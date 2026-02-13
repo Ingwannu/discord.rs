@@ -1,0 +1,15 @@
+﻿[package]
+name = "discordrs"
+version = "0.1.0"
+edition = "2021"
+description = "Discord Components V2 and modal interaction helpers for serenity"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+documentation = "https://docs.rs/discordrs"
+keywords = ["discord", "serenity", "components", "modal", "bot"]
+categories = ["api-bindings"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serenity = { version = "0.12.5", default-features = false, features = ["http", "model", "rustls_backend"] }
