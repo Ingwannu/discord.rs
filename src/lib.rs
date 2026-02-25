@@ -2378,6 +2378,29 @@ impl<'a> IntoIterator for &'a SlashCommandSet {
     }
 }
 
+/// Build a [`SlashCommandSet`] with concise syntax.
+///
+/// # Examples
+///
+/// ```rust
+/// use discordrs::{slash_commands, SlashCommandBuilder};
+///
+/// let set = slash_commands![
+///     SlashCommandBuilder::new("ping", "Latency check"),
+///     SlashCommandBuilder::new("about", "About this bot"),
+/// ];
+///
+/// assert_eq!(set.len(), 2);
+/// ```
+#[macro_export]
+macro_rules! slash_commands {
+    ($($command:expr),* $(,)?) => {{
+        let mut set = $crate::SlashCommandSet::new();
+        $(set.push($command);)*
+        set
+    }};
+}
+
 /// Bulk overwrite payload for global/guild slash command registration.
 pub fn slash_command_registration_payload<I>(commands: I) -> Vec<Value>
 where
@@ -2603,6 +2626,21 @@ impl<T> InteractionRouter<T> {
         self.resolve_route(kind, key).is_some()
     }
 
+    /// Insert a prefix route for the given interaction kind.
+    pub fn insert_prefix(&mut self, kind: DispatchKind, prefix: &str, value: T) {
+        self.push_route(kind, RoutePattern::Prefix(prefix.to_string()), value);
+    }
+
+    /// Upsert a prefix route for the given interaction kind.
+    pub fn set_prefix(&mut self, kind: DispatchKind, prefix: &str, value: T) {
+        self.set_route(kind, RoutePattern::Prefix(prefix.to_string()), value);
+    }
+
+    /// Remove a prefix route for the given interaction kind.
+    pub fn remove_prefix(&mut self, kind: DispatchKind, prefix: &str) -> bool {
+        self.remove_route(kind, RoutePattern::Prefix(prefix.to_string()))
+    }
+
     pub fn insert_command(&mut self, name: &str, value: T) {
         self.push_route(
             DispatchKind::Command,
@@ -2657,26 +2695,15 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_component_prefix(&mut self, prefix: &str, value: T) {
-        self.push_route(
-            DispatchKind::Component,
-            RoutePattern::Prefix(prefix.to_string()),
-            value,
-        );
+        self.insert_prefix(DispatchKind::Component, prefix, value);
     }
 
     pub fn set_component_prefix(&mut self, prefix: &str, value: T) {
-        self.set_route(
-            DispatchKind::Component,
-            RoutePattern::Prefix(prefix.to_string()),
-            value,
-        );
+        self.set_prefix(DispatchKind::Component, prefix, value);
     }
 
     pub fn remove_component_prefix(&mut self, prefix: &str) -> bool {
-        self.remove_route(
-            DispatchKind::Component,
-            RoutePattern::Prefix(prefix.to_string()),
-        )
+        self.remove_prefix(DispatchKind::Component, prefix)
     }
 
     pub fn on_component_prefix(mut self, prefix: &str, value: T) -> Self {
@@ -2713,26 +2740,15 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn insert_modal_prefix(&mut self, prefix: &str, value: T) {
-        self.push_route(
-            DispatchKind::Modal,
-            RoutePattern::Prefix(prefix.to_string()),
-            value,
-        );
+        self.insert_prefix(DispatchKind::Modal, prefix, value);
     }
 
     pub fn set_modal_prefix(&mut self, prefix: &str, value: T) {
-        self.set_route(
-            DispatchKind::Modal,
-            RoutePattern::Prefix(prefix.to_string()),
-            value,
-        );
+        self.set_prefix(DispatchKind::Modal, prefix, value);
     }
 
     pub fn remove_modal_prefix(&mut self, prefix: &str) -> bool {
-        self.remove_route(
-            DispatchKind::Modal,
-            RoutePattern::Prefix(prefix.to_string()),
-        )
+        self.remove_prefix(DispatchKind::Modal, prefix)
     }
 
     pub fn on_modal_prefix(mut self, prefix: &str, value: T) -> Self {
@@ -3310,6 +3326,38 @@ mod tests {
             payload[1].get("description").and_then(Value::as_str),
             Some("About updated")
         );
+    }
+
+    #[test]
+    fn slash_commands_macro_is_ergonomic() {
+        let set = slash_commands![
+            SlashCommandBuilder::new("ping", "Latency"),
+            SlashCommandBuilder::new("echo", "Echo"),
+        ];
+
+        assert_eq!(set.names().collect::<Vec<_>>(), vec!["ping", "echo"]);
+    }
+
+    #[test]
+    fn interaction_router_generic_prefix_helpers_work_for_all_kinds() {
+        let mut router = InteractionRouter::new();
+
+        router.insert_prefix(DispatchKind::Component, "ticket:", 1);
+        router.set_prefix(DispatchKind::Component, "ticket:", 2);
+        router.insert_prefix(DispatchKind::Modal, "prefs:", 3);
+
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "ticket:new"),
+            Some(&2)
+        );
+        assert_eq!(
+            router.resolve(DispatchKind::Modal, "prefs:general"),
+            Some(&3)
+        );
+
+        assert!(router.remove_prefix(DispatchKind::Component, "ticket:"));
+        assert!(!router.remove_prefix(DispatchKind::Component, "ticket:"));
+        assert_eq!(router.resolve(DispatchKind::Component, "ticket:new"), None);
     }
 
     #[test]

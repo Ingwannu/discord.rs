@@ -123,24 +123,23 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ```rust
 use discordrs::{
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandScope,
-    SlashCommandSet,
+    slash_commands, CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
+    SlashCommandScope, SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let mut commands = SlashCommandSet::new()
-        .with_command(
-            SlashCommandBuilder::new("ping", "지연 시간 확인")
-                .dm_permission(false)
-                .add_option(
-                    CommandOptionBuilder::string("target", "대상")
-                        .required(true)
-                        .add_choice(CommandOptionChoice::string("전체", "all")),
-                ),
-        )
-        .with_commands(vec![SlashCommandBuilder::new("about", "봇 정보")]);
+    let mut commands = slash_commands![
+        SlashCommandBuilder::new("ping", "지연 시간 확인")
+            .dm_permission(false)
+            .add_option(
+                CommandOptionBuilder::string("target", "대상")
+                    .required(true)
+                    .add_choice(CommandOptionChoice::string("전체", "all")),
+            ),
+        SlashCommandBuilder::new("about", "봇 정보"),
+    ];
 
     // 이름 기반 upsert/remove
     commands.set_command(SlashCommandBuilder::new("ping", "업데이트된 지연 시간 확인"));
@@ -200,8 +199,10 @@ router.set_component_fallback("handle_component_fallback");
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
 - 공통 fallback 헬퍼: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`
 - 공통 exact 라우트 헬퍼: `insert(kind, key, ...)`, `set(kind, key, ...)`, `remove(kind, key)`, `contains(kind, key)`
+- 공통 prefix 라우트 헬퍼: `insert_prefix(kind, ...)`, `set_prefix(kind, ...)`, `remove_prefix(kind, ...)`
 
 `SlashCommandSet` 추가 유틸:
+- `slash_commands![ ... ]`: 간결한 명령어 세트 구성
 - `names()` / `iter()` / `iter_mut()`: 삽입 순서 순회/수정
 - `get("name")` / `get_mut("name")`: 이름으로 조회/수정
 - `retain(...)`: 등록 전 조건에 맞는 명령어만 유지

@@ -76,24 +76,23 @@ async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn st
 
 ```rust
 use discordrs::{
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandScope,
-    SlashCommandSet,
+    slash_commands, CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
+    SlashCommandScope, SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
 
 async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
-    let mut commands = SlashCommandSet::new()
-        .with_command(
-            SlashCommandBuilder::new("ping", "Latency check")
-                .dm_permission(false)
-                .add_option(
-                    CommandOptionBuilder::string("target", "who to ping")
-                        .required(true)
-                        .add_choice(CommandOptionChoice::string("all", "all")),
-                ),
-        )
-        .with_commands(vec![SlashCommandBuilder::new("about", "About this bot")]);
+    let mut commands = slash_commands![
+        SlashCommandBuilder::new("ping", "Latency check")
+            .dm_permission(false)
+            .add_option(
+                CommandOptionBuilder::string("target", "who to ping")
+                    .required(true)
+                    .add_choice(CommandOptionChoice::string("all", "all")),
+            ),
+        SlashCommandBuilder::new("about", "About this bot"),
+    ];
 
     // Name-based upsert/remove helpers for ergonomic command management
     commands.set_command(SlashCommandBuilder::new("ping", "Updated latency check"));
@@ -151,8 +150,10 @@ Routing rules:
 - Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`.
 - Generic fallback helpers are available too: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`.
 - Generic exact-route helpers are available too: `insert(kind, key, ...)`, `set(kind, key, ...)`, `remove(kind, key)`, `contains(kind, key)`.
+- Generic prefix-route helpers are available too: `insert_prefix(kind, ...)`, `set_prefix(kind, ...)`, `remove_prefix(kind, ...)`.
 
 For slash command collection ergonomics, `SlashCommandSet` also supports:
+- `slash_commands![ ... ]` macro for concise set construction
 - `names()` / `iter()` / `iter_mut()` for ordered traversal
 - `get("name")` / `get_mut("name")` for name-based lookup and in-place edits
 - `retain(...)` to filter commands in place before registration

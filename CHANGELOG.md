@@ -7,6 +7,8 @@
 - Improved `InteractionRouter` robustness with per-kind fallback handlers (`*_fallback`) and clearer `contains_*` semantics (registered routes only; fallback excluded).
 - Expanded `SlashCommandSet` ergonomics with `iter`/`iter_mut`, `merge`/`with_merged`, and `dedup_by_name` for safer incremental command assembly.
 - Added generic exact-route APIs to `InteractionRouter`: `insert(kind, ...)`, `set(kind, ...)`, `remove(kind, ...)`, and `contains(kind, ...)`.
+- Added generic prefix-route APIs to `InteractionRouter`: `insert_prefix(kind, ...)`, `set_prefix(kind, ...)`, and `remove_prefix(kind, ...)`.
+- Added `slash_commands![...]` macro for concise slash command set construction.
 - Expanded tests and docs for the updated slash registration and interaction routing APIs.
 
 ## 0.1.3
