@@ -119,7 +119,54 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
     );
 ```
 
-## 8) 참고
+## 8) Slash Command 등록 스캐폴딩
+
+```rust
+use discordrs::{
+    slash_command_registration_payload, CommandOptionBuilder, CommandOptionChoice,
+    SlashCommandBuilder,
+};
+
+let payload = slash_command_registration_payload(vec![
+    SlashCommandBuilder::new("ping", "지연 시간 확인")
+        .dm_permission(false)
+        .add_option(
+            CommandOptionBuilder::string("target", "대상")
+                .required(true)
+                .add_choice(CommandOptionChoice::string("전체", "all")),
+        ),
+]);
+
+// payload(Vec<Value>)를 serenity HTTP bulk overwrite API에 전달
+```
+
+## 9) Interaction 디스패치 헬퍼
+
+```rust
+use discordrs::{dispatch_interaction, InteractionRouter};
+
+let router = InteractionRouter::new()
+    .on_command("ping", "handle_ping")
+    .on_component_prefix("ticket:", "handle_ticket_component")
+    .on_modal_prefix("ticket_modal:", "handle_ticket_modal");
+
+// event loop 내부
+// if let Some(route) = dispatch_interaction(&router, &interaction) {
+//     match *route {
+//         "handle_ping" => { /* ... */ }
+//         "handle_ticket_component" => { /* ... */ }
+//         "handle_ticket_modal" => { /* ... */ }
+//         _ => {}
+//     }
+// }
+```
+
+라우팅 규칙:
+- exact(custom_id/command name) 우선
+- exact 미스 시 prefix 매칭
+- prefix가 여러 개면 **가장 긴 prefix** 우선
+
+## 10) 참고
 
 - `discordrs`는 serenity가 아직 완전 지원하지 않는 V2 컴포넌트를 **raw HTTP payload**로 전송합니다.
 - 버튼/셀렉트의 `custom_id`는 핸들러 라우팅 규칙과 반드시 일치시켜야 합니다.**

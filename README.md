@@ -70,6 +70,50 @@ async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn st
 }
 ```
 
+## Slash Command Registration Scaffolding
+
+`discordrs` now includes JSON builders for bulk command registration payloads.
+
+```rust
+use discordrs::{
+    slash_command_registration_payload, CommandOptionBuilder, CommandOptionChoice,
+    SlashCommandBuilder,
+};
+
+let commands = slash_command_registration_payload(vec![
+    SlashCommandBuilder::new("ping", "Latency check")
+        .dm_permission(false)
+        .add_option(
+            CommandOptionBuilder::string("target", "who to ping")
+                .required(true)
+                .add_choice(CommandOptionChoice::string("all", "all")),
+        ),
+]);
+
+// Pass `commands` into serenity HTTP bulk overwrite endpoints.
+```
+
+## Interaction Dispatch Helper
+
+Use `InteractionRouter` for ergonomic routing by slash command name, component `custom_id`, or prefix patterns.
+
+```rust
+use discordrs::{dispatch_interaction, InteractionRouter};
+
+let router = InteractionRouter::new()
+    .on_command("ping", "ping_handler")
+    .on_component_prefix("ticket:", "ticket_component_handler")
+    .on_modal_prefix("ticket_modal:", "ticket_modal_handler");
+
+// inside event handler:
+// if let Some(route) = dispatch_interaction(&router, &interaction) { ... }
+```
+
+Routing rules:
+- Exact match wins first.
+- If no exact match, prefix routes are checked.
+- Among prefixes, the longest matching prefix wins.
+
 ## Notes
 
 - This library uses raw Discord HTTP payloads for Components V2 because serenity does not yet model all V2 structures directly.

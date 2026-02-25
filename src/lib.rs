@@ -1840,6 +1840,395 @@ impl ContentInventoryEntryBuilder {
 }
 
 /// Components v2에서 Channel Select를 사용할 때의 채널 타입 상수
+
+/// Slash command option type constants based on Discord API.
+pub mod command_option_type {
+    pub const SUB_COMMAND: u8 = 1;
+    pub const SUB_COMMAND_GROUP: u8 = 2;
+    pub const STRING: u8 = 3;
+    pub const INTEGER: u8 = 4;
+    pub const BOOLEAN: u8 = 5;
+    pub const USER: u8 = 6;
+    pub const CHANNEL: u8 = 7;
+    pub const ROLE: u8 = 8;
+    pub const MENTIONABLE: u8 = 9;
+    pub const NUMBER: u8 = 10;
+    pub const ATTACHMENT: u8 = 11;
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CommandOptionChoice {
+    pub name: String,
+    pub value: Value,
+}
+
+impl CommandOptionChoice {
+    pub fn string(name: &str, value: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            value: Value::String(value.to_string()),
+        }
+    }
+
+    pub fn integer(name: &str, value: i64) -> Self {
+        Self {
+            name: name.to_string(),
+            value: Value::Number(value.into()),
+        }
+    }
+
+    pub fn number(name: &str, value: f64) -> Self {
+        let number =
+            serde_json::Number::from_f64(value).expect("number choice value must be finite");
+        Self {
+            name: name.to_string(),
+            value: Value::Number(number),
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CommandOptionBuilder {
+    #[serde(rename = "type")]
+    option_type: u8,
+    name: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    choices: Vec<CommandOptionChoice>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    options: Vec<CommandOptionBuilder>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_types: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min_length: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_length: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    autocomplete: Option<bool>,
+}
+
+impl CommandOptionBuilder {
+    pub fn new(option_type: u8, name: &str, description: &str) -> Self {
+        Self {
+            option_type,
+            name: name.to_string(),
+            description: description.to_string(),
+            required: None,
+            choices: Vec::new(),
+            options: Vec::new(),
+            channel_types: None,
+            min_value: None,
+            max_value: None,
+            min_length: None,
+            max_length: None,
+            autocomplete: None,
+        }
+    }
+
+    pub fn string(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::STRING, name, description)
+    }
+
+    pub fn integer(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::INTEGER, name, description)
+    }
+
+    pub fn boolean(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::BOOLEAN, name, description)
+    }
+
+    pub fn user(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::USER, name, description)
+    }
+
+    pub fn channel(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::CHANNEL, name, description)
+    }
+
+    pub fn role(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::ROLE, name, description)
+    }
+
+    pub fn mentionable(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::MENTIONABLE, name, description)
+    }
+
+    pub fn number(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::NUMBER, name, description)
+    }
+
+    pub fn attachment(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::ATTACHMENT, name, description)
+    }
+
+    pub fn sub_command(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::SUB_COMMAND, name, description)
+    }
+
+    pub fn sub_command_group(name: &str, description: &str) -> Self {
+        Self::new(command_option_type::SUB_COMMAND_GROUP, name, description)
+    }
+
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
+    pub fn add_choice(mut self, choice: CommandOptionChoice) -> Self {
+        self.choices.push(choice);
+        self
+    }
+
+    pub fn add_option(mut self, option: CommandOptionBuilder) -> Self {
+        self.options.push(option);
+        self
+    }
+
+    pub fn channel_types(mut self, channel_types: Vec<u8>) -> Self {
+        self.channel_types = Some(channel_types);
+        self
+    }
+
+    pub fn min_value_i64(mut self, min: i64) -> Self {
+        self.min_value = Some(Value::Number(min.into()));
+        self
+    }
+
+    pub fn max_value_i64(mut self, max: i64) -> Self {
+        self.max_value = Some(Value::Number(max.into()));
+        self
+    }
+
+    pub fn min_value_f64(mut self, min: f64) -> Self {
+        self.min_value = Some(Value::Number(
+            serde_json::Number::from_f64(min).expect("min value must be finite"),
+        ));
+        self
+    }
+
+    pub fn max_value_f64(mut self, max: f64) -> Self {
+        self.max_value = Some(Value::Number(
+            serde_json::Number::from_f64(max).expect("max value must be finite"),
+        ));
+        self
+    }
+
+    pub fn min_length(mut self, min: u16) -> Self {
+        self.min_length = Some(min);
+        self
+    }
+
+    pub fn max_length(mut self, max: u16) -> Self {
+        self.max_length = Some(max);
+        self
+    }
+
+    pub fn autocomplete(mut self, autocomplete: bool) -> Self {
+        self.autocomplete = Some(autocomplete);
+        self
+    }
+
+    pub fn build(self) -> Value {
+        to_json_value(self)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct SlashCommandBuilder {
+    name: String,
+    description: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    options: Vec<CommandOptionBuilder>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dm_permission: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_member_permissions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nsfw: Option<bool>,
+}
+
+impl SlashCommandBuilder {
+    pub fn new(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+            options: Vec::new(),
+            dm_permission: None,
+            default_member_permissions: None,
+            nsfw: None,
+        }
+    }
+
+    pub fn add_option(mut self, option: CommandOptionBuilder) -> Self {
+        self.options.push(option);
+        self
+    }
+
+    pub fn dm_permission(mut self, allowed: bool) -> Self {
+        self.dm_permission = Some(allowed);
+        self
+    }
+
+    pub fn default_member_permissions(mut self, permissions_bitset: u64) -> Self {
+        self.default_member_permissions = Some(permissions_bitset.to_string());
+        self
+    }
+
+    pub fn nsfw(mut self, nsfw: bool) -> Self {
+        self.nsfw = Some(nsfw);
+        self
+    }
+
+    pub fn build(self) -> Value {
+        to_json_value(self)
+    }
+}
+
+/// Bulk overwrite payload for global/guild slash command registration.
+pub fn slash_command_registration_payload(commands: Vec<SlashCommandBuilder>) -> Vec<Value> {
+    commands
+        .into_iter()
+        .map(SlashCommandBuilder::build)
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchKind {
+    Command,
+    Component,
+    Modal,
+}
+
+#[derive(Clone)]
+enum RoutePattern {
+    Exact(String),
+    Prefix(String),
+}
+
+#[derive(Clone)]
+struct Route<T> {
+    kind: DispatchKind,
+    pattern: RoutePattern,
+    value: T,
+}
+
+/// Simple route table for command/component/modal dispatch.
+pub struct InteractionRouter<T> {
+    routes: Vec<Route<T>>,
+}
+
+impl<T> Default for InteractionRouter<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> InteractionRouter<T> {
+    pub fn new() -> Self {
+        Self { routes: Vec::new() }
+    }
+
+    pub fn on_command(mut self, name: &str, value: T) -> Self {
+        self.routes.push(Route {
+            kind: DispatchKind::Command,
+            pattern: RoutePattern::Exact(name.to_string()),
+            value,
+        });
+        self
+    }
+
+    pub fn on_component(mut self, custom_id: &str, value: T) -> Self {
+        self.routes.push(Route {
+            kind: DispatchKind::Component,
+            pattern: RoutePattern::Exact(custom_id.to_string()),
+            value,
+        });
+        self
+    }
+
+    pub fn on_component_prefix(mut self, prefix: &str, value: T) -> Self {
+        self.routes.push(Route {
+            kind: DispatchKind::Component,
+            pattern: RoutePattern::Prefix(prefix.to_string()),
+            value,
+        });
+        self
+    }
+
+    pub fn on_modal(mut self, custom_id: &str, value: T) -> Self {
+        self.routes.push(Route {
+            kind: DispatchKind::Modal,
+            pattern: RoutePattern::Exact(custom_id.to_string()),
+            value,
+        });
+        self
+    }
+
+    pub fn on_modal_prefix(mut self, prefix: &str, value: T) -> Self {
+        self.routes.push(Route {
+            kind: DispatchKind::Modal,
+            pattern: RoutePattern::Prefix(prefix.to_string()),
+            value,
+        });
+        self
+    }
+
+    pub fn resolve(&self, kind: DispatchKind, key: &str) -> Option<&T> {
+        self.resolve_route(kind, key).map(|route| &route.value)
+    }
+
+    fn resolve_route(&self, kind: DispatchKind, key: &str) -> Option<&Route<T>> {
+        let exact = self.routes.iter().find(|route| {
+            route.kind == kind
+                && matches!(&route.pattern, RoutePattern::Exact(exact) if exact == key)
+        });
+        if exact.is_some() {
+            return exact;
+        }
+
+        self.routes
+            .iter()
+            .filter(|route| {
+                route.kind == kind
+                    && matches!(&route.pattern, RoutePattern::Prefix(prefix) if key.starts_with(prefix))
+            })
+            .max_by_key(|route| match &route.pattern {
+                RoutePattern::Prefix(prefix) => prefix.len(),
+                RoutePattern::Exact(_) => 0,
+            })
+    }
+}
+
+pub fn interaction_dispatch_key(
+    interaction: &serenity::Interaction,
+) -> Option<(DispatchKind, &str)> {
+    match interaction {
+        serenity::Interaction::Command(command) => {
+            Some((DispatchKind::Command, command.data.name.as_str()))
+        }
+        serenity::Interaction::Component(component) => {
+            Some((DispatchKind::Component, component.data.custom_id.as_str()))
+        }
+        serenity::Interaction::Modal(modal) => {
+            Some((DispatchKind::Modal, modal.data.custom_id.as_str()))
+        }
+        _ => None,
+    }
+}
+
+pub fn dispatch_interaction<'a, T>(
+    router: &'a InteractionRouter<T>,
+    interaction: &serenity::Interaction,
+) -> Option<&'a T> {
+    let (kind, key) = interaction_dispatch_key(interaction)?;
+    router.resolve(kind, key)
+}
 pub mod channel_type {
     pub const GUILD_TEXT: u8 = 0;
     pub const DM: u8 = 1;
@@ -1937,5 +2326,66 @@ mod tests {
             MESSAGE_FLAG_IS_COMPONENTS_V2
         );
         assert_eq!(flags & (1 << 6), 1 << 6);
+    }
+
+    #[test]
+    fn slash_command_registration_payload_builds_expected_shape() {
+        let payload = slash_command_registration_payload(vec![SlashCommandBuilder::new(
+            "ping",
+            "Latency check",
+        )
+        .dm_permission(false)
+        .add_option(
+            CommandOptionBuilder::string("target", "who to ping")
+                .required(true)
+                .min_length(2)
+                .max_length(16)
+                .add_choice(CommandOptionChoice::string("all", "all")),
+        )]);
+
+        assert_eq!(payload.len(), 1);
+        assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("ping"));
+        assert_eq!(
+            payload[0].get("description").and_then(Value::as_str),
+            Some("Latency check")
+        );
+        assert_eq!(
+            payload[0].get("dm_permission").and_then(Value::as_bool),
+            Some(false)
+        );
+
+        let options = payload[0]
+            .get("options")
+            .and_then(Value::as_array)
+            .expect("options array");
+        assert_eq!(options.len(), 1);
+        assert_eq!(
+            options[0].get("name").and_then(Value::as_str),
+            Some("target")
+        );
+    }
+
+    #[test]
+    fn interaction_router_prefers_exact_then_longest_prefix() {
+        let router = InteractionRouter::new()
+            .on_component_prefix("ticket:", 1)
+            .on_component_prefix("ticket:close:", 2)
+            .on_component("ticket:close:now", 3)
+            .on_command("ping", 4);
+
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "ticket:close:now"),
+            Some(&3)
+        );
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "ticket:close:later"),
+            Some(&2)
+        );
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "ticket:open:later"),
+            Some(&1)
+        );
+        assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&4));
+        assert_eq!(router.resolve(DispatchKind::Modal, "ticket:open"), None);
     }
 }
