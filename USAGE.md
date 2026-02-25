@@ -141,11 +141,15 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
         )
         .with_commands(vec![SlashCommandBuilder::new("about", "봇 정보")]);
 
+    // payload 확인 (set을 소모하지 않음)
+    let payload = commands.payload();
+    assert_eq!(payload.len(), 2);
+
     // 글로벌 반영(전파 지연 가능)
-    let _ = commands.clone().register_global(http).await?;
+    let _ = commands.register_global_ref(http).await?;
 
     // 길드 반영(보통 빠름)
-    let _ = commands.register_guild(http, guild_id).await?;
+    let _ = commands.register_guild_ref(http, guild_id).await?;
     Ok(())
 }
 ```
@@ -172,6 +176,7 @@ router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 // if let Some(m) = router.resolve_interaction_match(&interaction) {
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
+// assert!(router.contains_command("ping"));
 // router.set_component_prefix("ticket:", "new_ticket_component_handler");
 // router.remove_modal("ticket_modal:legacy");
 // dispatch_interaction(&router, &interaction) / dispatch_interaction_match(...)도 계속 사용 가능

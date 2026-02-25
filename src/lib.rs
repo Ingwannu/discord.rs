@@ -2137,6 +2137,15 @@ impl SlashCommandSet {
         self.commands.clear();
     }
 
+    /// Build a bulk-overwrite payload while keeping this set intact.
+    pub fn payload(&self) -> Vec<Value> {
+        self.commands
+            .clone()
+            .into_iter()
+            .map(SlashCommandBuilder::build)
+            .collect()
+    }
+
     pub fn into_payload(self) -> Vec<Value> {
         slash_command_registration_payload(self.commands)
     }
@@ -2145,12 +2154,32 @@ impl SlashCommandSet {
         register_global_slash_commands(http, self.commands).await
     }
 
+    /// Register without consuming this set.
+    pub async fn register_global_ref(&self, http: &Http) -> Result<Vec<serenity::Command>, Error> {
+        register_global_slash_commands(http, self.commands.clone()).await
+    }
+
     pub async fn register_guild(
         self,
         http: &Http,
         guild_id: serenity::GuildId,
     ) -> Result<Vec<serenity::Command>, Error> {
         register_guild_slash_commands(http, guild_id, self.commands).await
+    }
+
+    /// Register without consuming this set.
+    pub async fn register_guild_ref(
+        &self,
+        http: &Http,
+        guild_id: serenity::GuildId,
+    ) -> Result<Vec<serenity::Command>, Error> {
+        register_guild_slash_commands(http, guild_id, self.commands.clone()).await
+    }
+}
+
+impl From<Vec<SlashCommandBuilder>> for SlashCommandSet {
+    fn from(commands: Vec<SlashCommandBuilder>) -> Self {
+        Self { commands }
     }
 }
 
@@ -2163,7 +2192,10 @@ impl FromIterator<SlashCommandBuilder> for SlashCommandSet {
 }
 
 /// Bulk overwrite payload for global/guild slash command registration.
-pub fn slash_command_registration_payload(commands: Vec<SlashCommandBuilder>) -> Vec<Value> {
+pub fn slash_command_registration_payload<I>(commands: I) -> Vec<Value>
+where
+    I: IntoIterator<Item = SlashCommandBuilder>,
+{
     commands
         .into_iter()
         .map(SlashCommandBuilder::build)
@@ -2173,10 +2205,13 @@ pub fn slash_command_registration_payload(commands: Vec<SlashCommandBuilder>) ->
 /// Register global slash commands via Discord bulk overwrite endpoint.
 ///
 /// This wraps serenity's raw HTTP call so you can keep using `SlashCommandBuilder`.
-pub async fn register_global_slash_commands(
+pub async fn register_global_slash_commands<I>(
     http: &Http,
-    commands: Vec<SlashCommandBuilder>,
-) -> Result<Vec<serenity::Command>, Error> {
+    commands: I,
+) -> Result<Vec<serenity::Command>, Error>
+where
+    I: IntoIterator<Item = SlashCommandBuilder>,
+{
     let payload = slash_command_registration_payload(commands);
     let created = http.create_global_commands(&payload).await?;
     Ok(created)
@@ -2185,11 +2220,14 @@ pub async fn register_global_slash_commands(
 /// Register guild slash commands via Discord bulk overwrite endpoint.
 ///
 /// Useful for fast iteration since guild commands update quickly.
-pub async fn register_guild_slash_commands(
+pub async fn register_guild_slash_commands<I>(
     http: &Http,
     guild_id: serenity::GuildId,
-    commands: Vec<SlashCommandBuilder>,
-) -> Result<Vec<serenity::Command>, Error> {
+    commands: I,
+) -> Result<Vec<serenity::Command>, Error>
+where
+    I: IntoIterator<Item = SlashCommandBuilder>,
+{
     let payload = slash_command_registration_payload(commands);
     let created = http.create_guild_commands(guild_id, &payload).await?;
     Ok(created)
@@ -2428,12 +2466,24 @@ impl<T> InteractionRouter<T> {
         self.resolve(DispatchKind::Command, name)
     }
 
+    pub fn contains_command(&self, name: &str) -> bool {
+        self.resolve_command(name).is_some()
+    }
+
     pub fn resolve_component(&self, custom_id: &str) -> Option<&T> {
         self.resolve(DispatchKind::Component, custom_id)
     }
 
+    pub fn contains_component(&self, custom_id: &str) -> bool {
+        self.resolve_component(custom_id).is_some()
+    }
+
     pub fn resolve_modal(&self, custom_id: &str) -> Option<&T> {
         self.resolve(DispatchKind::Modal, custom_id)
+    }
+
+    pub fn contains_modal(&self, custom_id: &str) -> bool {
+        self.resolve_modal(custom_id).is_some()
     }
 
     pub fn resolve_interaction(&self, interaction: &serenity::Interaction) -> Option<&T> {
@@ -2690,13 +2740,16 @@ mod tests {
         assert_eq!(router.len(), 3);
         assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&1));
         assert_eq!(router.resolve_command("ping"), Some(&1));
+        assert!(router.contains_command("ping"));
         assert_eq!(
             router.resolve(DispatchKind::Component, "ticket:new"),
             Some(&2)
         );
         assert_eq!(router.resolve_component("ticket:new"), Some(&2));
+        assert!(router.contains_component("ticket:new"));
         assert_eq!(router.resolve(DispatchKind::Modal, "prefs"), Some(&3));
         assert_eq!(router.resolve_modal("prefs"), Some(&3));
+        assert!(router.contains_modal("prefs"));
 
         router.clear();
         assert!(router.is_empty());
@@ -2720,9 +2773,12 @@ mod tests {
         set.push(SlashCommandBuilder::new("about", "About bot"));
         assert_eq!(set.len(), 3);
 
-        let payload = set.clone().into_payload();
+        let payload = set.payload();
         assert_eq!(payload.len(), 3);
         assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("ping"));
+
+        let into_payload = set.clone().into_payload();
+        assert_eq!(into_payload.len(), 3);
 
         set.clear();
         assert!(set.is_empty());
@@ -2744,8 +2800,11 @@ mod tests {
         set.extend(vec![SlashCommandBuilder::new("echo", "Echo")]);
         assert_eq!(set.len(), 4);
 
-        let from_iter: SlashCommandSet = extras.into_iter().collect();
+        let from_iter: SlashCommandSet = extras.clone().into_iter().collect();
         assert_eq!(from_iter.len(), 2);
+
+        let from_vec = SlashCommandSet::from(extras);
+        assert_eq!(from_vec.len(), 2);
     }
 
     #[test]

@@ -94,11 +94,15 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
         )
         .with_commands(vec![SlashCommandBuilder::new("about", "About this bot")]);
 
+    // Non-consuming helpers (useful when you want to re-use the same set)
+    let payload = commands.payload();
+    assert_eq!(payload.len(), 2);
+
     // Global update (can take up to ~1 hour to propagate)
-    let _global = commands.clone().register_global(http).await?;
+    let _global = commands.register_global_ref(http).await?;
 
     // Guild update (usually near-immediate)
-    let _guild = commands.register_guild(http, guild_id).await?;
+    let _guild = commands.register_guild_ref(http, guild_id).await?;
     Ok(())
 }
 ```
@@ -122,6 +126,7 @@ let router = InteractionRouter::new()
 // if let Some(m) = router.resolve_interaction_match(&interaction) {
 //     println!("matched {:?} by key {}", m.kind, m.key);
 // }
+// assert!(router.contains_command("ping"));
 // You can still use free functions:
 // router.set_component_prefix("ticket:", "new_ticket_component_handler");
 // router.remove_modal("ticket_modal:legacy");
