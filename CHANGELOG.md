@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added `SlashCommandScope` and `register_slash_commands(...)` for unified global/guild slash registration.
+- Extended `SlashCommandSet` ergonomics with scope-based `register[_ref]` plus standard `Extend`/`IntoIterator` support.
+- Improved `InteractionRouter` robustness with per-kind fallback handlers (`*_fallback`).
+- Expanded tests and docs for the updated slash registration and interaction routing APIs.
+
 ## 0.1.3
 
 - Added modal interaction components:

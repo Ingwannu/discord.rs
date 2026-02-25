@@ -76,7 +76,8 @@ async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn st
 
 ```rust
 use discordrs::{
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandSet,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandScope,
+    SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
@@ -98,11 +99,11 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
     let payload = commands.payload();
     assert_eq!(payload.len(), 2);
 
-    // Global update (can take up to ~1 hour to propagate)
-    let _global = commands.register_global_ref(http).await?;
-
-    // Guild update (usually near-immediate)
-    let _guild = commands.register_guild_ref(http, guild_id).await?;
+    // Unified scope-based registration API
+    let _global = commands.register_ref(http, SlashCommandScope::Global).await?;
+    let _guild = commands
+        .register_ref(http, SlashCommandScope::Guild(guild_id))
+        .await?;
     Ok(())
 }
 ```
@@ -119,7 +120,8 @@ use discordrs::{dispatch_interaction, dispatch_interaction_match, InteractionRou
 let router = InteractionRouter::new()
     .on_command("ping", "ping_handler")
     .on_component_prefix("ticket:", "ticket_component_handler")
-    .on_modal_prefix("ticket_modal:", "ticket_modal_handler");
+    .on_modal_prefix("ticket_modal:", "ticket_modal_handler")
+    .with_component_fallback("component_fallback_handler");
 
 // inside event handler:
 // if let Some(route) = router.resolve_interaction(&interaction) { ... }
@@ -137,6 +139,7 @@ Routing rules:
 - Exact match wins first.
 - If no exact match, prefix routes are checked.
 - Among prefixes, the longest matching prefix wins.
+- If no route matches, per-kind fallback handlers are used when configured.
 - Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`. 
 
 ## Notes

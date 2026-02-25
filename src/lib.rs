@@ -2175,6 +2175,23 @@ impl SlashCommandSet {
     ) -> Result<Vec<serenity::Command>, Error> {
         register_guild_slash_commands(http, guild_id, self.commands.clone()).await
     }
+
+    pub async fn register(
+        self,
+        http: &Http,
+        scope: SlashCommandScope,
+    ) -> Result<Vec<serenity::Command>, Error> {
+        register_slash_commands(http, scope, self.commands).await
+    }
+
+    /// Register without consuming this set.
+    pub async fn register_ref(
+        &self,
+        http: &Http,
+        scope: SlashCommandScope,
+    ) -> Result<Vec<serenity::Command>, Error> {
+        register_slash_commands(http, scope, self.commands.clone()).await
+    }
 }
 
 impl From<Vec<SlashCommandBuilder>> for SlashCommandSet {
@@ -2188,6 +2205,30 @@ impl FromIterator<SlashCommandBuilder> for SlashCommandSet {
         Self {
             commands: iter.into_iter().collect(),
         }
+    }
+}
+
+impl Extend<SlashCommandBuilder> for SlashCommandSet {
+    fn extend<T: IntoIterator<Item = SlashCommandBuilder>>(&mut self, iter: T) {
+        self.commands.extend(iter);
+    }
+}
+
+impl IntoIterator for SlashCommandSet {
+    type Item = SlashCommandBuilder;
+    type IntoIter = std::vec::IntoIter<SlashCommandBuilder>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.commands.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a SlashCommandSet {
+    type Item = &'a SlashCommandBuilder;
+    type IntoIter = std::slice::Iter<'a, SlashCommandBuilder>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.commands.iter()
     }
 }
 
@@ -2233,6 +2274,30 @@ where
     Ok(created)
 }
 
+/// Target scope for slash command bulk registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashCommandScope {
+    Global,
+    Guild(serenity::GuildId),
+}
+
+/// Register slash commands for either global or guild scope.
+pub async fn register_slash_commands<I>(
+    http: &Http,
+    scope: SlashCommandScope,
+    commands: I,
+) -> Result<Vec<serenity::Command>, Error>
+where
+    I: IntoIterator<Item = SlashCommandBuilder>,
+{
+    match scope {
+        SlashCommandScope::Global => register_global_slash_commands(http, commands).await,
+        SlashCommandScope::Guild(guild_id) => {
+            register_guild_slash_commands(http, guild_id, commands).await
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchKind {
     Command,
@@ -2266,6 +2331,9 @@ pub struct DispatchMatch<'a, T> {
 /// - `remove_*`: remove exact kind+pattern routes.
 pub struct InteractionRouter<T> {
     routes: Vec<Route<T>>,
+    command_fallback: Option<T>,
+    component_fallback: Option<T>,
+    modal_fallback: Option<T>,
 }
 
 impl<T> Default for InteractionRouter<T> {
@@ -2310,7 +2378,12 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn new() -> Self {
-        Self { routes: Vec::new() }
+        Self {
+            routes: Vec::new(),
+            command_fallback: None,
+            component_fallback: None,
+            modal_fallback: None,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -2323,6 +2396,45 @@ impl<T> InteractionRouter<T> {
 
     pub fn clear(&mut self) {
         self.routes.clear();
+        self.command_fallback = None;
+        self.component_fallback = None;
+        self.modal_fallback = None;
+    }
+
+    pub fn set_command_fallback(&mut self, value: T) -> Option<T> {
+        self.command_fallback.replace(value)
+    }
+
+    pub fn remove_command_fallback(&mut self) -> Option<T> {
+        self.command_fallback.take()
+    }
+
+    pub fn has_command_fallback(&self) -> bool {
+        self.command_fallback.is_some()
+    }
+
+    pub fn set_component_fallback(&mut self, value: T) -> Option<T> {
+        self.component_fallback.replace(value)
+    }
+
+    pub fn remove_component_fallback(&mut self) -> Option<T> {
+        self.component_fallback.take()
+    }
+
+    pub fn has_component_fallback(&self) -> bool {
+        self.component_fallback.is_some()
+    }
+
+    pub fn set_modal_fallback(&mut self, value: T) -> Option<T> {
+        self.modal_fallback.replace(value)
+    }
+
+    pub fn remove_modal_fallback(&mut self) -> Option<T> {
+        self.modal_fallback.take()
+    }
+
+    pub fn has_modal_fallback(&self) -> bool {
+        self.modal_fallback.is_some()
     }
 
     pub fn insert_command(&mut self, name: &str, value: T) {
@@ -2462,6 +2574,21 @@ impl<T> InteractionRouter<T> {
         self
     }
 
+    pub fn with_command_fallback(mut self, value: T) -> Self {
+        self.command_fallback = Some(value);
+        self
+    }
+
+    pub fn with_component_fallback(mut self, value: T) -> Self {
+        self.component_fallback = Some(value);
+        self
+    }
+
+    pub fn with_modal_fallback(mut self, value: T) -> Self {
+        self.modal_fallback = Some(value);
+        self
+    }
+
     pub fn resolve_command(&self, name: &str) -> Option<&T> {
         self.resolve(DispatchKind::Command, name)
     }
@@ -2500,7 +2627,9 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn resolve(&self, kind: DispatchKind, key: &str) -> Option<&T> {
-        self.resolve_route(kind, key).map(|route| &route.value)
+        self.resolve_route(kind, key)
+            .map(|route| &route.value)
+            .or_else(|| self.fallback(kind))
     }
 
     pub fn resolve_match<'a>(
@@ -2508,11 +2637,24 @@ impl<T> InteractionRouter<T> {
         kind: DispatchKind,
         key: &'a str,
     ) -> Option<DispatchMatch<'a, T>> {
-        self.resolve_route(kind, key).map(|route| DispatchMatch {
-            kind,
-            key,
-            value: &route.value,
-        })
+        self.resolve_route(kind, key)
+            .map(|route| DispatchMatch {
+                kind,
+                key,
+                value: &route.value,
+            })
+            .or_else(|| {
+                self.fallback(kind)
+                    .map(|value| DispatchMatch { kind, key, value })
+            })
+    }
+
+    fn fallback(&self, kind: DispatchKind) -> Option<&T> {
+        match kind {
+            DispatchKind::Command => self.command_fallback.as_ref(),
+            DispatchKind::Component => self.component_fallback.as_ref(),
+            DispatchKind::Modal => self.modal_fallback.as_ref(),
+        }
     }
 
     fn resolve_route(&self, kind: DispatchKind, key: &str) -> Option<&Route<T>> {
@@ -2808,6 +2950,40 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_set_supports_std_extend_and_into_iter() {
+        let mut set = SlashCommandSet::new();
+        set.extend([
+            SlashCommandBuilder::new("ping", "Latency"),
+            SlashCommandBuilder::new("echo", "Echo"),
+        ]);
+
+        let names = set
+            .clone()
+            .into_iter()
+            .map(|command| {
+                command.build()["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["ping", "echo"]);
+
+        let borrowed_count = (&set).into_iter().count();
+        assert_eq!(borrowed_count, 2);
+    }
+
+    #[test]
+    fn slash_command_scope_is_copy_and_eq() {
+        let guild_id = serenity::GuildId::new(42);
+        assert_eq!(SlashCommandScope::Global, SlashCommandScope::Global);
+        assert_eq!(
+            SlashCommandScope::Guild(guild_id),
+            SlashCommandScope::Guild(guild_id)
+        );
+    }
+
+    #[test]
     fn interaction_router_set_methods_upsert_existing_routes() {
         let mut router = InteractionRouter::new();
 
@@ -2855,10 +3031,39 @@ mod tests {
     }
 
     #[test]
+    fn interaction_router_fallbacks_resolve_and_clear() {
+        let mut router = InteractionRouter::new()
+            .on_command("ping", 1)
+            .with_command_fallback(10)
+            .with_component_fallback(20)
+            .with_modal_fallback(30);
+
+        assert!(router.has_command_fallback());
+        assert!(router.has_component_fallback());
+        assert!(router.has_modal_fallback());
+
+        assert_eq!(router.resolve_command("unknown"), Some(&10));
+        assert_eq!(router.resolve_component("ticket:unknown"), Some(&20));
+        assert_eq!(router.resolve_modal("prefs:unknown"), Some(&30));
+
+        assert_eq!(router.set_command_fallback(11), Some(10));
+        assert_eq!(router.resolve_command("still-unknown"), Some(&11));
+        assert_eq!(router.remove_component_fallback(), Some(20));
+        assert!(!router.has_component_fallback());
+        assert_eq!(router.resolve_component("ticket:unknown"), None);
+
+        router.clear();
+        assert!(router.is_empty());
+        assert!(!router.has_command_fallback());
+        assert!(!router.has_modal_fallback());
+    }
+
+    #[test]
     fn interaction_router_resolve_match_keeps_kind_and_key() {
         let router = InteractionRouter::new()
             .on_command("ping", 10)
-            .on_modal_prefix("prefs:", 20);
+            .on_modal_prefix("prefs:", 20)
+            .with_component_fallback(99);
 
         let command = router
             .resolve_match(DispatchKind::Command, "ping")
@@ -2873,5 +3078,12 @@ mod tests {
         assert_eq!(modal.kind, DispatchKind::Modal);
         assert_eq!(modal.key, "prefs:general");
         assert_eq!(*modal.value, 20);
+
+        let fallback = router
+            .resolve_match(DispatchKind::Component, "ticket:missing")
+            .expect("component fallback");
+        assert_eq!(fallback.kind, DispatchKind::Component);
+        assert_eq!(fallback.key, "ticket:missing");
+        assert_eq!(*fallback.value, 99);
     }
 }

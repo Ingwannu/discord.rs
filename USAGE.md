@@ -123,7 +123,8 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ```rust
 use discordrs::{
-    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandSet,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder, SlashCommandScope,
+    SlashCommandSet,
 };
 use serenity::all::GuildId;
 use serenity::http::Http;
@@ -145,11 +146,11 @@ async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error
     let payload = commands.payload();
     assert_eq!(payload.len(), 2);
 
-    // 글로벌 반영(전파 지연 가능)
-    let _ = commands.register_global_ref(http).await?;
-
-    // 길드 반영(보통 빠름)
-    let _ = commands.register_guild_ref(http, guild_id).await?;
+    // 통합 scope API
+    let _ = commands.register_ref(http, SlashCommandScope::Global).await?;
+    let _ = commands
+        .register_ref(http, SlashCommandScope::Guild(guild_id))
+        .await?;
     Ok(())
 }
 ```
@@ -163,6 +164,7 @@ let mut router = InteractionRouter::new();
 router.insert_command("ping", "handle_ping");
 router.insert_component_prefix("ticket:", "handle_ticket_component");
 router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
+router.set_component_fallback("handle_component_fallback");
 
 // event loop 내부
 // if let Some(route) = router.resolve_interaction(&interaction) {
@@ -186,6 +188,7 @@ router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 - exact(custom_id/command name) 우선
 - exact 미스 시 prefix 매칭
 - prefix가 여러 개면 **가장 긴 prefix** 우선
+- 매칭 실패 시 타입별 fallback(`set_*_fallback`)이 있으면 fallback 사용
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
 
 ## 10) 참고
