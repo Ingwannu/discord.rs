@@ -199,12 +199,15 @@ router.set_component_fallback("handle_component_fallback");
 - `set_*`은 upsert, `insert_*`는 추가, `remove_*`는 삭제
 - 타입별 헬퍼: `resolve_command`, `resolve_component`, `resolve_modal`
 - 공통 fallback 헬퍼: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`
+- 공통 exact 라우트 헬퍼: `insert(kind, key, ...)`, `set(kind, key, ...)`, `remove(kind, key)`, `contains(kind, key)`
 
 `SlashCommandSet` 추가 유틸:
-- `names()`: 현재 명령어 이름을 삽입 순서대로 순회
+- `names()` / `iter()` / `iter_mut()`: 삽입 순서 순회/수정
 - `get("name")` / `get_mut("name")`: 이름으로 조회/수정
 - `retain(...)`: 등록 전 조건에 맞는 명령어만 유지
 - `with_set_commands(...)` / `set_commands(...)`: 이름 기반 bulk upsert
+- `merge(...)` / `with_merged(...)`: 다른 Set을 이름 기반으로 병합
+- `dedup_by_name()`: 중복 이름 제거(가장 마지막에 정의된 명령어 유지)
 - `without("name")`, `remove_where(...)`: 등록 전 정리 작업을 간결하게 처리
 
 ## 10) 참고

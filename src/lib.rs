@@ -2183,6 +2183,47 @@ impl SlashCommandSet {
         self.commands.clear();
     }
 
+    /// Iterate commands in insertion order.
+    pub fn iter(&self) -> std::slice::Iter<'_, SlashCommandBuilder> {
+        self.commands.iter()
+    }
+
+    /// Mutably iterate commands in insertion order.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, SlashCommandBuilder> {
+        self.commands.iter_mut()
+    }
+
+    /// Merge another set into this set using name-based upsert semantics.
+    pub fn merge(&mut self, other: SlashCommandSet) {
+        self.set_commands(other.commands);
+    }
+
+    /// Builder-style merge using name-based upsert semantics.
+    pub fn with_merged(mut self, other: SlashCommandSet) -> Self {
+        self.merge(other);
+        self
+    }
+
+    /// Remove duplicate command names, keeping the latest command for each name.
+    ///
+    /// Returns the number of removed commands.
+    pub fn dedup_by_name(&mut self) -> usize {
+        let before = self.commands.len();
+        let mut seen = std::collections::HashSet::new();
+        let mut deduped = Vec::with_capacity(before);
+
+        for command in self.commands.drain(..).rev() {
+            if seen.insert(command.name().to_string()) {
+                deduped.push(command);
+            }
+        }
+
+        deduped.reverse();
+        self.commands = deduped;
+
+        before.saturating_sub(self.commands.len())
+    }
+
     /// Iterate command names in insertion order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.commands.iter().map(SlashCommandBuilder::name)
@@ -2540,6 +2581,26 @@ impl<T> InteractionRouter<T> {
 
     pub fn has_modal_fallback(&self) -> bool {
         self.modal_fallback.is_some()
+    }
+
+    /// Insert an exact-match route for the given interaction kind.
+    pub fn insert(&mut self, kind: DispatchKind, key: &str, value: T) {
+        self.push_route(kind, RoutePattern::Exact(key.to_string()), value);
+    }
+
+    /// Upsert an exact-match route for the given interaction kind.
+    pub fn set(&mut self, kind: DispatchKind, key: &str, value: T) {
+        self.set_route(kind, RoutePattern::Exact(key.to_string()), value);
+    }
+
+    /// Remove an exact-match route for the given interaction kind.
+    pub fn remove(&mut self, kind: DispatchKind, key: &str) -> bool {
+        self.remove_route(kind, RoutePattern::Exact(key.to_string()))
+    }
+
+    /// Check whether a route (exact or prefix) resolves for this kind+key.
+    pub fn contains(&self, kind: DispatchKind, key: &str) -> bool {
+        self.resolve_route(kind, key).is_some()
     }
 
     pub fn insert_command(&mut self, name: &str, value: T) {
@@ -3214,6 +3275,44 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_set_iter_merge_and_dedup_are_ergonomic() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency"))
+            .with_command(SlashCommandBuilder::new("echo", "Echo"));
+
+        let merged = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("echo", "Echo updated"))
+            .with_command(SlashCommandBuilder::new("about", "About"));
+
+        set.merge(merged);
+        let names = set.iter().map(|command| command.name()).collect::<Vec<_>>();
+        assert_eq!(names, vec!["ping", "echo", "about"]);
+
+        for command in set.iter_mut() {
+            if command.name() == "about" {
+                command.description = "About updated".to_string();
+            }
+        }
+
+        set.push(SlashCommandBuilder::new("ping", "Latency legacy"));
+        let removed = set.dedup_by_name();
+        assert_eq!(removed, 1);
+
+        let payload = set.payload();
+        assert_eq!(payload.len(), 3);
+        assert_eq!(payload[0].get("name").and_then(Value::as_str), Some("echo"));
+        assert_eq!(
+            payload[1].get("name").and_then(Value::as_str),
+            Some("about")
+        );
+        assert_eq!(payload[2].get("name").and_then(Value::as_str), Some("ping"));
+        assert_eq!(
+            payload[1].get("description").and_then(Value::as_str),
+            Some("About updated")
+        );
+    }
+
+    #[test]
     fn slash_command_scope_is_copy_and_eq() {
         let guild_id = serenity::GuildId::new(42);
         assert_eq!(SlashCommandScope::Global, SlashCommandScope::Global);
@@ -3338,6 +3437,23 @@ mod tests {
         assert_eq!(router.remove_fallback(DispatchKind::Command), Some(2));
         assert!(!router.has_fallback(DispatchKind::Command));
         assert_eq!(router.resolve(DispatchKind::Command, "missing"), None);
+    }
+
+    #[test]
+    fn interaction_router_generic_exact_helpers_are_ergonomic() {
+        let mut router = InteractionRouter::new();
+
+        router.insert(DispatchKind::Command, "ping", 1);
+        router.set(DispatchKind::Command, "ping", 2);
+        router.insert(DispatchKind::Modal, "prefs", 10);
+
+        assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&2));
+        assert!(router.contains(DispatchKind::Command, "ping"));
+        assert!(router.contains(DispatchKind::Modal, "prefs"));
+        assert!(!router.contains(DispatchKind::Modal, "missing"));
+
+        assert!(router.remove(DispatchKind::Modal, "prefs"));
+        assert!(!router.remove(DispatchKind::Modal, "prefs"));
     }
 
     #[test]
