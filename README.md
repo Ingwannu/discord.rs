@@ -146,12 +146,14 @@ Routing rules:
 - Among prefixes, the longest matching prefix wins.
 - If specificity ties (same exact key or same prefix length), the latest inserted route wins.
 - If no route matches, per-kind fallback handlers are used when configured.
+- `contains_command` / `contains_component` / `contains_modal` check **registered routes only** (fallbacks do not count).
 - Use `set_*` to upsert, `insert_*` to append, and `remove_*` to delete routes.
 - Convenience methods are available for each kind: `resolve_command`, `resolve_component`, `resolve_modal`.
 - Generic fallback helpers are available too: `set_fallback(kind, ...)`, `remove_fallback(kind)`, `has_fallback(kind)`.
 
 For slash command collection ergonomics, `SlashCommandSet` also supports:
 - `names()` to iterate command names in insertion order
+- `get("name")` / `get_mut("name")` for name-based lookup and in-place edits
 - `retain(...)` to filter commands in place before registration
 - `with_set_commands(...)` / `set_commands(...)` for bulk upsert by command name
 - `without("name")` and `remove_where(...)` for concise pre-registration pruning

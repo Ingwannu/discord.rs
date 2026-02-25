@@ -2201,6 +2201,18 @@ impl SlashCommandSet {
         self.commands.iter().any(|command| command.name() == name)
     }
 
+    /// Borrow a command by name.
+    pub fn get(&self, name: &str) -> Option<&SlashCommandBuilder> {
+        self.commands.iter().find(|command| command.name() == name)
+    }
+
+    /// Mutably borrow a command by name.
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut SlashCommandBuilder> {
+        self.commands
+            .iter_mut()
+            .find(|command| command.name() == name)
+    }
+
     /// Remove a command by name.
     ///
     /// Returns the removed command when found.
@@ -2716,7 +2728,7 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn contains_command(&self, name: &str) -> bool {
-        self.resolve_command(name).is_some()
+        self.resolve_route(DispatchKind::Command, name).is_some()
     }
 
     pub fn resolve_component(&self, custom_id: &str) -> Option<&T> {
@@ -2724,7 +2736,8 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn contains_component(&self, custom_id: &str) -> bool {
-        self.resolve_component(custom_id).is_some()
+        self.resolve_route(DispatchKind::Component, custom_id)
+            .is_some()
     }
 
     pub fn resolve_modal(&self, custom_id: &str) -> Option<&T> {
@@ -2732,7 +2745,7 @@ impl<T> InteractionRouter<T> {
     }
 
     pub fn contains_modal(&self, custom_id: &str) -> bool {
-        self.resolve_modal(custom_id).is_some()
+        self.resolve_route(DispatchKind::Modal, custom_id).is_some()
     }
 
     pub fn resolve_interaction(&self, interaction: &serenity::Interaction) -> Option<&T> {
@@ -3180,6 +3193,27 @@ mod tests {
     }
 
     #[test]
+    fn slash_command_set_get_and_get_mut_are_name_based() {
+        let mut set = SlashCommandSet::new()
+            .with_command(SlashCommandBuilder::new("ping", "Latency"))
+            .with_command(SlashCommandBuilder::new("echo", "Echo"));
+
+        let ping = set.get("ping").expect("ping should exist");
+        assert_eq!(ping.name(), "ping");
+
+        let echo = set.get_mut("echo").expect("echo should exist");
+        echo.description = "Echo updated".to_string();
+
+        let payload = set.payload();
+        assert_eq!(payload.len(), 2);
+        assert_eq!(
+            payload[1].get("description").and_then(Value::as_str),
+            Some("Echo updated")
+        );
+        assert!(set.get("missing").is_none());
+    }
+
+    #[test]
     fn slash_command_scope_is_copy_and_eq() {
         let guild_id = serenity::GuildId::new(42);
         assert_eq!(SlashCommandScope::Global, SlashCommandScope::Global);
@@ -3265,6 +3299,11 @@ mod tests {
         assert_eq!(router.resolve_command("unknown"), Some(&10));
         assert_eq!(router.resolve_component("ticket:unknown"), Some(&20));
         assert_eq!(router.resolve_modal("prefs:unknown"), Some(&30));
+
+        assert!(!router.contains_command("unknown"));
+        assert!(!router.contains_component("ticket:unknown"));
+        assert!(!router.contains_modal("prefs:unknown"));
+        assert!(router.contains_command("ping"));
 
         assert_eq!(router.set_command_fallback(11), Some(10));
         assert_eq!(router.resolve_command("still-unknown"), Some(&11));
