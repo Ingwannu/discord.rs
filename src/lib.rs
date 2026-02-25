@@ -1839,8 +1839,6 @@ impl ContentInventoryEntryBuilder {
     }
 }
 
-/// Components v2에서 Channel Select를 사용할 때의 채널 타입 상수
-
 /// Slash command option type constants based on Discord API.
 pub mod command_option_type {
     pub const SUB_COMMAND: u8 = 1;
@@ -2098,6 +2096,31 @@ pub fn slash_command_registration_payload(commands: Vec<SlashCommandBuilder>) ->
         .collect()
 }
 
+/// Register global slash commands via Discord bulk overwrite endpoint.
+///
+/// This wraps serenity's raw HTTP call so you can keep using `SlashCommandBuilder`.
+pub async fn register_global_slash_commands(
+    http: &Http,
+    commands: Vec<SlashCommandBuilder>,
+) -> Result<Vec<serenity::Command>, Error> {
+    let payload = slash_command_registration_payload(commands);
+    let created = http.create_global_commands(&payload).await?;
+    Ok(created)
+}
+
+/// Register guild slash commands via Discord bulk overwrite endpoint.
+///
+/// Useful for fast iteration since guild commands update quickly.
+pub async fn register_guild_slash_commands(
+    http: &Http,
+    guild_id: serenity::GuildId,
+    commands: Vec<SlashCommandBuilder>,
+) -> Result<Vec<serenity::Command>, Error> {
+    let payload = slash_command_registration_payload(commands);
+    let created = http.create_guild_commands(guild_id, &payload).await?;
+    Ok(created)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DispatchKind {
     Command,
@@ -2134,48 +2157,80 @@ impl<T> InteractionRouter<T> {
         Self { routes: Vec::new() }
     }
 
-    pub fn on_command(mut self, name: &str, value: T) -> Self {
+    pub fn len(&self) -> usize {
+        self.routes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.routes.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.routes.clear();
+    }
+
+    pub fn insert_command(&mut self, name: &str, value: T) {
         self.routes.push(Route {
             kind: DispatchKind::Command,
             pattern: RoutePattern::Exact(name.to_string()),
             value,
         });
+    }
+
+    pub fn on_command(mut self, name: &str, value: T) -> Self {
+        self.insert_command(name, value);
         self
+    }
+
+    pub fn insert_component(&mut self, custom_id: &str, value: T) {
+        self.routes.push(Route {
+            kind: DispatchKind::Component,
+            pattern: RoutePattern::Exact(custom_id.to_string()),
+            value,
+        });
     }
 
     pub fn on_component(mut self, custom_id: &str, value: T) -> Self {
+        self.insert_component(custom_id, value);
+        self
+    }
+
+    pub fn insert_component_prefix(&mut self, prefix: &str, value: T) {
         self.routes.push(Route {
             kind: DispatchKind::Component,
-            pattern: RoutePattern::Exact(custom_id.to_string()),
+            pattern: RoutePattern::Prefix(prefix.to_string()),
             value,
         });
-        self
     }
 
     pub fn on_component_prefix(mut self, prefix: &str, value: T) -> Self {
-        self.routes.push(Route {
-            kind: DispatchKind::Component,
-            pattern: RoutePattern::Prefix(prefix.to_string()),
-            value,
-        });
+        self.insert_component_prefix(prefix, value);
         self
     }
 
-    pub fn on_modal(mut self, custom_id: &str, value: T) -> Self {
+    pub fn insert_modal(&mut self, custom_id: &str, value: T) {
         self.routes.push(Route {
             kind: DispatchKind::Modal,
             pattern: RoutePattern::Exact(custom_id.to_string()),
             value,
         });
+    }
+
+    pub fn on_modal(mut self, custom_id: &str, value: T) -> Self {
+        self.insert_modal(custom_id, value);
         self
     }
 
-    pub fn on_modal_prefix(mut self, prefix: &str, value: T) -> Self {
+    pub fn insert_modal_prefix(&mut self, prefix: &str, value: T) {
         self.routes.push(Route {
             kind: DispatchKind::Modal,
             pattern: RoutePattern::Prefix(prefix.to_string()),
             value,
         });
+    }
+
+    pub fn on_modal_prefix(mut self, prefix: &str, value: T) -> Self {
+        self.insert_modal_prefix(prefix, value);
         self
     }
 
@@ -2387,5 +2442,32 @@ mod tests {
         );
         assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&4));
         assert_eq!(router.resolve(DispatchKind::Modal, "ticket:open"), None);
+    }
+
+    #[test]
+    fn interaction_router_insert_len_and_clear() {
+        let mut router = InteractionRouter::new();
+        assert!(router.is_empty());
+
+        router.insert_command("ping", 1);
+        router.insert_component_prefix("ticket:", 2);
+        router.insert_modal("prefs", 3);
+
+        assert_eq!(router.len(), 3);
+        assert_eq!(router.resolve(DispatchKind::Command, "ping"), Some(&1));
+        assert_eq!(
+            router.resolve(DispatchKind::Component, "ticket:new"),
+            Some(&2)
+        );
+        assert_eq!(router.resolve(DispatchKind::Modal, "prefs"), Some(&3));
+
+        router.clear();
+        assert!(router.is_empty());
+    }
+
+    #[test]
+    fn slash_registration_payload_empty_is_valid() {
+        let payload = slash_command_registration_payload(vec![]);
+        assert!(payload.is_empty());
     }
 }

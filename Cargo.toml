@@ -13,3 +13,9 @@ categories = ["api-bindings"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serenity = { version = "0.12.5", default-features = false, features = ["http", "model", "rustls_backend"] }
+reqwest = { version = "=0.11.27", default-features = false }
+url = "=2.4.1"
+idna = "=0.5.0"
+time = "=0.3.36"
+time-core = "=0.1.2"
+time-macros = "=0.2.18"

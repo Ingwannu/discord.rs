@@ -8,7 +8,7 @@
 
 ```toml
 [dependencies]
-discordrs = "0.1.1"
+discordrs = "0.1.3"
 serenity = { version = "0.12.5", features = ["client", "gateway", "model", "http", "rustls_backend"] }
 ```
 
@@ -119,25 +119,34 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
     );
 ```
 
-## 8) Slash Command 등록 스캐폴딩
+## 8) Slash Command 등록
 
 ```rust
 use discordrs::{
-    slash_command_registration_payload, CommandOptionBuilder, CommandOptionChoice,
-    SlashCommandBuilder,
+    register_guild_slash_commands, register_global_slash_commands,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
 };
+use serenity::all::GuildId;
+use serenity::http::Http;
 
-let payload = slash_command_registration_payload(vec![
-    SlashCommandBuilder::new("ping", "지연 시간 확인")
-        .dm_permission(false)
-        .add_option(
-            CommandOptionBuilder::string("target", "대상")
-                .required(true)
-                .add_choice(CommandOptionChoice::string("전체", "all")),
-        ),
-]);
+async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
+    let commands = vec![
+        SlashCommandBuilder::new("ping", "지연 시간 확인")
+            .dm_permission(false)
+            .add_option(
+                CommandOptionBuilder::string("target", "대상")
+                    .required(true)
+                    .add_choice(CommandOptionChoice::string("전체", "all")),
+            ),
+    ];
 
-// payload(Vec<Value>)를 serenity HTTP bulk overwrite API에 전달
+    // 글로벌 반영(전파 지연 가능)
+    let _ = register_global_slash_commands(http, commands.clone()).await?;
+
+    // 길드 반영(보통 빠름)
+    let _ = register_guild_slash_commands(http, guild_id, commands).await?;
+    Ok(())
+}
 ```
 
 ## 9) Interaction 디스패치 헬퍼
@@ -145,10 +154,10 @@ let payload = slash_command_registration_payload(vec![
 ```rust
 use discordrs::{dispatch_interaction, InteractionRouter};
 
-let router = InteractionRouter::new()
-    .on_command("ping", "handle_ping")
-    .on_component_prefix("ticket:", "handle_ticket_component")
-    .on_modal_prefix("ticket_modal:", "handle_ticket_modal");
+let mut router = InteractionRouter::new();
+router.insert_command("ping", "handle_ping");
+router.insert_component_prefix("ticket:", "handle_ticket_component");
+router.insert_modal_prefix("ticket_modal:", "handle_ticket_modal");
 
 // event loop 내부
 // if let Some(route) = dispatch_interaction(&router, &interaction) {

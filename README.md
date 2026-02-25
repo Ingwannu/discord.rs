@@ -70,32 +70,42 @@ async fn send_panel(http: &Http, channel_id: ChannelId) -> Result<(), Box<dyn st
 }
 ```
 
-## Slash Command Registration Scaffolding
+## Slash Command Registration
 
-`discordrs` now includes JSON builders for bulk command registration payloads.
+`discordrs` includes both payload builders and ready-to-use bulk registration helpers.
 
 ```rust
 use discordrs::{
-    slash_command_registration_payload, CommandOptionBuilder, CommandOptionChoice,
-    SlashCommandBuilder,
+    register_guild_slash_commands, register_global_slash_commands,
+    CommandOptionBuilder, CommandOptionChoice, SlashCommandBuilder,
 };
+use serenity::all::GuildId;
+use serenity::http::Http;
 
-let commands = slash_command_registration_payload(vec![
-    SlashCommandBuilder::new("ping", "Latency check")
-        .dm_permission(false)
-        .add_option(
-            CommandOptionBuilder::string("target", "who to ping")
-                .required(true)
-                .add_choice(CommandOptionChoice::string("all", "all")),
-        ),
-]);
+async fn register(http: &Http, guild_id: GuildId) -> Result<(), discordrs::Error> {
+    let commands = vec![
+        SlashCommandBuilder::new("ping", "Latency check")
+            .dm_permission(false)
+            .add_option(
+                CommandOptionBuilder::string("target", "who to ping")
+                    .required(true)
+                    .add_choice(CommandOptionChoice::string("all", "all")),
+            ),
+    ];
 
-// Pass `commands` into serenity HTTP bulk overwrite endpoints.
+    // Global update (can take up to ~1 hour to propagate)
+    let _global = register_global_slash_commands(http, commands.clone()).await?;
+
+    // Guild update (usually near-immediate)
+    let _guild = register_guild_slash_commands(http, guild_id, commands).await?;
+    Ok(())
+}
 ```
 
 ## Interaction Dispatch Helper
 
 Use `InteractionRouter` for ergonomic routing by slash command name, component `custom_id`, or prefix patterns.
+You can either chain with `on_*` or mutate with `insert_*` methods.
 
 ```rust
 use discordrs::{dispatch_interaction, InteractionRouter};
