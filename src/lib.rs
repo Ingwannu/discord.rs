@@ -1317,6 +1317,12 @@ pub struct ComponentsV2Message {
     components: Vec<Value>,
 }
 
+impl Default for ComponentsV2Message {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ComponentsV2Message {
     pub fn new() -> Self {
         Self {
@@ -1809,4 +1815,127 @@ pub async fn respond_component_with_components_v2(
         .await?;
 
     Ok(())
+}
+
+/// Content Inventory Entry 빌더 (type 16)
+/// Discord 최신 컴포넌트 타입 상수를 실제로 사용할 수 있게 제공
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ContentInventoryEntryBuilder {
+    #[serde(rename = "type")]
+    component_type: u8,
+    id: String,
+}
+
+impl ContentInventoryEntryBuilder {
+    pub fn new(id: &str) -> Self {
+        Self {
+            component_type: component_type::CONTENT_INVENTORY_ENTRY,
+            id: id.to_string(),
+        }
+    }
+
+    pub fn build(self) -> Value {
+        to_json_value(self)
+    }
+}
+
+/// Components v2에서 Channel Select를 사용할 때의 채널 타입 상수
+pub mod channel_type {
+    pub const GUILD_TEXT: u8 = 0;
+    pub const DM: u8 = 1;
+    pub const GUILD_VOICE: u8 = 2;
+    pub const GROUP_DM: u8 = 3;
+    pub const GUILD_CATEGORY: u8 = 4;
+    pub const GUILD_ANNOUNCEMENT: u8 = 5;
+    pub const ANNOUNCEMENT_THREAD: u8 = 10;
+    pub const PUBLIC_THREAD: u8 = 11;
+    pub const PRIVATE_THREAD: u8 = 12;
+    pub const GUILD_STAGE_VOICE: u8 = 13;
+    pub const GUILD_FORUM: u8 = 15;
+    pub const GUILD_MEDIA: u8 = 16;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_container_chunks_buttons_into_rows_of_five() {
+        let buttons = (0..7)
+            .map(|i| ButtonConfig::new(&format!("id_{i}"), &format!("btn_{i}")))
+            .collect::<Vec<_>>();
+
+        let v = create_container("title", "desc", buttons, None).build();
+        let components = v
+            .get("components")
+            .and_then(Value::as_array)
+            .expect("components should be array");
+
+        let action_rows = components
+            .iter()
+            .filter(|c| {
+                c.get("type").and_then(Value::as_u64) == Some(component_type::ACTION_ROW as u64)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(action_rows.len(), 2);
+
+        let first_row_count = action_rows[0]
+            .get("components")
+            .and_then(Value::as_array)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let second_row_count = action_rows[1]
+            .get("components")
+            .and_then(Value::as_array)
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        assert_eq!(first_row_count, 5);
+        assert_eq!(second_row_count, 2);
+    }
+
+    #[test]
+    fn modal_radio_checkbox_builds_labels() {
+        let modal = ModalBuilder::new("prefs", "Preferences")
+            .add_radio_group(
+                "Theme",
+                Some("pick one"),
+                RadioGroupBuilder::new("theme").add_option(SelectOption::new("Dark", "dark")),
+            )
+            .add_checkbox("Agree", None, CheckboxBuilder::new("agree").required(true))
+            .build();
+
+        let components = modal
+            .get("components")
+            .and_then(Value::as_array)
+            .expect("modal components should be array");
+
+        assert_eq!(components.len(), 2);
+        for c in components {
+            assert_eq!(
+                c.get("type").and_then(Value::as_u64),
+                Some(component_type::LABEL as u64)
+            );
+        }
+    }
+
+    #[test]
+    fn components_v2_payload_sets_flags() {
+        let map = ComponentsV2Payload::new(vec![])
+            .ephemeral(true)
+            .into_map()
+            .expect("payload map");
+
+        let flags = map
+            .get("flags")
+            .and_then(Value::as_u64)
+            .expect("flags should be u64");
+
+        assert_eq!(
+            flags & MESSAGE_FLAG_IS_COMPONENTS_V2,
+            MESSAGE_FLAG_IS_COMPONENTS_V2
+        );
+        assert_eq!(flags & (1 << 6), 1 << 6);
+    }
 }
