@@ -33,10 +33,43 @@
     </div>
 
     <script>
+      function appBasePath() {
+        var path = window.location.pathname || '/';
+        if (!path.endsWith('/')) {
+          path = path.replace(/\/[^/]*$/, '/');
+        }
+        return path;
+      }
+
+      function normalizeRoute(route) {
+        if (!route || route === '/') return '/README';
+        if (route.endsWith('.md')) return route.slice(0, -3);
+        if (!route.startsWith('/')) return '/' + route;
+        return route;
+      }
+
+      function routeToHash(route) {
+        return '#' + normalizeRoute(route);
+      }
+
+      function navigateToRoute(route) {
+        window.location.assign(appBasePath() + routeToHash(route));
+      }
+
+      function rewriteHashAnchors() {
+        var base = appBasePath();
+        document.querySelectorAll('a[href^="/#/"], a[href^="#/"]').forEach(function (a) {
+          var href = a.getAttribute('href');
+          if (!href) return;
+          var hash = href.replace(/^\/?#/, '#');
+          a.setAttribute('href', base + hash);
+        });
+      }
+
       window.$docsify = {
         name: 'discordrs docs',
         repo: 'Ingwannu/discordrs',
-        homepage: '/README.md',
+        homepage: 'README.md',
         loadSidebar: true,
         loadNavbar: true,
         subMaxLevel: 3,
@@ -69,7 +102,14 @@
             useMaxWidth: true,
             htmlLabels: true
           }
-        }
+        },
+        plugins: [
+          function (hook) {
+            hook.doneEach(function () {
+              rewriteHashAnchors();
+            });
+          }
+        ]
       };
     </script>
 
@@ -86,12 +126,6 @@
         var toggle = document.getElementById('lang-fab-toggle');
         var menu = document.getElementById('lang-fab-menu');
         var root = document.getElementById('lang-fab');
-
-        function normalizeRoute(route) {
-          if (!route || route === '/') return '/README';
-          if (route.endsWith('.md')) return route.slice(0, -3);
-          return route;
-        }
 
         function currentRoute() {
           var hash = window.location.hash || '#/README';
@@ -132,7 +166,7 @@
         function switchLanguage(lang) {
           var route = currentRoute();
           var target = lang === 'ko' ? toKo(route) : toEn(route);
-          window.location.hash = '#' + target;
+          navigateToRoute(target);
           menu.hidden = true;
           toggle.setAttribute('aria-expanded', 'false');
         }
@@ -155,6 +189,8 @@
             toggle.setAttribute('aria-expanded', 'false');
           }
         });
+
+        rewriteHashAnchors();
       })();
     </script>
   </body>

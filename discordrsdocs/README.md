@@ -15,8 +15,7 @@ A practical docs site for building Discord bots with `discordrs`.
 
 ## Language
 
-- [English](#/README)
-- [한국어](#/ko/README)
+Use the floating `LANG` button (bottom-right) to switch language.
 
 ## Live Site
 
