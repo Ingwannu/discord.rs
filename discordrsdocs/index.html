@@ -21,12 +21,22 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="lang-fab" class="lang-fab">
+      <button id="lang-fab-toggle" class="lang-fab-toggle" type="button" aria-haspopup="true" aria-expanded="false">
+        <span class="lang-fab-icon">☰</span>
+        <span class="lang-fab-label">LANG</span>
+      </button>
+      <div id="lang-fab-menu" class="lang-fab-menu" hidden>
+        <button type="button" data-lang="en">English</button>
+        <button type="button" data-lang="ko">한국어</button>
+      </div>
+    </div>
 
     <script>
       window.$docsify = {
         name: 'discordrs docs',
         repo: 'Ingwannu/discordrs',
-        homepage: 'README.md',
+        homepage: '/README.md',
         loadSidebar: true,
         loadNavbar: true,
         subMaxLevel: 3,
@@ -71,5 +81,81 @@
     <script src="https://cdn.jsdelivr.net/npm/docsify-mermaid@latest/dist/docsify-mermaid.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-rust.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-toml.min.js"></script>
+    <script>
+      (function () {
+        var toggle = document.getElementById('lang-fab-toggle');
+        var menu = document.getElementById('lang-fab-menu');
+        var root = document.getElementById('lang-fab');
+
+        function normalizeRoute(route) {
+          if (!route || route === '/') return '/README';
+          if (route.endsWith('.md')) return route.slice(0, -3);
+          return route;
+        }
+
+        function currentRoute() {
+          var hash = window.location.hash || '#/README';
+          return normalizeRoute(hash.slice(1));
+        }
+
+        function toKo(route) {
+          route = normalizeRoute(route);
+          if (route.startsWith('/ko/')) return route;
+          if (route === '/README') return '/ko/README';
+          if (route.startsWith('/docs/guide/')) {
+            var guide = route.slice('/docs/guide/'.length);
+            if (guide === 'crate-readme' || guide === 'changelog') return route;
+            return '/ko/guide/' + guide;
+          }
+          if (route.startsWith('/docs/api/')) {
+            return '/ko/api/' + route.slice('/docs/api/'.length);
+          }
+          return '/ko/README';
+        }
+
+        function toEn(route) {
+          route = normalizeRoute(route);
+          if (!route.startsWith('/ko/')) return route;
+          if (route === '/ko/README') return '/README';
+          if (route.startsWith('/ko/guide/')) {
+            var guide = route.slice('/ko/guide/'.length);
+            if (guide === 'full-manual') return '/docs/guide/full-manual';
+            if (guide === 'pdf-manual') return '/docs/guide/pdf-manual';
+            return '/docs/guide/' + guide;
+          }
+          if (route.startsWith('/ko/api/')) {
+            return '/docs/api/' + route.slice('/ko/api/'.length);
+          }
+          return '/README';
+        }
+
+        function switchLanguage(lang) {
+          var route = currentRoute();
+          var target = lang === 'ko' ? toKo(route) : toEn(route);
+          window.location.hash = '#' + target;
+          menu.hidden = true;
+          toggle.setAttribute('aria-expanded', 'false');
+        }
+
+        toggle.addEventListener('click', function () {
+          var next = menu.hidden;
+          menu.hidden = !next;
+          toggle.setAttribute('aria-expanded', String(next));
+        });
+
+        menu.querySelectorAll('button[data-lang]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            switchLanguage(btn.getAttribute('data-lang'));
+          });
+        });
+
+        document.addEventListener('click', function (event) {
+          if (!root.contains(event.target)) {
+            menu.hidden = true;
+            toggle.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+    </script>
   </body>
 </html>

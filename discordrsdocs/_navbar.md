@@ -1,6 +1,4 @@
 * [GitHub](https://github.com/Ingwannu/discordrs)
-* [English](#/README)
-* [한국어](#/ko/README)
 * [Crate README](#/docs/guide/crate-readme)
 * [Usage](#/docs/guide/usage-guide)
 * [Changelog](#/docs/guide/changelog)

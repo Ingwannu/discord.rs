@@ -71,6 +71,76 @@
   border: 1px solid #cbd5e1;
 }
 
+.lang-fab {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.lang-fab-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #1e3a8a;
+  border-radius: 999px;
+  background: #1d4ed8;
+  color: #eff6ff;
+  padding: 10px 14px;
+  cursor: pointer;
+  box-shadow: 0 10px 25px rgba(15, 23, 42, 0.25);
+  font-family: var(--base-font-family);
+  font-weight: 700;
+}
+
+.lang-fab-toggle:hover {
+  background: #1e40af;
+}
+
+.lang-fab-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.lang-fab-label {
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.lang-fab-menu {
+  min-width: 150px;
+  background: #ffffff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+}
+
+.lang-fab-menu[hidden] {
+  display: none;
+}
+
+.lang-fab-menu button {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #0f172a;
+  padding: 10px 12px;
+  font-family: var(--base-font-family);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lang-fab-menu button:hover {
+  background: #eff6ff;
+}
+
 @media (max-width: 900px) {
   :root {
     --content-max-width: 100%;
@@ -78,5 +148,10 @@
 
   .markdown-section h1 {
     font-size: 1.7rem;
+  }
+
+  .lang-fab {
+    right: 12px;
+    bottom: 12px;
   }
 }

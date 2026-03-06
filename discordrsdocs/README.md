@@ -6,12 +6,12 @@ A practical docs site for building Discord bots with `discordrs`.
 
 ## Start Here
 
-- [Getting Started](docs/guide/getting-started.md)
-- [Usage Guide](docs/guide/usage-guide.md)
-- [Architecture](docs/guide/architecture.md)
-- [Interaction Flow](docs/guide/interaction-flow.md)
-- [Full Technical Manual (Markdown)](docs/guide/full-manual.md)
-- [Full Technical Manual (PDF)](docs/guide/pdf-manual.md)
+- [Getting Started](#/docs/guide/getting-started)
+- [Usage Guide](#/docs/guide/usage-guide)
+- [Architecture](#/docs/guide/architecture)
+- [Interaction Flow](#/docs/guide/interaction-flow)
+- [Full Technical Manual (Markdown)](#/docs/guide/full-manual)
+- [Full Technical Manual (PDF)](#/docs/guide/pdf-manual)
 
 ## Language
 
