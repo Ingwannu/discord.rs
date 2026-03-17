@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 ```
 
 ## Minimal Gateway Bot
@@ -58,3 +58,4 @@ cargo run
 
 - Go to [Usage Guide](usage-guide.md)
 - Explore [API Reference](../api/builders.md)
+

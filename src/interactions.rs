@@ -12,7 +12,8 @@ use serde_json::Value;
 
 use crate::builders::ModalBuilder;
 use crate::parsers::{
-    parse_interaction_context, parse_raw_interaction, value_to_u8, InteractionContext, RawInteraction,
+    parse_interaction_context, parse_raw_interaction, value_to_u8, InteractionContext,
+    RawInteraction,
 };
 use crate::types::{invalid_data_error, Error};
 
@@ -27,12 +28,16 @@ pub enum InteractionResponse {
 
 #[async_trait]
 pub trait InteractionHandler: Send + Sync {
-    async fn handle(&self, ctx: InteractionContext, interaction: RawInteraction) -> InteractionResponse;
+    async fn handle(
+        &self,
+        ctx: InteractionContext,
+        interaction: RawInteraction,
+    ) -> InteractionResponse;
 }
 
 #[derive(Clone)]
 struct InteractionsState<H> {
-    public_key: String,
+    verifying_key: VerifyingKey,
     handler: H,
 }
 
@@ -74,15 +79,13 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, Statu
 }
 
 fn verify_discord_request_signature(
-    public_key: &str,
+    verifying_key: &VerifyingKey,
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(), StatusCode> {
     let signature = header_value(headers, "x-signature-ed25519")?;
     let timestamp = header_value(headers, "x-signature-timestamp")?;
-    let verifying_key = decode_verifying_key(public_key).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    verify_signature_with_key(&verifying_key, signature, timestamp, body)
+    verify_signature_with_key(verifying_key, signature, timestamp, body)
         .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
@@ -124,7 +127,9 @@ async fn handle_interactions_request<H>(
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
 {
-    if let Err(status) = verify_discord_request_signature(&state.public_key, &headers, body.as_ref()) {
+    if let Err(status) =
+        verify_discord_request_signature(&state.verifying_key, &headers, body.as_ref())
+    {
         return status.into_response();
     }
 
@@ -181,14 +186,58 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
+pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, Error>
+where
+    H: InteractionHandler + Clone + Send + Sync + 'static,
+{
+    let verifying_key = decode_verifying_key(public_key)?;
+
+    Ok(Router::new()
+        .route("/interactions", post(handle_interactions_request::<H>))
+        .with_state(InteractionsState {
+            verifying_key,
+            handler,
+        }))
+}
+
 pub fn interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
 {
-    Router::new()
-        .route("/interactions", post(handle_interactions_request::<H>))
-        .with_state(InteractionsState {
-            public_key: public_key.to_string(),
-            handler,
-        })
+    try_interactions_endpoint(public_key, handler)
+        .expect("invalid Discord public key for interactions endpoint")
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    use super::{try_interactions_endpoint, InteractionHandler, InteractionResponse};
+    use crate::parsers::{InteractionContext, RawInteraction};
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    #[async_trait]
+    impl InteractionHandler for TestHandler {
+        async fn handle(
+            &self,
+            _ctx: InteractionContext,
+            _interaction: RawInteraction,
+        ) -> InteractionResponse {
+            InteractionResponse::Raw(Value::Null)
+        }
+    }
+
+    #[test]
+    fn try_interactions_endpoint_rejects_invalid_public_key() {
+        assert!(try_interactions_endpoint("bad-key", TestHandler).is_err());
+    }
+
+    #[test]
+    fn try_interactions_endpoint_accepts_valid_public_key() {
+        let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(try_interactions_endpoint(public_key, TestHandler).is_ok());
+    }
 }

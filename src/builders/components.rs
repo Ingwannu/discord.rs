@@ -60,11 +60,16 @@ impl ButtonBuilder {
 
     pub fn custom_id(mut self, custom_id: &str) -> Self {
         self.custom_id = Some(custom_id.to_string());
+        self.url = None;
+        if self.style == button_style::LINK {
+            self.style = button_style::PRIMARY;
+        }
         self
     }
 
     pub fn url(mut self, url: &str) -> Self {
         self.url = Some(url.to_string());
+        self.custom_id = None;
         self.style = button_style::LINK;
         self
     }
@@ -74,8 +79,18 @@ impl ButtonBuilder {
         self
     }
 
+    fn normalize(mut self) -> Self {
+        if self.url.is_some() {
+            self.custom_id = None;
+            self.style = button_style::LINK;
+        } else if self.style == button_style::LINK {
+            self.style = button_style::PRIMARY;
+        }
+        self
+    }
+
     pub fn build(self) -> Value {
-        to_json_value(self)
+        to_json_value(self.normalize())
     }
 }
 
@@ -247,8 +262,24 @@ impl SelectMenuBuilder {
         self
     }
 
+    fn normalize(mut self) -> Self {
+        match self.component_type {
+            component_type::STRING_SELECT => {
+                self.channel_types = None;
+            }
+            component_type::CHANNEL_SELECT => {
+                self.options.clear();
+            }
+            _ => {
+                self.options.clear();
+                self.channel_types = None;
+            }
+        }
+        self
+    }
+
     pub fn build(self) -> Value {
-        to_json_value(self)
+        to_json_value(self.normalize())
     }
 }
 
@@ -311,5 +342,110 @@ impl ComponentsV2Message {
 
     pub fn build(self) -> Vec<Value> {
         self.components
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ButtonBuilder, SelectMenuBuilder};
+    use crate::constants::{button_style, component_type};
+    use crate::types::SelectOption;
+
+    #[test]
+    fn button_url_omits_custom_id_and_forces_link_style() {
+        let payload = ButtonBuilder::new()
+            .custom_id("button")
+            .url("https://example.com")
+            .build();
+
+        assert_eq!(
+            payload.get("style").and_then(|value| value.as_u64()),
+            Some(button_style::LINK as u64)
+        );
+        assert!(payload.get("custom_id").is_none());
+        assert_eq!(
+            payload.get("url").and_then(|value| value.as_str()),
+            Some("https://example.com")
+        );
+    }
+
+    #[test]
+    fn button_custom_id_omits_url_and_clears_link_style() {
+        let payload = ButtonBuilder::new()
+            .url("https://example.com")
+            .custom_id("button")
+            .build();
+
+        assert_eq!(
+            payload.get("style").and_then(|value| value.as_u64()),
+            Some(button_style::PRIMARY as u64)
+        );
+        assert_eq!(
+            payload.get("custom_id").and_then(|value| value.as_str()),
+            Some("button")
+        );
+        assert!(payload.get("url").is_none());
+    }
+
+    #[test]
+    fn button_link_style_without_url_falls_back_to_primary() {
+        let payload = ButtonBuilder::new().style(button_style::LINK).build();
+
+        assert_eq!(
+            payload.get("style").and_then(|value| value.as_u64()),
+            Some(button_style::PRIMARY as u64)
+        );
+        assert!(payload.get("url").is_none());
+    }
+
+    #[test]
+    fn string_select_omits_channel_types() {
+        let payload = SelectMenuBuilder::string("menu")
+            .add_option(SelectOption::new("One", "one"))
+            .channel_types(vec![0, 2])
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::STRING_SELECT as u64)
+        );
+        assert!(payload.get("options").is_some());
+        assert!(payload.get("channel_types").is_none());
+    }
+
+    #[test]
+    fn channel_select_omits_options() {
+        let payload = SelectMenuBuilder::channel("menu")
+            .add_option(SelectOption::new("One", "one"))
+            .channel_types(vec![0, 2])
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::CHANNEL_SELECT as u64)
+        );
+        assert!(payload.get("options").is_none());
+        assert_eq!(
+            payload
+                .get("channel_types")
+                .and_then(|value| value.as_array())
+                .map(|value| value.len()),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn non_string_non_channel_select_omits_variant_specific_fields() {
+        let payload = SelectMenuBuilder::role("menu")
+            .add_option(SelectOption::new("One", "one"))
+            .channel_types(vec![0, 2])
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::ROLE_SELECT as u64)
+        );
+        assert!(payload.get("options").is_none());
+        assert!(payload.get("channel_types").is_none());
     }
 }

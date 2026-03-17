@@ -16,19 +16,19 @@ Standalone Discord bot framework for Rust with Components V2, Gateway WebSocket,
 
 ```toml
 [dependencies]
-discordrs = "0.3.0"
+discordrs = "0.3.1"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "0.3.0", features = ["interactions"] }
+discordrs = { version = "0.3.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
 ```
 
 ## Quick Example
@@ -138,7 +138,7 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, but v0.3.0 is now a fully standalone framework.
+- `discordrs` started as a helper around serenity workflows, but v0.3.1 is now a fully standalone framework.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 
 ## License
@@ -154,3 +154,4 @@ at your option.
 
 - ingwannu
 - Contact: ingwannu@teamwicked.me, ingwannu@gmail.com
+

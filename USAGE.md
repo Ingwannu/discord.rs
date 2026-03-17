@@ -8,7 +8,7 @@ A common setup for running a Gateway bot runtime is:
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 ```
 
 You can choose feature flags depending on your use case.
@@ -16,16 +16,16 @@ You can choose feature flags depending on your use case.
 ```toml
 [dependencies]
 # Core only (builders, parsers, HTTP client, helpers)
-discordrs = "0.3.0"
+discordrs = "0.3.1"
 
 # Gateway + bot client runtime
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 
 # Interactions Endpoint
-discordrs = { version = "0.3.0", features = ["interactions"] }
+discordrs = { version = "0.3.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
 ```
 
 ## 2. Start a Bot
@@ -112,7 +112,67 @@ async fn handle_slash(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 }
 ```
 
-## 5. Respond to Button/Select Interactions
+## 5. Build an Interactions Endpoint Safely
+
+Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of turning into runtime 500s.
+
+```rust
+use async_trait::async_trait;
+use axum::Router;
+use discordrs::{
+    create_container, InteractionContext, InteractionHandler, InteractionResponse, RawInteraction,
+    try_interactions_endpoint,
+};
+
+#[derive(Clone)]
+struct Handler;
+
+#[async_trait]
+impl InteractionHandler for Handler {
+    async fn handle(
+        &self,
+        _ctx: InteractionContext,
+        interaction: RawInteraction,
+    ) -> InteractionResponse {
+        match interaction {
+            RawInteraction::Command { name, .. } if name.as_deref() == Some("hello") => {
+                InteractionResponse::ChannelMessage(serde_json::json!({
+                    "components": [create_container("Hello", "From interactions endpoint", vec![], None).build()],
+                    "flags": 1 << 15,
+                }))
+            }
+            _ => InteractionResponse::DeferredMessage,
+        }
+    }
+}
+
+fn build_router(public_key: &str) -> Router {
+    try_interactions_endpoint(public_key, Handler).expect("invalid Discord public key")
+}
+```
+
+## 6. Send a Follow-up When You Already Have application_id
+
+If the HTTP client was created without an application id, use the explicit follow-up method with `InteractionContext.application_id` instead of relying on an unset client value.
+
+```rust
+use discordrs::{parse_interaction_context, DiscordHttpClient};
+use serde_json::Value;
+
+async fn send_followup(http: &DiscordHttpClient, payload: &Value) -> Result<(), discordrs::Error> {
+    let ctx = parse_interaction_context(payload)?;
+    let body = serde_json::json!({
+        "content": "Follow-up message",
+    });
+
+    http.create_followup_message_with_application_id(&ctx.application_id, &ctx.token, &body)
+        .await?;
+
+    Ok(())
+}
+```
+
+## 7. Respond to Button/Select Interactions
 
 ```rust
 use discordrs::{
@@ -130,9 +190,9 @@ async fn handle_component(http: &DiscordHttpClient, payload: &Value) -> Result<(
 }
 ```
 
-## 6. Respond to Modal Submissions
+## 8. Respond to Modal Submissions
 
-From `RawInteraction::ModalSubmit`, you can read Radio/Checkbox values from `V2ModalSubmission` without losing V2 structure.
+From `RawInteraction::ModalSubmit`, you can read Radio/Checkbox/FileUpload values from `V2ModalSubmission` without losing V2 structure.
 
 ```rust
 use discordrs::{
@@ -147,8 +207,12 @@ fn summarize(submission: &V2ModalSubmission) -> String {
         .get_select_values("notify_channels")
         .map(|v| v.join(", "))
         .unwrap_or_else(|| "None".to_string());
+    let files = submission
+        .get_file_values("attachments")
+        .map(|v| v.join(", "))
+        .unwrap_or_else(|| "No files".to_string());
 
-    format!("Theme: {theme}, Notifications: {channels}")
+    format!("Theme: {theme}, Notifications: {channels}, Files: {files}")
 }
 
 async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), discordrs::Error> {
@@ -164,24 +228,12 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 }
 ```
 
-## 7. Frequently Used APIs
-
-- `DiscordHttpClient::new(token, application_id)`: Create a REST client
-- `create_container(...)`: Build a base Components V2 container message
-- `send_container_message(...)`: Send a Components V2 message to a channel
-- `respond_with_container(...)`: Reply to a Slash Command
-- `respond_component_with_container(...)`: Reply to button/select interactions
-- `respond_modal_with_container(...)`: Reply to modal submissions
-- `respond_with_modal(...)`: Open a modal as a response
-- `parse_raw_interaction(...)`: Route by interaction type
-- `parse_interaction_context(...)`: Extract shared context required for replies
-- `parse_modal_submission(...)`: Parse V2 modal submission data
-
-## 8. Modal Radio/Checkbox Example
+## 9. Modal Radio/Checkbox/FileUpload Example
 
 ```rust
 use discordrs::{
-    CheckboxBuilder, CheckboxGroupBuilder, ModalBuilder, RadioGroupBuilder, SelectOption,
+    CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, ModalBuilder, RadioGroupBuilder,
+    SelectOption,
 };
 
 let modal = ModalBuilder::new("preferences_modal", "Preferences")
@@ -206,11 +258,33 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
         "Agree to Terms",
         None,
         CheckboxBuilder::new("agree_terms").required(true),
+    )
+    .add_file_upload(
+        "Screenshot",
+        Some("Attach one or more files"),
+        FileUploadBuilder::new("attachments").min_values(1),
     );
 ```
 
-## 9. Notes
+## 10. Frequently Used APIs
 
-- Since v0.3.0, `discordrs` is a standalone framework that provides both Gateway and HTTP capabilities.
-- The V2 modal parser preserves component types such as `Label`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`, which helps downstream processing.
+- `DiscordHttpClient::new(token, application_id)`: Create a REST client
+- `create_container(...)`: Build a base Components V2 container message
+- `send_container_message(...)`: Send a Components V2 message to a channel
+- `respond_with_container(...)`: Reply to a Slash Command
+- `try_interactions_endpoint(...)`: Build an interactions endpoint with startup-time public key validation
+- `DiscordHttpClient::create_followup_message_with_application_id(...)`: Send follow-up replies when `InteractionContext.application_id` is available
+- `respond_component_with_container(...)`: Reply to button/select interactions
+- `respond_modal_with_container(...)`: Reply to modal submissions
+- `respond_with_modal(...)`: Open a modal as a response
+- `parse_raw_interaction(...)`: Route by interaction type
+- `parse_interaction_context(...)`: Extract shared context required for replies
+- `parse_modal_submission(...)`: Parse V2 modal submission data
+
+## 11. Notes
+
+- Since v0.3.1, `discordrs` is a standalone framework that provides both Gateway and HTTP capabilities.
+- The V2 modal parser preserves component types such as `FileUpload`, `Label`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`, which helps downstream processing.
 - Interaction response helpers can directly use `id` and `token` from `InteractionContext`.
+- Follow-up webhook helpers now fail early if `application_id` is missing instead of emitting `/webhooks/0/...`.
+

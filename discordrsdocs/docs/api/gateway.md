@@ -13,7 +13,7 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 ```
 
 ## Boot Pattern
@@ -39,3 +39,4 @@ Implement what you need:
 - Keep handler methods non-blocking.
 - Push heavy work to background tasks.
 - Use `Context.http` for follow-up API calls.
+

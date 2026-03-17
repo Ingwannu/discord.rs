@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::future::poll_fn;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Poll, Waker};
 use std::time::Duration;
 
 use reqwest::{Client, Method, StatusCode};
@@ -32,8 +35,12 @@ impl DiscordHttpClient {
     }
 
     pub async fn send_message(&self, channel_id: u64, body: &Value) -> Result<Value, Error> {
-        self.request(Method::POST, &format!("/channels/{channel_id}/messages"), Some(body))
-            .await
+        self.request(
+            Method::POST,
+            &format!("/channels/{channel_id}/messages"),
+            Some(body),
+        )
+        .await
     }
 
     pub async fn edit_message(
@@ -86,15 +93,19 @@ impl DiscordHttpClient {
         interaction_token: &str,
         body: &Value,
     ) -> Result<Value, Error> {
-        self.request(
-            Method::POST,
-            &format!(
-                "/webhooks/{}/{interaction_token}",
-                self.application_id()
-            ),
-            Some(body),
-        )
-        .await
+        let application_id = configured_application_id(self.application_id())?;
+        self.create_followup_message_with_application_id(&application_id, interaction_token, body)
+            .await
+    }
+
+    pub async fn create_followup_message_with_application_id(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        body: &Value,
+    ) -> Result<Value, Error> {
+        let path = followup_webhook_path(application_id, interaction_token, None)?;
+        self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn edit_followup_message(
@@ -103,15 +114,25 @@ impl DiscordHttpClient {
         message_id: &str,
         body: &Value,
     ) -> Result<Value, Error> {
-        self.request(
-            Method::PATCH,
-            &format!(
-                "/webhooks/{}/{interaction_token}/messages/{message_id}",
-                self.application_id()
-            ),
-            Some(body),
+        let application_id = configured_application_id(self.application_id())?;
+        self.edit_followup_message_with_application_id(
+            &application_id,
+            interaction_token,
+            message_id,
+            body,
         )
         .await
+    }
+
+    pub async fn edit_followup_message_with_application_id(
+        &self,
+        application_id: &str,
+        interaction_token: &str,
+        message_id: &str,
+        body: &Value,
+    ) -> Result<Value, Error> {
+        let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
+        self.request(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn bulk_overwrite_global_commands(
@@ -135,12 +156,15 @@ impl DiscordHttpClient {
         }
     }
 
-    pub async fn request(&self, method: Method, path: &str, body: Option<&Value>) -> Result<Value, Error> {
+    pub async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<Value, Error> {
         let mut retried_after_429 = false;
         loop {
-            let (status, response_text) = self
-                .request_once(method.clone(), path, body)
-                .await?;
+            let (status, response_text) = self.request_once(method.clone(), path, body).await?;
 
             if status == StatusCode::TOO_MANY_REQUESTS {
                 let payload = parse_body_value(response_text);
@@ -153,10 +177,15 @@ impl DiscordHttpClient {
                 let retry_after = payload
                     .get("retry_after")
                     .and_then(Value::as_f64)
-                    .or_else(|| payload.get("retry_after").and_then(Value::as_u64).map(|v| v as f64))
+                    .or_else(|| {
+                        payload
+                            .get("retry_after")
+                            .and_then(Value::as_u64)
+                            .map(|v| v as f64)
+                    })
                     .unwrap_or(1.0);
 
-                sleep_for_retry_after(retry_after);
+                sleep_for_retry_after(retry_after).await;
                 retried_after_429 = true;
                 continue;
             }
@@ -190,7 +219,7 @@ impl DiscordHttpClient {
             .request(method, url)
             .header("Authorization", format!("Bot {}", self.token))
             .header("Content-Type", "application/json")
-            .header("User-Agent", "DiscordBot (discordrs, 0.3.0)");
+            .header("User-Agent", "DiscordBot (discordrs, 0.3.1)");
 
         if let Some(body) = body {
             request_builder = request_builder.json(body);
@@ -212,6 +241,99 @@ fn parse_body_value(response_text: String) -> Value {
     }
 }
 
-fn sleep_for_retry_after(retry_after_seconds: f64) {
-    std::thread::sleep(Duration::from_secs_f64(retry_after_seconds.max(0.0)));
+fn configured_application_id(application_id: u64) -> Result<String, Error> {
+    if application_id == 0 {
+        return Err(invalid_data_error(
+            "application_id must be set before follow-up webhook calls; use set_application_id() or create_followup_message_with_application_id()",
+        ));
+    }
+
+    Ok(application_id.to_string())
 }
+
+fn followup_webhook_path(
+    application_id: &str,
+    interaction_token: &str,
+    message_id: Option<&str>,
+) -> Result<String, Error> {
+    let application_id = application_id.trim();
+    if application_id.is_empty() || application_id == "0" {
+        return Err(invalid_data_error(
+            "application_id must be set before follow-up webhook calls",
+        ));
+    }
+
+    let path = match message_id {
+        Some(message_id) => {
+            format!("/webhooks/{application_id}/{interaction_token}/messages/{message_id}")
+        }
+        None => format!("/webhooks/{application_id}/{interaction_token}"),
+    };
+
+    Ok(path)
+}
+
+async fn sleep_for_retry_after(retry_after_seconds: f64) {
+    let duration = Duration::from_secs_f64(retry_after_seconds.max(0.0));
+    let finished = Arc::new(AtomicBool::new(false));
+    let waker = Arc::new(Mutex::new(None::<Waker>));
+
+    let finished_for_thread = Arc::clone(&finished);
+    let waker_for_thread = Arc::clone(&waker);
+    std::thread::spawn(move || {
+        std::thread::sleep(duration);
+        finished_for_thread.store(true, Ordering::Release);
+        if let Ok(mut slot) = waker_for_thread.lock() {
+            if let Some(waker) = slot.take() {
+                waker.wake();
+            }
+        }
+    });
+
+    poll_fn(move |cx| {
+        if finished.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+
+        if let Ok(mut slot) = waker.lock() {
+            *slot = Some(cx.waker().clone());
+        }
+
+        if finished.load(Ordering::Acquire) {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{configured_application_id, followup_webhook_path};
+
+    #[test]
+    fn configured_application_id_rejects_zero() {
+        let error = configured_application_id(0).unwrap_err();
+        assert!(error.to_string().contains("application_id must be set"));
+    }
+
+    #[test]
+    fn followup_webhook_path_uses_explicit_application_id() {
+        let path = followup_webhook_path("123", "token", None).unwrap();
+        assert_eq!(path, "/webhooks/123/token");
+    }
+
+    #[test]
+    fn edit_followup_webhook_path_includes_message_id() {
+        let path = followup_webhook_path("123", "token", Some("456")).unwrap();
+        assert_eq!(path, "/webhooks/123/token/messages/456");
+    }
+
+    #[test]
+    fn followup_webhook_path_rejects_zero_application_id() {
+        let error = followup_webhook_path("0", "token", None).unwrap_err();
+        assert!(error.to_string().contains("application_id must be set"));
+    }
+}
+

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Added safer builder serialization for buttons and select menus so invalid Discord payload combinations are normalized before send.
+- Added modal `FILE_UPLOAD` parsing support and `V2ModalSubmission::get_file_values()`.
+- Added explicit follow-up webhook methods that accept `application_id` and fail early when it is missing.
+- Added `try_interactions_endpoint()` for startup-time Discord public-key validation.
+- Changed gateway reconnect behavior to preserve required resume query parameters and stop retrying documented terminal close codes forever.
+
 ## 0.3.0
 
 - **BREAKING**: Complete rewrite from a serenity helper library to a standalone Discord bot framework.

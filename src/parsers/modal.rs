@@ -55,6 +55,10 @@ fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalCompone
             let (custom_id, values) = parse_select_component_data(component, "checkbox_group")?;
             V2ModalComponent::CheckboxGroup { custom_id, values }
         }
+        component_type::FILE_UPLOAD => {
+            let (custom_id, values) = parse_select_component_data(component, "file_upload")?;
+            V2ModalComponent::FileUpload { custom_id, values }
+        }
         component_type::CHECKBOX => V2ModalComponent::Checkbox {
             custom_id: required_string_field(component, "custom_id", "checkbox")?,
             checked: required_bool_field(component, "checked", "checkbox")?,
@@ -126,6 +130,10 @@ pub enum V2ModalComponent {
         custom_id: String,
         values: Vec<String>,
     },
+    FileUpload {
+        custom_id: String,
+        values: Vec<String>,
+    },
     Checkbox {
         custom_id: String,
         checked: bool,
@@ -183,6 +191,18 @@ impl V2ModalSubmission {
             })
     }
 
+    pub fn get_file_values(&self, custom_id: &str) -> Option<&[String]> {
+        self.components
+            .iter()
+            .find_map(|component| match component {
+                V2ModalComponent::FileUpload {
+                    custom_id: component_custom_id,
+                    values,
+                } if component_custom_id == custom_id => Some(values.as_slice()),
+                _ => None,
+            })
+    }
+
     pub fn get_radio_value(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -215,4 +235,83 @@ pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, Error> 
         custom_id,
         components: parsed_components,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{parse_modal_submission, V2ModalComponent};
+
+    #[test]
+    fn parse_modal_submission_preserves_file_upload_values() {
+        let payload = json!({
+            "type": 5,
+            "data": {
+                "custom_id": "bug_submit_modal",
+                "components": [
+                    {
+                        "type": 18,
+                        "label": "Screenshot",
+                        "component": {
+                            "type": 19,
+                            "custom_id": "file_upload",
+                            "values": ["123", "456"]
+                        }
+                    }
+                ]
+            }
+        });
+
+        let submission = parse_modal_submission(&payload).expect("modal submit should parse");
+
+        assert_eq!(submission.custom_id, "bug_submit_modal");
+        assert_eq!(
+            submission.get_file_values("file_upload"),
+            Some(&["123".to_string(), "456".to_string()][..])
+        );
+        assert_eq!(
+            submission.components,
+            vec![V2ModalComponent::FileUpload {
+                custom_id: "file_upload".to_string(),
+                values: vec!["123".to_string(), "456".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_modal_submission_keeps_existing_component_types() {
+        let payload = json!({
+            "custom_id": "mixed_modal",
+            "components": [
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 4,
+                            "custom_id": "summary",
+                            "value": "details"
+                        }
+                    ]
+                },
+                {
+                    "type": 18,
+                    "label": "Logs",
+                    "component": {
+                        "type": 19,
+                        "custom_id": "attachments",
+                        "values": ["789"]
+                    }
+                }
+            ]
+        });
+
+        let submission = parse_modal_submission(&payload).expect("mixed modal should parse");
+
+        assert_eq!(submission.get_text("summary"), Some("details"));
+        assert_eq!(
+            submission.get_file_values("attachments"),
+            Some(&["789".to_string()][..])
+        );
+    }
 }

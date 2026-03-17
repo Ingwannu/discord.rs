@@ -4,31 +4,31 @@ Standalone Discord bot framework for Rust with Components V2, Gateway WebSocket,
 
 ## Features
 
-- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and zlib compression
-- HTTP REST client with automatic 429 rate-limit retry
+- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and terminal close-code handling
+- HTTP REST client with automatic 429 retry and explicit application-id follow-up helpers
 - Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu`, and more)
-- Modal builders with `RadioGroup`, `CheckboxGroup`, and `Checkbox`
-- V2 modal submission parser that preserves all V2 component types that serenity drops
-- Interaction routing helpers: `parse_raw_interaction` and `parse_interaction_context`
+- Modal builders with `RadioGroup`, `CheckboxGroup`, `Checkbox`, and `FileUpload`
+- V2 modal submission parser with preserved `FileUpload`, `RadioGroup`, `CheckboxGroup`, and other V2 component types
+- Interaction routing helpers: `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
 - Feature-gated modules: `gateway` for bot client runtime, `interactions` for HTTP Interactions Endpoint
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "0.3.0"
+discordrs = "0.3.1"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "0.3.0", features = ["interactions"] }
+discordrs = { version = "0.3.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
 ```
 
 ## Documentation Site
@@ -112,7 +112,8 @@ async fn send_support_panel(http: &DiscordHttpClient, channel_id: u64) -> Result
 
 ```rust
 use discordrs::{
-    CheckboxBuilder, CheckboxGroupBuilder, ModalBuilder, RadioGroupBuilder, SelectOption,
+    CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, ModalBuilder, RadioGroupBuilder,
+    SelectOption,
 };
 
 let modal = ModalBuilder::new("preferences_modal", "Preferences")
@@ -137,7 +138,52 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
         "Agree to Terms",
         None,
         CheckboxBuilder::new("agree_terms").required(true),
+    )
+    .add_file_upload(
+        "Screenshot",
+        Some("Attach one or more files"),
+        FileUploadBuilder::new("attachments").min_values(1),
     );
+```
+
+## Interactions Endpoint Example
+
+```rust
+use async_trait::async_trait;
+use axum::Router;
+use discordrs::{
+    create_container, InteractionContext, InteractionHandler, InteractionResponse, RawInteraction,
+    try_interactions_endpoint,
+};
+
+#[derive(Clone)]
+struct Handler;
+
+#[async_trait]
+impl InteractionHandler for Handler {
+    async fn handle(
+        &self,
+        ctx: InteractionContext,
+        interaction: RawInteraction,
+    ) -> InteractionResponse {
+        match interaction {
+            RawInteraction::Command { name, .. } if name.as_deref() == Some("hello") => {
+                let data = serde_json::json!({
+                    "components": [create_container("Hello", "World", vec![], None).build()],
+                    "flags": 1 << 15,
+                });
+                let _ = ctx;
+                InteractionResponse::ChannelMessage(data)
+            }
+            _ => InteractionResponse::Raw(serde_json::json!({ "type": 5 })),
+        }
+    }
+}
+
+fn app(public_key: &str) -> Router {
+    try_interactions_endpoint(public_key, Handler)
+        .expect("invalid Discord public key")
+}
 ```
 
 ## Feature Flags
@@ -150,8 +196,10 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, but v0.3.0 is now a fully standalone framework.
-- The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
+- `discordrs` started as a helper around serenity workflows, but v0.3.1 is now a fully standalone framework.
+- Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
+- Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
+- The parser keeps V2 modal component types, including `FileUpload`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 
 ## License
 
@@ -166,3 +214,4 @@ at your option.
 
 - ingwannu
 - Contact: ingwannu@teamwicked.me, ingwannu@gmail.com
+

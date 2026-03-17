@@ -27,16 +27,16 @@ Use the floating `LANG` button (bottom-right) to switch language.
 ```toml
 [dependencies]
 # core only
-discordrs = "0.3.0"
+discordrs = "0.3.1"
 
 # gateway runtime
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 
 # interactions endpoint
-discordrs = { version = "0.3.0", features = ["interactions"] }
+discordrs = { version = "0.3.1", features = ["interactions"] }
 
 # both
-discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
 ```
 
 ## What You Can Build
@@ -53,3 +53,4 @@ python3 -m http.server 8080 --directory discordrsdocs
 ```
 
 Then open <http://localhost:8080>.
+

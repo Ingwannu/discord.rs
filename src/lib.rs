@@ -20,16 +20,15 @@ pub mod interactions;
 pub use types::{ButtonConfig, Emoji, Error, MediaGalleryItem, MediaInfo, SelectOption};
 
 pub use builders::{
-    create_container, create_default_buttons, ActionRowBuilder, ButtonBuilder,
-    CheckboxBuilder, CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, FileBuilder,
-    FileUploadBuilder, LabelBuilder, MediaGalleryBuilder, ModalBuilder, RadioGroupBuilder,
-    SectionBuilder, SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder,
-    ThumbnailBuilder,
+    create_container, create_default_buttons, ActionRowBuilder, ButtonBuilder, CheckboxBuilder,
+    CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, FileBuilder, FileUploadBuilder,
+    LabelBuilder, MediaGalleryBuilder, ModalBuilder, RadioGroupBuilder, SectionBuilder,
+    SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder, ThumbnailBuilder,
 };
 
 pub use parsers::{
-    parse_interaction_context, parse_modal_submission, parse_raw_interaction,
-    InteractionContext, RawInteraction, V2ModalComponent, V2ModalSubmission,
+    parse_interaction_context, parse_modal_submission, parse_raw_interaction, InteractionContext,
+    RawInteraction, V2ModalComponent, V2ModalSubmission,
 };
 
 pub use constants::{
@@ -52,5 +51,6 @@ pub use gateway::{BotClient, BotClientBuilder, Context, EventHandler, TypeMap};
 
 #[cfg(feature = "interactions")]
 pub use interactions::{
-    interactions_endpoint, verify_discord_signature, InteractionHandler, InteractionResponse,
+    interactions_endpoint, try_interactions_endpoint, verify_discord_signature, InteractionHandler,
+    InteractionResponse,
 };

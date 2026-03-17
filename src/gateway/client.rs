@@ -4,9 +4,12 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration, interval};
-use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-use tracing::{info, warn, error, debug};
+use tokio::time::{interval, sleep, Duration};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{protocol::CloseFrame, Message as WsMessage},
+};
+use tracing::{debug, error, info, warn};
 
 const GATEWAY_URL: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
 
@@ -52,6 +55,7 @@ impl GatewayClient {
             let url = self
                 .resume_gateway_url
                 .clone()
+                .map(|url| normalize_gateway_url(&url))
                 .unwrap_or_else(|| GATEWAY_URL.to_string());
             info!("Connecting to gateway: {url}");
 
@@ -78,13 +82,16 @@ impl GatewayClient {
         }
     }
 
-    async fn connect_and_run(&mut self, url: &str, on_event: EventCallback) -> Result<ReconnectAction, crate::types::Error> {
+    async fn connect_and_run(
+        &mut self,
+        url: &str,
+        on_event: EventCallback,
+    ) -> Result<ReconnectAction, crate::types::Error> {
         let (ws_stream, _) = connect_async(url).await?;
         let (mut write, mut read) = ws_stream.split();
 
         // Wait for Hello
-        let hello = read.next().await
-            .ok_or("gateway closed before Hello")??;
+        let hello = read.next().await.ok_or("gateway closed before Hello")??;
         let hello_payload: Value = serde_json::from_str(hello.to_text()?)?;
         let hello_op = hello_payload["op"].as_u64().unwrap_or(u64::MAX);
         if hello_op != OP_HELLO {
@@ -107,7 +114,9 @@ impl GatewayClient {
                     "seq": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
                 }
             });
-            write.send(WsMessage::Text(resume.to_string().into())).await?;
+            write
+                .send(WsMessage::Text(resume.to_string().into()))
+                .await?;
             debug!("Sent Resume");
         } else {
             let identify = serde_json::json!({
@@ -122,7 +131,9 @@ impl GatewayClient {
                     }
                 }
             });
-            write.send(WsMessage::Text(identify.to_string().into())).await?;
+            write
+                .send(WsMessage::Text(identify.to_string().into()))
+                .await?;
             debug!("Sent Identify");
         }
 
@@ -191,7 +202,7 @@ impl GatewayClient {
                                             self.session_id = Some(sid.to_string());
                                         }
                                         if let Some(resume_url) = data["resume_gateway_url"].as_str() {
-                                            self.resume_gateway_url = Some(resume_url.to_string());
+                                            self.resume_gateway_url = Some(normalize_gateway_url(resume_url));
                                         }
                                         info!("Received READY, session_id={}", self.session_id.as_deref().unwrap_or("?"));
                                     }
@@ -232,6 +243,9 @@ impl GatewayClient {
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
                             warn!("Gateway closed: {frame:?}");
+                            if is_terminal_close_frame(frame.as_ref()) {
+                                return Err(terminal_close_error(frame).into());
+                            }
                             break ReconnectAction::Resume;
                         }
                         Some(Err(e)) => {
@@ -273,4 +287,95 @@ fn rand_jitter() -> f64 {
         .unwrap_or_default()
         .subsec_nanos();
     (nanos as f64 % 1000.0) / 1000.0
+}
+
+fn normalize_gateway_url(url: &str) -> String {
+    let mut normalized = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("wss://{url}")
+    };
+
+    if !has_query_param(&normalized, "v") {
+        append_query_param(&mut normalized, "v=10");
+    }
+
+    if !has_query_param(&normalized, "encoding") {
+        append_query_param(&mut normalized, "encoding=json");
+    }
+
+    normalized
+}
+
+fn has_query_param(url: &str, key: &str) -> bool {
+    url.split_once('?')
+        .map(|(_, query)| {
+            query
+                .split('&')
+                .filter(|segment| !segment.is_empty())
+                .any(|segment| segment.split('=').next() == Some(key))
+        })
+        .unwrap_or(false)
+}
+
+fn append_query_param(url: &mut String, param: &str) {
+    if url.contains('?') {
+        url.push('&');
+    } else {
+        url.push('?');
+    }
+    url.push_str(param);
+}
+
+fn is_terminal_close_frame(frame: Option<&CloseFrame>) -> bool {
+    frame
+        .map(|frame| is_terminal_close_code(u16::from(frame.code)))
+        .unwrap_or(false)
+}
+
+fn is_terminal_close_code(code: u16) -> bool {
+    matches!(code, 4004 | 4010 | 4011 | 4012 | 4013 | 4014)
+}
+
+fn terminal_close_error(frame: Option<CloseFrame>) -> String {
+    match frame {
+        Some(frame) => format!(
+            "gateway closed with terminal close code {}: {}",
+            u16::from(frame.code),
+            frame.reason
+        ),
+        None => "gateway closed with terminal close code".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_terminal_close_code, normalize_gateway_url};
+
+    #[test]
+    fn normalize_gateway_url_adds_missing_gateway_query() {
+        assert_eq!(
+            normalize_gateway_url("gateway.discord.gg"),
+            "wss://gateway.discord.gg?v=10&encoding=json"
+        );
+    }
+
+    #[test]
+    fn normalize_gateway_url_preserves_existing_query_values() {
+        assert_eq!(
+            normalize_gateway_url("wss://gateway.discord.gg/?encoding=json"),
+            "wss://gateway.discord.gg/?encoding=json&v=10"
+        );
+    }
+
+    #[test]
+    fn terminal_close_codes_match_discord_non_reconnectable_codes() {
+        for code in [4004_u16, 4010, 4011, 4012, 4013, 4014] {
+            assert!(is_terminal_close_code(code));
+        }
+
+        for code in [4000_u16, 4007, 4009] {
+            assert!(!is_terminal_close_code(code));
+        }
+    }
 }

@@ -8,7 +8,7 @@ A common setup for running a Gateway bot runtime is:
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 ```
 
 You can choose feature flags depending on your use case.
@@ -16,16 +16,16 @@ You can choose feature flags depending on your use case.
 ```toml
 [dependencies]
 # Core only (builders, parsers, HTTP client, helpers)
-discordrs = "0.3.0"
+discordrs = "0.3.1"
 
 # Gateway + bot client runtime
-discordrs = { version = "0.3.0", features = ["gateway"] }
+discordrs = { version = "0.3.1", features = ["gateway"] }
 
 # Interactions Endpoint
-discordrs = { version = "0.3.0", features = ["interactions"] }
+discordrs = { version = "0.3.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "0.3.0", features = ["gateway", "interactions"] }
+discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
 ```
 
 ## 2. Start a Bot
@@ -211,6 +211,7 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ## 9. Notes
 
-- Since v0.3.0, `discordrs` is a standalone framework that provides both Gateway and HTTP capabilities.
+- Since v0.3.1, `discordrs` is a standalone framework that provides both Gateway and HTTP capabilities.
 - The V2 modal parser preserves component types such as `Label`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`, which helps downstream processing.
 - Interaction response helpers can directly use `id` and `token` from `InteractionContext`.
+
