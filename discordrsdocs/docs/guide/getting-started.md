@@ -10,30 +10,31 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.1", features = ["gateway"] }
+discordrs = { version = "0.4.0", features = ["gateway"] }
 ```
 
-## Minimal Gateway Bot
+## Minimal Typed Gateway Bot
 
 ```rust
 use async_trait::async_trait;
-use discordrs::{gateway_intents, BotClient, Context, EventHandler};
-use serde_json::Value;
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: Value) {
-        println!("READY as {}", ready["user"]["username"]);
+    async fn handle_event(&self, _ctx: Context, event: Event) {
+        if let Event::Ready(ready) = event {
+            println!("READY as {}", ready.data.user.username);
+        }
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), discordrs::Error> {
+async fn main() -> Result<(), discordrs::DiscordError> {
     let token = std::env::var("DISCORD_TOKEN")?;
 
-    BotClient::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
+    Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
         .event_handler(Handler)
         .start()
         .await?;
@@ -57,5 +58,6 @@ cargo run
 ## Next
 
 - Go to [Usage Guide](usage-guide.md)
-- Explore [API Reference](../api/builders.md)
+- Read [Architecture](architecture.md)
+- Explore [Commands API](../api/commands.md)
 

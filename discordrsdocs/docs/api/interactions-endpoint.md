@@ -6,7 +6,7 @@ Use this mode when Discord sends interaction callbacks to your HTTP server.
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.1", features = ["interactions"] }
+discordrs = { version = "0.4.0", features = ["interactions"] }
 ```
 
 ## Capabilities

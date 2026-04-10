@@ -1,11 +1,15 @@
 use serde_json::Value;
 
-use crate::types::{invalid_data_error, Error};
+use crate::error::DiscordError;
+use crate::types::invalid_data_error;
 
 pub mod interaction;
 pub mod modal;
 
-pub use interaction::{parse_interaction_context, parse_raw_interaction, InteractionContext, RawInteraction};
+pub use interaction::{
+    parse_interaction, parse_interaction_context, parse_raw_interaction, InteractionContext,
+    RawInteraction,
+};
 pub use modal::{parse_modal_submission, V2ModalComponent, V2ModalSubmission};
 
 pub(crate) fn value_to_string(value: &Value) -> Option<String> {
@@ -28,14 +32,18 @@ pub(crate) fn optional_string_field(value: &Value, field: &str) -> Option<String
     value.get(field).and_then(value_to_string)
 }
 
-pub(crate) fn required_string_field(value: &Value, field: &str, context: &str) -> Result<String, Error> {
+pub(crate) fn required_string_field(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<String, DiscordError> {
     value
         .get(field)
         .and_then(value_to_string)
         .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
 }
 
-pub(crate) fn required_u8_field(value: &Value, field: &str, context: &str) -> Result<u8, Error> {
+pub(crate) fn required_u8_field(value: &Value, field: &str, context: &str) -> Result<u8, DiscordError> {
     value
         .get(field)
         .and_then(value_to_u8)
@@ -46,10 +54,12 @@ pub(crate) fn required_object_field<'a>(
     value: &'a Value,
     field: &str,
     context: &str,
-) -> Result<&'a Value, Error> {
+) -> Result<&'a Value, DiscordError> {
     match value.get(field) {
         Some(inner) if inner.is_object() => Ok(inner),
-        Some(_) => Err(invalid_data_error(format!("{context}.{field} must be an object"))),
+        Some(_) => Err(invalid_data_error(format!(
+            "{context}.{field} must be an object"
+        ))),
         None => Err(invalid_data_error(format!("missing {context}.{field}"))),
     }
 }
@@ -58,7 +68,7 @@ pub(crate) fn required_array_field<'a>(
     value: &'a Value,
     field: &str,
     context: &str,
-) -> Result<&'a [Value], Error> {
+) -> Result<&'a [Value], DiscordError> {
     value
         .get(field)
         .and_then(Value::as_array)
@@ -66,7 +76,11 @@ pub(crate) fn required_array_field<'a>(
         .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
 }
 
-pub(crate) fn required_bool_field(value: &Value, field: &str, context: &str) -> Result<bool, Error> {
+pub(crate) fn required_bool_field(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<bool, DiscordError> {
     value
         .get(field)
         .and_then(Value::as_bool)
@@ -77,7 +91,7 @@ pub(crate) fn required_string_values_field(
     value: &Value,
     field: &str,
     context: &str,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<String>, DiscordError> {
     let values = value
         .get(field)
         .and_then(Value::as_array)
@@ -97,18 +111,21 @@ pub(crate) fn optional_string_values_field(
     value: &Value,
     field: &str,
     context: &str,
-) -> Result<Option<Vec<String>>, Error> {
+) -> Result<Option<Vec<String>>, DiscordError> {
     match value.get(field) {
         Some(Value::Array(values)) => {
             let mut parsed_values = Vec::with_capacity(values.len());
             for entry in values {
-                let parsed = value_to_string(entry)
-                    .ok_or_else(|| invalid_data_error(format!("{context}.{field} must contain strings")))?;
+                let parsed = value_to_string(entry).ok_or_else(|| {
+                    invalid_data_error(format!("{context}.{field} must contain strings"))
+                })?;
                 parsed_values.push(parsed);
             }
             Ok(Some(parsed_values))
         }
-        Some(_) => Err(invalid_data_error(format!("{context}.{field} must be an array"))),
+        Some(_) => Err(invalid_data_error(format!(
+            "{context}.{field} must be an array"
+        ))),
         None => Ok(None),
     }
 }

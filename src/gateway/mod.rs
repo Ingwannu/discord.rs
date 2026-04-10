@@ -1,4 +1,9 @@
-mod client;
 mod bot;
+mod client;
 
-pub use bot::{BotClient, BotClientBuilder, Context, EventHandler, TypeMap};
+#[cfg(feature = "sharding")]
+pub use bot::ShardSupervisor;
+pub use bot::{
+    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventHandler, ShardMessenger,
+    TypeMap,
+};

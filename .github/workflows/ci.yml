@@ -34,5 +34,29 @@ jobs:
       - name: Cargo check (all features)
         run: cargo check --all-features --locked
 
+      - name: Cargo check (default features)
+        run: cargo check --locked
+
+      - name: Cargo check (examples, default features)
+        run: cargo check --examples --locked
+
+      - name: Cargo check (examples, all features)
+        run: cargo check --examples --all-features --locked
+
       - name: Cargo test (all features)
         run: cargo test --all-features --locked --no-fail-fast
+
+      - name: Cargo test (default features)
+        run: cargo test --locked
+
+      - name: Cargo clippy (all features)
+        run: cargo clippy --all-features --all-targets --locked -- -D warnings
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: Cargo clippy (default features)
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all -- --check

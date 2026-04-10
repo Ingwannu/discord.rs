@@ -1,56 +1,50 @@
 # discordrs Documentation
 
-A practical docs site for building Discord bots with `discordrs`.
+A practical docs site for building typed Discord bots with `discordrs`.
 
-> `discordrs` is a standalone Rust framework with Gateway runtime, Interaction Endpoint support, HTTP client, Components V2 builders, and robust payload parsers.
+> `discordrs` now centers on `Client`, `RestClient`, typed models/events/interactions, command builders, Components V2 helpers, and optional cache/collector layers.
 
 ## Start Here
 
 - [Getting Started](#/docs/guide/getting-started)
-- [Usage Guide](#/docs/guide/usage-guide)
 - [Architecture](#/docs/guide/architecture)
-- [Interaction Flow](#/docs/guide/interaction-flow)
-- [Full Technical Manual (Markdown)](#/docs/guide/full-manual)
-- [Full Technical Manual (PDF)](#/docs/guide/pdf-manual)
+- [Usage Guide](#/docs/guide/usage-guide)
+- [Commands API](#/docs/api/commands)
+- [Cache and Collectors](#/docs/api/cache-and-collectors)
 
-## Language
+## Main Runtime Surfaces
 
-Use the floating `LANG` button (bottom-right) to switch language.
+- `Client`: typed Gateway runtime with `Event` dispatch through `EventHandler::handle_event(...)`
+- `RestClient`: low-level REST surface with shared rate-limit state
+- `parse_interaction(...)`: typed interaction decoding
+- `SlashCommandBuilder` / `UserCommandBuilder` / `MessageCommandBuilder`
+- `CacheHandle` plus manager types, with in-memory cache storage enabled by the `cache` feature
+- collector types behind the `collectors` feature
 
-## Live Site
-
-- <http://discordrs.teamwicked.me/discordrsdocs/#/>
-- Korean: <http://discordrs.teamwicked.me/discordrsdocs/#/ko/README>
-
-## Install
+## Feature Flags
 
 ```toml
 [dependencies]
 # core only
-discordrs = "0.3.1"
+discordrs = "0.4.0"
 
-# gateway runtime
-discordrs = { version = "0.3.1", features = ["gateway"] }
+# typed gateway runtime
+discordrs = { version = "0.4.0", features = ["gateway"] }
+
+# typed gateway runtime with cache storage or collectors
+discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
+discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "0.3.1", features = ["interactions"] }
-
-# both
-discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
+discordrs = { version = "0.4.0", features = ["interactions"] }
 ```
 
-## What You Can Build
+## Roadmap Placeholders
 
-- Event-driven Gateway bots (`READY`, `MESSAGE_CREATE`, `INTERACTION_CREATE`)
-- Slash command + component + modal workflows
-- Components V2 rich layouts with sections, media galleries, buttons, and selects
-- Verified `/interactions` HTTP endpoint (Ed25519)
+- [Sharding](#/docs/api/sharding)
+- [Voice](#/docs/api/voice)
 
-## Local Preview
+## Language
 
-```bash
-python3 -m http.server 8080 --directory discordrsdocs
-```
-
-Then open <http://localhost:8080>.
+Use the floating `LANG` button (bottom-right) to switch language.
 

@@ -2,18 +2,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::constants::button_style;
+use crate::error::DiscordError;
 
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
+/// Backward-compatible error type alias. Prefer `DiscordError` directly.
+#[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
+pub type Error = DiscordError;
 
 pub(crate) fn to_json_value<T: Serialize>(value: T) -> Value {
     serde_json::to_value(value).expect("failed to serialize components v2 value")
 }
 
-pub(crate) fn invalid_data_error(message: impl Into<String>) -> Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
+pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
+    DiscordError::model(message)
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Emoji {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,

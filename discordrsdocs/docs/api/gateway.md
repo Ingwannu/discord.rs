@@ -4,22 +4,24 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ## Primary Types
 
+- `Client`: high-level typed runtime surface for Gateway bots
+- `ClientBuilder`: runtime configuration + startup
+- `Event`: typed Gateway event enum
 - `GatewayClient`: raw websocket lifecycle management (identify, heartbeat, resume, reconnect)
-- `BotClient`: high-level runtime that binds gateway events to your `EventHandler`
-- `Context`: shared state in handlers (`http`, optional typemap)
-- `EventHandler`: async trait for event callbacks
+- `Context`: shared runtime handles (`http`, cache, typemap, shard info)
+- `EventHandler`: async trait with `handle_event(ctx, event)`
 
 ## Setup
 
 ```toml
 [dependencies]
-discordrs = { version = "0.3.1", features = ["gateway"] }
+discordrs = { version = "0.4.0", features = ["gateway"] }
 ```
 
 ## Boot Pattern
 
 ```rust
-BotClient::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
+Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
     .event_handler(handler)
     .start()
     .await?;
@@ -27,16 +29,14 @@ BotClient::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESS
 
 ## Event Surface
 
-Implement what you need:
-
-- `ready`
-- `message_create`
-- `interaction_create`
-- `raw_event`
+- Prefer `handle_event` for new code.
+- `Event` currently exposes typed variants for `READY`, message events, interaction events, guild/channel/member/role cache flows, and `Unknown`.
+- Legacy `ready`, `message_create`, `interaction_create`, and `raw_event` hooks still exist for migration.
 
 ## Operational Notes
 
 - Keep handler methods non-blocking.
 - Push heavy work to background tasks.
-- Use `Context.http` for follow-up API calls.
+- Use `Context.rest()` or the cache-aware managers from `Context`.
+- `BotClient` still exists as a compatibility alias, but the docs prefer `Client`.
 

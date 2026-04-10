@@ -22,15 +22,15 @@
 ```toml
 [dependencies]
 # ì½”ì–´ë§??¬ìš©
-discordrs = "0.3.1"
+discordrs = "0.4.0"
 
-# Gateway ?°í???discordrs = { version = "0.3.1", features = ["gateway"] }
+# Gateway ?°í???discordrs = { version = "0.4.0", features = ["gateway"] }
 
 # Interactions Endpoint
-discordrs = { version = "0.3.1", features = ["interactions"] }
+discordrs = { version = "0.4.0", features = ["interactions"] }
 
 # ?????¬ìš©
-discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
+discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
 ```
 
 ## ë¡œì»¬ ë¯¸ë¦¬ë³´ê¸°

@@ -1,5 +1,7 @@
 # discordrs Library Documentation
 
+> This manual still contains low-level historical detail, but the current docs site now prefers `Client`, `RestClient`, typed models/events, command builders, cache managers, and collectors. Start with [Getting Started](getting-started.md), [Architecture](architecture.md), and the new API pages before using the older sections below.
+
 ## Overview
 
 discordrs is a standalone Rust framework for building Discord bots. It provides:

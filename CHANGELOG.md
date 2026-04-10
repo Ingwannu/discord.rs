@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0
+
+- Fixed gateway cache consistency after the upgrade: `READY` now clears stale cache state, `MESSAGE_UPDATE` merges partial payloads into cached messages instead of wiping fields, and guild/channel/bulk-delete paths now evict dependent cached entries.
+- Fixed `EventHandler` typed dispatch so `ready`, `message_create`, `interaction_create`, and the newly-added typed event hooks receive typed payloads, while `raw_event` is reserved for unknown events.
+- Fixed REST command registration safety so legacy global-command overwrite helpers now reject missing `application_id`, matching the typed command paths.
+- Fixed REST route-key normalization so major parameters (`applications`, `channels`, `guilds`, `webhooks`) keep distinct rate-limit buckets.
+- Fixed `EmbedBuilder::timestamp_now()` to emit Discord-compatible UTC ISO 8601 timestamps instead of a placeholder string.
+- Added typed `Snowflake`, `PermissionsBitField`, `User`, `Guild`, `Channel`, `Member`, `Role`, `Message`, `ApplicationCommand`, and typed interaction variants for chat-input, context-menu, autocomplete, component, and modal submit flows.
+- Added typed `Event` decoding and the new `Client` / `ClientBuilder` gateway runtime surface while keeping `BotClient` and `BotClientBuilder` compatibility aliases.
+- Added `Context::new(http, data)` so test code and helper crates can still construct a standalone `Context` outside the live gateway runtime.
+- Added `RestClient` as the preferred HTTP-facing surface while keeping `DiscordHttpClient` as a compatibility alias.
+- Added shared route/global rate-limit tracking for REST requests instead of a single retry-only 429 path.
+- Added typed command builders: `SlashCommandBuilder`, `UserCommandBuilder`, `MessageCommandBuilder`, and `CommandOptionBuilder`, including common shortcut helpers for option-heavy slash commands.
+- Added `MessageBuilder` and `InteractionResponseBuilder` so common message and interaction response bodies no longer need hand-written JSON.
+- Added typed helper paths such as `send_message`, `respond_to_interaction`, `respond_with_message`, `followup_message`, `defer_interaction`, and `update_interaction_message`.
+- Added typed interactions endpoint helpers: `TypedInteractionHandler`, `try_typed_interactions_endpoint`, and `typed_interactions_endpoint`.
+- Added cache managers behind the `cache` feature and collectors behind the `collectors` feature.
+- Added `prelude` re-exports for common runtime, builder, helper, and response types.
+- Added `ws` gateway config abstraction and promoted it into the public surface for reusable gateway URL, shard, and encoding configuration.
+- Added shard control primitives: `ShardConfig`, `ShardInfo`, `ShardIpcMessage`, `ShardRuntimeStatus`, `ShardingManager`, `ShardMessenger`, and `ShardSupervisor`.
+- Added shard-local gateway control from `Context` and `ShardMessenger`, including presence updates, reconnect, shutdown, and voice state update payloads.
+- Added supervisor-level shard control helpers so sharded runtimes can drive reconnect, presence, and voice state updates without bypassing the shard IPC layer.
+- Added queued shard boot behavior so multi-shard startup does not identify every shard immediately, and exposed `ShardRuntimeState::Queued` to make that lifecycle visible.
+- Added shutdown waiting helpers: `ShardSupervisor::shutdown_and_wait()` and `ShardSupervisor::wait_for_shutdown(...)`.
+- Added interruptible reconnect backoff so shutdown does not wait for long reconnect sleeps to finish.
+- Added `voice` state management plus a `voice_runtime` surface with websocket hello/identify, UDP IP discovery, select-protocol, session-description wait, speaking updates, and graceful close helpers.
+- Added checked-in examples for gateway, interactions endpoint, typed interactions endpoint, slash commands, cache, collectors, sharding, and voice runtime setup.
+- Added broader tests for typed models, typed events, cache and collectors, sharding state/control, gateway payload helpers, and voice runtime handshake flow.
+
 ## 0.3.1
 
 - Added safer builder serialization for buttons and select menus so invalid Discord payload combinations are normalized before send.

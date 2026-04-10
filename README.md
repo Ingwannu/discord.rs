@@ -1,34 +1,54 @@
 # discordrs
 
-Standalone Discord bot framework for Rust with Components V2, Gateway WebSocket, and HTTP client
+Standalone Discord bot framework for Rust with typed models, typed gateway events, Components V2, collectors, cache managers, and HTTP client
 
 ## Features
 
+- Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
+- Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
+- `prelude::*` re-exports for common runtime, builder, helper, and response types
+- Cache-backed manager reads for guilds, channels, members, roles, and messages, with in-memory storage enabled by the `cache` feature
+- Collectors for messages, interactions, components, and modals behind the `collectors` feature
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and terminal close-code handling
-- HTTP REST client with automatic 429 retry and explicit application-id follow-up helpers
+- Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
+- Voice manager plus voice runtime handshake support for websocket hello/identify, UDP discovery, select-protocol, and speaking updates
 - Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu`, and more)
+- Typed command builders for slash, user, and message commands
 - Modal builders with `RadioGroup`, `CheckboxGroup`, `Checkbox`, and `FileUpload`
 - V2 modal submission parser with preserved `FileUpload`, `RadioGroup`, `CheckboxGroup`, and other V2 component types
-- Interaction routing helpers: `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
-- Feature-gated modules: `gateway` for bot client runtime, `interactions` for HTTP Interactions Endpoint
+- Typed interaction decoding with chat-input, context-menu, autocomplete, component, and modal submit variants
+- Interaction routing helpers: `parse_interaction`, `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
+- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, and `voice`
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "0.3.1"
+discordrs = "0.4.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "0.3.1", features = ["gateway"] }
+discordrs = { version = "0.4.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "0.3.1", features = ["interactions"] }
+discordrs = { version = "0.4.0", features = ["interactions"] }
+
+# Gateway runtime with cache storage enabled
+discordrs = { version = "0.4.0", features = ["gateway", "cache"] }
+
+# Gateway runtime with collectors
+discordrs = { version = "0.4.0", features = ["gateway", "collectors"] }
+
+# Sharding foundations
+discordrs = { version = "0.4.0", features = ["gateway", "sharding"] }
+
+# Voice foundations
+discordrs = { version = "0.4.0", features = ["voice"] }
 
 # Both runtime modes
-discordrs = { version = "0.3.1", features = ["gateway", "interactions"] }
+discordrs = { version = "0.4.0", features = ["gateway", "interactions"] }
 ```
 
 ## Documentation Site
@@ -46,26 +66,20 @@ A navigation-focused docs website (similar to the discord.js docs browsing style
 ## Quick Example
 
 ```rust
-use discordrs::{BotClient, Context, EventHandler, gateway_intents};
-use discordrs::{create_container, respond_with_container, parse_raw_interaction, parse_interaction_context, RawInteraction};
 use async_trait::async_trait;
-use serde_json::Value;
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
 #[async_trait]
 impl EventHandler for Handler {
-    async fn ready(&self, _ctx: Context, ready: Value) {
-        println!("Bot ready! User: {}", ready["user"]["username"]);
-    }
-    async fn interaction_create(&self, ctx: Context, interaction: Value) {
-        let ictx = parse_interaction_context(&interaction).unwrap();
-        match parse_raw_interaction(&interaction).unwrap() {
-            RawInteraction::Command { name, .. } => {
-                if name.as_deref() == Some("hello") {
-                    let container = create_container("Hello", "Hello, World!", vec![], None);
-                    let _ = respond_with_container(&ctx.http, &ictx.id, &ictx.token, container, false).await;
-                }
+    async fn handle_event(&self, _ctx: Context, event: Event) {
+        match event {
+            Event::Ready(ready) => {
+                println!("Bot ready! User: {}", ready.data.user.username);
+            }
+            Event::MessageCreate(message) => {
+                println!("Message: {}", message.message.content);
             }
             _ => {}
         }
@@ -75,12 +89,29 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() {
     let token = std::env::var("DISCORD_TOKEN").unwrap();
-    BotClient::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
+    Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES)
         .event_handler(Handler)
         .start()
         .await
         .unwrap();
 }
+```
+
+## Typed APIs
+
+```rust
+use discordrs::{
+    option_type, CommandOptionBuilder, PermissionsBitField, SlashCommandBuilder,
+};
+
+let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
+    .option(
+        CommandOptionBuilder::new(option_type::STRING, "topic", "Ticket topic")
+            .required(true)
+            .autocomplete(true),
+    )
+    .default_member_permissions(PermissionsBitField(0))
+    .build();
 ```
 
 ## Components V2 Example
@@ -90,7 +121,7 @@ use discordrs::{
     button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
 };
 
-async fn send_support_panel(http: &DiscordHttpClient, channel_id: u64) -> Result<(), discordrs::Error> {
+async fn send_support_panel(http: &DiscordHttpClient, channel_id: u64) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
         ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
         ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
@@ -190,15 +221,23 @@ fn app(public_key: &str) -> Router {
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, parsers, HTTP client, helpers | reqwest, serde_json |
-| `gateway` | Gateway WebSocket, BotClient, EventHandler | tokio-tungstenite, flate2, async-trait |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers | reqwest, serde_json |
+| `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
+| `cache` | Enables the in-memory cache storage used by gateway cache managers | tokio |
+| `collectors` | Async collectors for messages and interactions | tokio |
+| `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
+| `voice` | In-memory voice connection and player skeletons | tokio |
 
 ## Notes
 
-- `discordrs` started as a helper around serenity workflows, but v0.3.1 is now a fully standalone framework.
+- `discordrs` started as a helper around serenity workflows, but v0.4.0 is now a fully standalone framework with a typed runtime surface.
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
+- Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
+- Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.
+- Use `EventHandler::handle_event(...)` when you want one typed entry point for every gateway event. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` still exist, but they now receive typed payloads too.
+- Use `Context::new(...)` when tests or helper crates need a standalone context outside the live gateway runtime.
 - The parser keeps V2 modal component types, including `FileUpload`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 
 ## License
