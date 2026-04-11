@@ -14,6 +14,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  COVERAGE_MIN_LINES: 35
+
 jobs:
   rust-check:
     name: rust-check
@@ -60,3 +63,38 @@ jobs:
 
       - name: Cargo fmt (check)
         run: cargo fmt --all -- --check
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup component add llvm-tools-preview
+          rustc --version
+          cargo --version
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --all-features --locked --lcov --output-path lcov.info --fail-under-lines ${{ env.COVERAGE_MIN_LINES }}
+
+      - name: Upload LCOV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.info
