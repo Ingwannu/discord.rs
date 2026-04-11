@@ -871,7 +871,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ApplicationCommand, ApplicationCommandOptionChoice, PermissionsBitField, Snowflake, User,
+        ApplicationCommand, ApplicationCommandOptionChoice, Channel, CommandInteractionOption,
+        ComponentInteraction, ComponentInteractionData, CreateMessage, DiscordModel, EmbedField,
+        Interaction, InteractionContextData, PermissionsBitField, Snowflake, User,
     };
 
     #[test]
@@ -951,5 +953,125 @@ mod tests {
             Some("1759288472266248192")
         );
         assert!(command.created_at().is_some());
+    }
+
+    #[test]
+    fn snowflake_helpers_cover_string_numeric_and_error_paths() {
+        let snowflake = Snowflake::new("1759288472266248192");
+        let parsed = "42".parse::<Snowflake>().unwrap();
+        let invalid = Snowflake::new("not-a-number");
+
+        assert_eq!(snowflake.as_str(), "1759288472266248192");
+        assert_eq!(snowflake.as_u64(), Some(1_759_288_472_266_248_192));
+        assert_eq!(snowflake.to_string(), "1759288472266248192");
+        assert_eq!(parsed.as_str(), "42");
+        assert_eq!(invalid.as_u64(), None);
+
+        let error = serde_json::from_value::<Snowflake>(json!(-1)).unwrap_err();
+        assert!(error.to_string().contains("snowflake cannot be negative"));
+    }
+
+    #[test]
+    fn permissions_bitfield_helpers_cover_mutation_and_invalid_wire_values() {
+        let mut permissions = PermissionsBitField(0b0011);
+        assert!(permissions.contains(0b0001));
+        assert!(!permissions.contains(0b0100));
+
+        permissions.insert(0b0100);
+        assert_eq!(permissions.bits(), 0b0111);
+        assert!(permissions.contains(0b0110));
+
+        permissions.remove(0b0010);
+        assert_eq!(permissions.bits(), 0b0101);
+        assert!(!permissions.contains(0b0010));
+
+        let error = serde_json::from_value::<PermissionsBitField>(json!("oops")).unwrap_err();
+        assert!(error.to_string().contains("invalid permission bitfield"));
+    }
+
+    #[test]
+    fn channel_and_create_message_keep_wire_aliases_and_omit_absent_optionals() {
+        let channel = Channel {
+            id: Snowflake::from("10"),
+            kind: 5,
+            name: Some("announcements".to_string()),
+            ..Channel::default()
+        };
+        let message = CreateMessage {
+            content: Some("hello".to_string()),
+            ..CreateMessage::default()
+        };
+
+        let channel_json = serde_json::to_value(&channel).unwrap();
+        let message_json = serde_json::to_value(&message).unwrap();
+
+        assert_eq!(channel_json["id"], json!("10"));
+        assert_eq!(channel_json["type"], json!(5));
+        assert_eq!(channel_json["name"], json!("announcements"));
+        assert!(channel_json.get("guild_id").is_none());
+        assert!(channel_json.get("topic").is_none());
+
+        assert_eq!(message_json, json!({ "content": "hello" }));
+    }
+
+    #[test]
+    fn embed_field_and_focus_helpers_follow_default_and_true_branches() {
+        let default_field = EmbedField {
+            name: "Name".to_string(),
+            value: "Value".to_string(),
+            ..EmbedField::default()
+        };
+        let inline_field = EmbedField {
+            inline: true,
+            ..default_field.clone()
+        };
+        let unfocused = CommandInteractionOption::default();
+        let focused = CommandInteractionOption {
+            focused: Some(true),
+            ..CommandInteractionOption::default()
+        };
+
+        let default_json = serde_json::to_value(&default_field).unwrap();
+        let inline_json = serde_json::to_value(&inline_field).unwrap();
+
+        assert!(default_json.get("inline").is_none());
+        assert_eq!(inline_json["inline"], json!(true));
+        assert!(!unfocused.is_focused());
+        assert!(focused.is_focused());
+    }
+
+    #[test]
+    fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
+        let context = InteractionContextData {
+            id: Snowflake::from("99"),
+            application_id: Snowflake::from("77"),
+            token: "token-123".to_string(),
+            ..InteractionContextData::default()
+        };
+        let interaction = Interaction::Component(ComponentInteraction {
+            context: context.clone(),
+            data: ComponentInteractionData {
+                custom_id: "button".to_string(),
+                component_type: 2,
+                values: vec!["x".to_string()],
+            },
+        });
+        let user = User {
+            id: Snowflake::from(1759288472266248192u64),
+            username: "discordrs".to_string(),
+            ..User::default()
+        };
+
+        assert_eq!(interaction.context().id.as_str(), "99");
+        assert_eq!(interaction.id().as_str(), "99");
+        assert_eq!(interaction.application_id().as_str(), "77");
+        assert_eq!(interaction.token(), "token-123");
+
+        assert_eq!(DiscordModel::id(&user).as_str(), "1759288472266248192");
+        assert_eq!(
+            DiscordModel::id_opt(&user).map(Snowflake::as_str),
+            Some("1759288472266248192")
+        );
+        assert!(DiscordModel::created_at(&user).is_some());
     }
 }

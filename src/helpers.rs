@@ -451,15 +451,52 @@ pub async fn respond_component_with_components_v2(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
-        INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
-        INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+        components_v2_flags, ComponentsV2Payload, INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+        INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
     };
+    use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 
     #[test]
     fn helper_constants_cover_new_callback_types() {
         assert_eq!(INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, 6);
         assert_eq!(INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, 8);
         assert_eq!(INTERACTION_RESPONSE_LAUNCH_ACTIVITY, 12);
+    }
+
+    #[test]
+    fn components_v2_flags_only_include_ephemeral_when_requested() {
+        assert_eq!(components_v2_flags(false), MESSAGE_FLAG_IS_COMPONENTS_V2);
+        assert_eq!(
+            components_v2_flags(true),
+            MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6)
+        );
+    }
+
+    #[test]
+    fn components_v2_payload_serializes_components_and_flags() {
+        let component = json!({ "type": 17, "content": "hello" });
+
+        let standard = ComponentsV2Payload::new(vec![component.clone()]).into_value();
+        assert_eq!(
+            standard,
+            json!({
+                "components": [component.clone()],
+                "flags": MESSAGE_FLAG_IS_COMPONENTS_V2,
+            })
+        );
+
+        let ephemeral = ComponentsV2Payload::new(vec![component.clone()])
+            .ephemeral(true)
+            .into_value();
+        assert_eq!(
+            ephemeral,
+            json!({
+                "components": [component],
+                "flags": MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6),
+            })
+        );
     }
 }

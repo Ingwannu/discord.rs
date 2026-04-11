@@ -147,3 +147,185 @@ impl ButtonConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::{
+        invalid_data_error, to_json_value, ButtonConfig, Emoji, MediaGalleryItem, SelectOption,
+    };
+    use crate::constants::button_style;
+    use crate::error::DiscordError;
+
+    #[test]
+    fn helpers_preserve_model_error_shape() {
+        let error = invalid_data_error("bad data");
+        assert!(matches!(
+            error,
+            DiscordError::Model { message } if message == "bad data"
+        ));
+
+        let value = to_json_value(SelectOption::new("Alpha", "alpha"));
+        assert_eq!(
+            value,
+            json!({
+                "label": "Alpha",
+                "value": "alpha"
+            })
+        );
+    }
+
+    #[test]
+    fn emoji_builders_round_trip_through_serde() {
+        let unicode = Emoji::unicode("🔥");
+        assert_eq!(unicode.name.as_deref(), Some("🔥"));
+        assert_eq!(unicode.id, None);
+        assert_eq!(unicode.animated, None);
+        assert_eq!(
+            serde_json::to_value(&unicode).unwrap(),
+            json!({ "name": "🔥" })
+        );
+
+        let custom = Emoji::custom("party", "42", true);
+        assert_eq!(custom.name.as_deref(), Some("party"));
+        assert_eq!(custom.id.as_deref(), Some("42"));
+        assert_eq!(custom.animated, Some(true));
+
+        let serialized = serde_json::to_value(&custom).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "id": "42",
+                "name": "party",
+                "animated": true
+            })
+        );
+
+        let round_trip: Emoji = serde_json::from_value(serialized).unwrap();
+        assert_eq!(round_trip.id.as_deref(), Some("42"));
+        assert_eq!(round_trip.name.as_deref(), Some("party"));
+        assert_eq!(round_trip.animated, Some(true));
+    }
+
+    #[test]
+    fn media_gallery_builder_sets_optional_fields_only_when_requested() {
+        let item = MediaGalleryItem::new("https://cdn.example/image.png");
+        assert_eq!(item.media.url, "https://cdn.example/image.png");
+        assert_eq!(item.description, None);
+        assert_eq!(item.spoiler, None);
+        assert_eq!(
+            serde_json::to_value(&item).unwrap(),
+            json!({
+                "media": {
+                    "url": "https://cdn.example/image.png"
+                }
+            })
+        );
+
+        let detailed = item.clone().description("Preview").spoiler(true);
+        assert_eq!(detailed.description.as_deref(), Some("Preview"));
+        assert_eq!(detailed.spoiler, Some(true));
+        assert_eq!(
+            serde_json::to_value(&detailed).unwrap(),
+            json!({
+                "media": {
+                    "url": "https://cdn.example/image.png"
+                },
+                "description": "Preview",
+                "spoiler": true
+            })
+        );
+    }
+
+    #[test]
+    fn select_option_builder_serializes_nested_unicode_emoji() {
+        let option = SelectOption::new("Support", "support")
+            .description("Open a support ticket")
+            .emoji("🔥")
+            .default_selected(true);
+
+        assert_eq!(option.label, "Support");
+        assert_eq!(option.value, "support");
+        assert_eq!(option.description.as_deref(), Some("Open a support ticket"));
+        assert_eq!(option.default, Some(true));
+        assert_eq!(
+            option
+                .emoji
+                .as_ref()
+                .and_then(|emoji| emoji.name.as_deref()),
+            Some("🔥")
+        );
+
+        let serialized = serde_json::to_value(&option).unwrap();
+        assert_eq!(
+            serialized,
+            json!({
+                "label": "Support",
+                "value": "support",
+                "description": "Open a support ticket",
+                "emoji": {
+                    "name": "🔥"
+                },
+                "default": true
+            })
+        );
+    }
+
+    #[test]
+    fn defaults_and_button_builder_behaviors_are_stable() {
+        let emoji = Emoji::default();
+        assert_eq!(emoji.id, None);
+        assert_eq!(emoji.name, None);
+        assert_eq!(emoji.animated, None);
+
+        let media = MediaGalleryItem::default();
+        assert_eq!(media.media.url, "");
+        assert_eq!(media.description, None);
+        assert_eq!(media.spoiler, None);
+
+        let option = SelectOption::default();
+        assert_eq!(option.label, "");
+        assert_eq!(option.value, "");
+        assert_eq!(option.description, None);
+        assert!(option.emoji.is_none());
+        assert_eq!(option.default, None);
+
+        let button_default = ButtonConfig::default();
+        assert_eq!(button_default.custom_id, "");
+        assert_eq!(button_default.label, "");
+        assert_eq!(button_default.style, 0);
+        assert_eq!(button_default.emoji, None);
+
+        let button = ButtonConfig::new("open-ticket", "Open")
+            .style(button_style::DANGER)
+            .emoji("🛠");
+        assert_eq!(button.custom_id, "open-ticket");
+        assert_eq!(button.label, "Open");
+        assert_eq!(button.style, button_style::DANGER);
+        assert_eq!(button.emoji.as_deref(), Some("🛠"));
+
+        let primary_button = ButtonConfig::new("primary", "Primary");
+        assert_eq!(primary_button.style, button_style::PRIMARY);
+    }
+
+    #[test]
+    fn select_option_omits_absent_optional_fields() {
+        let serialized = serde_json::to_value(SelectOption::new("Alpha", "alpha")).unwrap();
+        let object = serialized
+            .as_object()
+            .expect("select option should serialize to an object");
+
+        assert_eq!(
+            object.get("label"),
+            Some(&Value::String(String::from("Alpha")))
+        );
+        assert_eq!(
+            object.get("value"),
+            Some(&Value::String(String::from("alpha")))
+        );
+        assert!(!object.contains_key("description"));
+        assert!(!object.contains_key("emoji"));
+        assert!(!object.contains_key("default"));
+    }
+}

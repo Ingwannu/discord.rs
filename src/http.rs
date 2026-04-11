@@ -1154,12 +1154,14 @@ mod tests {
 
     use super::{
         configured_application_id, discord_api_error, discord_rate_limit_error,
-        execute_webhook_path, followup_webhook_path, global_commands_path,
-        interaction_callback_path, rate_limit_route_key, request_uses_bot_authorization,
+        execute_webhook_path, followup_webhook_path, global_commands_path, header_string,
+        interaction_callback_path, parse_body_value, rate_limit_route_key,
+        request_uses_bot_authorization, sleep_for_retry_after, validate_token_path_segment,
         RateLimitState,
     };
     use crate::error::DiscordError;
     use crate::model::Snowflake;
+    use reqwest::header::{HeaderMap, HeaderValue};
     use reqwest::{Method, StatusCode};
 
     #[test]
@@ -1324,5 +1326,100 @@ mod tests {
 
         assert!(state.wait_duration(&blocked_route).is_some());
         assert!(state.wait_duration(&other_route).is_none());
+    }
+
+    #[test]
+    fn parse_helpers_handle_empty_invalid_and_string_body_shapes() {
+        assert_eq!(parse_body_value(String::new()), serde_json::Value::Null);
+        assert_eq!(
+            parse_body_value(String::from("plain text")),
+            serde_json::Value::String(String::from("plain text"))
+        );
+        assert_eq!(
+            parse_body_value(String::from(r#"{"message":"ok"}"#)),
+            serde_json::json!({ "message": "ok" })
+        );
+
+        let header = HeaderValue::from_static("bucket-1");
+        assert_eq!(header_string(Some(&header)), Some(String::from("bucket-1")));
+        assert_eq!(header_string(None), None);
+    }
+
+    #[test]
+    fn validate_token_path_segment_handles_original_marker_and_control_characters() {
+        validate_token_path_segment("message_id", "@original", true).unwrap();
+        validate_token_path_segment("token", "safe-token", false).unwrap();
+
+        let backslash = validate_token_path_segment("token", r"bad\token", false).unwrap_err();
+        assert!(backslash.to_string().contains("token"));
+
+        let query = validate_token_path_segment("token", "bad?token", false).unwrap_err();
+        assert!(query.to_string().contains("token"));
+    }
+
+    #[test]
+    fn authorization_and_error_helpers_cover_query_and_fallback_cases() {
+        assert!(request_uses_bot_authorization(
+            "/channels/123/messages?wait=true"
+        ));
+        assert!(!request_uses_bot_authorization(
+            "/webhooks/123/token?wait=true"
+        ));
+
+        match discord_api_error(StatusCode::BAD_REQUEST, "plain body") {
+            DiscordError::Api {
+                status,
+                code,
+                message,
+            } => {
+                assert_eq!(status, 400);
+                assert_eq!(code, None);
+                assert_eq!(message, "plain body");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+
+        match discord_rate_limit_error("GET:channels/123", r#"{"message":"limited"}"#) {
+            DiscordError::RateLimit { route, retry_after } => {
+                assert_eq!(route, "GET:channels/123");
+                assert_eq!(retry_after, 1.0);
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+
+        assert_eq!(
+            rate_limit_route_key(&Method::PATCH, "/channels/123/messages/456?wait=true"),
+            "PATCH:channels/123/messages/:id"
+        );
+    }
+
+    #[test]
+    fn rate_limit_state_observe_tracks_buckets_and_global_limits() {
+        let state = RateLimitState::default();
+        let route_key = "POST:channels/123/messages";
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-bucket", HeaderValue::from_static("bucket-42"));
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("0.05"));
+
+        state.observe(route_key, &headers, StatusCode::OK, "");
+        assert!(state.route_buckets.lock().unwrap().contains_key(route_key));
+        assert!(state.wait_duration(route_key).is_some());
+
+        let global_headers = HeaderMap::new();
+        state.observe(
+            route_key,
+            &global_headers,
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"retry_after":0.05,"global":true}"#,
+        );
+        assert!(state.wait_duration("GET:anything").is_some());
+    }
+
+    #[tokio::test]
+    async fn sleep_for_retry_after_waits_without_panicking() {
+        let start = Instant::now();
+        sleep_for_retry_after(0.01).await;
+        assert!(start.elapsed() >= Duration::from_millis(5));
     }
 }

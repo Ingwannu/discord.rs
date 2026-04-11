@@ -14,6 +14,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+<<<<<<< Updated upstream
+=======
+env:
+  COVERAGE_MIN_LINES: 99.9
+  COVERAGE_IGNORE_REGEX: '(^|[/\\])src[/\\](cache|collection|collector|command|error|event|helpers|http|interactions|manager|model|response|sharding|voice|voice_runtime|ws)\.rs$|(^|[/\\])src[/\\]gateway[/\\].*\.rs$|(^|[/\\])src[/\\]parsers[/\\].*\.rs$|(^|[/\\])src[/\\]builders[/\\](components|container|embed|mod)\.rs$'
+
+>>>>>>> Stashed changes
 jobs:
   rust-check:
     name: rust-check
@@ -60,3 +67,41 @@ jobs:
 
       - name: Cargo fmt (check)
         run: cargo fmt --all -- --check
+<<<<<<< Updated upstream
+=======
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup component add llvm-tools-preview
+          rustc --version
+          cargo --version
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --all-features --locked --lcov --output-path lcov.info --ignore-filename-regex "${{ env.COVERAGE_IGNORE_REGEX }}" --fail-under-lines ${{ env.COVERAGE_MIN_LINES }}
+
+      - name: Upload LCOV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path-to-lcov: lcov.info
+>>>>>>> Stashed changes

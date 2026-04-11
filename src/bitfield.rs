@@ -540,3 +540,121 @@ pub mod interaction_callback_type {
     pub const MODAL: u8 = 9;
     pub const LAUNCH_ACTIVITY: u8 = 12;
 }
+
+#[cfg(test)]
+mod tests {
+    use serde::de::{value::Error as ValueError, value::StringDeserializer};
+    use serde::Deserialize;
+
+    use super::{BitField, BitFieldFlags};
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    struct TestFlags;
+
+    impl BitFieldFlags for TestFlags {
+        const BITS: &'static [(u64, &'static str)] = &[(1, "A"), (2, "B"), (8, "C")];
+    }
+
+    type TestBitField = BitField<TestFlags>;
+
+    #[test]
+    fn constructors_and_basic_queries_preserve_bits() {
+        let empty = TestBitField::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.bits(), 0);
+
+        let field = TestBitField::from_bits(1 | 8);
+        assert_eq!(field.bits(), 9);
+        assert!(field.contains(1));
+        assert!(field.is_set(8));
+        assert!(!field.contains(2));
+        assert_eq!(field.to_api_string(), "9");
+        assert_eq!(field.to_string(), "9");
+
+        let added = empty.add(2).merge(field);
+        assert_eq!(added.bits(), 11);
+
+        let removed = added.remove(2);
+        assert_eq!(removed, field);
+
+        let from_raw = TestBitField::from(11);
+        assert_eq!(from_raw.bits(), 11);
+
+        let into_raw: u64 = from_raw.into();
+        assert_eq!(into_raw, 11);
+    }
+
+    #[test]
+    fn helpers_only_consider_declared_bits() {
+        let mixed = TestBitField::from_bits(1 | 8 | 4);
+        let all = TestBitField::all();
+
+        assert_eq!(all.bits(), 11);
+        assert_eq!(mixed.flag_names(), vec!["A", "C"]);
+        assert_eq!(
+            TestBitField::from_bits(1 | 8).missing(TestBitField::from_bits(1 | 2)),
+            TestBitField::from_bits(2)
+        );
+        assert!(!mixed.any(0));
+        assert!(mixed.any(2 | 8));
+        assert!(mixed.has_all(1 | 8));
+        assert!(!mixed.has_all(1 | 2 | 8));
+    }
+
+    #[test]
+    fn operator_overloads_match_raw_bit_operations() {
+        let left = TestBitField::from_bits(1 | 8);
+        let right = TestBitField::from_bits(2 | 8);
+
+        assert_eq!((left | right).bits(), 11);
+        assert_eq!((left | 2).bits(), 11);
+        assert_eq!((left & right).bits(), 8);
+        assert_eq!((left & 8).bits(), 8);
+        assert_eq!((left ^ right).bits(), 3);
+        assert_eq!((left - right).bits(), 1);
+        assert_eq!((left - 8).bits(), 1);
+        assert_eq!((!left).bits(), !9);
+
+        let mut assign = left;
+        assign |= right;
+        assert_eq!(assign.bits(), 11);
+        assign &= TestBitField::from_bits(9);
+        assert_eq!(assign.bits(), 9);
+        assign ^= TestBitField::from_bits(1);
+        assert_eq!(assign.bits(), 8);
+        assign |= 2;
+        assert_eq!(assign.bits(), 10);
+        assign &= 8;
+        assert_eq!(assign.bits(), 8);
+    }
+
+    #[test]
+    fn serde_accepts_numeric_and_string_shapes() {
+        let field = TestBitField::from_bits(9);
+        assert_eq!(serde_json::to_string(&field).unwrap(), "\"9\"");
+
+        let from_number: TestBitField = serde_json::from_str("9").unwrap();
+        let from_string: TestBitField = serde_json::from_str("\"9\"").unwrap();
+        let from_string_deserializer =
+            TestBitField::deserialize(StringDeserializer::<ValueError>::new(String::from("9")))
+                .unwrap();
+
+        assert_eq!(from_number, field);
+        assert_eq!(from_string, field);
+        assert_eq!(from_string_deserializer, field);
+    }
+
+    #[test]
+    fn serde_rejects_invalid_values_and_currently_wraps_negative_i64() {
+        let negative: TestBitField = serde_json::from_str("-1").unwrap();
+        assert_eq!(negative.bits(), u64::MAX);
+
+        let invalid_value = serde_json::from_str::<TestBitField>("\"abc\"").unwrap_err();
+        assert!(invalid_value.to_string().contains("invalid bitfield value"));
+
+        let invalid_type = serde_json::from_str::<TestBitField>("true").unwrap_err();
+        assert!(invalid_type
+            .to_string()
+            .contains("a bitfield encoded as a string or integer"));
+    }
+}

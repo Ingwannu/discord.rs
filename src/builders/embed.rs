@@ -238,7 +238,8 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_unix_timestamp, EmbedBuilder};
+    use super::{civil_from_days, format_unix_timestamp, EmbedBuilder};
+    use serde_json::json;
     use std::time::Duration;
 
     #[test]
@@ -275,5 +276,193 @@ mod tests {
                 23 => byte == b'Z',
                 _ => byte.is_ascii_digit(),
             }));
+    }
+
+    #[test]
+    fn embed_build_serializes_rich_payload() {
+        let embed = EmbedBuilder::new()
+            .title("Release")
+            .description("Shipped")
+            .url("https://example.com/release")
+            .color(0x5865F2)
+            .field("Status", "Green", true)
+            .blank_field(false)
+            .author(
+                "discordrs",
+                Some("https://example.com".to_string()),
+                Some("https://example.com/icon.png".to_string()),
+            )
+            .thumbnail("https://example.com/thumb.png")
+            .image("https://example.com/image.png")
+            .footer("Footer", Some("https://example.com/footer.png".to_string()))
+            .timestamp_iso("2026-04-12T03:04:05.678Z")
+            .build();
+
+        let fields = embed
+            .get("fields")
+            .and_then(|value| value.as_array())
+            .expect("fields array");
+
+        assert_eq!(
+            embed.get("title").and_then(|value| value.as_str()),
+            Some("Release")
+        );
+        assert_eq!(
+            embed.get("description").and_then(|value| value.as_str()),
+            Some("Shipped")
+        );
+        assert_eq!(
+            embed.get("url").and_then(|value| value.as_str()),
+            Some("https://example.com/release")
+        );
+        assert_eq!(
+            embed.get("color").and_then(|value| value.as_u64()),
+            Some(0x5865F2)
+        );
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            fields[0].get("name").and_then(|value| value.as_str()),
+            Some("Status")
+        );
+        assert_eq!(
+            fields[0].get("value").and_then(|value| value.as_str()),
+            Some("Green")
+        );
+        assert_eq!(
+            fields[0].get("inline").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            fields[1].get("name").and_then(|value| value.as_str()),
+            Some("\u{200B}")
+        );
+        assert_eq!(
+            fields[1].get("value").and_then(|value| value.as_str()),
+            Some("\u{200B}")
+        );
+        assert_eq!(
+            fields[1].get("inline").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            embed
+                .get("author")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("discordrs")
+        );
+        assert_eq!(
+            embed
+                .get("author")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            embed
+                .get("author")
+                .and_then(|value| value.get("icon_url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com/icon.png")
+        );
+        assert_eq!(
+            embed
+                .get("thumbnail")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com/thumb.png")
+        );
+        assert_eq!(
+            embed
+                .get("image")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com/image.png")
+        );
+        assert_eq!(
+            embed
+                .get("footer")
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str()),
+            Some("Footer")
+        );
+        assert_eq!(
+            embed
+                .get("footer")
+                .and_then(|value| value.get("icon_url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com/footer.png")
+        );
+        assert_eq!(
+            embed.get("timestamp").and_then(|value| value.as_str()),
+            Some("2026-04-12T03:04:05.678Z")
+        );
+    }
+
+    #[test]
+    fn embed_build_omits_optional_nested_fields_when_not_set() {
+        let embed = EmbedBuilder::new()
+            .author("discordrs", None, None)
+            .footer("Footer", None)
+            .build();
+
+        assert_eq!(
+            embed
+                .get("author")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("discordrs")
+        );
+        assert!(embed
+            .get("author")
+            .and_then(|value| value.get("url"))
+            .is_none());
+        assert!(embed
+            .get("author")
+            .and_then(|value| value.get("icon_url"))
+            .is_none());
+        assert_eq!(
+            embed
+                .get("footer")
+                .and_then(|value| value.get("text"))
+                .and_then(|value| value.as_str()),
+            Some("Footer")
+        );
+        assert!(embed
+            .get("footer")
+            .and_then(|value| value.get("icon_url"))
+            .is_none());
+        assert!(embed.get("fields").is_none());
+    }
+
+    #[test]
+    fn embed_build_includes_direct_video_and_provider_fields() {
+        let embed = EmbedBuilder {
+            video: Some(json!({ "url": "https://example.com/video.mp4" })),
+            provider: Some(json!({ "name": "discordrs" })),
+            ..EmbedBuilder::default()
+        }
+        .build();
+
+        assert_eq!(
+            embed
+                .get("video")
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str()),
+            Some("https://example.com/video.mp4")
+        );
+        assert_eq!(
+            embed
+                .get("provider")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("discordrs")
+        );
+    }
+
+    #[test]
+    fn civil_from_days_handles_epoch_and_leap_day() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
     }
 }

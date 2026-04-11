@@ -174,3 +174,162 @@ impl SectionBuilder {
         to_json_value(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
+    use crate::builders::{ButtonBuilder, TextDisplayBuilder};
+    use crate::constants::{button_style, component_type};
+    use crate::types::MediaGalleryItem;
+
+    #[test]
+    fn media_gallery_builder_serializes_items_and_id() {
+        let payload = MediaGalleryBuilder::new()
+            .add_item(MediaGalleryItem::new("https://example.com/one.png"))
+            .add_items(vec![
+                MediaGalleryItem::new("https://example.com/two.png").description("second"),
+                MediaGalleryItem::new("https://example.com/three.png").spoiler(true),
+            ])
+            .id(7)
+            .build();
+
+        let items = payload
+            .get("items")
+            .and_then(|value| value.as_array())
+            .expect("gallery items");
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::MEDIA_GALLERY as u64)
+        );
+        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(7));
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items[1].get("description").and_then(|value| value.as_str()),
+            Some("second")
+        );
+        assert_eq!(
+            items[2].get("spoiler").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn thumbnail_builder_serializes_optional_fields() {
+        let default_payload = ThumbnailBuilder::new("https://example.com/thumb.png").build();
+        assert_eq!(
+            default_payload,
+            json!({
+                "type": component_type::THUMBNAIL,
+                "media": {"url": "https://example.com/thumb.png"},
+            })
+        );
+
+        let payload = ThumbnailBuilder::new("https://example.com/thumb.png")
+            .description("preview")
+            .spoiler(true)
+            .id(3)
+            .build();
+
+        assert_eq!(
+            payload,
+            json!({
+                "type": component_type::THUMBNAIL,
+                "media": {"url": "https://example.com/thumb.png"},
+                "description": "preview",
+                "spoiler": true,
+                "id": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn file_builder_serializes_optional_fields() {
+        let default_payload = FileBuilder::new("https://example.com/file.txt").build();
+        assert_eq!(
+            default_payload,
+            json!({
+                "type": component_type::FILE,
+                "file": {"url": "https://example.com/file.txt"},
+            })
+        );
+
+        let payload = FileBuilder::new("https://example.com/file.txt")
+            .spoiler(true)
+            .id(11)
+            .build();
+
+        assert_eq!(
+            payload,
+            json!({
+                "type": component_type::FILE,
+                "file": {"url": "https://example.com/file.txt"},
+                "spoiler": true,
+                "id": 11,
+            })
+        );
+    }
+
+    #[test]
+    fn section_builder_serializes_text_and_thumbnail_accessory() {
+        let payload = SectionBuilder::new()
+            .add_text_display(TextDisplayBuilder::new("title"))
+            .set_thumbnail_accessory(
+                ThumbnailBuilder::new("https://example.com/thumb.png")
+                    .description("preview")
+                    .id(8),
+            )
+            .id(4)
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::SECTION as u64)
+        );
+        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(4));
+        assert_eq!(
+            payload
+                .get("components")
+                .and_then(|value| value.as_array())
+                .map(|components| components.len()),
+            Some(1)
+        );
+        assert_eq!(
+            payload
+                .get("accessory")
+                .and_then(|value| value.get("type"))
+                .and_then(|value| value.as_u64()),
+            Some(component_type::THUMBNAIL as u64)
+        );
+    }
+
+    #[test]
+    fn section_builder_can_replace_accessory_with_button() {
+        let payload = SectionBuilder::new()
+            .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/thumb.png"))
+            .set_button_accessory(
+                ButtonBuilder::new()
+                    .label("Open")
+                    .style(button_style::SECONDARY)
+                    .custom_id("open"),
+            )
+            .build();
+
+        assert_eq!(
+            payload
+                .get("accessory")
+                .and_then(|value| value.get("type"))
+                .and_then(|value| value.as_u64()),
+            Some(component_type::BUTTON as u64)
+        );
+        assert_eq!(
+            payload
+                .get("accessory")
+                .and_then(|value| value.get("custom_id"))
+                .and_then(|value| value.as_str()),
+            Some("open")
+        );
+    }
+}
