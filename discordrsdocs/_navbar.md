@@ -1,4 +1,8 @@
 * [GitHub](https://github.com/Ingwannu/discordrs)
+* [Getting Started](#/docs/guide/getting-started)
+* [Architecture](#/docs/guide/architecture)
+* [Commands](#/docs/api/commands)
+* [Cache + Collectors](#/docs/api/cache-and-collectors)
 * [Crate README](#/docs/guide/crate-readme)
 * [Usage](#/docs/guide/usage-guide)
 * [Changelog](#/docs/guide/changelog)

@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::constants::component_type;
-use crate::types::{invalid_data_error, Error};
+use crate::error::DiscordError;
+use crate::types::invalid_data_error;
 
 use super::{
     required_array_field, required_bool_field, required_object_field, required_string_field,
@@ -11,13 +13,13 @@ use super::{
 fn parse_select_component_data(
     component: &Value,
     context: &str,
-) -> Result<(String, Vec<String>), Error> {
+) -> Result<(String, Vec<String>), DiscordError> {
     let custom_id = required_string_field(component, "custom_id", context)?;
     let values = required_string_values_field(component, "values", context)?;
     Ok((custom_id, values))
 }
 
-fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalComponent>, Error> {
+fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalComponent>, DiscordError> {
     let Some(component_type) = component.get("type").and_then(value_to_u8) else {
         return Ok(None);
     };
@@ -72,7 +74,7 @@ fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalCompone
 fn parse_modal_component_tree(
     component: &Value,
     parsed_components: &mut Vec<V2ModalComponent>,
-) -> Result<(), Error> {
+) -> Result<(), DiscordError> {
     match component.get("type").and_then(value_to_u8) {
         Some(component_type::ACTION_ROW) => {
             let nested_components = required_array_field(component, "components", "action_row")?;
@@ -96,7 +98,7 @@ fn parse_modal_component_tree(
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum V2ModalComponent {
     TextInput {
         custom_id: String,
@@ -140,7 +142,7 @@ pub enum V2ModalComponent {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct V2ModalSubmission {
     pub custom_id: String,
     pub components: Vec<V2ModalComponent>,
@@ -216,7 +218,7 @@ impl V2ModalSubmission {
     }
 }
 
-pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, Error> {
+pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, DiscordError> {
     let modal_data = if data.get("custom_id").is_some() && data.get("components").is_some() {
         data
     } else {

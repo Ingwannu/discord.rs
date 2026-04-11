@@ -9,20 +9,26 @@ use axum::{
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::builders::ModalBuilder;
+use crate::error::DiscordError;
+use crate::model::{ApplicationCommandOptionChoice, Interaction, InteractionContextData};
 use crate::parsers::{
-    parse_interaction_context, parse_raw_interaction, value_to_u8, InteractionContext,
-    RawInteraction,
+    parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
+    InteractionContext, RawInteraction,
 };
-use crate::types::{invalid_data_error, Error};
+use crate::types::invalid_data_error;
 
 pub enum InteractionResponse {
     Pong,
     ChannelMessage(Value),
     DeferredMessage,
+    DeferredUpdate,
+    AutocompleteResult(Vec<ApplicationCommandOptionChoice>),
     Modal(ModalBuilder),
     UpdateMessage(Value),
+    LaunchActivity,
     Raw(Value),
 }
 
@@ -35,13 +41,24 @@ pub trait InteractionHandler: Send + Sync {
     ) -> InteractionResponse;
 }
 
+#[async_trait]
+pub trait TypedInteractionHandler: Send + Sync {
+    async fn handle_typed(
+        &self,
+        ctx: InteractionContextData,
+        interaction: Interaction,
+    ) -> InteractionResponse;
+}
+
 #[derive(Clone)]
 struct InteractionsState<H> {
     verifying_key: VerifyingKey,
     handler: H,
 }
 
-fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, Error> {
+const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
+
+fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
     let public_key_bytes = hex::decode(public_key)?;
     let public_key_bytes: [u8; 32] = public_key_bytes
         .as_slice()
@@ -52,12 +69,57 @@ fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, Error> {
         .map_err(|error| invalid_data_error(format!("invalid public key: {error}")))
 }
 
+fn current_unix_timestamp() -> Result<i64, DiscordError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| invalid_data_error("system clock is before unix epoch"))?;
+
+    i64::try_from(duration.as_secs())
+        .map_err(|_| invalid_data_error("system clock is out of range"))
+}
+
+fn validate_signature_timestamp(
+    timestamp: &str,
+    now_unix_timestamp: i64,
+) -> Result<(), DiscordError> {
+    let timestamp = timestamp
+        .parse::<i64>()
+        .map_err(|_| invalid_data_error("signature timestamp must be a unix timestamp"))?;
+    let drift = (i128::from(timestamp) - i128::from(now_unix_timestamp)).abs();
+
+    if drift > i128::from(SIGNATURE_TIMESTAMP_TOLERANCE_SECS) {
+        return Err(invalid_data_error(
+            "signature timestamp outside allowed freshness window",
+        ));
+    }
+
+    Ok(())
+}
+
 fn verify_signature_with_key(
     verifying_key: &VerifyingKey,
     signature_hex: &str,
     timestamp: &str,
     body: &[u8],
-) -> Result<(), Error> {
+) -> Result<(), DiscordError> {
+    let now_unix_timestamp = current_unix_timestamp()?;
+    verify_signature_with_key_at_time(
+        verifying_key,
+        signature_hex,
+        timestamp,
+        body,
+        now_unix_timestamp,
+    )
+}
+
+fn verify_signature_with_key_at_time(
+    verifying_key: &VerifyingKey,
+    signature_hex: &str,
+    timestamp: &str,
+    body: &[u8],
+    now_unix_timestamp: i64,
+) -> Result<(), DiscordError> {
+    validate_signature_timestamp(timestamp, now_unix_timestamp)?;
     let signature_bytes = hex::decode(signature_hex)?;
     let signature = Signature::from_slice(&signature_bytes)
         .map_err(|error| invalid_data_error(format!("invalid signature bytes: {error}")))?;
@@ -83,10 +145,26 @@ fn verify_discord_request_signature(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(), StatusCode> {
+    let now_unix_timestamp = current_unix_timestamp().map_err(|_| StatusCode::UNAUTHORIZED)?;
+    verify_discord_request_signature_at_time(verifying_key, headers, body, now_unix_timestamp)
+}
+
+fn verify_discord_request_signature_at_time(
+    verifying_key: &VerifyingKey,
+    headers: &HeaderMap,
+    body: &[u8],
+    now_unix_timestamp: i64,
+) -> Result<(), StatusCode> {
     let signature = header_value(headers, "x-signature-ed25519")?;
     let timestamp = header_value(headers, "x-signature-timestamp")?;
-    verify_signature_with_key(verifying_key, signature, timestamp, body)
-        .map_err(|_| StatusCode::UNAUTHORIZED)
+    verify_signature_with_key_at_time(
+        verifying_key,
+        signature,
+        timestamp,
+        body,
+        now_unix_timestamp,
+    )
+    .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
 pub fn verify_discord_signature(
@@ -94,7 +172,7 @@ pub fn verify_discord_signature(
     signature: &str,
     timestamp: &str,
     body: &[u8],
-) -> Result<(), Error> {
+) -> Result<(), DiscordError> {
     let verifying_key = decode_verifying_key(public_key)?;
     verify_signature_with_key(&verifying_key, signature, timestamp, body)
 }
@@ -107,6 +185,11 @@ fn interaction_response_payload(response: InteractionResponse) -> Value {
             "data": data,
         }),
         InteractionResponse::DeferredMessage => serde_json::json!({ "type": 5 }),
+        InteractionResponse::DeferredUpdate => serde_json::json!({ "type": 6 }),
+        InteractionResponse::AutocompleteResult(choices) => serde_json::json!({
+            "type": 8,
+            "data": { "choices": choices },
+        }),
         InteractionResponse::Modal(modal) => serde_json::json!({
             "type": 9,
             "data": modal.build(),
@@ -115,6 +198,7 @@ fn interaction_response_payload(response: InteractionResponse) -> Value {
             "type": 7,
             "data": data,
         }),
+        InteractionResponse::LaunchActivity => serde_json::json!({ "type": 12 }),
         InteractionResponse::Raw(data) => data,
     }
 }
@@ -186,7 +270,7 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
-pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, Error>
+pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, DiscordError>
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
 {
@@ -208,13 +292,109 @@ where
         .expect("invalid Discord public key for interactions endpoint")
 }
 
+async fn handle_typed_interactions_request<H>(
+    State(state): State<InteractionsState<H>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse
+where
+    H: TypedInteractionHandler + Clone + Send + Sync + 'static,
+{
+    if let Err(status) =
+        verify_discord_request_signature(&state.verifying_key, &headers, body.as_ref())
+    {
+        return status.into_response();
+    }
+
+    let payload: Value = match serde_json::from_slice(body.as_ref()) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let interaction_type = match payload.get("type").and_then(value_to_u8) {
+        Some(interaction_type) => interaction_type,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "missing or invalid interaction.type" })),
+            )
+                .into_response();
+        }
+    };
+
+    if interaction_type == 1 {
+        return (StatusCode::OK, Json(serde_json::json!({ "type": 1 }))).into_response();
+    }
+
+    let interaction = match parse_interaction(&payload) {
+        Ok(interaction) => interaction,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    let context: InteractionContextData = interaction.context().clone();
+
+    let response = state.handler.handle_typed(context, interaction).await;
+    let response_payload = interaction_response_payload(response);
+    (StatusCode::OK, Json(response_payload)).into_response()
+}
+
+pub fn try_typed_interactions_endpoint<H>(
+    public_key: &str,
+    handler: H,
+) -> Result<Router, DiscordError>
+where
+    H: TypedInteractionHandler + Clone + Send + Sync + 'static,
+{
+    let verifying_key = decode_verifying_key(public_key)?;
+
+    Ok(Router::new()
+        .route(
+            "/interactions",
+            post(handle_typed_interactions_request::<H>),
+        )
+        .with_state(InteractionsState {
+            verifying_key,
+            handler,
+        }))
+}
+
+pub fn typed_interactions_endpoint<H>(public_key: &str, handler: H) -> Router
+where
+    H: TypedInteractionHandler + Clone + Send + Sync + 'static,
+{
+    try_typed_interactions_endpoint(public_key, handler)
+        .expect("invalid Discord public key for typed interactions endpoint")
+}
+
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use serde_json::Value;
 
-    use super::{try_interactions_endpoint, InteractionHandler, InteractionResponse};
+    use super::{
+        interaction_response_payload, try_interactions_endpoint, try_typed_interactions_endpoint,
+        verify_discord_request_signature_at_time, verify_signature_with_key_at_time,
+        InteractionHandler, InteractionResponse, TypedInteractionHandler,
+        SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
+    };
+    use crate::model::ApplicationCommandOptionChoice;
+    use crate::model::{Interaction, InteractionContextData};
     use crate::parsers::{InteractionContext, RawInteraction};
+
+    const TEST_NOW_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
     #[derive(Clone)]
     struct TestHandler;
@@ -239,5 +419,229 @@ mod tests {
     fn try_interactions_endpoint_accepts_valid_public_key() {
         let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
         assert!(try_interactions_endpoint(public_key, TestHandler).is_ok());
+    }
+
+    #[derive(Clone)]
+    struct TypedTestHandler;
+
+    #[async_trait]
+    impl TypedInteractionHandler for TypedTestHandler {
+        async fn handle_typed(
+            &self,
+            _ctx: InteractionContextData,
+            _interaction: Interaction,
+        ) -> InteractionResponse {
+            InteractionResponse::Raw(Value::Null)
+        }
+    }
+
+    #[test]
+    fn try_typed_interactions_endpoint_accepts_valid_public_key() {
+        let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(try_typed_interactions_endpoint(public_key, TypedTestHandler).is_ok());
+    }
+
+    #[test]
+    fn interaction_response_payload_supports_deferred_update() {
+        let payload = interaction_response_payload(InteractionResponse::DeferredUpdate);
+        assert_eq!(payload["type"], 6);
+    }
+
+    #[test]
+    fn interaction_response_payload_supports_autocomplete_choices() {
+        let payload = interaction_response_payload(InteractionResponse::AutocompleteResult(vec![
+            ApplicationCommandOptionChoice {
+                name: "Support".to_string(),
+                value: Value::String("support".to_string()),
+            },
+        ]));
+
+        assert_eq!(payload["type"], 8);
+        assert_eq!(payload["data"]["choices"][0]["name"], "Support");
+        assert_eq!(payload["data"]["choices"][0]["value"], "support");
+    }
+
+    #[test]
+    fn interaction_response_payload_supports_launch_activity() {
+        let payload = interaction_response_payload(InteractionResponse::LaunchActivity);
+        assert_eq!(payload["type"], 12);
+    }
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[7_u8; 32])
+    }
+
+    fn sign_request(timestamp: &str, body: &[u8]) -> (VerifyingKey, String) {
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+        let mut signed_payload = Vec::with_capacity(timestamp.len() + body.len());
+        signed_payload.extend_from_slice(timestamp.as_bytes());
+        signed_payload.extend_from_slice(body);
+        let signature = signing_key.sign(&signed_payload);
+
+        (verifying_key, hex::encode(signature.to_bytes()))
+    }
+
+    fn signed_headers(signature: &str, timestamp: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-signature-ed25519",
+            HeaderValue::from_str(signature).expect("signature header"),
+        );
+        headers.insert(
+            "x-signature-timestamp",
+            HeaderValue::from_str(timestamp).expect("timestamp header"),
+        );
+        headers
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_accepts_fresh_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        assert!(verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_stale_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP - SIGNATURE_TIMESTAMP_TOLERANCE_SECS - 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("stale timestamps should be rejected");
+
+        assert!(error.to_string().contains("freshness window"));
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_future_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP + SIGNATURE_TIMESTAMP_TOLERANCE_SECS + 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("future timestamps should be rejected");
+
+        assert!(error.to_string().contains("freshness window"));
+    }
+
+    #[test]
+    fn verify_signature_with_key_at_time_rejects_invalid_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp = "not-a-timestamp";
+        let (verifying_key, signature) = sign_request(timestamp, body);
+
+        let error = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature,
+            timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .expect_err("invalid timestamps should be rejected");
+
+        assert!(error.to_string().contains("unix timestamp"));
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_missing_headers() {
+        let headers = HeaderMap::new();
+        let body = br#"{"type":1}"#;
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_invalid_signature() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let signing_key = test_signing_key();
+        let verifying_key = signing_key.verifying_key();
+        let headers = signed_headers(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            &timestamp,
+        );
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_stale_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP - SIGNATURE_TIMESTAMP_TOLERANCE_SECS - 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+        let headers = signed_headers(&signature, &timestamp);
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn verify_discord_request_signature_rejects_future_timestamp() {
+        let body = br#"{"type":1}"#;
+        let timestamp =
+            (TEST_NOW_UNIX_TIMESTAMP + SIGNATURE_TIMESTAMP_TOLERANCE_SECS + 1).to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+        let headers = signed_headers(&signature, &timestamp);
+
+        assert_eq!(
+            verify_discord_request_signature_at_time(
+                &verifying_key,
+                &headers,
+                body,
+                TEST_NOW_UNIX_TIMESTAMP,
+            ),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 }

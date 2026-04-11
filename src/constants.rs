@@ -40,26 +40,9 @@ pub mod text_input_style {
     pub const PARAGRAPH: u8 = 2;
 }
 
-pub mod gateway_intents {
-    pub const GUILDS: u64 = 1 << 0;
-    pub const GUILD_MEMBERS: u64 = 1 << 1;
-    pub const GUILD_MODERATION: u64 = 1 << 2;
-    pub const GUILD_EMOJIS_AND_STICKERS: u64 = 1 << 3;
-    pub const GUILD_INTEGRATIONS: u64 = 1 << 4;
-    pub const GUILD_WEBHOOKS: u64 = 1 << 5;
-    pub const GUILD_INVITES: u64 = 1 << 6;
-    pub const GUILD_VOICE_STATES: u64 = 1 << 7;
-    pub const GUILD_PRESENCES: u64 = 1 << 8;
-    pub const GUILD_MESSAGES: u64 = 1 << 9;
-    pub const GUILD_MESSAGE_REACTIONS: u64 = 1 << 10;
-    pub const GUILD_MESSAGE_TYPING: u64 = 1 << 11;
-    pub const DIRECT_MESSAGES: u64 = 1 << 12;
-    pub const DIRECT_MESSAGE_REACTIONS: u64 = 1 << 13;
-    pub const DIRECT_MESSAGE_TYPING: u64 = 1 << 14;
-    pub const MESSAGE_CONTENT: u64 = 1 << 15;
-    pub const GUILD_SCHEDULED_EVENTS: u64 = 1 << 16;
-    pub const AUTO_MODERATION_CONFIGURATION: u64 = 1 << 20;
-    pub const AUTO_MODERATION_EXECUTION: u64 = 1 << 21;
-}
+// Re-export gateway_intents from bitfield module for backward compatibility.
+// The canonical definitions now live in src/bitfield.rs.
+pub use crate::bitfield::gateway_intents;
 
+/// Legacy constant — prefer `bitfield::message_flags::IS_COMPONENTS_V2` or `MessageFlags::from_bits(1 << 15)`.
 pub const MESSAGE_FLAG_IS_COMPONENTS_V2: u64 = 1 << 15;

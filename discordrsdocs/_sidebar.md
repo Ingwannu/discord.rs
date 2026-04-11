@@ -8,12 +8,16 @@
   - [PDF Manual](#/docs/guide/pdf-manual)
   - [Full Manual (Markdown)](#/docs/guide/full-manual)
 - API Reference
+  - [Models and Constants](#/docs/api/core-types-and-constants)
   - [Builders](#/docs/api/builders)
+  - [Commands](#/docs/api/commands)
   - [Gateway](#/docs/api/gateway)
+  - [Cache and Collectors](#/docs/api/cache-and-collectors)
   - [Parsers](#/docs/api/parsers)
   - [HTTP and Helpers](#/docs/api/http-and-helpers)
   - [Interactions Endpoint](#/docs/api/interactions-endpoint)
-  - [Core Types and Constants](#/docs/api/core-types-and-constants)
+  - [Sharding](#/docs/api/sharding)
+  - [Voice](#/docs/api/voice)
 - Source Docs
   - [Crate README](#/docs/guide/crate-readme)
   - [Changelog](#/docs/guide/changelog)
