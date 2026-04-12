@@ -14,13 +14,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-<<<<<<< Updated upstream
-=======
 env:
   COVERAGE_MIN_LINES: 99.9
   COVERAGE_IGNORE_REGEX: '(^|[/\\])src[/\\](cache|collection|collector|command|error|event|helpers|http|interactions|manager|model|response|sharding|voice|voice_runtime|ws)\.rs$|(^|[/\\])src[/\\]gateway[/\\].*\.rs$|(^|[/\\])src[/\\]parsers[/\\].*\.rs$|(^|[/\\])src[/\\]builders[/\\](components|container|embed|mod)\.rs$'
-
->>>>>>> Stashed changes
 jobs:
   rust-check:
     name: rust-check
@@ -67,8 +63,6 @@ jobs:
 
       - name: Cargo fmt (check)
         run: cargo fmt --all -- --check
-<<<<<<< Updated upstream
-=======
 
   coverage:
     name: coverage
@@ -104,4 +98,3 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: lcov.info
->>>>>>> Stashed changes
