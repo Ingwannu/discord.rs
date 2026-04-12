@@ -628,9 +628,16 @@ impl CachedManager<Channel> for ChannelManager {
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
+    use std::sync::Arc;
+
+    #[cfg(feature = "gateway")]
+    use crate::manager::CachedManager;
     use crate::model::{Channel, Guild, Message, Role, Snowflake, User};
 
-    use super::CacheHandle;
+    use super::{
+        CacheHandle, ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager,
+    };
+    use crate::http::DiscordHttpClient;
 
     #[tokio::test]
     async fn cache_handle_tracks_create_and_delete_flows() {
@@ -953,5 +960,381 @@ mod tests {
             .message(&other_channel_id, &untouched_message_id)
             .await
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn cache_handle_removes_individual_entries_without_touching_other_guild_data() {
+        let cache = CacheHandle::new();
+        let guild_id = Snowflake::from("1");
+        let other_guild_id = Snowflake::from("2");
+        let channel_id = Snowflake::from("10");
+        let other_channel_id = Snowflake::from("20");
+        let user_id = Snowflake::from("11");
+        let other_user_id = Snowflake::from("21");
+        let message_id = Snowflake::from("12");
+        let other_message_id = Snowflake::from("22");
+        let role_id = Snowflake::from("13");
+        let other_role_id = Snowflake::from("23");
+
+        for (id, name) in [
+            (guild_id.clone(), "discordrs"),
+            (other_guild_id.clone(), "other"),
+        ] {
+            cache
+                .upsert_guild(Guild {
+                    id,
+                    name: name.to_string(),
+                    ..Guild::default()
+                })
+                .await;
+        }
+
+        for (id, guild, name) in [
+            (channel_id.clone(), Some(guild_id.clone()), "general"),
+            (
+                other_channel_id.clone(),
+                Some(other_guild_id.clone()),
+                "other-general",
+            ),
+        ] {
+            cache
+                .upsert_channel(Channel {
+                    id,
+                    guild_id: guild,
+                    kind: 0,
+                    name: Some(name.to_string()),
+                    ..Channel::default()
+                })
+                .await;
+        }
+
+        for (guild, user, username) in [
+            (guild_id.clone(), user_id.clone(), "discordrs"),
+            (other_guild_id.clone(), other_user_id.clone(), "other"),
+        ] {
+            cache
+                .upsert_member(
+                    guild,
+                    user.clone(),
+                    crate::model::Member {
+                        user: Some(User {
+                            id: user,
+                            username: username.to_string(),
+                            ..User::default()
+                        }),
+                        ..crate::model::Member::default()
+                    },
+                )
+                .await;
+        }
+
+        for (message_id, channel_id, guild_id, content) in [
+            (
+                message_id.clone(),
+                channel_id.clone(),
+                Some(guild_id.clone()),
+                "hello",
+            ),
+            (
+                other_message_id.clone(),
+                other_channel_id.clone(),
+                Some(other_guild_id.clone()),
+                "other",
+            ),
+        ] {
+            cache
+                .upsert_message(Message {
+                    id: message_id,
+                    channel_id,
+                    guild_id,
+                    content: content.to_string(),
+                    ..Message::default()
+                })
+                .await;
+        }
+
+        for (guild_id, role_id, name) in [
+            (guild_id.clone(), role_id.clone(), "admin"),
+            (other_guild_id.clone(), other_role_id.clone(), "member"),
+        ] {
+            cache
+                .upsert_role(
+                    guild_id,
+                    Role {
+                        id: role_id,
+                        name: name.to_string(),
+                        ..Role::default()
+                    },
+                )
+                .await;
+        }
+
+        assert_eq!(cache.members(&guild_id).await.len(), 1);
+        assert_eq!(cache.messages(&channel_id).await.len(), 1);
+        assert_eq!(cache.roles(&guild_id).await.len(), 1);
+
+        cache.remove_member(&guild_id, &user_id).await;
+        cache.remove_message(&channel_id, &message_id).await;
+        cache.remove_role(&guild_id, &role_id).await;
+
+        assert!(cache.member(&guild_id, &user_id).await.is_none());
+        assert!(cache.message(&channel_id, &message_id).await.is_none());
+        assert!(cache.role(&guild_id, &role_id).await.is_none());
+        assert!(!cache.contains_member(&guild_id, &user_id).await);
+        assert!(!cache.contains_message(&channel_id, &message_id).await);
+        assert!(!cache.contains_role(&guild_id, &role_id).await);
+        assert!(cache.members(&guild_id).await.is_empty());
+        assert!(cache.messages(&channel_id).await.is_empty());
+        assert!(cache.roles(&guild_id).await.is_empty());
+
+        assert!(cache
+            .member(&other_guild_id, &other_user_id)
+            .await
+            .is_some());
+        assert!(cache
+            .message(&other_channel_id, &other_message_id)
+            .await
+            .is_some());
+        assert!(cache.role(&other_guild_id, &other_role_id).await.is_some());
+    }
+
+    #[cfg(feature = "gateway")]
+    #[tokio::test]
+    async fn managers_return_cached_values_without_hitting_http() {
+        let cache = CacheHandle::new();
+        let http = Arc::new(DiscordHttpClient::new("token", 1));
+        let guild_id = Snowflake::from("100");
+        let channel_id = Snowflake::from("200");
+        let user_id = Snowflake::from("300");
+        let message_id = Snowflake::from("400");
+        let role_id = Snowflake::from("500");
+
+        let guild = Guild {
+            id: guild_id.clone(),
+            name: "discordrs".to_string(),
+            ..Guild::default()
+        };
+        let channel = Channel {
+            id: channel_id.clone(),
+            guild_id: Some(guild_id.clone()),
+            kind: 0,
+            name: Some("general".to_string()),
+            ..Channel::default()
+        };
+        let member = crate::model::Member {
+            user: Some(User {
+                id: user_id.clone(),
+                username: "discordrs".to_string(),
+                ..User::default()
+            }),
+            ..crate::model::Member::default()
+        };
+        let message = Message {
+            id: message_id.clone(),
+            channel_id: channel_id.clone(),
+            guild_id: Some(guild_id.clone()),
+            content: "cached".to_string(),
+            ..Message::default()
+        };
+        let role = Role {
+            id: role_id.clone(),
+            name: "admin".to_string(),
+            ..Role::default()
+        };
+
+        cache.upsert_guild(guild.clone()).await;
+        cache.upsert_channel(channel.clone()).await;
+        cache
+            .upsert_member(guild_id.clone(), user_id.clone(), member.clone())
+            .await;
+        cache.upsert_message(message.clone()).await;
+        cache.upsert_role(guild_id.clone(), role.clone()).await;
+
+        let guild_manager = GuildManager::new(Arc::clone(&http), cache.clone());
+        let channel_manager = ChannelManager::new(Arc::clone(&http), cache.clone());
+        let member_manager = MemberManager::new(Arc::clone(&http), cache.clone());
+        let message_manager = MessageManager::new(Arc::clone(&http), cache.clone());
+        let role_manager = RoleManager::new(http, cache.clone());
+
+        assert_eq!(
+            guild_manager.get(guild_id.clone()).await.unwrap().name,
+            "discordrs"
+        );
+        assert_eq!(
+            channel_manager
+                .get(channel_id.clone())
+                .await
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("general")
+        );
+        assert_eq!(
+            member_manager
+                .get(guild_id.clone(), user_id.clone())
+                .await
+                .unwrap()
+                .user
+                .as_ref()
+                .map(|user| user.username.as_str()),
+            Some("discordrs")
+        );
+        assert_eq!(
+            message_manager
+                .get(channel_id.clone(), message_id.clone())
+                .await
+                .unwrap()
+                .content,
+            "cached"
+        );
+        assert_eq!(role_manager.list(guild_id.clone()).await.unwrap().len(), 1);
+
+        assert!(guild_manager.contains(guild_id.clone()).await);
+        assert!(channel_manager.contains(channel_id.clone()).await);
+        assert!(
+            member_manager
+                .contains(guild_id.clone(), user_id.clone())
+                .await
+        );
+        assert!(
+            message_manager
+                .contains(channel_id.clone(), message_id.clone())
+                .await
+        );
+        assert!(
+            role_manager
+                .contains(guild_id.clone(), role_id.clone())
+                .await
+        );
+
+        assert_eq!(
+            guild_manager.cached(guild_id.clone()).await.unwrap().id,
+            guild_id
+        );
+        assert_eq!(
+            channel_manager.cached(channel_id.clone()).await.unwrap().id,
+            channel_id
+        );
+        assert_eq!(
+            member_manager
+                .cached(guild_id.clone(), user_id.clone())
+                .await
+                .unwrap()
+                .user
+                .as_ref()
+                .map(|user| user.id.clone()),
+            Some(user_id.clone())
+        );
+        assert_eq!(
+            message_manager
+                .cached(channel_id.clone(), message_id.clone())
+                .await
+                .unwrap()
+                .id,
+            message_id
+        );
+        assert_eq!(
+            role_manager
+                .cached(guild_id.clone(), role_id.clone())
+                .await
+                .unwrap()
+                .id,
+            role_id
+        );
+
+        assert_eq!(guild_manager.list_cached().await.len(), 1);
+        assert_eq!(channel_manager.list_cached().await.len(), 1);
+        assert_eq!(member_manager.list_cached(guild_id.clone()).await.len(), 1);
+        assert_eq!(
+            message_manager.list_cached(channel_id.clone()).await.len(),
+            1
+        );
+        assert_eq!(role_manager.list_cached(guild_id.clone()).await.len(), 1);
+    }
+
+    #[cfg(feature = "gateway")]
+    #[tokio::test]
+    async fn cached_manager_trait_impls_delegate_to_cache_for_hits() {
+        let cache = CacheHandle::new();
+        let http = Arc::new(DiscordHttpClient::new("token", 1));
+        let guild_id = Snowflake::from("701");
+        let channel_id = Snowflake::from("702");
+
+        cache
+            .upsert_guild(Guild {
+                id: guild_id.clone(),
+                name: "guild".to_string(),
+                ..Guild::default()
+            })
+            .await;
+        cache
+            .upsert_channel(Channel {
+                id: channel_id.clone(),
+                guild_id: Some(guild_id.clone()),
+                kind: 0,
+                name: Some("cached-channel".to_string()),
+                ..Channel::default()
+            })
+            .await;
+
+        let guild_manager = GuildManager::new(Arc::clone(&http), cache.clone());
+        let channel_manager = ChannelManager::new(http, cache);
+
+        assert_eq!(
+            <GuildManager as CachedManager<Guild>>::get(&guild_manager, guild_id.clone())
+                .await
+                .unwrap()
+                .name,
+            "guild"
+        );
+        assert_eq!(
+            <GuildManager as CachedManager<Guild>>::cached(&guild_manager, guild_id.clone())
+                .await
+                .unwrap()
+                .id,
+            guild_id
+        );
+        assert!(
+            <GuildManager as CachedManager<Guild>>::contains(&guild_manager, guild_id.clone())
+                .await
+        );
+        assert_eq!(
+            <GuildManager as CachedManager<Guild>>::list_cached(&guild_manager)
+                .await
+                .len(),
+            1
+        );
+
+        assert_eq!(
+            <ChannelManager as CachedManager<Channel>>::get(&channel_manager, channel_id.clone())
+                .await
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("cached-channel")
+        );
+        assert_eq!(
+            <ChannelManager as CachedManager<Channel>>::cached(
+                &channel_manager,
+                channel_id.clone()
+            )
+            .await
+            .unwrap()
+            .id,
+            channel_id
+        );
+        assert!(
+            <ChannelManager as CachedManager<Channel>>::contains(
+                &channel_manager,
+                channel_id.clone()
+            )
+            .await
+        );
+        assert_eq!(
+            <ChannelManager as CachedManager<Channel>>::list_cached(&channel_manager)
+                .await
+                .len(),
+            1
+        );
     }
 }

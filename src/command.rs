@@ -296,7 +296,11 @@ impl MessageCommandBuilder {
 mod tests {
     use serde_json::json;
 
-    use super::{command_type, option_type, CommandOptionBuilder, SlashCommandBuilder};
+    use super::{
+        command_type, option_type, CommandOptionBuilder, MessageCommandBuilder,
+        SlashCommandBuilder, UserCommandBuilder,
+    };
+    use crate::model::{ApplicationCommand, PermissionsBitField};
 
     #[test]
     fn slash_command_builder_serializes_nested_options() {
@@ -324,5 +328,145 @@ mod tests {
         let value = serde_json::to_value(command).unwrap();
         assert_eq!(value["options"][0]["type"], json!(option_type::STRING));
         assert_eq!(value["options"][1]["type"], json!(option_type::BOOLEAN));
+    }
+
+    #[test]
+    fn command_option_builder_shortcuts_cover_supported_types() {
+        let cases = [
+            (
+                CommandOptionBuilder::subcommand("sub", "desc").build(),
+                option_type::SUB_COMMAND,
+            ),
+            (
+                CommandOptionBuilder::subcommand_group("group", "desc").build(),
+                option_type::SUB_COMMAND_GROUP,
+            ),
+            (
+                CommandOptionBuilder::string("string", "desc").build(),
+                option_type::STRING,
+            ),
+            (
+                CommandOptionBuilder::integer("integer", "desc").build(),
+                option_type::INTEGER,
+            ),
+            (
+                CommandOptionBuilder::boolean("boolean", "desc").build(),
+                option_type::BOOLEAN,
+            ),
+            (
+                CommandOptionBuilder::user("user", "desc").build(),
+                option_type::USER,
+            ),
+            (
+                CommandOptionBuilder::channel("channel", "desc").build(),
+                option_type::CHANNEL,
+            ),
+            (
+                CommandOptionBuilder::role("role", "desc").build(),
+                option_type::ROLE,
+            ),
+            (
+                CommandOptionBuilder::mentionable("mentionable", "desc").build(),
+                option_type::MENTIONABLE,
+            ),
+            (
+                CommandOptionBuilder::number("number", "desc").build(),
+                option_type::NUMBER,
+            ),
+            (
+                CommandOptionBuilder::attachment("attachment", "desc").build(),
+                option_type::ATTACHMENT,
+            ),
+        ];
+
+        for (option, expected_kind) in cases {
+            assert_eq!(option.kind, expected_kind);
+        }
+    }
+
+    #[test]
+    fn command_option_builder_serializes_nested_constraints_and_choices() {
+        let option = CommandOptionBuilder::subcommand_group("admin", "Admin tools")
+            .option(
+                CommandOptionBuilder::subcommand("ban", "Ban a member")
+                    .option(CommandOptionBuilder::user("target", "Member").required(true))
+                    .option(
+                        CommandOptionBuilder::integer("days", "Delete days")
+                            .autocomplete(true)
+                            .min_value(1.0)
+                            .max_value(7.0),
+                    )
+                    .option(
+                        CommandOptionBuilder::string("reason", "Reason")
+                            .min_length(3)
+                            .max_length(120),
+                    )
+                    .option(CommandOptionBuilder::number("ratio", "Ratio").choice("Half", 0.5_f64))
+                    .option(CommandOptionBuilder::attachment("proof", "Proof")),
+            )
+            .build();
+
+        let value = serde_json::to_value(option).unwrap();
+        let nested = &value["options"][0]["options"];
+
+        assert_eq!(value["type"], json!(option_type::SUB_COMMAND_GROUP));
+        assert_eq!(value["options"][0]["type"], json!(option_type::SUB_COMMAND));
+        assert_eq!(nested[0]["required"], json!(true));
+        assert_eq!(nested[1]["autocomplete"], json!(true));
+        assert_eq!(nested[1]["min_value"], json!(1.0));
+        assert_eq!(nested[1]["max_value"], json!(7.0));
+        assert_eq!(nested[2]["min_length"], json!(3));
+        assert_eq!(nested[2]["max_length"], json!(120));
+        assert_eq!(nested[3]["choices"][0]["name"], json!("Half"));
+        assert_eq!(nested[3]["choices"][0]["value"], json!(0.5));
+        assert_eq!(nested[4]["type"], json!(option_type::ATTACHMENT));
+    }
+
+    #[test]
+    fn command_definition_converts_into_application_command() {
+        let permissions = PermissionsBitField(8);
+        let command = SlashCommandBuilder::new("ban", "Ban a member")
+            .integer_option("days", "Delete days", false)
+            .default_member_permissions(permissions)
+            .dm_permission(false)
+            .nsfw(true)
+            .build();
+
+        let application_command: ApplicationCommand = command.clone().into();
+
+        assert_eq!(application_command.kind, command_type::CHAT_INPUT);
+        assert_eq!(application_command.name, "ban");
+        assert_eq!(application_command.description, "Ban a member");
+        assert_eq!(application_command.options.len(), 1);
+        assert_eq!(
+            application_command
+                .default_member_permissions
+                .map(PermissionsBitField::bits),
+            Some(8)
+        );
+        assert_eq!(application_command.dm_permission, Some(false));
+        assert_eq!(application_command.nsfw, Some(true));
+    }
+
+    #[test]
+    fn user_and_message_command_builders_apply_command_kinds_and_permissions() {
+        let user_command = UserCommandBuilder::new("Inspect")
+            .default_member_permissions(PermissionsBitField(16))
+            .dm_permission(true)
+            .build();
+        let message_command = MessageCommandBuilder::new("Quote")
+            .default_member_permissions(PermissionsBitField(32))
+            .dm_permission(false)
+            .build();
+
+        let user_value = serde_json::to_value(user_command).unwrap();
+        let message_value = serde_json::to_value(message_command).unwrap();
+
+        assert_eq!(user_value["type"], json!(command_type::USER));
+        assert_eq!(user_value["default_member_permissions"], json!("16"));
+        assert_eq!(user_value["dm_permission"], json!(true));
+        assert_eq!(message_value["type"], json!(command_type::MESSAGE));
+        assert_eq!(message_value["default_member_permissions"], json!("32"));
+        assert_eq!(message_value["dm_permission"], json!(false));
     }
 }

@@ -517,3 +517,299 @@ impl ModalBuilder {
         to_json_value(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, LabelBuilder, ModalBuilder,
+        RadioGroupBuilder, TextInputBuilder,
+    };
+    use crate::builders::{ActionRowBuilder, ButtonBuilder, SelectMenuBuilder};
+    use crate::constants::{component_type, text_input_style};
+    use crate::types::SelectOption;
+
+    #[test]
+    fn text_input_builder_serializes_helpers_and_optional_fields() {
+        let short = TextInputBuilder::short("short-id", "Short").build();
+        assert_eq!(
+            short.get("style").and_then(|value| value.as_u64()),
+            Some(text_input_style::SHORT as u64)
+        );
+
+        let paragraph = TextInputBuilder::paragraph("paragraph-id", "Paragraph")
+            .placeholder("type here")
+            .value("seed")
+            .required(true)
+            .min_length(5)
+            .max_length(25)
+            .build();
+
+        assert_eq!(
+            paragraph,
+            json!({
+                "type": component_type::TEXT_INPUT,
+                "custom_id": "paragraph-id",
+                "style": text_input_style::PARAGRAPH,
+                "label": "Paragraph",
+                "placeholder": "type here",
+                "value": "seed",
+                "required": true,
+                "min_length": 5,
+                "max_length": 25,
+            })
+        );
+    }
+
+    #[test]
+    fn radio_group_builder_serializes_added_options_and_flags() {
+        let payload = RadioGroupBuilder::new("radio")
+            .add_option(SelectOption::new("One", "1"))
+            .add_options(vec![SelectOption::new("Two", "2").default_selected(true)])
+            .required(true)
+            .disabled(false)
+            .id(4)
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::RADIO_GROUP as u64)
+        );
+        assert_eq!(
+            payload
+                .get("options")
+                .and_then(|value| value.as_array())
+                .map(|options| options.len()),
+            Some(2)
+        );
+        assert_eq!(
+            payload.get("required").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            payload.get("disabled").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(4));
+    }
+
+    #[test]
+    fn checkbox_group_builder_serializes_limits_and_flags() {
+        let payload = CheckboxGroupBuilder::new("checks")
+            .add_option(SelectOption::new("One", "1"))
+            .add_options(vec![SelectOption::new("Two", "2")])
+            .min_values(1)
+            .max_values(2)
+            .required(true)
+            .disabled(true)
+            .id(8)
+            .build();
+
+        assert_eq!(
+            payload,
+            json!({
+                "type": component_type::CHECKBOX_GROUP,
+                "custom_id": "checks",
+                "options": [
+                    {"label": "One", "value": "1"},
+                    {"label": "Two", "value": "2"}
+                ],
+                "min_values": 1,
+                "max_values": 2,
+                "required": true,
+                "disabled": true,
+                "id": 8,
+            })
+        );
+    }
+
+    #[test]
+    fn checkbox_and_file_upload_builders_serialize_optional_fields() {
+        let checkbox = CheckboxBuilder::new("terms")
+            .checked(true)
+            .required(true)
+            .disabled(false)
+            .id(3)
+            .build();
+
+        assert_eq!(
+            checkbox,
+            json!({
+                "type": component_type::CHECKBOX,
+                "custom_id": "terms",
+                "checked": true,
+                "required": true,
+                "disabled": false,
+                "id": 3,
+            })
+        );
+
+        let upload = FileUploadBuilder::new("attachment")
+            .min_values(1)
+            .max_values(3)
+            .required(true)
+            .id(6)
+            .build();
+
+        assert_eq!(
+            upload,
+            json!({
+                "type": component_type::FILE_UPLOAD,
+                "custom_id": "attachment",
+                "min_values": 1,
+                "max_values": 3,
+                "required": true,
+                "id": 6,
+            })
+        );
+    }
+
+    #[test]
+    fn label_builder_helper_constructors_wrap_expected_component_types() {
+        let cases = vec![
+            (
+                LabelBuilder::with_select_menu(
+                    "Choose",
+                    SelectMenuBuilder::string("select").add_option(SelectOption::new("One", "1")),
+                )
+                .description("pick one")
+                .id(1)
+                .build(),
+                component_type::STRING_SELECT,
+            ),
+            (
+                LabelBuilder::with_file_upload("Upload", FileUploadBuilder::new("upload")).build(),
+                component_type::FILE_UPLOAD,
+            ),
+            (
+                LabelBuilder::with_radio_group(
+                    "Radio",
+                    RadioGroupBuilder::new("radio").add_option(SelectOption::new("One", "1")),
+                )
+                .build(),
+                component_type::RADIO_GROUP,
+            ),
+            (
+                LabelBuilder::with_checkbox_group(
+                    "Checks",
+                    CheckboxGroupBuilder::new("checks").add_option(SelectOption::new("One", "1")),
+                )
+                .build(),
+                component_type::CHECKBOX_GROUP,
+            ),
+            (
+                LabelBuilder::with_checkbox("Accept", CheckboxBuilder::new("accept")).build(),
+                component_type::CHECKBOX,
+            ),
+        ];
+
+        for (index, (payload, expected_type)) in cases.into_iter().enumerate() {
+            assert_eq!(
+                payload.get("type").and_then(|value| value.as_u64()),
+                Some(component_type::LABEL as u64)
+            );
+            assert_eq!(
+                payload
+                    .get("component")
+                    .and_then(|value| value.get("type"))
+                    .and_then(|value| value.as_u64()),
+                Some(expected_type as u64)
+            );
+            if index == 0 {
+                assert_eq!(
+                    payload.get("description").and_then(|value| value.as_str()),
+                    Some("pick one")
+                );
+                assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(1));
+            } else {
+                assert!(payload.get("description").is_none());
+                assert!(payload.get("id").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn modal_builder_composes_components_and_optional_descriptions() {
+        let payload = ModalBuilder::new("modal-id", "Modal Title")
+            .add_text_input(
+                TextInputBuilder::short("name", "Name")
+                    .placeholder("Jane")
+                    .required(true),
+            )
+            .add_select_menu(
+                "Choose",
+                Some("Pick exactly one"),
+                SelectMenuBuilder::string("select").add_option(SelectOption::new("One", "1")),
+            )
+            .add_file_upload("Upload", None, FileUploadBuilder::new("upload"))
+            .add_radio_group(
+                "Radio",
+                Some("Required choice"),
+                RadioGroupBuilder::new("radio").add_option(SelectOption::new("One", "1")),
+            )
+            .add_checkbox_group(
+                "Checks",
+                None,
+                CheckboxGroupBuilder::new("checks").add_option(SelectOption::new("One", "1")),
+            )
+            .add_checkbox("Accept", Some("Terms"), CheckboxBuilder::new("accept"))
+            .add_label(LabelBuilder::with_checkbox(
+                "Standalone",
+                CheckboxBuilder::new("solo"),
+            ))
+            .add_action_row(
+                ActionRowBuilder::new().add_component(
+                    ButtonBuilder::new()
+                        .label("Ignored in modal tests")
+                        .custom_id("btn")
+                        .build(),
+                ),
+            )
+            .add_component(json!({"type": 250, "custom": true}))
+            .build();
+
+        let components = payload
+            .get("components")
+            .and_then(|value| value.as_array())
+            .expect("modal components");
+
+        assert_eq!(
+            payload.get("custom_id").and_then(|value| value.as_str()),
+            Some("modal-id")
+        );
+        assert_eq!(
+            payload.get("title").and_then(|value| value.as_str()),
+            Some("Modal Title")
+        );
+        assert_eq!(components.len(), 9);
+        assert_eq!(
+            components[0].get("type").and_then(|value| value.as_u64()),
+            Some(component_type::ACTION_ROW as u64)
+        );
+        assert_eq!(
+            components[1]
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some("Pick exactly one")
+        );
+        assert!(components[2].get("description").is_none());
+        assert_eq!(
+            components[3]
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some("Required choice")
+        );
+        assert!(components[4].get("description").is_none());
+        assert_eq!(
+            components[5]
+                .get("description")
+                .and_then(|value| value.as_str()),
+            Some("Terms")
+        );
+        assert_eq!(
+            components[8].get("type").and_then(|value| value.as_u64()),
+            Some(250)
+        );
+    }
+}

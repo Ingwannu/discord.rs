@@ -133,3 +133,158 @@ pub(crate) fn optional_string_values_field(
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        optional_string_field, optional_string_values_field, required_array_field,
+        required_bool_field, required_object_field, required_string_field,
+        required_string_values_field, required_u8_field, value_to_string, value_to_u8,
+    };
+    use crate::error::DiscordError;
+
+    fn model_message(error: DiscordError) -> String {
+        match error {
+            DiscordError::Model { message } => message,
+            other => panic!("expected model error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn value_converters_accept_strings_and_numbers() {
+        assert_eq!(value_to_string(&json!("123")), Some(String::from("123")));
+        assert_eq!(value_to_string(&json!(456)), Some(String::from("456")));
+        assert_eq!(value_to_string(&json!(true)), None);
+
+        assert_eq!(value_to_u8(&json!(7)), Some(7));
+        assert_eq!(value_to_u8(&json!("8")), Some(8));
+        assert_eq!(value_to_u8(&json!(300)), None);
+        assert_eq!(value_to_u8(&json!("bad")), None);
+    }
+
+    #[test]
+    fn field_helpers_extract_required_and_optional_values() {
+        let value = json!({
+            "id": "123",
+            "count": "7",
+            "payload": { "ok": true },
+            "items": [1, 2],
+            "enabled": true,
+        });
+
+        assert_eq!(
+            optional_string_field(&value, "id"),
+            Some(String::from("123"))
+        );
+        assert_eq!(optional_string_field(&value, "missing"), None);
+        assert_eq!(
+            required_string_field(&value, "id", "interaction").unwrap(),
+            "123"
+        );
+        assert_eq!(
+            required_u8_field(&value, "count", "interaction").unwrap(),
+            7
+        );
+        assert_eq!(
+            required_object_field(&value, "payload", "interaction")
+                .unwrap()
+                .get("ok"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            required_array_field(&value, "items", "interaction").unwrap(),
+            &[json!(1), json!(2)]
+        );
+        assert!(required_bool_field(&value, "enabled", "interaction").unwrap());
+    }
+
+    #[test]
+    fn field_helpers_report_invalid_shapes() {
+        let value = json!({
+            "wrong_string": false,
+            "wrong_number": 512,
+            "wrong_object": [],
+            "wrong_array": {},
+            "wrong_bool": "true",
+        });
+
+        assert_eq!(
+            model_message(
+                required_string_field(&value, "wrong_string", "interaction").unwrap_err()
+            ),
+            "missing or invalid interaction.wrong_string"
+        );
+        assert_eq!(
+            model_message(required_u8_field(&value, "wrong_number", "interaction").unwrap_err()),
+            "missing or invalid interaction.wrong_number"
+        );
+        assert_eq!(
+            model_message(
+                required_object_field(&value, "wrong_object", "interaction").unwrap_err()
+            ),
+            "interaction.wrong_object must be an object"
+        );
+        assert_eq!(
+            model_message(required_array_field(&value, "wrong_array", "interaction").unwrap_err()),
+            "missing or invalid interaction.wrong_array"
+        );
+        assert_eq!(
+            model_message(required_bool_field(&value, "wrong_bool", "interaction").unwrap_err()),
+            "missing or invalid interaction.wrong_bool"
+        );
+        assert_eq!(
+            model_message(required_object_field(&value, "missing", "interaction").unwrap_err()),
+            "missing interaction.missing"
+        );
+    }
+
+    #[test]
+    fn string_values_helpers_parse_arrays_and_reject_invalid_entries() {
+        let valid = json!({
+            "values": ["one", 2, "three"],
+            "tags": ["alpha", "beta"],
+        });
+        let invalid_entry = json!({ "values": ["ok", true] });
+        let invalid_shape = json!({ "values": "nope" });
+
+        assert_eq!(
+            required_string_values_field(&valid, "values", "component_data").unwrap(),
+            vec![
+                String::from("one"),
+                String::from("2"),
+                String::from("three")
+            ]
+        );
+        assert_eq!(
+            optional_string_values_field(&valid, "tags", "component_data").unwrap(),
+            Some(vec![String::from("alpha"), String::from("beta")])
+        );
+        assert_eq!(
+            optional_string_values_field(&valid, "missing", "component_data").unwrap(),
+            None
+        );
+        assert_eq!(
+            model_message(
+                required_string_values_field(&invalid_entry, "values", "component_data")
+                    .unwrap_err()
+            ),
+            "component_data.values must contain strings"
+        );
+        assert_eq!(
+            model_message(
+                optional_string_values_field(&invalid_entry, "values", "component_data")
+                    .unwrap_err()
+            ),
+            "component_data.values must contain strings"
+        );
+        assert_eq!(
+            model_message(
+                optional_string_values_field(&invalid_shape, "values", "component_data")
+                    .unwrap_err()
+            ),
+            "component_data.values must be an array"
+        );
+    }
+}

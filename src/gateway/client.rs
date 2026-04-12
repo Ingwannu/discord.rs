@@ -531,14 +531,23 @@ impl GatewayClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use super::{
-        identify_payload, initial_heartbeat_delay, is_terminal_close_code, resume_payload,
-        voice_state_update_payload,
+        identify_payload, initial_heartbeat_delay, is_terminal_close_code, is_terminal_close_frame,
+        recv_control_command, resume_payload, terminal_close_error, voice_state_update_payload,
+        EventCallback, GatewayClient, GatewayCommand, ReconnectAction,
     };
     use crate::model::Snowflake;
+    #[cfg(feature = "sharding")]
+    use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
     use crate::ws::GatewayConnectionConfig;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+    use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
     #[test]
     fn normalize_gateway_url_adds_missing_gateway_query() {
@@ -607,5 +616,488 @@ mod tests {
 
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
         assert_eq!(resume["d"]["token"], serde_json::json!("secret-token"));
+    }
+
+    #[test]
+    fn identify_without_shard_and_resume_without_sequence_keep_expected_shape() {
+        let identify = identify_payload("secret-token", 513, None);
+        let resume = resume_payload("secret-token", "session", 0);
+
+        assert!(identify["d"].get("shard").is_none());
+        assert_eq!(identify["d"]["intents"], serde_json::json!(513));
+        assert_eq!(resume["d"]["session_id"], serde_json::json!("session"));
+        assert!(resume["d"]["seq"].is_null());
+    }
+
+    #[test]
+    fn shard_clamps_total_shards_and_updates_gateway_config() {
+        let client = GatewayClient::new("secret-token".into(), 513).shard(2, 0);
+
+        assert_eq!(client.shard_info, Some([2, 1]));
+        assert_eq!(
+            client.gateway_config.normalized_url(),
+            "wss://gateway.discord.gg/?v=10&encoding=json&shard=2,1"
+        );
+    }
+
+    #[test]
+    fn terminal_close_helpers_cover_frame_and_none_cases() {
+        let frame = CloseFrame {
+            code: CloseCode::from(4004),
+            reason: "bad auth".into(),
+        };
+
+        assert!(is_terminal_close_frame(Some(&frame)));
+        assert_eq!(
+            terminal_close_error(Some(frame.clone())),
+            "gateway closed with terminal close code 4004: bad auth"
+        );
+        assert!(!is_terminal_close_frame(None));
+        assert_eq!(
+            terminal_close_error(None),
+            "gateway closed with terminal close code"
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_control_command_and_wait_for_backoff_command_handle_control_flow() {
+        let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+        let mut shutdown_client =
+            GatewayClient::new("secret-token".into(), 513).control(shutdown_rx);
+        shutdown_tx.send(GatewayCommand::Shutdown).unwrap();
+        assert!(shutdown_client
+            .wait_for_backoff_command(Duration::from_millis(10))
+            .await
+            .unwrap());
+
+        let (reconnect_tx, reconnect_rx) = mpsc::unbounded_channel();
+        let mut reconnect_client =
+            GatewayClient::new("secret-token".into(), 513).control(reconnect_rx);
+        reconnect_client.session_id = Some("session".into());
+        reconnect_client.resume_gateway_url = Some("wss://gateway.discord.gg".into());
+        reconnect_client
+            .sequence
+            .store(42, std::sync::atomic::Ordering::Relaxed);
+        reconnect_tx.send(GatewayCommand::Reconnect).unwrap();
+        assert!(!reconnect_client
+            .wait_for_backoff_command(Duration::from_millis(10))
+            .await
+            .unwrap());
+        assert!(reconnect_client.session_id.is_none());
+        assert!(reconnect_client.resume_gateway_url.is_none());
+        assert_eq!(
+            reconnect_client
+                .sequence
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+
+        let (presence_tx, presence_rx) = mpsc::unbounded_channel();
+        let mut presence_client =
+            GatewayClient::new("secret-token".into(), 513).control(presence_rx);
+        presence_tx
+            .send(GatewayCommand::UpdatePresence("busy".into()))
+            .unwrap();
+        assert!(!presence_client
+            .wait_for_backoff_command(Duration::from_millis(10))
+            .await
+            .unwrap());
+
+        let mut no_control_client = GatewayClient::new("secret-token".into(), 513);
+        assert!(!no_control_client
+            .wait_for_backoff_command(Duration::from_millis(1))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn recv_control_command_reads_payloads_and_handles_missing_channel() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut command_rx = Some(rx);
+
+        tx.send(GatewayCommand::SendPayload(serde_json::json!({ "op": 4 })))
+            .unwrap();
+        match recv_control_command(&mut command_rx).await {
+            Some(GatewayCommand::SendPayload(payload)) => {
+                assert_eq!(payload["op"], serde_json::json!(4));
+            }
+            other => panic!("unexpected control command: {other:?}"),
+        }
+
+        let mut none_rx = None;
+        let pending =
+            tokio::time::timeout(Duration::from_millis(5), recv_control_command(&mut none_rx))
+                .await;
+        assert!(pending.is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_identifies_processes_ready_and_shuts_down() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let events = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
+        let events_for_callback = Arc::clone(&events);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 0,
+                    "t": "READY",
+                    "s": 7,
+                    "d": {
+                        "user": {
+                            "id": "1",
+                            "username": "discordrs"
+                        },
+                        "session_id": "session-1",
+                        "resume_gateway_url": "wss://gateway.discord.gg"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let _ = ws.next().await;
+
+            identify_payload
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
+        let on_event: EventCallback = Arc::new(move |name, data| {
+            events_for_callback.lock().unwrap().push((name, data));
+        });
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), on_event)
+            .await
+            .unwrap();
+
+        shutdown.await.unwrap();
+        let identify = server.await.unwrap();
+
+        assert!(matches!(
+            action,
+            ReconnectAction::Shutdown | ReconnectAction::Resume
+        ));
+        assert_eq!(identify["op"], serde_json::json!(2));
+        assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
+        assert_eq!(client.session_id.as_deref(), Some("session-1"));
+        assert_eq!(
+            client.resume_gateway_url.as_deref(),
+            Some("wss://gateway.discord.gg?v=10&encoding=json")
+        );
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            7
+        );
+        assert_eq!(events.lock().unwrap()[0].0, "READY");
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_resumes_existing_session_and_handles_invalid_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let resume_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 9,
+                    "d": false
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            resume_payload
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513);
+        client.session_id = Some("session-2".into());
+        client
+            .sequence
+            .store(42, std::sync::atomic::Ordering::Relaxed);
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+
+        let resume = server.await.unwrap();
+
+        assert!(matches!(action, ReconnectAction::Reconnect));
+        assert_eq!(resume["op"], serde_json::json!(6));
+        assert_eq!(resume["d"]["token"], serde_json::json!("secret-token"));
+        assert_eq!(resume["d"]["session_id"], serde_json::json!("session-2"));
+        assert_eq!(resume["d"]["seq"], serde_json::json!(42));
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_skips_malformed_messages_and_honors_reconnect_opcode() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text("not-json".into())).await.unwrap();
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 7,
+                    "d": null
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            identify_payload
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}")));
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+
+        let identify = server.await.unwrap();
+
+        assert!(matches!(action, ReconnectAction::Resume));
+        assert_eq!(identify["op"], serde_json::json!(2));
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_replies_to_server_heartbeat_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 10,
+                    "d": { "heartbeat_interval": 60_000 }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let identify_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 1,
+                    "d": null
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+            let heartbeat_payload: serde_json::Value =
+                serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                    .unwrap();
+            let _ = ws.next().await;
+
+            (identify_payload, heartbeat_payload)
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
+        let action = client
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .await
+            .unwrap();
+
+        shutdown.await.unwrap();
+        let (identify, heartbeat) = server.await.unwrap();
+
+        assert!(matches!(
+            action,
+            ReconnectAction::Shutdown | ReconnectAction::Resume
+        ));
+        assert_eq!(identify["op"], serde_json::json!(2));
+        assert_eq!(heartbeat["op"], serde_json::json!(1));
+        assert!(heartbeat["d"].is_null());
+    }
+
+    #[tokio::test]
+    async fn run_reconnects_after_invalid_session_and_then_shuts_down_cleanly() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let payloads = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let payloads_for_server = Arc::clone(&payloads);
+
+        let server = tokio::spawn(async move {
+            for iteration in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+
+                ws.send(WsMessage::Text(
+                    serde_json::json!({
+                        "op": 10,
+                        "d": { "heartbeat_interval": 60_000 }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+
+                let payload: serde_json::Value =
+                    serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap())
+                        .unwrap();
+                payloads_for_server.lock().unwrap().push(payload);
+
+                if iteration == 0 {
+                    ws.send(WsMessage::Text(
+                        serde_json::json!({
+                            "op": 9,
+                            "d": false
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                } else {
+                    let close = ws.next().await;
+                    assert!(matches!(close, Some(Ok(WsMessage::Close(_))) | None));
+                }
+            }
+        });
+
+        let shutdown = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            command_tx.send(GatewayCommand::Shutdown).unwrap();
+        });
+
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")))
+            .control(command_rx);
+        client.session_id = Some("session-2".into());
+        client.resume_gateway_url = Some(format!("ws://{address}/"));
+        client
+            .sequence
+            .store(42, std::sync::atomic::Ordering::Relaxed);
+
+        client.run(Arc::new(|_, _| {})).await.unwrap();
+
+        shutdown.await.unwrap();
+        server.await.unwrap();
+
+        let payloads = payloads.lock().unwrap();
+        assert_eq!(payloads.len(), 2);
+        assert_eq!(payloads[0]["op"], serde_json::json!(6));
+        assert_eq!(payloads[1]["op"], serde_json::json!(2));
+        assert!(client.session_id.is_none());
+        assert!(client.resume_gateway_url.is_none());
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[cfg(feature = "sharding")]
+    #[test]
+    fn supervisor_callback_records_state_and_error_events() {
+        let seen = Arc::new(Mutex::new(Vec::<ShardSupervisorEvent>::new()));
+        let seen_for_callback = Arc::clone(&seen);
+        let callback = Arc::new(move |event| {
+            seen_for_callback.lock().unwrap().push(event);
+        });
+
+        let client = GatewayClient::new("secret-token".into(), 513)
+            .shard(3, 5)
+            .supervisor(callback);
+
+        client.publish_state(ShardRuntimeState::Running);
+        client.publish_error("boom".to_string());
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen[0],
+            ShardSupervisorEvent::StateChanged {
+                shard_id: 3,
+                state: ShardRuntimeState::Running,
+            }
+        );
+        assert_eq!(
+            seen[1],
+            ShardSupervisorEvent::GatewayError {
+                shard_id: 3,
+                message: "boom".to_string(),
+            }
+        );
     }
 }

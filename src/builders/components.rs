@@ -347,9 +347,15 @@ impl ComponentsV2Message {
 
 #[cfg(test)]
 mod tests {
-    use super::{ButtonBuilder, SelectMenuBuilder};
-    use crate::constants::{button_style, component_type};
-    use crate::types::SelectOption;
+    use super::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
+    use crate::builders::container::TextDisplayBuilder;
+    use crate::builders::modal::TextInputBuilder;
+    use crate::builders::{
+        ContainerBuilder, FileBuilder, MediaGalleryBuilder, SectionBuilder, SeparatorBuilder,
+    };
+    use crate::constants::{button_style, component_type, text_input_style};
+    use crate::types::{Emoji, MediaGalleryItem, SelectOption};
+    use serde_json::json;
 
     #[test]
     fn button_url_omits_custom_id_and_forces_link_style() {
@@ -447,5 +453,263 @@ mod tests {
         );
         assert!(payload.get("options").is_none());
         assert!(payload.get("channel_types").is_none());
+    }
+
+    #[test]
+    fn button_serializes_optional_fields() {
+        let payload = ButtonBuilder::new()
+            .style(button_style::SUCCESS)
+            .label("Ship")
+            .emoji(Emoji::custom("party", "123", true))
+            .disabled(true)
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::BUTTON as u64)
+        );
+        assert_eq!(
+            payload.get("style").and_then(|value| value.as_u64()),
+            Some(button_style::SUCCESS as u64)
+        );
+        assert_eq!(
+            payload.get("label").and_then(|value| value.as_str()),
+            Some("Ship")
+        );
+        assert_eq!(
+            payload
+                .get("emoji")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("party")
+        );
+        assert_eq!(
+            payload
+                .get("emoji")
+                .and_then(|value| value.get("id"))
+                .and_then(|value| value.as_str()),
+            Some("123")
+        );
+        assert_eq!(
+            payload
+                .get("emoji")
+                .and_then(|value| value.get("animated"))
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            payload.get("disabled").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn button_emoji_unicode_sets_name_only() {
+        let payload = ButtonBuilder::new().emoji_unicode("🔥").build();
+
+        assert_eq!(
+            payload
+                .get("emoji")
+                .and_then(|value| value.get("name"))
+                .and_then(|value| value.as_str()),
+            Some("🔥")
+        );
+        assert!(payload
+            .get("emoji")
+            .and_then(|value| value.get("id"))
+            .is_none());
+    }
+
+    #[test]
+    fn action_row_builds_mixed_components_with_id() {
+        let payload = ActionRowBuilder::new()
+            .add_button(ButtonBuilder::new().label("Go").custom_id("go"))
+            .add_select_menu(
+                SelectMenuBuilder::string("menu")
+                    .placeholder("Pick")
+                    .min_values(1)
+                    .max_values(2)
+                    .disabled(true)
+                    .add_options(vec![
+                        SelectOption::new("One", "one"),
+                        SelectOption::new("Two", "two"),
+                    ]),
+            )
+            .add_text_input(
+                TextInputBuilder::short("topic", "Topic")
+                    .placeholder("Tell me")
+                    .required(true),
+            )
+            .add_component(json!({ "type": 99, "custom": "raw" }))
+            .id(7)
+            .build();
+
+        let components = payload
+            .get("components")
+            .and_then(|value| value.as_array())
+            .expect("components array");
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::ACTION_ROW as u64)
+        );
+        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(7));
+        assert_eq!(components.len(), 4);
+        assert_eq!(
+            components[0].get("label").and_then(|value| value.as_str()),
+            Some("Go")
+        );
+        assert_eq!(
+            components[1].get("type").and_then(|value| value.as_u64()),
+            Some(component_type::STRING_SELECT as u64)
+        );
+        assert_eq!(
+            components[1]
+                .get("options")
+                .and_then(|value| value.as_array())
+                .map(|value| value.len()),
+            Some(2)
+        );
+        assert_eq!(
+            components[1]
+                .get("placeholder")
+                .and_then(|value| value.as_str()),
+            Some("Pick")
+        );
+        assert_eq!(
+            components[1]
+                .get("min_values")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            components[1]
+                .get("max_values")
+                .and_then(|value| value.as_u64()),
+            Some(2)
+        );
+        assert_eq!(
+            components[1]
+                .get("disabled")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            components[2].get("type").and_then(|value| value.as_u64()),
+            Some(component_type::TEXT_INPUT as u64)
+        );
+        assert_eq!(
+            components[2].get("style").and_then(|value| value.as_u64()),
+            Some(text_input_style::SHORT as u64)
+        );
+        assert_eq!(
+            components[3].get("custom").and_then(|value| value.as_str()),
+            Some("raw")
+        );
+    }
+
+    #[test]
+    fn mentionable_select_keeps_shared_fields_and_omits_variant_specific_fields() {
+        let payload = SelectMenuBuilder::mentionable("menu")
+            .placeholder("Pick a target")
+            .add_option(SelectOption::new("One", "one"))
+            .channel_types(vec![0, 2])
+            .min_values(1)
+            .max_values(3)
+            .disabled(true)
+            .build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::MENTIONABLE_SELECT as u64)
+        );
+        assert_eq!(
+            payload.get("placeholder").and_then(|value| value.as_str()),
+            Some("Pick a target")
+        );
+        assert_eq!(
+            payload.get("min_values").and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            payload.get("max_values").and_then(|value| value.as_u64()),
+            Some(3)
+        );
+        assert_eq!(
+            payload.get("disabled").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(payload.get("options").is_none());
+        assert!(payload.get("channel_types").is_none());
+    }
+
+    #[test]
+    fn user_select_builder_sets_expected_component_type() {
+        let payload = SelectMenuBuilder::user("menu").build();
+
+        assert_eq!(
+            payload.get("type").and_then(|value| value.as_u64()),
+            Some(component_type::USER_SELECT as u64)
+        );
+    }
+
+    #[test]
+    fn components_v2_message_preserves_component_order() {
+        let payload = ComponentsV2Message::new()
+            .add_text_display(TextDisplayBuilder::new("Intro").id(1))
+            .add_action_row(
+                ActionRowBuilder::new()
+                    .add_button(ButtonBuilder::new().label("Continue").custom_id("continue")),
+            )
+            .add_component(json!({ "type": 255, "marker": "raw" }))
+            .build();
+
+        assert_eq!(payload.len(), 3);
+        assert_eq!(
+            payload[0].get("type").and_then(|value| value.as_u64()),
+            Some(component_type::TEXT_DISPLAY as u64)
+        );
+        assert_eq!(
+            payload[0].get("content").and_then(|value| value.as_str()),
+            Some("Intro")
+        );
+        assert_eq!(
+            payload[1].get("type").and_then(|value| value.as_u64()),
+            Some(component_type::ACTION_ROW as u64)
+        );
+        assert_eq!(
+            payload[2].get("marker").and_then(|value| value.as_str()),
+            Some("raw")
+        );
+    }
+
+    #[test]
+    fn components_v2_message_supports_all_builder_entry_points() {
+        let payload = ComponentsV2Message::new()
+            .add_container(
+                ContainerBuilder::new().add_text_display(TextDisplayBuilder::new("inside")),
+            )
+            .add_media_gallery(
+                MediaGalleryBuilder::new()
+                    .add_item(MediaGalleryItem::new("https://example.com/image.png")),
+            )
+            .add_separator(SeparatorBuilder::new())
+            .add_section(SectionBuilder::new().add_text_display(TextDisplayBuilder::new("section")))
+            .add_file(FileBuilder::new("https://example.com/file.txt"))
+            .build();
+
+        assert_eq!(
+            payload
+                .iter()
+                .map(|component| component.get("type").and_then(|value| value.as_u64()))
+                .collect::<Vec<_>>(),
+            vec![
+                Some(component_type::CONTAINER as u64),
+                Some(component_type::MEDIA_GALLERY as u64),
+                Some(component_type::SEPARATOR as u64),
+                Some(component_type::SECTION as u64),
+                Some(component_type::FILE as u64),
+            ]
+        );
     }
 }
