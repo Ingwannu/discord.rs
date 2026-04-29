@@ -11,7 +11,8 @@ discord.rs is a standalone Rust framework for building Discord bots. It provides
 - **Builders** for Components V2 payloads (buttons, selects, media galleries, modals), enabling fluent construction of rich messages.
 - **Parsers** for routing and extracting data from raw interaction payloads and V2 modal submissions.
 - **Helpers** and **Interaction Endpoint** support for easily replying to slash commands, component interactions, and modal submissions.
-- **Voice receive helpers** for voice gateway/UDP setup, RTP-size transport decrypt, Opus PCM decode, and experimental DAVE hooks.
+- **Voice helpers** for voice gateway/UDP setup, Opus-frame RTP send, RTP-size transport decrypt, Opus PCM decode, and experimental DAVE hooks.
+- **OAuth2 backend helpers** for authorization URLs, authorization-code exchange, and refresh-token exchange.
 - **Typed Discord coverage** for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, and integrations.
 
 This modular design separates concerns into `builders/`, `gateway/`, `parsers/`, and `http/` directories, with core types and utilities at the root.
@@ -239,7 +240,7 @@ Re-exports parsers and provides JSON helpers:
 - **README.md**: High-level overview, features, installation, quickstart examples.
 - **USAGE.md**: Expanded usage guide covering bot startup, message sending, and interaction flows.
 - **CHANGELOG.md**: Version history with breaking changes and new features.
-- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `dave`), and dependencies.
+- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `zstd-stream`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `dave`), and dependencies.
 - **LICENSE-APACHE** & **LICENSE-MIT**: Dual licensing terms.
 
 ---

@@ -2,18 +2,21 @@ use std::collections::HashMap;
 #[cfg(feature = "dave")]
 use std::num::NonZeroU16;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use futures_util::{SinkExt, StreamExt};
 use opus_decoder::OpusDecoder;
+#[cfg(feature = "voice-encode")]
+use opus_rs::{Application as OpusApplication, OpusEncoder as RawOpusEncoder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, sleep, Duration};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::error::DiscordError;
@@ -41,6 +44,14 @@ const VOICE_OP_DAVE_MLS_PROPOSALS: u64 = 27;
 const VOICE_OP_DAVE_MLS_ANNOUNCE_COMMIT_TRANSITION: u64 = 29;
 const VOICE_OP_DAVE_MLS_WELCOME: u64 = 30;
 const DAVE_MAGIC_MARKER: [u8; 2] = [0xfa, 0xfa];
+const RTP_VERSION: u8 = 2;
+const RTP_PAYLOAD_TYPE_OPUS: u8 = 120;
+const DISCORD_OPUS_SAMPLE_RATE: u32 = 48_000;
+const DISCORD_OPUS_CHANNELS: usize = 2;
+const DISCORD_OPUS_SAMPLES_PER_CHANNEL: usize = 960;
+const DISCORD_OPUS_STEREO_FRAME_SAMPLES: usize =
+    DISCORD_OPUS_CHANNELS * DISCORD_OPUS_SAMPLES_PER_CHANNEL;
+const DISCORD_OPUS_FRAME_MS: u64 = 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VoiceRuntimeConfig {
@@ -215,6 +226,392 @@ pub struct VoiceDecodedPacket {
     pub pcm: Vec<i16>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoiceOpusFrame {
+    pub bytes: Vec<u8>,
+    pub duration: Duration,
+}
+
+impl VoiceOpusFrame {
+    pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
+        Self {
+            bytes: bytes.into(),
+            duration: Duration::from_millis(DISCORD_OPUS_FRAME_MS),
+        }
+    }
+
+    pub fn duration(mut self, duration: Duration) -> Self {
+        self.duration = duration;
+        self
+    }
+}
+
+#[cfg(feature = "voice-encode")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PcmFrame {
+    samples: Vec<f32>,
+    sample_rate: u32,
+    channels: usize,
+    duration: Duration,
+}
+
+#[cfg(feature = "voice-encode")]
+impl PcmFrame {
+    pub fn new(
+        samples: impl Into<Vec<f32>>,
+        sample_rate: u32,
+        channels: usize,
+        duration: Duration,
+    ) -> Result<Self, DiscordError> {
+        let samples = samples.into();
+        if sample_rate != DISCORD_OPUS_SAMPLE_RATE {
+            return Err(invalid_data_error(format!(
+                "PCM frame sample_rate must be {DISCORD_OPUS_SAMPLE_RATE} Hz"
+            )));
+        }
+        if channels != DISCORD_OPUS_CHANNELS {
+            return Err(invalid_data_error(format!(
+                "PCM frame channels must be {DISCORD_OPUS_CHANNELS}"
+            )));
+        }
+        if duration != Duration::from_millis(DISCORD_OPUS_FRAME_MS) {
+            return Err(invalid_data_error(format!(
+                "PCM frame duration must be {DISCORD_OPUS_FRAME_MS}ms"
+            )));
+        }
+        if samples.len() != DISCORD_OPUS_STEREO_FRAME_SAMPLES {
+            return Err(invalid_data_error(format!(
+                "PCM frame must contain {DISCORD_OPUS_STEREO_FRAME_SAMPLES} interleaved f32 samples"
+            )));
+        }
+
+        Ok(Self {
+            samples,
+            sample_rate,
+            channels,
+            duration,
+        })
+    }
+
+    pub fn discord_stereo_20ms(samples: impl Into<Vec<f32>>) -> Result<Self, DiscordError> {
+        Self::new(
+            samples,
+            DISCORD_OPUS_SAMPLE_RATE,
+            DISCORD_OPUS_CHANNELS,
+            Duration::from_millis(DISCORD_OPUS_FRAME_MS),
+        )
+    }
+
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn samples_per_channel(&self) -> usize {
+        self.samples.len() / self.channels
+    }
+
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+}
+
+#[cfg(feature = "voice-encode")]
+pub trait AudioSource {
+    fn next_pcm_frame(&mut self) -> Result<Option<PcmFrame>, DiscordError>;
+}
+
+#[cfg(feature = "voice-encode")]
+pub struct AudioMixer {
+    sources: Vec<Box<dyn AudioSource + Send>>,
+    volume: f32,
+}
+
+#[cfg(feature = "voice-encode")]
+impl AudioMixer {
+    pub fn new() -> Self {
+        Self {
+            sources: Vec::new(),
+            volume: 1.0,
+        }
+    }
+
+    pub fn with_volume(volume: f32) -> Self {
+        Self {
+            sources: Vec::new(),
+            volume,
+        }
+    }
+
+    pub fn push_source<S>(&mut self, source: S)
+    where
+        S: AudioSource + Send + 'static,
+    {
+        self.sources.push(Box::new(source));
+    }
+
+    pub fn active_sources(&self) -> usize {
+        self.sources.len()
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.volume
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume;
+    }
+}
+
+#[cfg(feature = "voice-encode")]
+impl Default for AudioMixer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "voice-encode")]
+impl AudioSource for AudioMixer {
+    fn next_pcm_frame(&mut self) -> Result<Option<PcmFrame>, DiscordError> {
+        let mut mixed = vec![0.0_f32; DISCORD_OPUS_STEREO_FRAME_SAMPLES];
+        let mut mixed_any = false;
+        let mut index = 0;
+
+        while index < self.sources.len() {
+            match self.sources[index].next_pcm_frame()? {
+                Some(frame) => {
+                    if frame.sample_rate() != DISCORD_OPUS_SAMPLE_RATE
+                        || frame.channels() != DISCORD_OPUS_CHANNELS
+                        || frame.duration() != Duration::from_millis(DISCORD_OPUS_FRAME_MS)
+                        || frame.samples().len() != DISCORD_OPUS_STEREO_FRAME_SAMPLES
+                    {
+                        return Err(invalid_data_error(
+                            "audio mixer only accepts 48kHz stereo 20ms PCM frames",
+                        ));
+                    }
+                    for (target, sample) in mixed.iter_mut().zip(frame.samples()) {
+                        *target += sample * self.volume;
+                    }
+                    mixed_any = true;
+                    index += 1;
+                }
+                None => {
+                    self.sources.remove(index);
+                }
+            }
+        }
+
+        if !mixed_any {
+            return Ok(None);
+        }
+
+        for sample in &mut mixed {
+            *sample = sample.clamp(-1.0, 1.0);
+        }
+
+        PcmFrame::discord_stereo_20ms(mixed).map(Some)
+    }
+}
+
+#[cfg(feature = "voice-encode")]
+pub struct VoiceOpusEncoder {
+    encoder: RawOpusEncoder,
+    bitrate_bps: i32,
+    use_cbr: bool,
+    output: Vec<u8>,
+}
+
+#[cfg(feature = "voice-encode")]
+impl VoiceOpusEncoder {
+    pub fn new(bitrate_bps: i32, use_cbr: bool) -> Result<Self, DiscordError> {
+        let mut encoder = RawOpusEncoder::new(
+            DISCORD_OPUS_SAMPLE_RATE as i32,
+            DISCORD_OPUS_CHANNELS,
+            OpusApplication::Audio,
+        )
+        .map_err(|error| invalid_data_error(format!("failed to create Opus encoder: {error}")))?;
+        encoder.bitrate_bps = bitrate_bps;
+        encoder.use_cbr = use_cbr;
+
+        Ok(Self {
+            encoder,
+            bitrate_bps,
+            use_cbr,
+            output: vec![0_u8; 4_096],
+        })
+    }
+
+    pub fn discord_music() -> Result<Self, DiscordError> {
+        Self::new(128_000, true)
+    }
+
+    pub fn with_bitrate_bps(mut self, bitrate_bps: i32) -> Self {
+        self.encoder.bitrate_bps = bitrate_bps;
+        self.bitrate_bps = bitrate_bps;
+        self
+    }
+
+    pub fn with_cbr(mut self, use_cbr: bool) -> Self {
+        self.encoder.use_cbr = use_cbr;
+        self.use_cbr = use_cbr;
+        self
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        DISCORD_OPUS_SAMPLE_RATE
+    }
+
+    pub fn channels(&self) -> usize {
+        DISCORD_OPUS_CHANNELS
+    }
+
+    pub fn samples_per_channel(&self) -> usize {
+        DISCORD_OPUS_SAMPLES_PER_CHANNEL
+    }
+
+    pub fn bitrate_bps(&self) -> i32 {
+        self.bitrate_bps
+    }
+
+    pub fn use_cbr(&self) -> bool {
+        self.use_cbr
+    }
+
+    pub fn encode_pcm_frame(&mut self, frame: &PcmFrame) -> Result<VoiceOpusFrame, DiscordError> {
+        if frame.sample_rate() != DISCORD_OPUS_SAMPLE_RATE
+            || frame.channels() != DISCORD_OPUS_CHANNELS
+            || frame.samples_per_channel() != DISCORD_OPUS_SAMPLES_PER_CHANNEL
+            || frame.duration() != Duration::from_millis(DISCORD_OPUS_FRAME_MS)
+        {
+            return Err(invalid_data_error(
+                "Opus encoder requires 48kHz stereo 20ms PCM frames",
+            ));
+        }
+
+        let written = self
+            .encoder
+            .encode(
+                frame.samples(),
+                DISCORD_OPUS_SAMPLES_PER_CHANNEL,
+                &mut self.output,
+            )
+            .map_err(|error| invalid_data_error(format!("failed to encode Opus frame: {error}")))?;
+        Ok(VoiceOpusFrame {
+            bytes: self.output[..written].to_vec(),
+            duration: frame.duration(),
+        })
+    }
+
+    pub fn encode_source_frames<S>(
+        &mut self,
+        source: &mut S,
+        max_frames: Option<usize>,
+    ) -> Result<Vec<VoiceOpusFrame>, DiscordError>
+    where
+        S: AudioSource + ?Sized,
+    {
+        let mut frames = Vec::new();
+        while max_frames.is_none_or(|max| frames.len() < max) {
+            let Some(frame) = source.next_pcm_frame()? else {
+                break;
+            };
+            frames.push(self.encode_pcm_frame(&frame)?);
+        }
+        Ok(frames)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoiceOutboundPacket {
+    pub rtp: VoiceRtpHeader,
+    pub nonce_suffix: [u8; 4],
+    pub opus_frame: Vec<u8>,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VoiceOutboundRtpState {
+    pub sequence: u16,
+    pub timestamp: u32,
+    pub nonce_suffix: u32,
+    pub ssrc: u32,
+    pub payload_type: u8,
+    pub sample_rate: u32,
+}
+
+impl VoiceOutboundRtpState {
+    pub fn new(ssrc: u32) -> Self {
+        Self {
+            sequence: 0,
+            timestamp: 0,
+            nonce_suffix: initial_voice_heartbeat_nonce() as u32,
+            ssrc,
+            payload_type: RTP_PAYLOAD_TYPE_OPUS,
+            sample_rate: DISCORD_OPUS_SAMPLE_RATE,
+        }
+    }
+
+    pub fn with_counters(ssrc: u32, sequence: u16, timestamp: u32, nonce_suffix: u32) -> Self {
+        Self {
+            sequence,
+            timestamp,
+            nonce_suffix,
+            ssrc,
+            payload_type: RTP_PAYLOAD_TYPE_OPUS,
+            sample_rate: DISCORD_OPUS_SAMPLE_RATE,
+        }
+    }
+
+    pub fn build_packet(
+        &mut self,
+        opus_frame: &[u8],
+        duration: Duration,
+        mode: &VoiceEncryptionMode,
+        secret_key: &[u8],
+    ) -> Result<VoiceOutboundPacket, DiscordError> {
+        if opus_frame.is_empty() {
+            return Err(invalid_data_error("opus frame must not be empty"));
+        }
+
+        let sequence = self.sequence;
+        let timestamp = self.timestamp;
+        let nonce_suffix = self.nonce_suffix.to_be_bytes();
+        let packet = encrypt_transport_payload(
+            VoiceOutboundEncryptParams {
+                sequence,
+                timestamp,
+                ssrc: self.ssrc,
+                payload_type: self.payload_type,
+                nonce_suffix,
+            },
+            opus_frame,
+            mode,
+            secret_key,
+        )?;
+        let rtp = parse_rtp_header(&packet)?;
+
+        self.sequence = self.sequence.wrapping_add(1);
+        self.timestamp = self
+            .timestamp
+            .wrapping_add(timestamp_increment(self.sample_rate, duration));
+        self.nonce_suffix = self.nonce_suffix.wrapping_add(1);
+
+        Ok(VoiceOutboundPacket {
+            rtp,
+            nonce_suffix,
+            opus_frame: opus_frame.to_vec(),
+            bytes: packet,
+        })
+    }
+}
+
 pub struct VoiceOpusDecoder {
     decoder: OpusDecoder,
     sample_rate: u32,
@@ -307,12 +704,20 @@ pub trait VoiceDaveFrameDecryptor {
 }
 
 #[cfg(feature = "dave")]
-pub struct VoiceDaveyDecryptor {
+pub trait VoiceDaveFrameEncryptor {
+    fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError>;
+}
+
+#[cfg(feature = "dave")]
+pub struct VoiceDaveySession {
     session: davey::DaveSession,
 }
 
 #[cfg(feature = "dave")]
-impl VoiceDaveyDecryptor {
+pub type VoiceDaveyDecryptor = VoiceDaveySession;
+
+#[cfg(feature = "dave")]
+impl VoiceDaveySession {
     pub fn new(
         protocol_version: NonZeroU16,
         user_id: u64,
@@ -384,10 +789,26 @@ impl VoiceDaveyDecryptor {
         self.session
             .set_passthrough_mode(enabled, transition_expiry);
     }
+
+    pub fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError> {
+        self.session
+            .encrypt_opus(opus_frame)
+            .map(|frame| frame.into_owned())
+            .map_err(|error| {
+                invalid_data_error(format!("failed to encrypt DAVE Opus frame: {error:?}"))
+            })
+    }
 }
 
 #[cfg(feature = "dave")]
-impl VoiceDaveFrameDecryptor for VoiceDaveyDecryptor {
+impl VoiceDaveFrameEncryptor for VoiceDaveySession {
+    fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError> {
+        VoiceDaveySession::encrypt_opus(self, opus_frame)
+    }
+}
+
+#[cfg(feature = "dave")]
+impl VoiceDaveFrameDecryptor for VoiceDaveySession {
     fn decrypt_frame(
         &mut self,
         _rtp: &VoiceRtpHeader,
@@ -544,6 +965,7 @@ pub struct VoiceRuntimeHandle {
     close_tx: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), DiscordError>>,
     udp_socket: Arc<UdpSocket>,
+    outbound_rtp: Arc<Mutex<VoiceOutboundRtpState>>,
 }
 
 impl VoiceRuntimeHandle {
@@ -680,6 +1102,146 @@ impl VoiceRuntimeHandle {
         ))
     }
 
+    #[cfg(feature = "dave")]
+    pub fn send_dave_transition_ready(&self, transition_id: u64) -> Result<(), DiscordError> {
+        self.send(VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id })
+    }
+
+    #[cfg(feature = "dave")]
+    pub fn send_dave_mls_key_package(
+        &self,
+        key_package: impl Into<Vec<u8>>,
+    ) -> Result<(), DiscordError> {
+        self.send(VoiceGatewayCommand::DaveMlsKeyPackage {
+            key_package: key_package.into(),
+        })
+    }
+
+    #[cfg(feature = "dave")]
+    pub fn send_dave_mls_commit_welcome(
+        &self,
+        commit: impl Into<Vec<u8>>,
+        welcome: Option<Vec<u8>>,
+    ) -> Result<(), DiscordError> {
+        self.send(VoiceGatewayCommand::DaveMlsCommitWelcome {
+            commit: commit.into(),
+            welcome,
+        })
+    }
+
+    #[cfg(feature = "dave")]
+    pub fn send_dave_mls_invalid_commit_welcome(
+        &self,
+        transition_id: u64,
+    ) -> Result<(), DiscordError> {
+        self.send(VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { transition_id })
+    }
+
+    pub async fn send_opus_frame(
+        &self,
+        opus_frame: &[u8],
+        duration: Duration,
+    ) -> Result<VoiceOutboundPacket, DiscordError> {
+        self.send_opus_payload(opus_frame, duration, false).await
+    }
+
+    async fn send_opus_payload(
+        &self,
+        opus_payload: &[u8],
+        duration: Duration,
+        requires_dave: bool,
+    ) -> Result<VoiceOutboundPacket, DiscordError> {
+        let state = self.state();
+        let session_description = state
+            .session_description
+            .as_ref()
+            .ok_or_else(|| invalid_data_error("missing voice session description"))?;
+        let dave_enabled = session_description.dave_protocol_version.unwrap_or(0) > 0;
+        if requires_dave && !dave_enabled {
+            return Err(invalid_data_error(
+                "DAVE encrypted Opus send requires an active DAVE session",
+            ));
+        }
+        if !requires_dave && dave_enabled {
+            return Err(invalid_data_error(
+                "DAVE encrypted voice frames are not supported by send_opus_frame",
+            ));
+        }
+
+        let packet = {
+            let mut outbound_rtp = self.outbound_rtp.lock().await;
+            outbound_rtp.build_packet(
+                opus_payload,
+                duration,
+                &session_description.mode,
+                &session_description.secret_key,
+            )?
+        };
+        self.udp_socket.send(&packet.bytes).await?;
+        Ok(packet)
+    }
+
+    #[cfg(feature = "dave")]
+    pub async fn send_opus_frame_with_dave<E>(
+        &self,
+        opus_frame: &[u8],
+        duration: Duration,
+        encryptor: &mut E,
+    ) -> Result<VoiceOutboundPacket, DiscordError>
+    where
+        E: VoiceDaveFrameEncryptor + ?Sized,
+    {
+        let encrypted = encryptor.encrypt_opus(opus_frame)?;
+        self.send_opus_payload(&encrypted, duration, true).await
+    }
+
+    #[cfg(feature = "voice-encode")]
+    pub async fn play_audio_source<S>(
+        &self,
+        source: &mut S,
+        encoder: &mut VoiceOpusEncoder,
+    ) -> Result<usize, DiscordError>
+    where
+        S: AudioSource + ?Sized,
+    {
+        self.play_audio_source_limited(source, encoder, None).await
+    }
+
+    #[cfg(feature = "voice-encode")]
+    pub async fn play_audio_source_limited<S>(
+        &self,
+        source: &mut S,
+        encoder: &mut VoiceOpusEncoder,
+        max_frames: Option<usize>,
+    ) -> Result<usize, DiscordError>
+    where
+        S: AudioSource + ?Sized,
+    {
+        let frames = encoder.encode_source_frames(source, max_frames)?;
+        self.play_opus_frames(frames).await
+    }
+
+    pub async fn play_opus_frames<I>(&self, frames: I) -> Result<usize, DiscordError>
+    where
+        I: IntoIterator<Item = VoiceOpusFrame>,
+    {
+        self.set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)?;
+        let mut sent = 0;
+        let mut result = Ok(());
+        for frame in frames {
+            if let Err(error) = self.send_opus_frame(&frame.bytes, frame.duration).await {
+                result = Err(error);
+                break;
+            }
+            sent += 1;
+            sleep(frame.duration).await;
+        }
+        let stop_result = self.set_speaking(VoiceSpeakingFlags::default(), 0);
+        result?;
+        stop_result?;
+        Ok(sent)
+    }
+
     pub async fn close(mut self) -> Result<(), DiscordError> {
         if let Some(close_tx) = self.close_tx.take() {
             let _ = close_tx.send(());
@@ -770,21 +1332,30 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<VoiceGatewayCommand>();
     let (close_tx, mut close_rx) = oneshot::channel();
     let udp_socket_handle = Arc::clone(&udp_socket);
+    let outbound_rtp = Arc::new(Mutex::new(VoiceOutboundRtpState::new(
+        state_tx.borrow().ready.ssrc,
+    )));
 
     let task = tokio::spawn(async move {
         let mut heartbeat = interval(Duration::from_millis(heartbeat_interval_ms));
+        let mut heartbeat_nonce = initial_voice_heartbeat_nonce();
         let mut seq_ack = state_tx.borrow().last_sequence;
 
         loop {
             tokio::select! {
                 _ = heartbeat.tick() => {
-                    let heartbeat_payload = build_heartbeat_payload(heartbeat_interval_ms, seq_ack);
+                    let heartbeat_payload =
+                        build_heartbeat_payload(next_voice_heartbeat_nonce(&mut heartbeat_nonce), seq_ack);
                     write.send(WsMessage::Text(heartbeat_payload.to_string().into())).await?;
                 }
                 command = command_rx.recv() => {
                     match command {
                         Some(command) => {
-                            write.send(WsMessage::Text(command.payload().to_string().into())).await?;
+                            if let Some(bytes) = command.binary_payload() {
+                                write.send(WsMessage::Binary(bytes.into())).await?;
+                            } else {
+                                write.send(WsMessage::Text(command.payload().to_string().into())).await?;
+                            }
                         }
                         None => break,
                     }
@@ -965,6 +1536,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
         close_tx: Some(close_tx),
         task,
         udp_socket: udp_socket_handle,
+        outbound_rtp,
     })
 }
 
@@ -994,6 +1566,18 @@ fn build_heartbeat_payload(heartbeat_nonce: u64, seq_ack: Option<i64>) -> Value 
             "seq_ack": seq_ack.unwrap_or(-1),
         }
     })
+}
+
+fn initial_voice_heartbeat_nonce() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn next_voice_heartbeat_nonce(current: &mut u64) -> u64 {
+    *current = current.wrapping_add(1);
+    *current
 }
 
 fn decrypt_transport_payload(
@@ -1041,6 +1625,75 @@ fn decrypt_transport_payload(
     Err(invalid_data_error(format!(
         "unsupported voice encryption mode for receive: {mode:?}"
     )))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VoiceOutboundEncryptParams {
+    sequence: u16,
+    timestamp: u32,
+    ssrc: u32,
+    payload_type: u8,
+    nonce_suffix: [u8; 4],
+}
+
+fn encrypt_transport_payload(
+    params: VoiceOutboundEncryptParams,
+    opus_frame: &[u8],
+    mode: &VoiceEncryptionMode,
+    secret_key: &[u8],
+) -> Result<Vec<u8>, DiscordError> {
+    if secret_key.len() != 32 {
+        return Err(invalid_data_error("voice secret_key must be 32 bytes"));
+    }
+
+    let mut packet = build_rtp_header(
+        params.sequence,
+        params.timestamp,
+        params.ssrc,
+        params.payload_type,
+    );
+    let aad = packet.clone();
+    let mut encrypted = opus_frame.to_vec();
+
+    if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
+        let cipher = Aes256Gcm::new_from_slice(secret_key)
+            .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
+        let mut nonce = [0_u8; 12];
+        nonce[8..12].copy_from_slice(&params.nonce_suffix);
+        cipher
+            .encrypt_in_place(AesNonce::from_slice(&nonce), &aad, &mut encrypted)
+            .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))?;
+    } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
+        let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
+            .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
+        let mut nonce = [0_u8; 24];
+        nonce[20..24].copy_from_slice(&params.nonce_suffix);
+        cipher
+            .encrypt_in_place(XNonce::from_slice(&nonce), &aad, &mut encrypted)
+            .map_err(|_| invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet"))?;
+    } else {
+        return Err(invalid_data_error(format!(
+            "unsupported voice encryption mode for send: {mode:?}"
+        )));
+    }
+
+    packet.extend_from_slice(&encrypted);
+    packet.extend_from_slice(&params.nonce_suffix);
+    Ok(packet)
+}
+
+fn build_rtp_header(sequence: u16, timestamp: u32, ssrc: u32, payload_type: u8) -> Vec<u8> {
+    let mut packet = vec![RTP_VERSION << 6, payload_type & 0x7f];
+    packet.extend_from_slice(&sequence.to_be_bytes());
+    packet.extend_from_slice(&timestamp.to_be_bytes());
+    packet.extend_from_slice(&ssrc.to_be_bytes());
+    packet
+}
+
+fn timestamp_increment(sample_rate: u32, duration: Duration) -> u32 {
+    let nanos = duration.as_nanos();
+    let samples = (u128::from(sample_rate) * nanos) / 1_000_000_000;
+    samples.max(1).min(u128::from(u32::MAX)) as u32
 }
 
 fn read_hello_interval(payload: &Value) -> Result<u64, DiscordError> {
@@ -1132,10 +1785,13 @@ mod tests {
 
     use super::{
         build_heartbeat_payload, build_identify_payload, connect, decrypt_transport_payload,
-        parse_dave_frame, parse_rtp_header, parse_uleb128, read_hello_interval,
-        select_encryption_mode, update_state, VoiceDaveState, VoiceOpusDecoder, VoiceRuntimeConfig,
-        VoiceRuntimeState, VoiceSessionDescription,
+        next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header, parse_uleb128,
+        read_hello_interval, select_encryption_mode, update_state, VoiceDaveState,
+        VoiceOpusDecoder, VoiceOutboundRtpState, VoiceRuntimeConfig, VoiceRuntimeState,
+        VoiceSessionDescription,
     };
+    #[cfg(feature = "voice-encode")]
+    use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
     use crate::voice::{
         VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayReady, VoiceSpeakingFlags,
         VoiceUdpDiscoveryPacket,
@@ -1263,6 +1919,22 @@ mod tests {
     }
 
     #[test]
+    fn voice_runtime_heartbeat_nonce_does_not_reuse_interval_value() {
+        let heartbeat_interval_ms = 5_000;
+        let mut nonce = heartbeat_interval_ms;
+
+        let first = next_voice_heartbeat_nonce(&mut nonce);
+        let second = next_voice_heartbeat_nonce(&mut nonce);
+
+        assert_ne!(first, heartbeat_interval_ms);
+        assert_ne!(first, second);
+        assert_eq!(
+            build_heartbeat_payload(first, None)["d"]["t"],
+            serde_json::json!(first)
+        );
+    }
+
+    #[test]
     fn voice_runtime_read_hello_interval_and_mode_selection_handle_edge_cases() {
         assert_eq!(
             read_hello_interval(&serde_json::json!({
@@ -1349,6 +2021,77 @@ mod tests {
     }
 
     #[test]
+    fn voice_outbound_rtp_state_encrypts_and_advances_counters() {
+        let secret_key = [7_u8; 32];
+        let opus_frame = [0xf8, 0xff, 0xfe];
+        let mut state = VoiceOutboundRtpState::with_counters(42, 0x1234, 48_000, 9);
+
+        let packet = state
+            .build_packet(
+                &opus_frame,
+                Duration::from_millis(20),
+                &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                &secret_key,
+            )
+            .unwrap();
+
+        assert_eq!(packet.rtp.version, 2);
+        assert_eq!(packet.rtp.payload_type, 120);
+        assert_eq!(packet.rtp.sequence, 0x1234);
+        assert_eq!(packet.rtp.timestamp, 48_000);
+        assert_eq!(packet.rtp.ssrc, 42);
+        assert_eq!(packet.nonce_suffix, [0, 0, 0, 9]);
+        assert_eq!(state.sequence, 0x1235);
+        assert_eq!(state.timestamp, 48_960);
+        assert_eq!(state.nonce_suffix, 10);
+
+        let decrypted = decrypt_transport_payload(
+            &packet.bytes,
+            &packet.rtp,
+            &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            &secret_key,
+        )
+        .unwrap();
+        assert_eq!(decrypted, opus_frame);
+    }
+
+    #[test]
+    fn voice_outbound_rtp_state_supports_xchacha_and_rejects_empty_frames() {
+        let secret_key = [9_u8; 32];
+        let opus_frame = [0x11, 0x22, 0x33, 0x44];
+        let mut state = VoiceOutboundRtpState::with_counters(99, 0x2233, 96_000, 10);
+
+        let packet = state
+            .build_packet(
+                &opus_frame,
+                Duration::from_millis(40),
+                &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+                &secret_key,
+            )
+            .unwrap();
+        let decrypted = decrypt_transport_payload(
+            &packet.bytes,
+            &packet.rtp,
+            &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+            &secret_key,
+        )
+        .unwrap();
+        assert_eq!(decrypted, opus_frame);
+        assert_eq!(state.timestamp, 97_920);
+
+        assert!(state
+            .build_packet(
+                &[],
+                Duration::from_millis(20),
+                &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+                &secret_key,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("opus frame must not be empty"));
+    }
+
+    #[test]
     fn voice_opus_decoder_decodes_discord_silence_frame() {
         let mut decoder = VoiceOpusDecoder::discord_default().unwrap();
         let (samples_per_channel, pcm) = decoder
@@ -1359,6 +2102,75 @@ mod tests {
         assert_eq!(decoder.channels(), 2);
         assert!(samples_per_channel > 0);
         assert_eq!(pcm.len(), samples_per_channel * 2);
+    }
+
+    #[cfg(feature = "voice-encode")]
+    #[derive(Clone)]
+    struct OneFrameSource {
+        frame: Option<PcmFrame>,
+    }
+
+    #[cfg(feature = "voice-encode")]
+    impl AudioSource for OneFrameSource {
+        fn next_pcm_frame(&mut self) -> Result<Option<PcmFrame>, crate::error::DiscordError> {
+            Ok(self.frame.take())
+        }
+    }
+
+    #[cfg(feature = "voice-encode")]
+    #[test]
+    fn pcm_frame_accepts_only_discord_stereo_20ms_shape() {
+        let frame = PcmFrame::discord_stereo_20ms(vec![0.0; 1_920]).unwrap();
+
+        assert_eq!(frame.sample_rate(), 48_000);
+        assert_eq!(frame.channels(), 2);
+        assert_eq!(frame.samples_per_channel(), 960);
+        assert_eq!(frame.duration(), Duration::from_millis(20));
+
+        assert!(PcmFrame::discord_stereo_20ms(vec![0.0; 1_919])
+            .unwrap_err()
+            .to_string()
+            .contains("1920"));
+    }
+
+    #[cfg(feature = "voice-encode")]
+    #[test]
+    fn audio_mixer_sums_sources_clamps_and_removes_finished_sources() {
+        let mut mixer = AudioMixer::new();
+        mixer.push_source(OneFrameSource {
+            frame: Some(PcmFrame::discord_stereo_20ms(vec![0.75; 1_920]).unwrap()),
+        });
+        mixer.push_source(OneFrameSource {
+            frame: Some(PcmFrame::discord_stereo_20ms(vec![0.5; 1_920]).unwrap()),
+        });
+
+        let mixed = mixer.next_pcm_frame().unwrap().unwrap();
+        assert_eq!(mixed.samples()[0], 1.0);
+        assert_eq!(mixed.samples()[1], 1.0);
+        assert_eq!(mixer.active_sources(), 2);
+
+        assert!(mixer.next_pcm_frame().unwrap().is_none());
+        assert_eq!(mixer.active_sources(), 0);
+    }
+
+    #[cfg(feature = "voice-encode")]
+    #[test]
+    fn voice_opus_encoder_encodes_discord_pcm_with_audio_cbr_settings() {
+        let mut encoder = VoiceOpusEncoder::discord_music()
+            .unwrap()
+            .with_bitrate_bps(96_000)
+            .with_cbr(true);
+        let frame = PcmFrame::discord_stereo_20ms(vec![0.0; 1_920]).unwrap();
+
+        assert_eq!(encoder.sample_rate(), 48_000);
+        assert_eq!(encoder.channels(), 2);
+        assert_eq!(encoder.samples_per_channel(), 960);
+        assert_eq!(encoder.bitrate_bps(), 96_000);
+        assert!(encoder.use_cbr());
+
+        let encoded = encoder.encode_pcm_frame(&frame).unwrap();
+        assert!(!encoded.bytes.is_empty());
+        assert_eq!(encoded.duration, Duration::from_millis(20));
     }
 
     #[test]
@@ -1396,6 +2208,7 @@ mod tests {
         assert!(!decryptor.is_ready());
         assert_eq!(decryptor.session().user_id(), 42);
         assert_eq!(decryptor.session().channel_id(), 100);
+        assert!(decryptor.encrypt_opus(&[0xf8, 0xff, 0xfe]).is_err());
         decryptor.set_passthrough_mode(true, Some(1));
     }
 
@@ -1604,9 +2417,15 @@ mod tests {
         let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let ws_port = tcp_listener.local_addr().unwrap().port();
         let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
+        let (dave_commands_tx, dave_commands_rx) = oneshot::channel();
 
         let server = tokio::spawn(async move {
             let mut heartbeat_tx = Some(heartbeat_tx);
+            let mut dave_commands_tx = Some(dave_commands_tx);
+            let mut saw_transition_ready = false;
+            let mut saw_key_package = false;
+            let mut saw_commit_welcome = false;
+            let mut saw_invalid_commit_welcome = false;
             let (tcp_stream, _) = tcp_listener.accept().await.unwrap();
             let mut ws = accept_async(tcp_stream).await.unwrap();
 
@@ -1749,12 +2568,39 @@ mod tests {
                                 let _ = heartbeat_tx.send(());
                             }
                         }
+                        if payload["op"] == serde_json::json!(23)
+                            && payload["d"]["transition_id"] == serde_json::json!(99)
+                        {
+                            saw_transition_ready = true;
+                        }
+                        if payload["op"] == serde_json::json!(31)
+                            && payload["d"]["transition_id"] == serde_json::json!(99)
+                        {
+                            saw_invalid_commit_welcome = true;
+                        }
+                    }
+                    WsMessage::Binary(bytes) => {
+                        if bytes.as_ref() == [26, 1, 2, 3] {
+                            saw_key_package = true;
+                        }
+                        if bytes.as_ref() == [28, 4, 5, 6, 7] {
+                            saw_commit_welcome = true;
+                        }
                     }
                     WsMessage::Close(frame) => {
                         let _ = ws.send(WsMessage::Close(frame)).await;
                         break;
                     }
                     _ => {}
+                }
+                if saw_transition_ready
+                    && saw_key_package
+                    && saw_commit_welcome
+                    && saw_invalid_commit_welcome
+                {
+                    if let Some(dave_commands_tx) = dave_commands_tx.take() {
+                        let _ = dave_commands_tx.send(());
+                    }
                 }
             }
         });
@@ -1777,6 +2623,13 @@ mod tests {
             .send(VoiceGatewayCommand::Heartbeat { nonce: 55 })
             .unwrap();
         heartbeat_rx.await.unwrap();
+        handle.send_dave_transition_ready(99).unwrap();
+        handle.send_dave_mls_key_package(vec![1, 2, 3]).unwrap();
+        handle
+            .send_dave_mls_commit_welcome(vec![4, 5], Some(vec![6, 7]))
+            .unwrap();
+        handle.send_dave_mls_invalid_commit_welcome(99).unwrap();
+        dave_commands_rx.await.unwrap();
 
         timeout(Duration::from_secs(1), async {
             loop {

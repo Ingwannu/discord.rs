@@ -1,4 +1,4 @@
-# discord.rs Usage
+﻿# discord.rs Usage
 
 `discord.rs` is a standalone Discord bot framework for Rust with a typed Gateway runtime, typed REST surface, Components V2 builders, cache managers, and collectors.
 
@@ -9,25 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core only
-discordrs = "1.1.0"
+discordrs = "1.2.0"
 
 # Typed gateway runtime
-discordrs = { version = "1.1.0", features = ["gateway"] }
+discordrs = { version = "1.2.0", features = ["gateway"] }
 
 # Typed gateway runtime with cache storage enabled
-discordrs = { version = "1.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.2.0", features = ["gateway", "cache"] }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "1.1.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.1.0", features = ["interactions"] }
+discordrs = { version = "1.2.0", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.2.0", features = ["voice"] }
 
-# Experimental DAVE/MLS receive hook
-discordrs = { version = "1.1.0", features = ["voice", "dave"] }
+# PCM source/mixer plus Opus encoder playback
+discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+
+# Experimental DAVE/MLS receive and outbound media hook
+discordrs = { version = "1.2.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -115,7 +118,7 @@ async fn receive_pcm() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
-Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, and Opus PCM decode. Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes an experimental `VoiceDaveyDecryptor`.
+Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes experimental `VoiceDaveySession` and outbound DAVE media helpers.
 
 ## 8. Keep old raw helpers only for migration
 

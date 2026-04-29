@@ -3,8 +3,9 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AuditLogEntry, Channel, Entitlement, Guild, Integration, Interaction, Member, Message, Role,
-    Snowflake, SoundboardSound, Subscription, User, VoiceServerUpdate, VoiceState,
+    AuditLogEntry, Channel, Entitlement, Guild, Integration, Interaction, Member, Message,
+    Presence, Role, Snowflake, SoundboardSound, StageInstance, Sticker, Subscription, User,
+    VoiceServerUpdate, VoiceState,
 };
 use crate::parsers::parse_interaction;
 use crate::types::Emoji;
@@ -74,6 +75,27 @@ pub struct MemberRemoveEvent {
     pub raw: Value,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GuildMembersChunkPayload {
+    pub guild_id: Snowflake,
+    #[serde(default)]
+    pub members: Vec<Member>,
+    pub chunk_index: u64,
+    pub chunk_count: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_found: Vec<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presences: Option<Vec<Presence>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GuildMembersChunkEvent {
+    pub data: GuildMembersChunkPayload,
+    pub raw: Value,
+}
+
 #[derive(Clone, Debug)]
 pub struct RoleEvent {
     pub guild_id: Snowflake,
@@ -128,6 +150,11 @@ pub struct VoiceStateEvent {
 #[derive(Clone, Debug)]
 pub struct VoiceServerEvent {
     pub data: VoiceServerUpdate,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResumedEvent {
     pub raw: Value,
 }
 
@@ -322,11 +349,11 @@ pub struct ReactionRemoveEmojiEvent {
 #[derive(Clone, Debug)]
 pub struct GuildStickersUpdateEvent {
     pub guild_id: Option<Snowflake>,
-    pub stickers: Vec<serde_json::Value>,
+    pub stickers: Vec<Sticker>,
     pub raw: Value,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ScheduledEvent {
     pub id: Option<Snowflake>,
     pub guild_id: Option<Snowflake>,
@@ -343,6 +370,63 @@ pub struct ScheduledEvent {
     pub entity_metadata: Option<Value>,
     pub user_count: Option<u64>,
     pub image: Option<String>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GuildScheduledEventUserEvent {
+    pub guild_scheduled_event_id: Snowflake,
+    pub user_id: Snowflake,
+    pub guild_id: Snowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<Member>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<User>,
+    #[serde(skip)]
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct StageInstanceEvent {
+    pub stage_instance: StageInstance,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct ApplicationCommandPermissionsUpdateEvent {
+    pub id: Option<Snowflake>,
+    pub application_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub permissions: Vec<Value>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct VoiceChannelEffectEvent {
+    pub channel_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub user_id: Option<Snowflake>,
+    pub emoji: Option<Emoji>,
+    pub animation_type: Option<u64>,
+    pub animation_id: Option<u64>,
+    pub sound_id: Option<Snowflake>,
+    pub sound_volume: Option<f64>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct VoiceChannelStartTimeUpdateEvent {
+    pub channel_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub voice_channel_start_time: Option<String>,
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct VoiceChannelStatusUpdateEvent {
+    pub channel_id: Option<Snowflake>,
+    pub guild_id: Option<Snowflake>,
+    pub status: Option<String>,
     pub raw: Value,
 }
 
@@ -387,6 +471,7 @@ pub struct AuditLogEntryEvent {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Event {
     Ready(ReadyEvent),
     GuildCreate(GuildEvent),
@@ -398,6 +483,7 @@ pub enum Event {
     MemberAdd(MemberEvent),
     MemberUpdate(MemberEvent),
     MemberRemove(MemberRemoveEvent),
+    GuildMembersChunk(GuildMembersChunkEvent),
     RoleCreate(RoleEvent),
     RoleUpdate(RoleEvent),
     RoleDelete(RoleDeleteEvent),
@@ -436,6 +522,7 @@ pub enum Event {
     InteractionCreate(InteractionEvent),
     VoiceStateUpdate(VoiceStateEvent),
     VoiceServerUpdate(VoiceServerEvent),
+    Resumed(ResumedEvent),
     ThreadCreate(ThreadEvent),
     ThreadUpdate(ThreadEvent),
     ThreadDelete(ThreadEvent),
@@ -449,6 +536,15 @@ pub enum Event {
     GuildScheduledEventCreate(ScheduledEvent),
     GuildScheduledEventUpdate(ScheduledEvent),
     GuildScheduledEventDelete(ScheduledEvent),
+    GuildScheduledEventUserAdd(GuildScheduledEventUserEvent),
+    GuildScheduledEventUserRemove(GuildScheduledEventUserEvent),
+    StageInstanceCreate(StageInstanceEvent),
+    StageInstanceUpdate(StageInstanceEvent),
+    StageInstanceDelete(StageInstanceEvent),
+    VoiceChannelEffectSend(VoiceChannelEffectEvent),
+    VoiceChannelStartTimeUpdate(VoiceChannelStartTimeUpdateEvent),
+    VoiceChannelStatusUpdate(VoiceChannelStatusUpdateEvent),
+    ApplicationCommandPermissionsUpdate(ApplicationCommandPermissionsUpdateEvent),
     AutoModerationRuleCreate(AutoModerationEvent),
     AutoModerationRuleUpdate(AutoModerationEvent),
     AutoModerationRuleDelete(AutoModerationEvent),
@@ -470,6 +566,7 @@ impl Event {
             Event::MemberAdd(_) => "GUILD_MEMBER_ADD",
             Event::MemberUpdate(_) => "GUILD_MEMBER_UPDATE",
             Event::MemberRemove(_) => "GUILD_MEMBER_REMOVE",
+            Event::GuildMembersChunk(_) => "GUILD_MEMBERS_CHUNK",
             Event::RoleCreate(_) => "GUILD_ROLE_CREATE",
             Event::RoleUpdate(_) => "GUILD_ROLE_UPDATE",
             Event::RoleDelete(_) => "GUILD_ROLE_DELETE",
@@ -508,6 +605,7 @@ impl Event {
             Event::InteractionCreate(_) => "INTERACTION_CREATE",
             Event::VoiceStateUpdate(_) => "VOICE_STATE_UPDATE",
             Event::VoiceServerUpdate(_) => "VOICE_SERVER_UPDATE",
+            Event::Resumed(_) => "RESUMED",
             Event::ThreadCreate(_) => "THREAD_CREATE",
             Event::ThreadUpdate(_) => "THREAD_UPDATE",
             Event::ThreadDelete(_) => "THREAD_DELETE",
@@ -521,6 +619,17 @@ impl Event {
             Event::GuildScheduledEventCreate(_) => "GUILD_SCHEDULED_EVENT_CREATE",
             Event::GuildScheduledEventUpdate(_) => "GUILD_SCHEDULED_EVENT_UPDATE",
             Event::GuildScheduledEventDelete(_) => "GUILD_SCHEDULED_EVENT_DELETE",
+            Event::GuildScheduledEventUserAdd(_) => "GUILD_SCHEDULED_EVENT_USER_ADD",
+            Event::GuildScheduledEventUserRemove(_) => "GUILD_SCHEDULED_EVENT_USER_REMOVE",
+            Event::StageInstanceCreate(_) => "STAGE_INSTANCE_CREATE",
+            Event::StageInstanceUpdate(_) => "STAGE_INSTANCE_UPDATE",
+            Event::StageInstanceDelete(_) => "STAGE_INSTANCE_DELETE",
+            Event::VoiceChannelEffectSend(_) => "VOICE_CHANNEL_EFFECT_SEND",
+            Event::VoiceChannelStartTimeUpdate(_) => "VOICE_CHANNEL_START_TIME_UPDATE",
+            Event::VoiceChannelStatusUpdate(_) => "VOICE_CHANNEL_STATUS_UPDATE",
+            Event::ApplicationCommandPermissionsUpdate(_) => {
+                "APPLICATION_COMMAND_PERMISSIONS_UPDATE"
+            }
             Event::AutoModerationRuleCreate(_) => "AUTO_MODERATION_RULE_CREATE",
             Event::AutoModerationRuleUpdate(_) => "AUTO_MODERATION_RULE_UPDATE",
             Event::AutoModerationRuleDelete(_) => "AUTO_MODERATION_RULE_DELETE",
@@ -540,6 +649,7 @@ impl Event {
             | Event::ChannelDelete(event) => &event.raw,
             Event::MemberAdd(event) | Event::MemberUpdate(event) => &event.raw,
             Event::MemberRemove(event) => &event.raw,
+            Event::GuildMembersChunk(event) => &event.raw,
             Event::RoleCreate(event) | Event::RoleUpdate(event) => &event.raw,
             Event::RoleDelete(event) => &event.raw,
             Event::MessageCreate(event) | Event::MessageUpdate(event) => &event.raw,
@@ -574,6 +684,7 @@ impl Event {
             Event::InteractionCreate(event) => &event.raw,
             Event::VoiceStateUpdate(event) => &event.raw,
             Event::VoiceServerUpdate(event) => &event.raw,
+            Event::Resumed(event) => &event.raw,
             Event::ThreadCreate(event)
             | Event::ThreadUpdate(event)
             | Event::ThreadDelete(event) => &event.raw,
@@ -586,6 +697,15 @@ impl Event {
             Event::GuildScheduledEventCreate(event)
             | Event::GuildScheduledEventUpdate(event)
             | Event::GuildScheduledEventDelete(event) => &event.raw,
+            Event::GuildScheduledEventUserAdd(event)
+            | Event::GuildScheduledEventUserRemove(event) => &event.raw,
+            Event::StageInstanceCreate(event)
+            | Event::StageInstanceUpdate(event)
+            | Event::StageInstanceDelete(event) => &event.raw,
+            Event::VoiceChannelEffectSend(event) => &event.raw,
+            Event::VoiceChannelStartTimeUpdate(event) => &event.raw,
+            Event::VoiceChannelStatusUpdate(event) => &event.raw,
+            Event::ApplicationCommandPermissionsUpdate(event) => &event.raw,
             Event::AutoModerationRuleCreate(event)
             | Event::AutoModerationRuleUpdate(event)
             | Event::AutoModerationRuleDelete(event)
@@ -637,6 +757,10 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             raw: data,
         }),
         "GUILD_MEMBER_REMOVE" => Event::MemberRemove(MemberRemoveEvent {
+            data: serde_json::from_value(data.clone())?,
+            raw: data,
+        }),
+        "GUILD_MEMBERS_CHUNK" => Event::GuildMembersChunk(GuildMembersChunkEvent {
             data: serde_json::from_value(data.clone())?,
             raw: data,
         }),
@@ -832,6 +956,7 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             data: serde_json::from_value(data.clone())?,
             raw: data,
         }),
+        "RESUMED" => Event::Resumed(ResumedEvent { raw: data }),
         "THREAD_CREATE" => Event::ThreadCreate(ThreadEvent {
             thread: serde_json::from_value(data.clone())?,
             raw: data,
@@ -978,6 +1103,27 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
         "GUILD_SCHEDULED_EVENT_DELETE" => {
             Event::GuildScheduledEventDelete(decode_scheduled_event(data)?)
         }
+        "GUILD_SCHEDULED_EVENT_USER_ADD" => {
+            Event::GuildScheduledEventUserAdd(decode_scheduled_event_user_event(data)?)
+        }
+        "GUILD_SCHEDULED_EVENT_USER_REMOVE" => {
+            Event::GuildScheduledEventUserRemove(decode_scheduled_event_user_event(data)?)
+        }
+        "STAGE_INSTANCE_CREATE" => Event::StageInstanceCreate(decode_stage_instance_event(data)?),
+        "STAGE_INSTANCE_UPDATE" => Event::StageInstanceUpdate(decode_stage_instance_event(data)?),
+        "STAGE_INSTANCE_DELETE" => Event::StageInstanceDelete(decode_stage_instance_event(data)?),
+        "VOICE_CHANNEL_EFFECT_SEND" => {
+            Event::VoiceChannelEffectSend(decode_voice_channel_effect_event(data))
+        }
+        "VOICE_CHANNEL_START_TIME_UPDATE" => {
+            Event::VoiceChannelStartTimeUpdate(decode_voice_channel_start_time_update_event(data))
+        }
+        "VOICE_CHANNEL_STATUS_UPDATE" => {
+            Event::VoiceChannelStatusUpdate(decode_voice_channel_status_update_event(data))
+        }
+        "APPLICATION_COMMAND_PERMISSIONS_UPDATE" => Event::ApplicationCommandPermissionsUpdate(
+            decode_application_command_permissions_update_event(data),
+        ),
         "AUTO_MODERATION_RULE_CREATE" => {
             Event::AutoModerationRuleCreate(decode_auto_moderation_event(data))
         }
@@ -1065,6 +1211,72 @@ fn decode_poll_vote_event(data: Value) -> PollVoteEvent {
         message_id: read_optional_snowflake(&data, "message_id"),
         guild_id: read_optional_snowflake(&data, "guild_id"),
         answer_id: read_optional_u64(&data, "answer_id"),
+        raw: data,
+    }
+}
+
+fn decode_scheduled_event_user_event(
+    data: Value,
+) -> Result<GuildScheduledEventUserEvent, DiscordError> {
+    let mut event: GuildScheduledEventUserEvent = serde_json::from_value(data.clone())?;
+    event.raw = data;
+    Ok(event)
+}
+
+fn decode_stage_instance_event(data: Value) -> Result<StageInstanceEvent, DiscordError> {
+    Ok(StageInstanceEvent {
+        stage_instance: serde_json::from_value(data.clone())?,
+        raw: data,
+    })
+}
+
+fn decode_application_command_permissions_update_event(
+    data: Value,
+) -> ApplicationCommandPermissionsUpdateEvent {
+    ApplicationCommandPermissionsUpdateEvent {
+        id: read_optional_snowflake(&data, "id"),
+        application_id: read_optional_snowflake(&data, "application_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        permissions: data
+            .get("permissions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+        raw: data,
+    }
+}
+
+fn decode_voice_channel_effect_event(data: Value) -> VoiceChannelEffectEvent {
+    VoiceChannelEffectEvent {
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        user_id: read_optional_snowflake(&data, "user_id"),
+        emoji: data
+            .get("emoji")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok()),
+        animation_type: read_optional_u64(&data, "animation_type"),
+        animation_id: read_optional_u64(&data, "animation_id"),
+        sound_id: read_optional_snowflake(&data, "sound_id"),
+        sound_volume: data.get("sound_volume").and_then(Value::as_f64),
+        raw: data,
+    }
+}
+
+fn decode_voice_channel_start_time_update_event(data: Value) -> VoiceChannelStartTimeUpdateEvent {
+    VoiceChannelStartTimeUpdateEvent {
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        voice_channel_start_time: read_optional_string(&data, "voice_channel_start_time"),
+        raw: data,
+    }
+}
+
+fn decode_voice_channel_status_update_event(data: Value) -> VoiceChannelStatusUpdateEvent {
+    VoiceChannelStatusUpdateEvent {
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        status: read_optional_string(&data, "status"),
         raw: data,
     }
 }
@@ -2274,6 +2486,69 @@ mod tests {
                 assert_eq!(event.code.as_deref(), Some("invite-create"));
             }
             other => panic!("unexpected invite create event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_event_covers_new_gateway_surface_variants() {
+        match decode_event(
+            "GUILD_MEMBERS_CHUNK",
+            json!({
+                "guild_id": "1",
+                "members": [{
+                    "user": { "id": "2", "username": "member" },
+                    "roles": ["3"]
+                }],
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "not_found": ["4"],
+                "presences": [{
+                    "user_id": "2",
+                    "status": "online",
+                    "activities": [{ "name": "Testing", "type": 0 }]
+                }],
+                "nonce": "abc"
+            }),
+        )
+        .unwrap()
+        {
+            Event::GuildMembersChunk(event) => {
+                assert_eq!(event.data.guild_id.as_str(), "1");
+                assert_eq!(event.data.members.len(), 1);
+                assert_eq!(event.data.not_found[0].as_str(), "4");
+                assert_eq!(
+                    event.data.presences.unwrap()[0]
+                        .activities
+                        .as_ref()
+                        .unwrap()[0]
+                        .name,
+                    "Testing"
+                );
+                assert_eq!(event.data.nonce.as_deref(), Some("abc"));
+            }
+            other => panic!("unexpected guild members chunk event: {other:?}"),
+        }
+
+        match decode_event("RESUMED", json!({ "trace": [] })).unwrap() {
+            Event::Resumed(event) => assert_eq!(event.raw["trace"], json!([])),
+            other => panic!("unexpected resumed event: {other:?}"),
+        }
+
+        match decode_event(
+            "VOICE_CHANNEL_STATUS_UPDATE",
+            json!({
+                "guild_id": "1",
+                "channel_id": "2",
+                "status": "Live"
+            }),
+        )
+        .unwrap()
+        {
+            Event::VoiceChannelStatusUpdate(event) => {
+                assert_eq!(event.channel_id.unwrap().as_str(), "2");
+                assert_eq!(event.status.as_deref(), Some("Live"));
+            }
+            other => panic!("unexpected voice channel status event: {other:?}"),
         }
     }
 

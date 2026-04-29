@@ -19,12 +19,16 @@ impl GatewayEncoding {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatewayCompression {
     ZlibStream,
+    #[cfg(feature = "zstd-stream")]
+    ZstdStream,
 }
 
 impl GatewayCompression {
     pub fn as_str(self) -> &'static str {
         match self {
             GatewayCompression::ZlibStream => "zlib-stream",
+            #[cfg(feature = "zstd-stream")]
+            GatewayCompression::ZstdStream => "zstd-stream",
         }
     }
 }
@@ -70,10 +74,14 @@ impl GatewayConnectionConfig {
         self
     }
 
-    /// Enable gateway zlib-stream compression.
+    /// Enable gateway transport compression.
     pub fn compression(mut self, compression: GatewayCompression) -> Self {
         self.compression = Some(compression);
         self
+    }
+
+    pub fn compression_kind(&self) -> Option<GatewayCompression> {
+        self.compression
     }
 
     pub fn shard(mut self, shard_id: u32, total_shards: u32) -> Self {
@@ -207,6 +215,22 @@ mod tests {
             "wss://gateway.discord.test/socket?v=11&encoding=json"
         );
         assert_eq!(config.to_string(), config.normalized_url());
+    }
+
+    #[cfg(feature = "zstd-stream")]
+    #[test]
+    fn normalized_url_supports_zstd_stream_compression() {
+        let url = GatewayConnectionConfig::new(
+            "wss://gateway.discord.gg/?encoding=json&compress=zlib-stream",
+        )
+        .compression(GatewayCompression::ZstdStream)
+        .normalized_url();
+
+        assert_eq!(GatewayCompression::ZstdStream.as_str(), "zstd-stream");
+        assert_eq!(
+            url,
+            "wss://gateway.discord.gg/?encoding=json&v=10&compress=zstd-stream"
+        );
     }
 
     #[test]

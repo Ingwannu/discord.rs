@@ -210,6 +210,20 @@ impl ShardMessenger {
         self.send(GatewayCommand::UpdatePresence(status.into()))
     }
 
+    pub fn update_presence_typed(
+        &self,
+        presence: crate::model::UpdatePresence,
+    ) -> Result<(), DiscordError> {
+        self.send(GatewayCommand::UpdatePresenceData(presence))
+    }
+
+    pub fn request_guild_members(
+        &self,
+        request: crate::model::RequestGuildMembers,
+    ) -> Result<(), DiscordError> {
+        self.send(GatewayCommand::RequestGuildMembers(request))
+    }
+
     pub fn update_voice_state(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -399,6 +413,28 @@ impl Context {
         messenger.update_presence(status)
     }
 
+    pub async fn update_presence_typed(
+        &self,
+        presence: crate::model::UpdatePresence,
+    ) -> Result<(), DiscordError> {
+        let messenger = self
+            .shard_messenger()
+            .await
+            .ok_or_else(|| invalid_data_error("missing shard messenger"))?;
+        messenger.update_presence_typed(presence)
+    }
+
+    pub async fn request_guild_members(
+        &self,
+        request: crate::model::RequestGuildMembers,
+    ) -> Result<(), DiscordError> {
+        let messenger = self
+            .shard_messenger()
+            .await
+            .ok_or_else(|| invalid_data_error("missing shard messenger"))?;
+        messenger.request_guild_members(request)
+    }
+
     pub async fn reconnect_shard(&self) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -547,6 +583,7 @@ pub trait EventHandler: Send + Sync + 'static {
                 self.member_remove(ctx, event.data.guild_id, event.data.user)
                     .await
             }
+            Event::GuildMembersChunk(event) => self.guild_members_chunk(ctx, event).await,
             Event::RoleCreate(event) => self.role_create(ctx, event.guild_id, event.role).await,
             Event::RoleUpdate(event) => self.role_update(ctx, event.guild_id, event.role).await,
             Event::RoleDelete(event) => {
@@ -594,6 +631,7 @@ pub trait EventHandler: Send + Sync + 'static {
             Event::InviteDelete(event) => self.invite_delete(ctx, event).await,
             Event::VoiceStateUpdate(event) => self.voice_state_update(ctx, event.state).await,
             Event::VoiceServerUpdate(event) => self.voice_server_update(ctx, event.data).await,
+            Event::Resumed(event) => self.resumed(ctx, event).await,
             Event::MessageReactionAdd(event) => self.reaction_add(ctx, event).await,
             Event::MessageReactionRemove(event) => self.reaction_remove(ctx, event).await,
             Event::MessageReactionRemoveAll(event) => self.reaction_remove_all(ctx, event).await,
@@ -604,8 +642,64 @@ pub trait EventHandler: Send + Sync + 'static {
             Event::InteractionCreate(event) => {
                 self.interaction_create(ctx, event.interaction).await
             }
+            Event::UserUpdate(event) => self.user_update(ctx, event.user).await,
+            Event::ThreadCreate(event) => self.thread_create(ctx, event).await,
+            Event::ThreadUpdate(event) => self.thread_update(ctx, event).await,
+            Event::ThreadDelete(event) => self.thread_delete(ctx, event).await,
+            Event::ThreadListSync(event) => self.thread_list_sync(ctx, event).await,
+            Event::ThreadMemberUpdate(event) => self.thread_member_update(ctx, event).await,
+            Event::ThreadMembersUpdate(event) => self.thread_members_update(ctx, event).await,
+            Event::MessageReactionRemoveEmoji(event) => {
+                self.reaction_remove_emoji(ctx, event).await
+            }
+            Event::GuildStickersUpdate(event) => self.guild_stickers_update(ctx, event).await,
+            Event::GuildScheduledEventCreate(event) => {
+                self.guild_scheduled_event_create(ctx, event).await
+            }
+            Event::GuildScheduledEventUpdate(event) => {
+                self.guild_scheduled_event_update(ctx, event).await
+            }
+            Event::GuildScheduledEventDelete(event) => {
+                self.guild_scheduled_event_delete(ctx, event).await
+            }
+            Event::GuildScheduledEventUserAdd(event) => {
+                self.guild_scheduled_event_user_add(ctx, event).await
+            }
+            Event::GuildScheduledEventUserRemove(event) => {
+                self.guild_scheduled_event_user_remove(ctx, event).await
+            }
+            Event::StageInstanceCreate(event) => self.stage_instance_create(ctx, event).await,
+            Event::StageInstanceUpdate(event) => self.stage_instance_update(ctx, event).await,
+            Event::StageInstanceDelete(event) => self.stage_instance_delete(ctx, event).await,
+            Event::VoiceChannelEffectSend(event) => {
+                self.voice_channel_effect_send(ctx, event).await
+            }
+            Event::VoiceChannelStartTimeUpdate(event) => {
+                self.voice_channel_start_time_update(ctx, event).await
+            }
+            Event::VoiceChannelStatusUpdate(event) => {
+                self.voice_channel_status_update(ctx, event).await
+            }
+            Event::ApplicationCommandPermissionsUpdate(event) => {
+                self.application_command_permissions_update(ctx, event)
+                    .await
+            }
+            Event::AutoModerationRuleCreate(event) => {
+                self.auto_moderation_rule_create(ctx, event).await
+            }
+            Event::AutoModerationRuleUpdate(event) => {
+                self.auto_moderation_rule_update(ctx, event).await
+            }
+            Event::AutoModerationRuleDelete(event) => {
+                self.auto_moderation_rule_delete(ctx, event).await
+            }
+            Event::AutoModerationActionExecution(event) => {
+                self.auto_moderation_action_execution(ctx, event).await
+            }
+            Event::GuildAuditLogEntryCreate(event) => {
+                self.guild_audit_log_entry_create(ctx, event).await
+            }
             Event::Unknown { kind, raw } => self.raw_event(ctx, kind, raw).await,
-            _ => {}
         }
     }
 
@@ -635,6 +729,12 @@ pub trait EventHandler: Send + Sync + 'static {
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _user: crate::model::User,
+    ) {
+    }
+    async fn guild_members_chunk(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildMembersChunkEvent,
     ) {
     }
     async fn role_create(
@@ -737,6 +837,7 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn invite_delete(&self, _ctx: Context, _event: crate::event::InviteEvent) {}
     async fn voice_state_update(&self, _ctx: Context, _state: crate::model::VoiceState) {}
     async fn voice_server_update(&self, _ctx: Context, _data: crate::model::VoiceServerUpdate) {}
+    async fn resumed(&self, _ctx: Context, _event: crate::event::ResumedEvent) {}
     async fn reaction_add(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
     async fn reaction_remove(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
     async fn reaction_remove_all(
@@ -750,6 +851,125 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn typing_start(&self, _ctx: Context, _data: crate::event::TypingStartEvent) {}
     async fn presence_update(&self, _ctx: Context, _data: crate::event::PresenceUpdateEvent) {}
     async fn interaction_create(&self, _ctx: Context, _interaction: crate::model::Interaction) {}
+    async fn user_update(&self, _ctx: Context, _user: crate::model::User) {}
+    async fn thread_create(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
+    async fn thread_update(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
+    async fn thread_delete(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
+    async fn thread_list_sync(&self, _ctx: Context, _event: crate::event::ThreadListSyncEvent) {}
+    async fn thread_member_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadMemberUpdateEvent,
+    ) {
+    }
+    async fn thread_members_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadMembersUpdateEvent,
+    ) {
+    }
+    async fn reaction_remove_emoji(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ReactionRemoveEmojiEvent,
+    ) {
+    }
+    async fn guild_stickers_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildStickersUpdateEvent,
+    ) {
+    }
+    async fn guild_scheduled_event_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ScheduledEvent,
+    ) {
+    }
+    async fn guild_scheduled_event_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ScheduledEvent,
+    ) {
+    }
+    async fn guild_scheduled_event_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ScheduledEvent,
+    ) {
+    }
+    async fn guild_scheduled_event_user_add(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildScheduledEventUserEvent,
+    ) {
+    }
+    async fn guild_scheduled_event_user_remove(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildScheduledEventUserEvent,
+    ) {
+    }
+    async fn stage_instance_create(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    }
+    async fn stage_instance_update(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    }
+    async fn stage_instance_delete(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    }
+    async fn voice_channel_effect_send(
+        &self,
+        _ctx: Context,
+        _event: crate::event::VoiceChannelEffectEvent,
+    ) {
+    }
+    async fn voice_channel_start_time_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::VoiceChannelStartTimeUpdateEvent,
+    ) {
+    }
+    async fn voice_channel_status_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::VoiceChannelStatusUpdateEvent,
+    ) {
+    }
+    async fn application_command_permissions_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ApplicationCommandPermissionsUpdateEvent,
+    ) {
+    }
+    async fn auto_moderation_rule_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::AutoModerationEvent,
+    ) {
+    }
+    async fn auto_moderation_rule_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::AutoModerationEvent,
+    ) {
+    }
+    async fn auto_moderation_rule_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::AutoModerationEvent,
+    ) {
+    }
+    async fn auto_moderation_action_execution(
+        &self,
+        _ctx: Context,
+        _event: crate::event::AutoModerationEvent,
+    ) {
+    }
+    async fn guild_audit_log_entry_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::AuditLogEntryEvent,
+    ) {
+    }
     async fn raw_event(&self, _ctx: Context, _event_name: String, _data: Value) {}
 }
 
@@ -1399,7 +1619,11 @@ async fn apply_cache_updates(cache: &CacheHandle, event: &Event) {
         Event::VoiceServerUpdate(_) => {}
         Event::ChannelPinsUpdate(_) => {}
         Event::GuildBanAdd(_) | Event::GuildBanRemove(_) => {}
-        Event::GuildEmojisUpdate(_) => {}
+        Event::GuildEmojisUpdate(event) => {
+            cache
+                .replace_emojis(event.guild_id.clone(), event.emojis.clone())
+                .await;
+        }
         Event::GuildIntegrationsUpdate(_)
         | Event::IntegrationCreate(_)
         | Event::IntegrationUpdate(_)
@@ -1419,6 +1643,31 @@ async fn apply_cache_updates(cache: &CacheHandle, event: &Event) {
         Event::GuildSoundboardSoundsUpdate(event) | Event::SoundboardSounds(event) => {
             cache
                 .replace_soundboard_sounds(event.guild_id.clone(), event.soundboard_sounds.clone())
+                .await;
+        }
+        Event::GuildStickersUpdate(event) => {
+            if let Some(guild_id) = event.guild_id.clone() {
+                cache
+                    .replace_stickers(guild_id, event.stickers.clone())
+                    .await;
+            }
+        }
+        Event::GuildScheduledEventCreate(event) | Event::GuildScheduledEventUpdate(event) => {
+            cache.upsert_scheduled_event(event.clone()).await;
+        }
+        Event::GuildScheduledEventDelete(event) => {
+            if let (Some(guild_id), Some(event_id)) = (event.guild_id.as_ref(), event.id.as_ref()) {
+                cache.remove_scheduled_event(guild_id, event_id).await;
+            }
+        }
+        Event::StageInstanceCreate(event) | Event::StageInstanceUpdate(event) => {
+            cache
+                .upsert_stage_instance(event.stage_instance.clone())
+                .await;
+        }
+        Event::StageInstanceDelete(event) => {
+            cache
+                .remove_stage_instance(&event.stage_instance.guild_id, &event.stage_instance.id)
                 .await;
         }
         Event::EntitlementCreate(_)
@@ -1588,23 +1837,25 @@ mod tests {
     use crate::event::{
         decode_event, BulkMessageDeleteEvent, ChannelEvent, ChannelPinsUpdateEvent, Event,
         GuildBanEvent, GuildDeleteEvent, GuildDeletePayload, GuildEmojisUpdateEvent, GuildEvent,
-        GuildIntegrationsUpdateEvent, InviteEvent, MemberEvent, MemberRemoveEvent,
-        MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload, MessageEvent,
-        PresenceUpdateEvent, ReactionEvent, ReactionRemoveAllEvent, ReadyEvent, ReadyPayload,
-        RoleDeleteEvent, RoleDeletePayload, RoleEvent, TypingStartEvent, UserUpdateEvent,
-        VoiceServerEvent, VoiceStateEvent, WebhooksUpdateEvent,
+        GuildIntegrationsUpdateEvent, GuildStickersUpdateEvent, InviteEvent, MemberEvent,
+        MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload,
+        MessageEvent, PresenceUpdateEvent, ReactionEvent, ReactionRemoveAllEvent, ReadyEvent,
+        ReadyPayload, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
+        StageInstanceEvent, TypingStartEvent, UserUpdateEvent, VoiceServerEvent, VoiceStateEvent,
+        WebhooksUpdateEvent,
     };
     use crate::gateway::client::GatewayCommand;
     use crate::http::DiscordHttpClient;
     use crate::model::{
         Attachment, ComponentInteraction, ComponentInteractionData, Embed, Interaction,
-        InteractionContextData, Member, Message, Reaction, Role, Snowflake, SoundboardSound, User,
-        VoiceServerUpdate, VoiceState,
+        InteractionContextData, Member, Message, Reaction, Role, Snowflake, SoundboardSound,
+        StageInstance, Sticker, User, VoiceServerUpdate, VoiceState,
     };
     #[cfg(feature = "sharding")]
     use crate::model::{GatewayBot, SessionStartLimit};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardConfig, ShardingManager};
+    use crate::types::Emoji;
     #[cfg(feature = "voice")]
     use crate::voice::{AudioTrack, VoiceConnectionConfig};
 
@@ -1973,6 +2224,139 @@ mod tests {
         .await;
         assert!(cache
             .soundboard_sound(&guild_id, &second_sound_id)
+            .await
+            .is_none());
+    }
+
+    #[cfg(feature = "cache")]
+    #[tokio::test]
+    async fn apply_cache_updates_tracks_guild_metadata_events() {
+        let cache = crate::cache::CacheHandle::new();
+        let guild_id = Snowflake::from("900");
+        let emoji_id = Snowflake::from("901");
+        let sticker_id = Snowflake::from("902");
+        let scheduled_event_id = Snowflake::from("903");
+        let stage_instance_id = Snowflake::from("904");
+        let stage_channel_id = Snowflake::from("905");
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
+                guild_id: guild_id.clone(),
+                emojis: vec![Emoji {
+                    id: Some(emoji_id.to_string()),
+                    name: Some("wave".to_string()),
+                    ..Emoji::default()
+                }],
+                raw: json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(
+            cache
+                .emoji(&guild_id, &emoji_id)
+                .await
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("wave")
+        );
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::GuildStickersUpdate(GuildStickersUpdateEvent {
+                guild_id: Some(guild_id.clone()),
+                stickers: vec![Sticker {
+                    id: sticker_id.clone(),
+                    name: "ship".to_string(),
+                    kind: 1,
+                    format_type: 1,
+                    guild_id: Some(guild_id.clone()),
+                    ..Sticker::default()
+                }],
+                raw: json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(
+            cache.sticker(&guild_id, &sticker_id).await.unwrap().name,
+            "ship"
+        );
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::GuildScheduledEventCreate(ScheduledEvent {
+                id: Some(scheduled_event_id.clone()),
+                guild_id: Some(guild_id.clone()),
+                name: Some("town hall".to_string()),
+                raw: json!({}),
+                ..ScheduledEvent::default()
+            }),
+        )
+        .await;
+        assert_eq!(
+            cache
+                .scheduled_event(&guild_id, &scheduled_event_id)
+                .await
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("town hall")
+        );
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::StageInstanceCreate(StageInstanceEvent {
+                stage_instance: StageInstance {
+                    id: stage_instance_id.clone(),
+                    guild_id: guild_id.clone(),
+                    channel_id: stage_channel_id,
+                    topic: "live".to_string(),
+                    privacy_level: 2,
+                    ..StageInstance::default()
+                },
+                raw: json!({}),
+            }),
+        )
+        .await;
+        assert_eq!(
+            cache
+                .stage_instance(&guild_id, &stage_instance_id)
+                .await
+                .unwrap()
+                .topic,
+            "live"
+        );
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::GuildScheduledEventDelete(ScheduledEvent {
+                id: Some(scheduled_event_id.clone()),
+                guild_id: Some(guild_id.clone()),
+                raw: json!({}),
+                ..ScheduledEvent::default()
+            }),
+        )
+        .await;
+        assert!(cache
+            .scheduled_event(&guild_id, &scheduled_event_id)
+            .await
+            .is_none());
+
+        super::apply_cache_updates(
+            &cache,
+            &Event::StageInstanceDelete(StageInstanceEvent {
+                stage_instance: StageInstance {
+                    id: stage_instance_id.clone(),
+                    guild_id: guild_id.clone(),
+                    ..StageInstance::default()
+                },
+                raw: json!({}),
+            }),
+        )
+        .await;
+        assert!(cache
+            .stage_instance(&guild_id, &stage_instance_id)
             .await
             .is_none());
     }

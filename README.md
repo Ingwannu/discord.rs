@@ -1,4 +1,4 @@
-# discord.rs
+﻿# discord.rs
 
 discord.rs is a standalone Discord bot framework for Rust with typed models, typed gateway events, Components V2, collectors, cache managers, and an HTTP client.
 
@@ -9,13 +9,14 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
 - Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
-- Cache-backed manager reads for guilds, channels, members, roles, and messages, with in-memory storage enabled by the `cache` feature
+- Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with optional size limits via `CacheConfig`
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and terminal close-code handling
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
-- Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, and pure-Rust Opus PCM decode
-- Experimental `dave` feature with DAVE opcode state tracking and an optional `davey`/OpenMLS-backed decryptor hook
-- Typed Discord coverage for polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, and integrations
+- Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
+- Experimental `dave` feature with DAVE opcode state tracking and an optional `davey`/OpenMLS-backed decryptor hook; full production MLS interop still requires live Discord transition validation
+- Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, and refresh-token exchange
+- Typed Discord coverage for polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/prune/vanity, voice regions, and bulk bans
 - Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu`, and more)
 - Typed command builders for slash, user, and message commands
 - Modal builders with `RadioGroup`, `CheckboxGroup`, `Checkbox`, and `FileUpload`
@@ -28,34 +29,40 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "1.1.0"
+discordrs = "1.2.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.1.0", features = ["gateway"] }
+discordrs = { version = "1.2.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.1.0", features = ["interactions"] }
+discordrs = { version = "1.2.0", features = ["interactions"] }
 
 # Gateway runtime with cache storage enabled
-discordrs = { version = "1.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "1.2.0", features = ["gateway", "cache"] }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.1.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "1.1.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.2.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.2.0", features = ["voice"] }
 
-# Experimental DAVE receive integration
-discordrs = { version = "1.1.0", features = ["voice", "dave"] }
+# PCM -> Opus voice encode/playback helpers
+discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+
+# Experimental DAVE receive/outbound media integration
+discordrs = { version = "1.2.0", features = ["voice", "dave"] }
+
+# Gateway runtime with zstd-stream transport compression
+discordrs = { version = "1.2.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "1.1.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.2.0", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup
@@ -251,12 +258,14 @@ fn app(public_key: &str) -> Router {
 |---------|-------------|----------|
 | (default) | Builders, typed models, command builders, parsers, REST client, helpers | reqwest, serde_json |
 | `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
+| `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
 | `cache` | Enables the in-memory cache storage used by gateway cache managers | tokio |
 | `collectors` | Async collectors for messages and interactions | tokio |
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
-| `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
-| `dave` | Experimental DAVE/MLS receive integration hook backed by `davey` | voice, davey |
+| `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
+| `dave` | Experimental DAVE/MLS receive and outbound media hooks backed by `davey`; production interop still requires live Discord transition validation | voice, davey |
 
 ## Notes
 
@@ -265,6 +274,9 @@ fn app(public_key: &str) -> Router {
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
 - Prefer the typed `RestClient` methods such as `create_message`, `update_message`, `create_interaction_response_typed`, and `bulk_overwrite_*_typed`.
+- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_auto_moderation_rules_typed`, `get_guild_preview_typed`, `get_guild_vanity_url`, `get_voice_regions_typed`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
+- Use `CacheHandle::with_config(CacheConfig::unbounded().max_messages_per_channel(...).max_total_messages(...).message_ttl(...))` for long-running bots that need bounded in-memory cache growth.
+- Use `OAuth2Client` for OAuth2 authorization-code or refresh-token flows; it is intentionally separate from bot-token `RestClient` authorization.
 - Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and token/path segments are validated before webhook/callback paths are built.
 - Typed slash and autocomplete interaction payloads preserve option `value`, `focused`, and nested option input through `CommandInteractionOption`.
 - Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.

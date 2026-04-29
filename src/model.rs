@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -8,22 +9,31 @@ use crate::parsers::V2ModalSubmission;
 use crate::types::Emoji;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
-pub struct Snowflake(String);
+pub struct Snowflake {
+    raw: String,
+    numeric: Option<u64>,
+}
 
 impl Snowflake {
     /// Discord epoch: January 1, 2015 00:00:00 UTC in milliseconds.
     const DISCORD_EPOCH: u64 = 1_420_070_400_000;
 
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+        let raw = value.into();
+        let numeric = raw.parse().ok();
+        Self { raw, numeric }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.raw
     }
 
     pub fn as_u64(&self) -> Option<u64> {
-        self.0.parse().ok()
+        self.numeric
+    }
+
+    pub fn to_u64(&self) -> Option<u64> {
+        self.as_u64()
     }
 
     /// Extracts the creation timestamp from this Snowflake as Unix milliseconds.
@@ -31,7 +41,7 @@ impl Snowflake {
     /// Discord encodes the creation timestamp in the top 42 bits of every Snowflake ID.
     /// Returns `None` if the inner value is not a valid u64.
     pub fn timestamp(&self) -> Option<u64> {
-        let raw = self.0.parse::<u64>().ok()?;
+        let raw = self.numeric?;
         // (raw >> 22) gives milliseconds since Discord epoch
         Some((raw >> 22) + Self::DISCORD_EPOCH)
     }
@@ -39,25 +49,28 @@ impl Snowflake {
 
 impl Display for Snowflake {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.raw)
     }
 }
 
 impl From<u64> for Snowflake {
     fn from(value: u64) -> Self {
-        Self(value.to_string())
+        Self {
+            raw: value.to_string(),
+            numeric: Some(value),
+        }
     }
 }
 
 impl From<&str> for Snowflake {
     fn from(value: &str) -> Self {
-        Self(value.to_string())
+        Self::new(value)
     }
 }
 
 impl From<String> for Snowflake {
     fn from(value: String) -> Self {
-        Self(value)
+        Self::new(value)
     }
 }
 
@@ -74,7 +87,7 @@ impl Serialize for Snowflake {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.0)
+        serializer.serialize_str(&self.raw)
     }
 }
 
@@ -300,6 +313,7 @@ pub struct Attachment {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum ChannelType {
     Text = 0,
     Dm = 1,
@@ -541,6 +555,139 @@ pub struct Guild {
     pub approximate_member_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approximate_presence_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CurrentUserGuild {
+    pub id: Snowflake,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub owner: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<String>,
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GuildPreview {
+    pub id: Snowflake,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub splash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discovery_splash: Option<String>,
+    #[serde(default)]
+    pub emojis: Vec<Emoji>,
+    #[serde(default)]
+    pub features: Vec<String>,
+    pub approximate_member_count: u64,
+    pub approximate_presence_count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub stickers: Vec<Sticker>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct VanityUrl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uses: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GuildPruneCount {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pruned: Option<u64>,
+}
+
+pub type GuildPruneResult = GuildPruneCount;
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BulkGuildBanRequest {
+    pub user_ids: Vec<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_message_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct BulkGuildBanResponse {
+    #[serde(default)]
+    pub banned_users: Vec<Snowflake>,
+    #[serde(default)]
+    pub failed_users: Vec<Snowflake>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct VoiceRegion {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub optimal: bool,
+    #[serde(default)]
+    pub deprecated: bool,
+    #[serde(default)]
+    pub custom: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AutoModerationRule {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub creator_id: Snowflake,
+    pub event_type: u8,
+    pub trigger_type: u8,
+    #[serde(default)]
+    pub trigger_metadata: AutoModerationTriggerMetadata,
+    #[serde(default)]
+    pub actions: Vec<AutoModerationAction>,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub exempt_roles: Vec<Snowflake>,
+    #[serde(default)]
+    pub exempt_channels: Vec<Snowflake>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AutoModerationTriggerMetadata {
+    #[serde(default)]
+    pub keyword_filter: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex_patterns: Option<Vec<String>>,
+    #[serde(default)]
+    pub presets: Vec<u8>,
+    #[serde(default)]
+    pub allow_list: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_total_limit: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mention_raid_protection_enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AutoModerationAction {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<AutoModerationActionMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AutoModerationActionMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -831,6 +978,52 @@ pub struct ApplicationCommandOption {
     pub max_length: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ApplicationIntegrationType(pub u8);
+
+impl ApplicationIntegrationType {
+    pub const GUILD_INSTALL: Self = Self(0);
+    pub const USER_INSTALL: Self = Self(1);
+}
+
+impl Default for ApplicationIntegrationType {
+    fn default() -> Self {
+        Self::GUILD_INSTALL
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct InteractionContextType(pub u8);
+
+impl InteractionContextType {
+    pub const GUILD: Self = Self(0);
+    pub const BOT_DM: Self = Self(1);
+    pub const PRIVATE_CHANNEL: Self = Self(2);
+}
+
+impl Default for InteractionContextType {
+    fn default() -> Self {
+        Self::GUILD
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ApplicationCommandHandlerType(pub u8);
+
+impl ApplicationCommandHandlerType {
+    pub const APP_HANDLER: Self = Self(1);
+    pub const DISCORD_LAUNCH_ACTIVITY: Self = Self(2);
+}
+
+impl Default for ApplicationCommandHandlerType {
+    fn default() -> Self {
+        Self::APP_HANDLER
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ApplicationCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -842,8 +1035,12 @@ pub struct ApplicationCommand {
     #[serde(rename = "type")]
     pub kind: u8,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub options: Vec<ApplicationCommandOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -851,7 +1048,77 @@ pub struct ApplicationCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dm_permission: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration_types: Option<Vec<ApplicationIntegrationType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Vec<InteractionContextType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handler: Option<ApplicationCommandHandlerType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct Application {
+    pub id: Snowflake,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub rpc_origins: Vec<String>,
+    #[serde(default)]
+    pub bot_public: bool,
+    #[serde(default)]
+    pub bot_require_code_grant: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms_of_service_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privacy_policy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<User>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_sku_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate_guild_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approximate_user_install_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interactions_endpoint_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_connections_verification_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_install_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_params: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integration_types_config: Option<HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ApplicationRoleConnectionMetadata {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub key: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name_localizations: Option<HashMap<String, String>>,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description_localizations: Option<HashMap<String, String>>,
 }
 
 impl ApplicationCommand {
@@ -885,6 +1152,12 @@ pub struct InteractionContextData {
     pub locale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_locale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entitlements: Option<Vec<Entitlement>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<InteractionContextType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorizing_integration_owners: Option<HashMap<String, Snowflake>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -918,6 +1191,8 @@ pub struct CommandInteractionData {
     pub options: Vec<CommandInteractionOption>,
     #[serde(default)]
     pub resolved: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<Snowflake>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -970,6 +1245,7 @@ pub struct PingInteraction {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Interaction {
     Ping(PingInteraction),
     ChatInputCommand(ChatInputCommandInteraction),
@@ -1124,6 +1400,8 @@ pub struct Embed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video: Option<EmbedMedia>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<EmbedAuthor>,
     #[serde(default)]
     pub fields: Vec<EmbedField>,
@@ -1136,7 +1414,7 @@ pub struct Reaction {
     #[serde(default)]
     pub me: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji: Option<serde_json::Value>,
+    pub emoji: Option<Emoji>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1225,7 +1503,7 @@ pub struct GuildScheduledEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_id: Option<Snowflake>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub entity_metadata: Option<serde_json::Value>,
+    pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creator: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1233,7 +1511,40 @@ pub struct GuildScheduledEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub recurrence_rule: Option<serde_json::Value>,
+    pub recurrence_rule: Option<GuildScheduledEventRecurrenceRule>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GuildScheduledEventEntityMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GuildScheduledEventRecurrenceRuleNWeekday {
+    pub n: i8,
+    pub day: u8,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GuildScheduledEventRecurrenceRule {
+    pub start: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    pub frequency: u8,
+    pub interval: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_weekday: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_n_weekday: Option<Vec<GuildScheduledEventRecurrenceRuleNWeekday>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_month: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_month_day: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by_year_day: Option<Vec<u16>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1474,7 +1785,140 @@ pub struct Presence {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub activities: Option<Vec<serde_json::Value>>,
+    pub activities: Option<Vec<Activity>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ActivityType(pub u8);
+
+impl ActivityType {
+    pub const PLAYING: Self = Self(0);
+    pub const STREAMING: Self = Self(1);
+    pub const LISTENING: Self = Self(2);
+    pub const WATCHING: Self = Self(3);
+    pub const CUSTOM: Self = Self(4);
+    pub const COMPETING: Self = Self(5);
+}
+
+impl Default for ActivityType {
+    fn default() -> Self {
+        Self::PLAYING
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ActivityTimestamps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ActivityParty {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<Vec<u64>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ActivityAssets {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub small_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub small_text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ActivitySecrets {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub join: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spectate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_secret: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ActivityButton {
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct Activity {
+    pub name: String,
+    #[serde(default, rename = "type")]
+    pub kind: ActivityType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamps: Option<ActivityTimestamps>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<Emoji>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub party: Option<ActivityParty>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assets: Option<ActivityAssets>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<ActivitySecrets>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buttons: Option<Vec<ActivityButton>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdatePresence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since: Option<u64>,
+    #[serde(default)]
+    pub activities: Vec<Activity>,
+    pub status: String,
+    #[serde(default)]
+    pub afk: bool,
+}
+
+impl UpdatePresence {
+    pub fn online_with_activity(name: impl Into<String>) -> Self {
+        Self {
+            since: None,
+            activities: vec![Activity {
+                name: name.into(),
+                kind: ActivityType::PLAYING,
+                ..Activity::default()
+            }],
+            status: "online".to_string(),
+            afk: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequestGuildMembers {
+    pub guild_id: Snowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presences: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_ids: Option<Vec<Snowflake>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1560,12 +2004,13 @@ mod tests {
         ApplicationCommand, ApplicationCommandOptionChoice, Attachment, AutocompleteInteraction,
         Channel, ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption,
         ComponentInteraction, ComponentInteractionData, CreateDmChannel, CreateMessage, CreatePoll,
-        DefaultReaction, DiscordModel, Embed, EmbedField, ForumTag, GatewayBot, Guild, Integration,
-        Interaction, InteractionCallbackResponse, InteractionContextData, Member, Message,
-        MessageContextMenuInteraction, ModalSubmitInteraction, PermissionsBitField,
-        PingInteraction, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia, PollResults,
-        Presence, Reaction, Role, SessionStartLimit, Snowflake, StickerItem, Subscription,
-        ThreadListResponse, ThreadMember, ThreadMetadata, User, UserContextMenuInteraction,
+        DefaultReaction, DiscordModel, Embed, EmbedField, ForumTag, GatewayBot, Guild,
+        GuildScheduledEvent, Integration, Interaction, InteractionCallbackResponse,
+        InteractionContextData, Member, Message, MessageContextMenuInteraction,
+        ModalSubmitInteraction, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
+        PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, Role, SessionStartLimit,
+        Snowflake, StickerItem, Subscription, ThreadListResponse, ThreadMember, ThreadMetadata,
+        User, UserContextMenuInteraction,
     };
     use crate::parsers::V2ModalSubmission;
 
@@ -2177,6 +2622,58 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&gateway).unwrap()["session_start_limit"]["remaining"],
             999
+        );
+    }
+
+    #[test]
+    fn scheduled_event_recurrence_and_reaction_emoji_are_typed() {
+        let event: GuildScheduledEvent = serde_json::from_value(json!({
+            "id": "1",
+            "guild_id": "2",
+            "name": "standup",
+            "scheduled_start_time": "2026-04-29T00:00:00.000000+00:00",
+            "privacy_level": 2,
+            "status": 1,
+            "entity_type": 3,
+            "entity_metadata": { "location": "voice" },
+            "recurrence_rule": {
+                "start": "2026-04-29T00:00:00.000000+00:00",
+                "frequency": 2,
+                "interval": 1,
+                "by_weekday": [1],
+                "by_n_weekday": [{ "n": 1, "day": 1 }]
+            }
+        }))
+        .unwrap();
+        let reaction: Reaction = serde_json::from_value(json!({
+            "count": 2,
+            "me": true,
+            "emoji": { "id": "10", "name": "party", "animated": true }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            event
+                .entity_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.location.as_deref()),
+            Some("voice")
+        );
+        assert_eq!(
+            event
+                .recurrence_rule
+                .as_ref()
+                .and_then(|rule| rule.by_n_weekday.as_ref())
+                .and_then(|weekdays| weekdays.first())
+                .map(|weekday| weekday.day),
+            Some(1)
+        );
+        assert_eq!(
+            reaction
+                .emoji
+                .as_ref()
+                .and_then(|emoji| emoji.name.as_deref()),
+            Some("party")
         );
     }
 

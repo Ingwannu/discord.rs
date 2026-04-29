@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.0
+
+- Added a `voice-encode` feature with optional `opus-rs` support, including `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder` for 48 kHz stereo 20 ms PCM-to-Opus playback through the existing voice runtime.
+- Added outbound voice playback plumbing for encoded Opus frames, RTP sequence/timestamp/nonce management, and automatic speaking on/off behavior around playback.
+- Added DAVE outbound media support with `VoiceDaveySession`, `VoiceDaveFrameEncryptor`, `send_opus_frame_with_dave(...)`, and typed DAVE MLS gateway commands for transition-ready, key-package, commit/welcome, and invalid commit/welcome flows.
+- Added an ignored live DAVE MLS transition harness (`tests/live_voice_dave.rs`) so production interoperability can be verified against a real Discord voice session without running live network tests by default.
+- Expanded Gateway typed coverage, EventHandler convenience hooks, request-guild-members helpers, interaction payload fields, application command fields, and richer Activity/Presence models.
+- Added OAuth2 backend helpers, typed REST coverage for moderation/application/guild administration gaps, and continued the split of HTTP helper/path/body/rate-limit code away from the monolithic HTTP client.
+- Added cache storage and eviction controls for guild metadata, emojis, stickers, scheduled events, stage instances, voice state, soundboard, and other long-running bot data.
+- Hardened collector deadlines, shard IPC lifetime, voice heartbeat nonce generation, gateway outbound scheduling, reconnect jitter, and HTTP rate-limit bucket cleanup.
+- Made coverage reporting stricter by removing broad coverage ignore shortcuts and keeping the release gate on real all-features line coverage.
+- Updated README, USAGE, Docsify docs, and the `discordrs-dev` Codex skill guidance for the `1.2.0` public surface.
+
 ## 1.1.0
 
 - Added Discord Gateway `zlib-stream` handling that keeps compressed payload state across binary frames and inflates only complete payload boundaries.

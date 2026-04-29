@@ -1,6 +1,6 @@
-[package]
+﻿[package]
 name = "discordrs"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client"
 authors = [
@@ -26,6 +26,7 @@ gateway = [
 cache = []
 collectors = ["gateway"]
 sharding = ["gateway"]
+zstd-stream = ["gateway", "dep:zstd"]
 voice = [
     "dep:tokio-tungstenite",
     "dep:futures-util",
@@ -33,6 +34,7 @@ voice = [
     "dep:chacha20poly1305",
     "dep:opus-decoder",
 ]
+voice-encode = ["voice", "dep:opus-rs"]
 dave = ["voice", "dep:davey"]
 interactions = [
     "dep:axum",
@@ -47,6 +49,7 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"], optional = true }
 flate2 = { version = "1", optional = true }
+zstd = { version = "0.13", optional = true }
 futures-util = { version = "0.3", optional = true }
 axum = { version = "0.7", optional = true }
 ed25519-dalek = { version = "2", optional = true }
@@ -57,6 +60,7 @@ tracing = "0.1"
 aes-gcm = { version = "0.10", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 opus-decoder = { version = "0.1", optional = true }
+opus-rs = { version = "0.1", optional = true }
 davey = { version = "0.1", optional = true }
 
 [dev-dependencies]
