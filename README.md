@@ -1,4 +1,6 @@
-﻿# discord.rs
+# discord.rs
+
+<a href="https://coveralls.io/github/Ingwannu/discordrs?branch=main"><img src="https://coveralls.io/repos/github/Ingwannu/discordrs/badge.svg?branch=main&t=20260411" alt="Coveralls"></a>
 
 discord.rs is a standalone Discord bot framework for Rust with typed models, typed gateway events, Components V2, collectors, cache managers, and an HTTP client.
 
@@ -299,4 +301,3 @@ at your option.
 
 - ingwannu
 - Contact: ingwannu@teamwicked.me, ingwannu@gmail.com
-
