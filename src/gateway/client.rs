@@ -79,10 +79,7 @@ struct GatewayOutboundLimiter {
 
 impl GatewayOutboundLimiter {
     async fn wait_for_command(&mut self, command: &GatewayCommand) {
-        loop {
-            let Some(delay) = self.reserve_delay(command, Instant::now()) else {
-                break;
-            };
+        while let Some(delay) = self.reserve_delay(command, Instant::now()) {
             sleep(delay).await;
         }
     }

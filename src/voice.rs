@@ -457,10 +457,10 @@ impl VoiceGatewayCommand {
                 "token": token,
             }),
             VoiceGatewayCommand::SelectProtocol(command) => {
-                serde_json::to_value(command).expect("voice protocol command should serialize")
+                serde_json::to_value(command).unwrap_or(serde_json::Value::Null)
             }
             VoiceGatewayCommand::Speaking(command) => {
-                serde_json::to_value(command).expect("voice speaking command should serialize")
+                serde_json::to_value(command).unwrap_or(serde_json::Value::Null)
             }
             VoiceGatewayCommand::Resume {
                 server_id,
@@ -812,10 +812,7 @@ impl VoiceManager {
                     channel_id,
                 ));
                 self.players.entry(guild_id.clone()).or_default();
-                self.connections.insert(guild_id.clone(), state);
-                self.connections
-                    .get_mut(&guild_id)
-                    .expect("voice connection should exist after insert")
+                self.connections.entry(guild_id.clone()).or_insert(state)
             }
         };
 

@@ -10,20 +10,20 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "1.1.0", features = ["gateway"] }
+discordrs = { version = "1.2.1", features = ["gateway"] }
 ```
 
 필요한 런타임에 따라 기능을 추가합니다.
 
 ```toml
 # REST/빌더/타입 모델만 사용할 때
-discordrs = "1.1.0"
+discordrs = "1.2.1"
 
 # Voice receive와 Opus PCM decode
-discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.2.1", features = ["voice"] }
 
 # 실험적 DAVE/MLS hook
-discordrs = { version = "1.1.0", features = ["voice", "dave"] }
+discordrs = { version = "1.2.1", features = ["voice", "dave"] }
 ```
 
 ## 최소 Typed Gateway Bot

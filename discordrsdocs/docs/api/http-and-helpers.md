@@ -19,6 +19,13 @@ Common operations include:
 
 Raw `serde_json::Value` methods remain available for routes where Discord adds fields before discord.rs has a typed model. Prefer the typed methods first, then drop to raw JSON only for newly released or experimental API fields.
 
+`1.2.1` hardens the REST layer:
+
+- invite codes are validated before `get_invite`, `get_invite_with_options`, and `delete_invite` build bot-authorized paths
+- generated query strings are percent-encoded
+- request body serialization failures return `DiscordError::Json` instead of panicking
+- repeated HTTP 429 responses are retried up to a bounded limit before `DiscordError::RateLimit`
+
 ## Helper Functions
 
 For Components V2 and interaction response workflows, use:

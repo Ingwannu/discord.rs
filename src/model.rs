@@ -24,6 +24,15 @@ impl Snowflake {
         Self { raw, numeric }
     }
 
+    pub fn try_new(value: impl Into<String>) -> Result<Self, String> {
+        let snowflake = Self::new(value);
+        if snowflake.is_valid() {
+            Ok(snowflake)
+        } else {
+            Err("snowflake must contain only ASCII digits".to_string())
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         &self.raw
     }
@@ -34,6 +43,10 @@ impl Snowflake {
 
     pub fn to_u64(&self) -> Option<u64> {
         self.as_u64()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        !self.raw.is_empty() && self.raw.chars().all(|ch| ch.is_ascii_digit())
     }
 
     /// Extracts the creation timestamp from this Snowflake as Unix milliseconds.
@@ -751,9 +764,18 @@ impl ApplicationCommandOptionChoice {
     pub fn new(name: impl Into<String>, value: impl Serialize) -> Self {
         Self {
             name: name.into(),
-            value: serde_json::to_value(value)
-                .expect("application command option choice should serialize"),
+            value: serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
         }
+    }
+
+    pub fn try_new(
+        name: impl Into<String>,
+        value: impl Serialize,
+    ) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            name: name.into(),
+            value: serde_json::to_value(value)?,
+        })
     }
 }
 
@@ -2104,6 +2126,10 @@ mod tests {
         assert_eq!(snowflake.to_string(), "1759288472266248192");
         assert_eq!(parsed.as_str(), "42");
         assert_eq!(invalid.as_u64(), None);
+        assert!(snowflake.is_valid());
+        assert!(!invalid.is_valid());
+        assert!(Snowflake::try_new("42").is_ok());
+        assert!(Snowflake::try_new("not-a-number").is_err());
 
         let error = serde_json::from_value::<Snowflake>(json!(-1)).unwrap_err();
         assert!(error.to_string().contains("snowflake cannot be negative"));

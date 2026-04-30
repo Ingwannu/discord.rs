@@ -4,7 +4,7 @@ These layers are optional. They are meant to improve runtime ergonomics without 
 
 ## Cache
 
-Enable the `cache` feature when the bot needs in-memory state for common lookups.
+The `cache` feature is enabled by default in `1.2.1`, so normal installs keep in-memory state for common lookups. Builds using `default-features = false` keep the cache API available but use empty no-op storage.
 
 Main types:
 
@@ -19,6 +19,8 @@ Main types:
 The managers prefer cache hits and fall back to `RestClient` fetches.
 
 `CacheHandle::with_config(...)` lets long-running bots bound message, presence, and member storage by size and TTL. Size limits are enforced on insert, and TTL limits are purged on insert, explicit `purge_expired()`, and cache reads for the affected entity type.
+
+Use `CacheHandle::is_enabled()` when reusable code needs to detect whether it was compiled with real cache storage.
 
 ```rust
 use std::time::Duration;

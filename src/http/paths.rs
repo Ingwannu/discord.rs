@@ -1,4 +1,5 @@
 use reqwest::Method;
+use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
@@ -105,7 +106,12 @@ pub(crate) fn query_string(params: Vec<String>) -> String {
     if params.is_empty() {
         String::new()
     } else {
-        format!("?{}", params.join("&"))
+        let mut serializer = form_urlencoded::Serializer::new(String::new());
+        for param in params {
+            let (name, value) = param.split_once('=').unwrap_or((param.as_str(), ""));
+            serializer.append_pair(name, value);
+        }
+        format!("?{}", serializer.finish())
     }
 }
 

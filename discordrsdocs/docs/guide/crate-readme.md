@@ -16,34 +16,34 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Modal builders with `RadioGroup`, `CheckboxGroup`, and `Checkbox`
 - V2 modal submission parser that preserves all V2 component types that serenity drops
 - Interaction routing helpers: `parse_interaction`, `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
-- Cache-backed manager reads with in-memory storage enabled by the `cache` feature and optional `CacheConfig` size limits
+- Cache-backed manager reads with in-memory storage enabled by default and optional `CacheConfig` size limits
 - Voice runtime helpers for UDP packet receive, Opus-frame RTP send, PCM-to-Opus encode, RTP-size decrypt, Opus PCM decode, and experimental DAVE hooks
 - OAuth2 backend helpers for authorization URLs, code exchange, and refresh-token exchange
 - Typed Discord coverage for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, integrations, Auto Moderation, guild preview/prune/vanity, voice regions, and bulk bans
-- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, and `dave`
+- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, and `dave`; `cache` is included in the default feature set
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "1.2.0"
+discordrs = "1.2.1"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.2.0", features = ["gateway"] }
+discordrs = { version = "1.2.1", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.2.0", features = ["interactions"] }
+discordrs = { version = "1.2.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "1.2.0", features = ["gateway", "interactions"] }
+discordrs = { version = "1.2.1", features = ["gateway", "interactions"] }
 
 # Voice playback/receive and experimental DAVE hook
-discordrs = { version = "1.2.0", features = ["voice"] }
-discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
-discordrs = { version = "1.2.0", features = ["voice", "dave"] }
+discordrs = { version = "1.2.1", features = ["voice"] }
+discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.1", features = ["voice", "dave"] }
 ```
 
 ## Quick Example
@@ -141,11 +141,11 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, typed models, command builders, parsers, REST client, helpers | reqwest, serde_json |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio |
 | `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
-| `cache` | Enables the in-memory cache storage used by gateway cache managers | tokio |
+| `cache` | Enables the in-memory cache storage used by gateway cache managers; included in default features | tokio |
 | `collectors` | Async collectors for messages and interactions | tokio |
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
 | `voice` | Voice gateway/UDP runtime receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
@@ -172,4 +172,3 @@ at your option.
 
 - ingwannu
 - Contact: ingwannu@teamwicked.me, ingwannu@gmail.com
-

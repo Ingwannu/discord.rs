@@ -536,6 +536,10 @@ impl CacheHandle {
         &self.config
     }
 
+    pub fn is_enabled(&self) -> bool {
+        cfg!(feature = "cache")
+    }
+
     #[cfg(feature = "cache")]
     pub async fn clear(&self) {
         let mut store = self.store.write().await;

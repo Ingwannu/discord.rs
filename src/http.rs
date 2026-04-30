@@ -45,6 +45,7 @@ use rate_limit::RateLimitState;
 use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
 
 const API_BASE: &str = "https://discord.com/api/v10";
+const MAX_RATE_LIMIT_RETRIES: usize = 5;
 
 pub struct RestClient {
     client: Client,
@@ -1729,6 +1730,8 @@ impl RestClient {
     }
 
     pub async fn get_invite(&self, code: &str) -> Result<Invite, DiscordError> {
+        let code = code.trim();
+        validate_token_path_segment("invite_code", code, false)?;
         self.request_typed(
             Method::GET,
             &format!("/invites/{code}"),
@@ -1744,6 +1747,8 @@ impl RestClient {
         with_expiration: Option<bool>,
         guild_scheduled_event_id: Option<Snowflake>,
     ) -> Result<Invite, DiscordError> {
+        let code = code.trim();
+        validate_token_path_segment("invite_code", code, false)?;
         self.request_typed(
             Method::GET,
             &format!(
@@ -1756,6 +1761,8 @@ impl RestClient {
     }
 
     pub async fn delete_invite(&self, code: &str) -> Result<Invite, DiscordError> {
+        let code = code.trim();
+        validate_token_path_segment("invite_code", code, false)?;
         self.request_typed(
             Method::DELETE,
             &format!("/invites/{code}"),
@@ -2975,7 +2982,7 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let response = self
-            .request_with_headers(method, path, Some(multipart_body(body, files)))
+            .request_with_headers(method, path, Some(multipart_body(body, files)?))
             .await?;
         Ok(parse_body_value(response.body))
     }
@@ -2990,13 +2997,8 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let response = self
-            .request_with_headers(
-                method,
-                path,
-                body.map(serialize_body).map(RequestBody::Json),
-            )
-            .await?;
+        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
+        let response = self.request_with_headers(method, path, body).await?;
         let value = parse_body_value(response.body);
         serde_json::from_value(value).map_err(Into::into)
     }
@@ -3013,7 +3015,7 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let response = self
-            .request_with_headers(method, path, Some(multipart_body(body, files)))
+            .request_with_headers(method, path, Some(multipart_body(body, files)?))
             .await?;
         let value = parse_body_value(response.body);
         serde_json::from_value(value).map_err(Into::into)
@@ -3028,12 +3030,8 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_with_headers(
-            method,
-            path,
-            body.map(serialize_body).map(RequestBody::Json),
-        )
-        .await?;
+        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
+        self.request_with_headers(method, path, body).await?;
         Ok(())
     }
 
@@ -3047,7 +3045,7 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_with_headers(method, path, Some(multipart_body(body, files)))
+        self.request_with_headers(method, path, Some(multipart_body(body, files)?))
             .await?;
         Ok(())
     }
@@ -3059,50 +3057,51 @@ impl RestClient {
         body: Option<RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
         let route_key = rate_limit_route_key(&method, path);
-        while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
-            debug!(
-                "waiting for rate limit on {route_key} for {:?}",
-                wait_duration
+        let mut rate_limit_retries = 0;
+
+        loop {
+            while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
+                debug!(
+                    "waiting for rate limit on {route_key} for {:?}",
+                    wait_duration
+                );
+                sleep_for_retry_after(wait_duration.as_secs_f64()).await;
+            }
+
+            let response = self
+                .request_once(method.clone(), path, body.as_ref())
+                .await?;
+            self.rate_limits.observe(
+                &route_key,
+                &response.headers,
+                response.status,
+                &response.body,
             );
-            sleep_for_retry_after(wait_duration.as_secs_f64()).await;
-        }
 
-        let response = self
-            .request_once(method.clone(), path, body.as_ref())
-            .await?;
-        self.rate_limits.observe(
-            &route_key,
-            &response.headers,
-            response.status,
-            &response.body,
-        );
+            if response.status == StatusCode::TOO_MANY_REQUESTS {
+                if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
+                    return Err(discord_rate_limit_error(&route_key, &response.body));
+                }
 
-        if response.status == StatusCode::TOO_MANY_REQUESTS {
-            warn!("received rate limit for {route_key}, retrying once");
-            let payload = parse_body_value(response.body.clone());
-            let retry_after = payload
-                .get("retry_after")
-                .and_then(Value::as_f64)
-                .unwrap_or(1.0);
-            sleep_for_retry_after(retry_after).await;
-
-            let retried = self.request_once(method, path, body.as_ref()).await?;
-            self.rate_limits
-                .observe(&route_key, &retried.headers, retried.status, &retried.body);
-            if retried.status == StatusCode::TOO_MANY_REQUESTS {
-                return Err(discord_rate_limit_error(&route_key, &retried.body));
+                rate_limit_retries += 1;
+                warn!(
+                    "received rate limit for {route_key}, retrying ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})"
+                );
+                let payload = parse_body_value(response.body.clone());
+                let retry_after = payload
+                    .get("retry_after")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0);
+                sleep_for_retry_after(retry_after).await;
+                continue;
             }
-            if !retried.status.is_success() {
-                return Err(discord_api_error(retried.status, &retried.body));
+
+            if !response.status.is_success() {
+                return Err(discord_api_error(response.status, &response.body));
             }
-            return Ok(retried);
-        }
 
-        if !response.status.is_success() {
-            return Err(discord_api_error(response.status, &response.body));
+            return Ok(response);
         }
-
-        Ok(response)
     }
 
     async fn request_once(

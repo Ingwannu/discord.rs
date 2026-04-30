@@ -20,18 +20,20 @@ pub(crate) enum RequestBody {
     },
 }
 
-pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(body: &T) -> Value {
-    serde_json::to_value(body).expect("failed to serialize request body")
+pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(
+    body: &T,
+) -> Result<Value, DiscordError> {
+    serde_json::to_value(body).map_err(Into::into)
 }
 
 pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
     body: &T,
     files: &[FileAttachment],
-) -> RequestBody {
-    RequestBody::Multipart {
-        payload_json: serialize_body(body),
+) -> Result<RequestBody, DiscordError> {
+    Ok(RequestBody::Multipart {
+        payload_json: serialize_body(body)?,
         files: files.to_vec(),
-    }
+    })
 }
 
 pub(crate) fn build_multipart_form(

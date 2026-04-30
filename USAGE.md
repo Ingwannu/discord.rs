@@ -10,38 +10,38 @@ Pick features based on the runtime surface you want to ship.
 
 ```toml
 [dependencies]
-# Core only: models, builders, parsers, helpers, REST client
-discordrs = "1.2.0"
+# Core default: models, builders, parsers, helpers, REST client, cache storage
+discordrs = "1.2.1"
 
 # Gateway runtime
-discordrs = { version = "1.2.0", features = ["gateway"] }
+discordrs = { version = "1.2.1", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.2.0", features = ["interactions"] }
+discordrs = { version = "1.2.1", features = ["interactions"] }
 
-# Gateway runtime with cache storage enabled
-discordrs = { version = "1.2.0", features = ["gateway", "cache"] }
+# Minimal core without cache storage
+discordrs = { version = "1.2.1", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.2.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.1", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "1.2.0", features = ["gateway", "sharding"] }
+discordrs = { version = "1.2.1", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "1.2.0", features = ["voice"] }
+discordrs = { version = "1.2.1", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
 
 # Experimental DAVE/MLS receive and outbound media hooks
-discordrs = { version = "1.2.0", features = ["voice", "dave"] }
+discordrs = { version = "1.2.1", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "1.2.0", features = ["gateway", "voice"] }
+discordrs = { version = "1.2.1", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "1.2.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "1.2.1", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -350,7 +350,7 @@ On the gateway runtime, `Context` exposes manager shortcuts in all builds:
 - `ctx.messages()`
 - `ctx.roles()`
 
-These managers keep the REST handle and cache handle together. Enabling the `cache` feature turns on the in-memory storage they read from before falling back to HTTP; without it, the types still exist but cached reads stay empty.
+These managers keep the REST handle and cache handle together. The `cache` feature is enabled by default, so normal installs store gateway cache data in memory before falling back to HTTP. If you compile with `default-features = false`, the same types still exist but cached reads stay empty; use `CacheHandle::is_enabled()` when shared code needs to detect that mode.
 
 ```rust
 async fn inspect_cache(ctx: &discordrs::Context) {
@@ -375,6 +375,12 @@ let cache = CacheHandle::with_config(
         .max_members_per_guild(25_000),
 );
 ```
+
+## 8.5 REST Safety Notes
+
+`RestClient` validates token-like path segments before authenticated routes are built. This includes invite codes passed to `get_invite`, `get_invite_with_options`, and `delete_invite`, so user-provided invite text cannot inject `/`, `\`, `?`, `#`, or control characters into bot-authorized REST paths.
+
+Generated query strings are percent-encoded. Request body serialization failures return `DiscordError::Json` instead of panicking, and repeated HTTP 429 responses are retried up to a bounded limit before surfacing `DiscordError::RateLimit`.
 
 ## 9. Control the Active Shard from `Context`
 

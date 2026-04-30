@@ -31,23 +31,23 @@
 ```toml
 [dependencies]
 # 코어만 사용
-discordrs = "1.1.0"
+discordrs = "1.2.1"
 
 # 타입 게이트웨이 런타임
-discordrs = { version = "1.1.0", features = ["gateway"] }
+discordrs = { version = "1.2.1", features = ["gateway"] }
 
 # 캐시 또는 컬렉터가 포함된 게이트웨이 런타임
-discordrs = { version = "1.1.0", features = ["gateway", "cache"] }
-discordrs = { version = "1.1.0", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.1", features = ["gateway", "cache"] }
+discordrs = { version = "1.2.1", features = ["gateway", "collectors"] }
 
 # 인터랙션 엔드포인트
-discordrs = { version = "1.1.0", features = ["interactions"] }
+discordrs = { version = "1.2.1", features = ["interactions"] }
 
 # Voice receive / Opus decode
-discordrs = { version = "1.1.0", features = ["voice"] }
+discordrs = { version = "1.2.1", features = ["voice"] }
 
 # 실험적 DAVE/MLS hook
-discordrs = { version = "1.1.0", features = ["voice", "dave"] }
+discordrs = { version = "1.2.1", features = ["voice", "dave"] }
 ```
 
 ## 언어 전환

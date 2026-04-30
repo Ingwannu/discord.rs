@@ -107,11 +107,21 @@ impl CommandOptionBuilder {
     }
 
     pub fn choice(mut self, name: &str, value: impl Serialize) -> Self {
-        self.inner.choices.push(ApplicationCommandOptionChoice {
-            name: name.to_string(),
-            value: serde_json::to_value(value).expect("failed to serialize command option choice"),
-        });
+        self.inner
+            .choices
+            .push(ApplicationCommandOptionChoice::new(name, value));
         self
+    }
+
+    pub fn try_choice(
+        mut self,
+        name: &str,
+        value: impl Serialize,
+    ) -> Result<Self, serde_json::Error> {
+        self.inner
+            .choices
+            .push(ApplicationCommandOptionChoice::try_new(name, value)?);
+        Ok(self)
     }
 
     pub fn min_value(mut self, value: f64) -> Self {

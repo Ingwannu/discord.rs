@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.0", features = ["gateway"] }
+discordrs = { version = "1.2.1", features = ["gateway"] }
 ```
 
 ## Minimal Typed Gateway Bot

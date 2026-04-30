@@ -6,13 +6,13 @@ Voice is an optional runtime layer. It stays feature-gated so core Gateway, REST
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.0", features = ["voice"] }
+discordrs = { version = "1.2.1", features = ["voice"] }
 
 # PCM -> Opus encode/playback helpers
-discordrs = { version = "1.2.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
 
 # Experimental DAVE/MLS hook
-discordrs = { version = "1.2.0", features = ["voice", "dave"] }
+discordrs = { version = "1.2.1", features = ["voice", "dave"] }
 ```
 
 ## Surfaces

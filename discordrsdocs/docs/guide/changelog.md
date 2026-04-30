@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1
+
+- Fixed invite-code path injection in `get_invite`, `get_invite_with_options`, and `delete_invite` by validating invite codes before building authenticated REST paths.
+- Changed REST request body serialization to return `DiscordError::Json` instead of panicking when user-provided `Serialize` values cannot be represented as JSON.
+- Percent-encoded generated REST query strings so timestamps, comma-separated lists, and future string parameters cannot corrupt query boundaries.
+- Improved HTTP 429 handling by retrying repeated rate-limit responses up to a bounded limit while continuing to honor route and global rate-limit state.
+- Enabled the `cache` feature by default and added `CacheHandle::is_enabled()` so cache-backed manager behavior is explicit in default installs.
+- Added `Snowflake::try_new` and `Snowflake::is_valid` for callers that want early validation while preserving the existing permissive constructor.
+- Added fallible command-choice constructors while keeping existing command builder calls panic-free.
+- Fixed the all-target Clippy warning in the gateway outbound limiter and added regression tests for invite validation, serialization errors, and repeated rate-limit retries.
+- Updated README, USAGE, and Docsify docs for the `1.2.1` security and stability release.
+
 ## 1.2.0
 
 - Added a `voice-encode` feature with optional `opus-rs` support, including `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder` for 48 kHz stereo 20 ms PCM-to-Opus playback through the existing voice runtime.

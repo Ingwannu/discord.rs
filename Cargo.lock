@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "discordrs"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -433,6 +433,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "url",
  "zstd",
 ]
 

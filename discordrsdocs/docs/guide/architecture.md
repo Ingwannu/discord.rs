@@ -60,7 +60,7 @@ flowchart LR
 - `src/http_body.rs`: JSON/multipart request-body serialization and response-body parsing helpers
 - `src/http_paths.rs`: REST path, query-string, token-segment, and route-key helpers shared by `RestClient` and tests
 - `src/http_rate_limit.rs`: REST route/bucket/global rate-limit state and stale bucket cleanup
-- `src/cache.rs`: opt-in cache handle and manager types
+- `src/cache.rs`: cache handle and manager types; in-memory storage is enabled by default and can be disabled with `default-features = false`
 - `src/collector.rs`: opt-in async collectors
 - `src/parsers/`: raw + typed interaction parsing helpers
 - `src/helpers.rs`: high-level reply helpers for interaction flows

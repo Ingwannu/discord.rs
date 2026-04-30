@@ -27,6 +27,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
+#[derive(serde::Serialize)]
+struct InvalidJsonBody {
+    map: HashMap<Vec<u8>, String>,
+}
+
 #[derive(Debug)]
 struct PlannedResponse {
     status: StatusCode,
@@ -776,6 +781,53 @@ fn validate_token_path_segment_handles_original_marker_and_control_characters() 
     assert!(query.to_string().contains("token"));
 }
 
+#[tokio::test]
+async fn invite_helpers_reject_unsafe_codes_before_network() {
+    let client = RestClient::new_with_base_url("poc-token", 123, "http://127.0.0.1:9");
+
+    for code in [
+        "../channels/111/messages/222",
+        r"..\channels\111\messages\222",
+        "abc?with_counts=true",
+        "abc#fragment",
+        "line\nbreak",
+    ] {
+        assert!(matches!(
+            client.get_invite(code).await,
+            Err(DiscordError::Model { .. })
+        ));
+        assert!(matches!(
+            client
+                .get_invite_with_options(code, Some(true), None, None)
+                .await,
+            Err(DiscordError::Model { .. })
+        ));
+        assert!(matches!(
+            client.delete_invite(code).await,
+            Err(DiscordError::Model { .. })
+        ));
+    }
+}
+
+#[tokio::test]
+async fn typed_request_serialization_errors_return_json_errors_before_network() {
+    let client = RestClient::new_with_base_url("serialize-token", 123, "http://127.0.0.1:9");
+    let body = InvalidJsonBody {
+        map: HashMap::from([(vec![1, 2, 3], "bad".to_string())]),
+    };
+
+    match client
+        .modify_guild_member_typed(Snowflake::from("1"), Snowflake::from("2"), &body)
+        .await
+        .unwrap_err()
+    {
+        DiscordError::Json(message) => {
+            assert!(message.contains("key must be a string"));
+        }
+        other => panic!("unexpected serialization error: {other:?}"),
+    }
+}
+
 #[test]
 fn authorization_and_error_helpers_cover_query_and_fallback_cases() {
     assert!(request_uses_bot_authorization(
@@ -827,7 +879,7 @@ fn new_coverage_query_helpers_build_expected_paths() {
             before: Some("2026-04-29T00:00:00Z".to_string()),
             limit: Some(50),
         }),
-        "?before=2026-04-29T00:00:00Z&limit=50"
+        "?before=2026-04-29T00%3A00%3A00Z&limit=50"
     );
     assert_eq!(
         joined_archived_threads_query(&JoinedArchivedThreadsQuery {
@@ -2288,7 +2340,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     assert_request_basics(
             &requests[3],
             "GET",
-            "/applications/555/entitlements?user_id=777&sku_ids=900,901&limit=25&guild_id=200&exclude_ended=true&exclude_deleted=false",
+        "/applications/555/entitlements?user_id=777&sku_ids=900%2C901&limit=25&guild_id=200&exclude_ended=true&exclude_deleted=false",
             Some("Bot premium-token"),
         );
     assert_request_basics(
@@ -2492,7 +2544,7 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     assert_request_basics(
         &requests[4],
         "GET",
-        "/channels/100/threads/archived/public?before=2026-04-29T00:00:00Z&limit=50",
+        "/channels/100/threads/archived/public?before=2026-04-29T00%3A00%3A00Z&limit=50",
         Some("Bot coverage-token"),
     );
     assert_request_basics(
@@ -3504,20 +3556,16 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
 
 #[tokio::test]
 async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
-    let responses = vec![
-        PlannedResponse::text(
-            StatusCode::BAD_REQUEST,
-            r#"{"code":50035,"message":"bad payload"}"#,
-        ),
+    let mut responses = vec![PlannedResponse::text(
+        StatusCode::BAD_REQUEST,
+        r#"{"code":50035,"message":"bad payload"}"#,
+    )];
+    responses.extend((0..6).map(|_| {
         PlannedResponse::json(
             StatusCode::TOO_MANY_REQUESTS,
             json!({ "retry_after": 0.0, "global": false }),
-        ),
-        PlannedResponse::json(
-            StatusCode::TOO_MANY_REQUESTS,
-            json!({ "retry_after": 0.0, "global": false }),
-        ),
-    ];
+        )
+    }));
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("err-token", 123, base_url);
 
@@ -3556,13 +3604,50 @@ async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 7);
     assert_request_basics(
         &requests[0],
         "POST",
         "/channels/9/messages",
         Some("Bot err-token"),
     );
-    assert_request_basics(&requests[1], "POST", "/webhooks/9/token?wait=true", None);
-    assert_request_basics(&requests[2], "POST", "/webhooks/9/token?wait=true", None);
+    for request in requests.iter().skip(1) {
+        assert_request_basics(request, "POST", "/webhooks/9/token?wait=true", None);
+    }
+}
+
+#[tokio::test]
+async fn request_retries_repeated_rate_limits_until_success() {
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "retry_after": 0.0, "global": false }),
+        ),
+        PlannedResponse::json(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "retry_after": 0.0, "global": false }),
+        ),
+        PlannedResponse::json(StatusCode::OK, json!({ "ok": true })),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("retry-token", 123, base_url);
+
+    assert_eq!(
+        client
+            .request(
+                Method::GET,
+                "/channels/9",
+                Option::<&serde_json::Value>::None
+            )
+            .await
+            .unwrap()["ok"],
+        json!(true)
+    );
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    for request in requests.iter() {
+        assert_request_basics(request, "GET", "/channels/9", Some("Bot retry-token"));
+    }
 }

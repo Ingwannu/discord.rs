@@ -9,7 +9,7 @@ use crate::error::DiscordError;
 pub type Error = DiscordError;
 
 pub(crate) fn to_json_value<T: Serialize>(value: T) -> Value {
-    serde_json::to_value(value).expect("failed to serialize components v2 value")
+    serde_json::to_value(value).unwrap_or(Value::Null)
 }
 
 pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
