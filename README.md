@@ -13,7 +13,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
 - Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults and explicit `CacheConfig` overrides
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
-- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, and terminal close-code handling
+- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
 - Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
 - Experimental `dave` feature with DAVE opcode state tracking and an optional `davey`/OpenMLS-backed decryptor hook; full production MLS interop still requires live Discord transition validation
@@ -31,43 +31,43 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "1.2.1"
+discordrs = "1.2.2"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.2.1", features = ["interactions"] }
+discordrs = { version = "1.2.2", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "1.2.1", default-features = false }
+discordrs = { version = "1.2.2", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.2.1", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.2", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "1.2.1", features = ["gateway", "sharding"] }
+discordrs = { version = "1.2.2", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "1.2.1", features = ["voice"] }
+discordrs = { version = "1.2.2", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
 
 # Experimental DAVE receive/outbound media integration
-discordrs = { version = "1.2.1", features = ["voice", "dave"] }
+discordrs = { version = "1.2.2", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "1.2.1", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "1.2.2", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "1.2.1", features = ["gateway", "interactions"] }
+discordrs = { version = "1.2.2", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup

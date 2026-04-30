@@ -15,7 +15,7 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 ```
 
 ## Boot Pattern
@@ -39,4 +39,5 @@ Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGE
 - Push heavy work to background tasks.
 - Use `Context.rest()` or the cache-aware managers from `Context`.
 - `BotClient` still exists as a compatibility alias, but the docs prefer `Client`.
+- `1.2.2` fixes Gateway compression negotiation so default connections do not request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
 

@@ -1,4 +1,4 @@
-﻿# discord.rs
+# discord.rs
 
 > This page mirrors the crate README as source documentation. For the current docs-first surface, prefer the typed runtime pages for `Client`, `RestClient`, commands, cache, and collectors.
 
@@ -26,24 +26,24 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "1.2.1"
+discordrs = "1.2.2"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.2.1", features = ["interactions"] }
+discordrs = { version = "1.2.2", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "1.2.1", features = ["gateway", "interactions"] }
+discordrs = { version = "1.2.2", features = ["gateway", "interactions"] }
 
 # Voice playback/receive and experimental DAVE hook
-discordrs = { version = "1.2.1", features = ["voice"] }
-discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
-discordrs = { version = "1.2.1", features = ["voice", "dave"] }
+discordrs = { version = "1.2.2", features = ["voice"] }
+discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.2", features = ["voice", "dave"] }
 ```
 
 ## Quick Example

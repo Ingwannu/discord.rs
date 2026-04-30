@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.2
+
+- Fixed default Gateway startup so Identify no longer requests payload compression without a matching receive decoder, preventing compressed binary payloads from being read as UTF-8 JSON.
+- Fixed explicit `zlib-stream` Gateway transport compression so compressed `HELLO` frames are decoded with the same stream decoder used for subsequent dispatch payloads.
+- Added local websocket regression coverage for compressed Gateway `HELLO` and dispatch frames.
+- Updated README, USAGE, Docsify docs, and the `discordrs-dev` Codex skill guidance for the `1.2.2` Gateway compression hotfix.
+
 ## 1.2.1
 
 - Fixed invite-code path injection in `get_invite`, `get_invite_with_options`, and `delete_invite` by validating invite codes before building authenticated REST paths.

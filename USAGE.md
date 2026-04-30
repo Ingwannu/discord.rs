@@ -1,4 +1,4 @@
-﻿# discord.rs Usage
+# discord.rs Usage
 
 `discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
 
@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "1.2.1"
+discordrs = "1.2.2"
 
 # Gateway runtime
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.2.1", features = ["interactions"] }
+discordrs = { version = "1.2.2", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "1.2.1", default-features = false }
+discordrs = { version = "1.2.2", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.2.1", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.2", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "1.2.1", features = ["gateway", "sharding"] }
+discordrs = { version = "1.2.2", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "1.2.1", features = ["voice"] }
+discordrs = { version = "1.2.2", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
 
 # Experimental DAVE/MLS receive and outbound media hooks
-discordrs = { version = "1.2.1", features = ["voice", "dave"] }
+discordrs = { version = "1.2.2", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "1.2.1", features = ["gateway", "voice"] }
+discordrs = { version = "1.2.2", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "1.2.1", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "1.2.2", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -57,6 +57,7 @@ The public API was tightened to make the typed surface the default:
 - `RestClient` no longer exposes the old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands`.
 - Builder implementation submodules are private. Import from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
+- `1.2.2` fixes Gateway compression handling so default connections no longer request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
 
 Common replacements:
 

@@ -1,4 +1,4 @@
-﻿# discord.rs Usage
+# discord.rs Usage
 
 `discord.rs` is a standalone Discord bot framework for Rust with a typed Gateway runtime, typed REST surface, Components V2 builders, cache managers, and collectors.
 
@@ -9,28 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core default with cache storage
-discordrs = "1.2.1"
+discordrs = "1.2.2"
 
 # Typed gateway runtime
-discordrs = { version = "1.2.1", features = ["gateway"] }
+discordrs = { version = "1.2.2", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "1.2.1", default-features = false }
+discordrs = { version = "1.2.2", default-features = false }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "1.2.1", features = ["gateway", "collectors"] }
+discordrs = { version = "1.2.2", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.2.1", features = ["interactions"] }
+discordrs = { version = "1.2.2", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "1.2.1", features = ["voice"] }
+discordrs = { version = "1.2.2", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "1.2.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
 
 # Experimental DAVE/MLS receive and outbound media hook
-discordrs = { version = "1.2.1", features = ["voice", "dave"] }
+discordrs = { version = "1.2.2", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -85,7 +85,7 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 
 ## 5. Turn on cache or collectors when the bot needs them
 
-- `cache`: enables the in-memory cache storage used by `CacheHandle` and gateway manager reads; this feature is included by default in `1.2.1`
+- `cache`: enables the in-memory cache storage used by `CacheHandle` and gateway manager reads; this feature is included by default in `1.2.2`
 - `collectors`: enables async collectors for messages, interactions, components, and modals
 
 ## 6. Use typed Discord coverage before raw JSON
