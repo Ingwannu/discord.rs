@@ -2788,10 +2788,16 @@ mod tests {
             ws.send(WsMessage::Binary(vec![0, 15, 27, 4, 5].into()))
                 .await
                 .unwrap();
-            ws.send(WsMessage::Binary(vec![0, 16, 29, 0, 99, 6].into()))
+            ws.send(WsMessage::Binary(vec![0, 16, 29, 1].into()))
                 .await
                 .unwrap();
-            ws.send(WsMessage::Binary(vec![0, 17, 30, 0, 99, 7].into()))
+            ws.send(WsMessage::Binary(vec![0, 17, 30].into()))
+                .await
+                .unwrap();
+            ws.send(WsMessage::Binary(vec![0, 18, 29, 0, 99, 6].into()))
+                .await
+                .unwrap();
+            ws.send(WsMessage::Binary(vec![0, 19, 30, 0, 99, 7].into()))
                 .await
                 .unwrap();
             ws.send(WsMessage::Binary(vec![0, 25].into()))
