@@ -31,21 +31,21 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # core only
-discordrs = "2.0.0"
+discordrs = "2.0.1"
 
 # typed gateway runtime
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 
 # typed gateway runtime with cache storage or collectors
-discordrs = { version = "2.0.0", features = ["gateway", "cache"] }
-discordrs = { version = "2.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.1", features = ["gateway", "cache"] }
+discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 
 # voice receive, Opus decode, and DAVE hook
-discordrs = { version = "2.0.0", features = ["voice"] }
-discordrs = { version = "2.0.0", features = ["voice", "dave"] }
+discordrs = { version = "2.0.1", features = ["voice"] }
+discordrs = { version = "2.0.1", features = ["voice", "dave"] }
 ```
 
 ## Runtime Extensions

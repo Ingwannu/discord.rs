@@ -16,7 +16,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Modal builders with `RadioGroup`, `CheckboxGroup`, and `Checkbox`
 - V2 modal submission parser that preserves all V2 component types that serenity drops
 - Interaction routing helpers: `parse_interaction`, `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
-- Cache-backed manager reads with in-memory storage enabled by default and optional `CacheConfig` size limits
+- Cache-backed manager reads with in-memory storage enabled by default, optional `CacheConfig` size limits, and cheap `Arc` read APIs for hot member/message/presence paths
 - Voice runtime helpers for UDP packet receive, Opus-frame RTP send, PCM-to-Opus encode, RTP-size decrypt, Opus PCM decode, and live-validated DAVE hooks
 - OAuth2 backend helpers for authorization URLs, code exchange, and refresh-token exchange
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
@@ -27,24 +27,24 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.0.0"
+discordrs = "2.0.1"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.0", features = ["gateway", "interactions"] }
+discordrs = { version = "2.0.1", features = ["gateway", "interactions"] }
 
 # Voice playback/receive and DAVE hook
-discordrs = { version = "2.0.0", features = ["voice"] }
-discordrs = { version = "2.0.0", features = ["voice", "voice-encode"] }
-discordrs = { version = "2.0.0", features = ["voice", "dave"] }
+discordrs = { version = "2.0.1", features = ["voice"] }
+discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.1", features = ["voice", "dave"] }
 ```
 
 ## Quick Example
@@ -142,11 +142,11 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio, async-trait |
 | `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
-| `cache` | Enables the in-memory cache storage used by gateway cache managers; included in default features | tokio |
+| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
 | `collectors` | Async collectors for messages and interactions | tokio |
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
 | `voice` | Voice gateway/UDP runtime receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |

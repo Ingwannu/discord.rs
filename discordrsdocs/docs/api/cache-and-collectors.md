@@ -4,12 +4,13 @@ These layers are optional. They are meant to improve runtime ergonomics without 
 
 ## Cache
 
-The `cache` feature is enabled by default in `1.2.2`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
+The `cache` feature is enabled by default in `2.0.1`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
 
 Main types:
 
 - `CacheConfig`
 - `CacheHandle`
+- `CacheBackend`
 - `GuildManager`
 - `ChannelManager`
 - `MemberManager`
@@ -21,6 +22,10 @@ The managers prefer cache hits and fall back to `RestClient` fetches.
 `ClientBuilder::cache_config(...)` and `CacheHandle::with_config(...)` let long-running bots tune message, presence, and member storage by size and TTL. Size limits are enforced on insert, and TTL limits are purged on insert, explicit `purge_expired()`, and cache reads for the affected entity type. Use `CacheConfig::unbounded()` only when retaining all cached gateway data is intentional.
 
 Use `CacheHandle::is_enabled()` when reusable code needs to detect whether it was compiled with real cache storage.
+
+Hot member, message, and presence reads have `Arc` variants (`member_arc`, `message_arc`, `presence_arc`, and manager `cached_arc` helpers) for callers that want to avoid deep cloning cached payloads. The owned-return methods remain available and clone from the same in-memory entries.
+
+`CacheBackend` is the async extension trait for external member/message/presence stores. `CacheHandle` implements it for the default in-memory backend, and external stores can implement the same `Arc`-returning read shape for distributed bot deployments.
 
 ```rust
 use std::time::Duration;

@@ -50,39 +50,27 @@ pub mod option_type {
 /// Typed Discord API object for `CommandDefinition`.
 pub struct CommandDefinition {
     #[serde(rename = "type")]
-    /// Discord API payload field `kind`.
     pub kind: u8,
-    /// Discord API payload field `name`.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `name_localizations`.
     pub name_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
-    /// Discord API payload field `description`.
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `description_localizations`.
     pub description_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
-    /// Discord API payload field `options`.
     pub options: Vec<ApplicationCommandOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `default_member_permissions`.
     pub default_member_permissions: Option<PermissionsBitField>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `dm_permission`.
     pub dm_permission: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `integration_types`.
     pub integration_types: Option<Vec<ApplicationIntegrationType>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `contexts`.
     pub contexts: Option<Vec<InteractionContextType>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `handler`.
     pub handler: Option<ApplicationCommandHandlerType>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `nsfw`.
     pub nsfw: Option<bool>,
 }
 
@@ -116,7 +104,7 @@ pub struct CommandOptionBuilder {
 }
 
 impl CommandOptionBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(kind: u8, name: &str, description: &str) -> Self {
         Self {
             inner: ApplicationCommandOption {
@@ -128,19 +116,16 @@ impl CommandOptionBuilder {
         }
     }
 
-    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.inner.required = Some(required);
         self
     }
 
-    /// Runs the `autocomplete` operation.
     pub fn autocomplete(mut self, enabled: bool) -> Self {
         self.inner.autocomplete = Some(enabled);
         self
     }
 
-    /// Runs the `choice` operation.
     pub fn choice(mut self, name: &str, value: impl Serialize) -> Self {
         self.inner
             .choices
@@ -148,7 +133,6 @@ impl CommandOptionBuilder {
         self
     }
 
-    /// Runs the `try_choice` operation.
     pub fn try_choice(
         mut self,
         name: &str,
@@ -160,92 +144,86 @@ impl CommandOptionBuilder {
         Ok(self)
     }
 
-    /// Runs the `min_value` operation.
     pub fn min_value(mut self, value: f64) -> Self {
         self.inner.min_value = Some(value);
         self
     }
 
-    /// Runs the `max_value` operation.
     pub fn max_value(mut self, value: f64) -> Self {
         self.inner.max_value = Some(value);
         self
     }
 
-    /// Runs the `min_length` operation.
     pub fn min_length(mut self, value: u16) -> Self {
         self.inner.min_length = Some(value);
         self
     }
 
-    /// Runs the `max_length` operation.
     pub fn max_length(mut self, value: u16) -> Self {
         self.inner.max_length = Some(value);
         self
     }
 
-    /// Runs the `option` operation.
     pub fn option(mut self, option: CommandOptionBuilder) -> Self {
         self.inner.options.push(option.build());
         self
     }
 
-    /// Creates or returns `subcommand` data.
+    /// Creates a `subcommand` value.
     pub fn subcommand(name: &str, description: &str) -> Self {
         Self::new(option_type::SUB_COMMAND, name, description)
     }
 
-    /// Creates or returns `subcommand_group` data.
+    /// Creates a `subcommand_group` value.
     pub fn subcommand_group(name: &str, description: &str) -> Self {
         Self::new(option_type::SUB_COMMAND_GROUP, name, description)
     }
 
-    /// Creates or returns `string` data.
+    /// Creates a `string` value.
     pub fn string(name: &str, description: &str) -> Self {
         Self::new(option_type::STRING, name, description)
     }
 
-    /// Creates or returns `integer` data.
+    /// Creates a `integer` value.
     pub fn integer(name: &str, description: &str) -> Self {
         Self::new(option_type::INTEGER, name, description)
     }
 
-    /// Creates or returns `boolean` data.
+    /// Creates a `boolean` value.
     pub fn boolean(name: &str, description: &str) -> Self {
         Self::new(option_type::BOOLEAN, name, description)
     }
 
-    /// Creates or returns `user` data.
+    /// Creates a `user` value.
     pub fn user(name: &str, description: &str) -> Self {
         Self::new(option_type::USER, name, description)
     }
 
-    /// Creates or returns `channel` data.
+    /// Creates a `channel` value.
     pub fn channel(name: &str, description: &str) -> Self {
         Self::new(option_type::CHANNEL, name, description)
     }
 
-    /// Creates or returns `role` data.
+    /// Creates a `role` value.
     pub fn role(name: &str, description: &str) -> Self {
         Self::new(option_type::ROLE, name, description)
     }
 
-    /// Creates or returns `mentionable` data.
+    /// Creates a `mentionable` value.
     pub fn mentionable(name: &str, description: &str) -> Self {
         Self::new(option_type::MENTIONABLE, name, description)
     }
 
-    /// Creates or returns `number` data.
+    /// Creates a `number` value.
     pub fn number(name: &str, description: &str) -> Self {
         Self::new(option_type::NUMBER, name, description)
     }
 
-    /// Creates or returns `attachment` data.
+    /// Creates a `attachment` value.
     pub fn attachment(name: &str, description: &str) -> Self {
         Self::new(option_type::ATTACHMENT, name, description)
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> ApplicationCommandOption {
         self.inner
     }
@@ -258,7 +236,7 @@ pub struct SlashCommandBuilder {
 }
 
 impl SlashCommandBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(name: &str, description: &str) -> Self {
         Self {
             inner: CommandDefinition {
@@ -270,56 +248,46 @@ impl SlashCommandBuilder {
         }
     }
 
-    /// Runs the `option` operation.
     pub fn option(mut self, option: CommandOptionBuilder) -> Self {
         self.inner.options.push(option.build());
         self
     }
 
-    /// Runs the `string_option` operation.
     pub fn string_option(self, name: &str, description: &str, required: bool) -> Self {
         self.option(CommandOptionBuilder::string(name, description).required(required))
     }
 
-    /// Runs the `integer_option` operation.
     pub fn integer_option(self, name: &str, description: &str, required: bool) -> Self {
         self.option(CommandOptionBuilder::integer(name, description).required(required))
     }
 
-    /// Runs the `boolean_option` operation.
     pub fn boolean_option(self, name: &str, description: &str, required: bool) -> Self {
         self.option(CommandOptionBuilder::boolean(name, description).required(required))
     }
 
-    /// Runs the `user_option` operation.
     pub fn user_option(self, name: &str, description: &str, required: bool) -> Self {
         self.option(CommandOptionBuilder::user(name, description).required(required))
     }
 
-    /// Runs the `subcommand` operation.
     pub fn subcommand(self, option: CommandOptionBuilder) -> Self {
         self.option(option)
     }
 
-    /// Runs the `default_member_permissions` operation.
     pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
 
-    /// Runs the `dm_permission` operation.
     pub fn dm_permission(mut self, enabled: bool) -> Self {
         self.inner.dm_permission = Some(enabled);
         self
     }
 
-    /// Runs the `nsfw` operation.
     pub fn nsfw(mut self, enabled: bool) -> Self {
         self.inner.nsfw = Some(enabled);
         self
     }
 
-    /// Runs the `integration_types` operation.
     pub fn integration_types<I>(mut self, integration_types: I) -> Self
     where
         I: IntoIterator<Item = ApplicationIntegrationType>,
@@ -328,7 +296,6 @@ impl SlashCommandBuilder {
         self
     }
 
-    /// Runs the `contexts` operation.
     pub fn contexts<I>(mut self, contexts: I) -> Self
     where
         I: IntoIterator<Item = InteractionContextType>,
@@ -337,7 +304,6 @@ impl SlashCommandBuilder {
         self
     }
 
-    /// Runs the `name_localization` operation.
     pub fn name_localization(mut self, locale: &str, name: &str) -> Self {
         self.inner
             .name_localizations
@@ -346,7 +312,6 @@ impl SlashCommandBuilder {
         self
     }
 
-    /// Runs the `description_localization` operation.
     pub fn description_localization(mut self, locale: &str, description: &str) -> Self {
         self.inner
             .description_localizations
@@ -355,13 +320,11 @@ impl SlashCommandBuilder {
         self
     }
 
-    /// Runs the `handler` operation.
     pub fn handler(mut self, handler: ApplicationCommandHandlerType) -> Self {
         self.inner.handler = Some(handler);
         self
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
@@ -374,7 +337,7 @@ pub struct PrimaryEntryPointCommandBuilder {
 }
 
 impl PrimaryEntryPointCommandBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(name: &str, description: &str) -> Self {
         Self {
             inner: CommandDefinition {
@@ -386,7 +349,6 @@ impl PrimaryEntryPointCommandBuilder {
         }
     }
 
-    /// Runs the `integration_types` operation.
     pub fn integration_types<I>(mut self, integration_types: I) -> Self
     where
         I: IntoIterator<Item = ApplicationIntegrationType>,
@@ -395,7 +357,6 @@ impl PrimaryEntryPointCommandBuilder {
         self
     }
 
-    /// Runs the `contexts` operation.
     pub fn contexts<I>(mut self, contexts: I) -> Self
     where
         I: IntoIterator<Item = InteractionContextType>,
@@ -404,7 +365,6 @@ impl PrimaryEntryPointCommandBuilder {
         self
     }
 
-    /// Runs the `name_localization` operation.
     pub fn name_localization(mut self, locale: &str, name: &str) -> Self {
         self.inner
             .name_localizations
@@ -413,7 +373,6 @@ impl PrimaryEntryPointCommandBuilder {
         self
     }
 
-    /// Runs the `description_localization` operation.
     pub fn description_localization(mut self, locale: &str, description: &str) -> Self {
         self.inner
             .description_localizations
@@ -422,13 +381,11 @@ impl PrimaryEntryPointCommandBuilder {
         self
     }
 
-    /// Runs the `handler` operation.
     pub fn handler(mut self, handler: ApplicationCommandHandlerType) -> Self {
         self.inner.handler = Some(handler);
         self
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
@@ -441,7 +398,7 @@ pub struct UserCommandBuilder {
 }
 
 impl UserCommandBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(name: &str) -> Self {
         Self {
             inner: CommandDefinition {
@@ -452,19 +409,16 @@ impl UserCommandBuilder {
         }
     }
 
-    /// Runs the `default_member_permissions` operation.
     pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
 
-    /// Runs the `dm_permission` operation.
     pub fn dm_permission(mut self, enabled: bool) -> Self {
         self.inner.dm_permission = Some(enabled);
         self
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
@@ -477,7 +431,7 @@ pub struct MessageCommandBuilder {
 }
 
 impl MessageCommandBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(name: &str) -> Self {
         Self {
             inner: CommandDefinition {
@@ -488,19 +442,16 @@ impl MessageCommandBuilder {
         }
     }
 
-    /// Runs the `default_member_permissions` operation.
     pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
 
-    /// Runs the `dm_permission` operation.
     pub fn dm_permission(mut self, enabled: bool) -> Self {
         self.inner.dm_permission = Some(enabled);
         self
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> CommandDefinition {
         self.inner
     }

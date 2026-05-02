@@ -8,14 +8,13 @@ pub struct HttpError {
 }
 
 impl HttpError {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(err: &reqwest::Error) -> Self {
         Self {
             message: err.to_string(),
         }
     }
 
-    /// Runs the `message` operation.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -80,7 +79,7 @@ pub enum DiscordError {
 }
 
 impl DiscordError {
-    /// Creates or returns `api` data.
+    /// Creates a `api` value.
     pub fn api(status: u16, code: Option<u64>, message: impl Into<String>) -> Self {
         Self::Api {
             status,
@@ -89,14 +88,14 @@ impl DiscordError {
         }
     }
 
-    /// Creates or returns `model` data.
+    /// Creates a `model` value.
     pub fn model(message: impl Into<String>) -> Self {
         Self::Model {
             message: message.into(),
         }
     }
 
-    /// Creates or returns `rate_limit` data.
+    /// Creates a `rate_limit` value.
     pub fn rate_limit(route: impl Into<String>, retry_after: f64) -> Self {
         Self::RateLimit {
             route: route.into(),
@@ -104,21 +103,21 @@ impl DiscordError {
         }
     }
 
-    /// Creates or returns `gateway` data.
+    /// Creates a `gateway` value.
     pub fn gateway(message: impl Into<String>) -> Self {
         Self::Gateway {
             message: message.into(),
         }
     }
 
-    /// Creates or returns `voice` data.
+    /// Creates a `voice` value.
     pub fn voice(message: impl Into<String>) -> Self {
         Self::Voice {
             message: message.into(),
         }
     }
 
-    /// Creates or returns `cache` data.
+    /// Creates a `cache` value.
     pub fn cache(message: impl Into<String>) -> Self {
         Self::Cache {
             message: message.into(),

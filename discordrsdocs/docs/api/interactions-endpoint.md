@@ -1,4 +1,4 @@
-﻿# Interactions Endpoint API
+# Interactions Endpoint API
 
 Use this mode when Discord sends interaction callbacks to your HTTP server.
 
@@ -6,13 +6,14 @@ Use this mode when Discord sends interaction callbacks to your HTTP server.
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 ```
 
 ## Capabilities
 
 - Ed25519 request signature verification
 - Axum routing helpers
+- 64 KiB request body cap on generated `/interactions` routes
 - Typed interaction parsing
 - Structured response encoding (`Pong`, message, deferred, modal, update)
 - Optional `AppFramework` routing for commands, components, and modals

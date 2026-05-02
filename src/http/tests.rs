@@ -3,13 +3,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::body::{header_string, parse_body_value};
+use super::client_config::default_http_client;
 use super::paths::{
     archived_threads_query, audit_log_query, configured_application_id, current_user_guilds_query,
     execute_webhook_path, followup_webhook_path, get_guild_query, global_commands_path,
     guild_bans_query, guild_members_query, interaction_callback_path, invite_query,
     joined_archived_threads_query, poll_answer_voters_query, rate_limit_route_key,
     request_uses_bot_authorization, search_guild_members_query, subscription_query,
-    thread_member_query, validate_token_path_segment,
+    thread_member_query, validate_snowflake_path_segment, validate_token_path_segment,
 };
 use super::rate_limit::RateLimitState;
 use super::{
@@ -884,12 +885,32 @@ fn parse_helpers_handle_empty_invalid_and_string_body_shapes() {
 fn validate_token_path_segment_handles_original_marker_and_control_characters() {
     validate_token_path_segment("message_id", "@original", true).unwrap();
     validate_token_path_segment("token", "safe-token", false).unwrap();
+    validate_token_path_segment("token", "abc.DEF_123-456~xyz", false).unwrap();
 
     let backslash = validate_token_path_segment("token", r"bad\token", false).unwrap_err();
     assert!(backslash.to_string().contains("token"));
 
     let query = validate_token_path_segment("token", "bad?token", false).unwrap_err();
     assert!(query.to_string().contains("token"));
+
+    let marker = validate_token_path_segment("token", "@original", false).unwrap_err();
+    assert!(marker.to_string().contains("unsafe"));
+
+    let control = validate_token_path_segment("token", "bad\ntoken", false).unwrap_err();
+    assert!(control.to_string().contains("unsafe"));
+}
+
+#[test]
+fn validate_snowflake_path_segment_rejects_non_digit_ids() {
+    validate_snowflake_path_segment("channel_id", &Snowflake::from("123")).unwrap();
+
+    let slash = validate_snowflake_path_segment("channel_id", &Snowflake::from("123/456"))
+        .expect_err("slash must not be accepted in a snowflake path segment");
+    assert!(slash.to_string().contains("valid Discord snowflake"));
+
+    let query = validate_snowflake_path_segment("channel_id", &Snowflake::from("123?after=1"))
+        .expect_err("query separators must not be accepted in snowflake path segments");
+    assert!(query.to_string().contains("ASCII digits"));
 }
 
 #[tokio::test]
@@ -1946,6 +1967,291 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
 }
 
 #[tokio::test]
+async fn raw_auto_moderation_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!([auto_moderation_rule_payload("7")])),
+        PlannedResponse::json(StatusCode::OK, auto_moderation_rule_payload("8")),
+        PlannedResponse::json(StatusCode::OK, auto_moderation_rule_payload("9")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("automod-token", 555, base_url);
+    let body = json!({ "name": "block bad words" });
+
+    assert_eq!(
+        client
+            .get_auto_moderation_rules(Snowflake::from("200"))
+            .await
+            .unwrap()[0]["id"],
+        json!("7")
+    );
+    assert_eq!(
+        client
+            .create_auto_moderation_rule(Snowflake::from("200"), &body)
+            .await
+            .unwrap()["id"],
+        json!("8")
+    );
+    assert_eq!(
+        client
+            .modify_auto_moderation_rule(Snowflake::from("200"), Snowflake::from("9"), &body)
+            .await
+            .unwrap()["id"],
+        json!("9")
+    );
+    client
+        .delete_auto_moderation_rule(Snowflake::from("200"), Snowflake::from("9"))
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let expected = [
+        ("GET", "/guilds/200/auto-moderation/rules"),
+        ("POST", "/guilds/200/auto-moderation/rules"),
+        ("PATCH", "/guilds/200/auto-moderation/rules/9"),
+        ("DELETE", "/guilds/200/auto-moderation/rules/9"),
+    ];
+    assert_eq!(requests.len(), expected.len());
+    for (request, (method, path)) in requests.iter().zip(expected) {
+        assert_request_basics(request, method, path, Some("Bot automod-token"));
+    }
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{ "reason": "spam", "user": user_payload("3", "banned") }]),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({ "reason": "abuse", "user": user_payload("4", "banned-one") }),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "application_commands": [],
+                "audit_log_entries": [],
+                "auto_moderation_rules": [],
+                "guild_scheduled_events": [],
+                "integrations": [],
+                "threads": [],
+                "users": [],
+                "webhooks": []
+            }),
+        ),
+        PlannedResponse::json(StatusCode::OK, json!([role_payload("9", "admin")])),
+        PlannedResponse::json(StatusCode::OK, json!([role_payload("10", "mod")])),
+        PlannedResponse::json(StatusCode::OK, json!([emoji_payload("1", "guild_raw")])),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("1", "guild_raw")),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("2", "guild_create")),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("2", "guild_edit")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({ "items": [emoji_payload("3", "app_raw")] }),
+        ),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("3", "app_raw")),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("4", "app_create")),
+        PlannedResponse::json(StatusCode::OK, emoji_payload("4", "app_edit")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("raw-admin-token", 555, base_url);
+    let emoji_body = json!({ "name": "emoji", "image": "data:image/png;base64,AAAA" });
+
+    assert_eq!(
+        client
+            .get_guild_bans(Snowflake::from("200"), Some(2), Some(Snowflake::from("9")))
+            .await
+            .unwrap()[0]
+            .user
+            .as_ref()
+            .unwrap()
+            .username,
+        "banned"
+    );
+    assert_eq!(
+        client
+            .get_guild_ban(Snowflake::from("200"), Snowflake::from("4"))
+            .await
+            .unwrap()
+            .reason
+            .as_deref(),
+        Some("abuse")
+    );
+    client
+        .create_guild_ban(
+            Snowflake::from("200"),
+            Snowflake::from("4"),
+            &json!({ "delete_message_seconds": 60 }),
+        )
+        .await
+        .unwrap();
+    client
+        .create_guild_ban_typed(
+            Snowflake::from("200"),
+            Snowflake::from("5"),
+            &CreateGuildBan {
+                delete_message_days: None,
+                delete_message_seconds: Some(120),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .remove_guild_ban(Snowflake::from("200"), Snowflake::from("4"))
+        .await
+        .unwrap();
+    client
+        .modify_guild_member(
+            Snowflake::from("200"),
+            Snowflake::from("6"),
+            &json!({ "nick": "raw" }),
+        )
+        .await
+        .unwrap();
+    client
+        .modify_guild_member_typed(
+            Snowflake::from("200"),
+            Snowflake::from("7"),
+            &ModifyGuildMember {
+                nick: Some(Some("typed".to_string())),
+                ..ModifyGuildMember::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(client
+        .get_guild_audit_log(Snowflake::from("200"), None, None, None, None)
+        .await
+        .unwrap()["audit_log_entries"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        client
+            .modify_guild_role_positions(
+                Snowflake::from("200"),
+                &json!([{ "id": "9", "position": 1 }]),
+            )
+            .await
+            .unwrap()[0]
+            .name,
+        "admin"
+    );
+    assert_eq!(
+        client
+            .modify_guild_role_positions_typed(
+                Snowflake::from("200"),
+                &[ModifyGuildRolePosition {
+                    id: Snowflake::from("10"),
+                    position: Some(Some(2)),
+                }],
+            )
+            .await
+            .unwrap()[0]
+            .name,
+        "mod"
+    );
+    assert_eq!(
+        client
+            .get_guild_emojis(Snowflake::from("200"))
+            .await
+            .unwrap()[0]["name"],
+        json!("guild_raw")
+    );
+    assert_eq!(
+        client
+            .get_guild_emoji(Snowflake::from("200"), Snowflake::from("1"))
+            .await
+            .unwrap()["id"],
+        json!("1")
+    );
+    assert_eq!(
+        client
+            .create_guild_emoji(Snowflake::from("200"), &emoji_body)
+            .await
+            .unwrap()["name"],
+        json!("guild_create")
+    );
+    assert_eq!(
+        client
+            .modify_guild_emoji(Snowflake::from("200"), Snowflake::from("2"), &emoji_body)
+            .await
+            .unwrap()["name"],
+        json!("guild_edit")
+    );
+    client
+        .delete_guild_emoji(Snowflake::from("200"), Snowflake::from("2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client.get_application_emojis().await.unwrap()[0]["name"],
+        json!("app_raw")
+    );
+    assert_eq!(
+        client
+            .get_application_emoji(Snowflake::from("3"))
+            .await
+            .unwrap()["id"],
+        json!("3")
+    );
+    assert_eq!(
+        client.create_application_emoji(&emoji_body).await.unwrap()["name"],
+        json!("app_create")
+    );
+    assert_eq!(
+        client
+            .modify_application_emoji(Snowflake::from("4"), &emoji_body)
+            .await
+            .unwrap()["name"],
+        json!("app_edit")
+    );
+    client
+        .delete_application_emoji(Snowflake::from("4"))
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let expected = [
+        ("GET", "/guilds/200/bans?limit=2&before=9"),
+        ("GET", "/guilds/200/bans/4"),
+        ("PUT", "/guilds/200/bans/4"),
+        ("PUT", "/guilds/200/bans/5"),
+        ("DELETE", "/guilds/200/bans/4"),
+        ("PATCH", "/guilds/200/members/6"),
+        ("PATCH", "/guilds/200/members/7"),
+        ("GET", "/guilds/200/audit-logs"),
+        ("PATCH", "/guilds/200/roles"),
+        ("PATCH", "/guilds/200/roles"),
+        ("GET", "/guilds/200/emojis"),
+        ("GET", "/guilds/200/emojis/1"),
+        ("POST", "/guilds/200/emojis"),
+        ("PATCH", "/guilds/200/emojis/2"),
+        ("DELETE", "/guilds/200/emojis/2"),
+        ("GET", "/applications/555/emojis"),
+        ("GET", "/applications/555/emojis/3"),
+        ("POST", "/applications/555/emojis"),
+        ("PATCH", "/applications/555/emojis/4"),
+        ("DELETE", "/applications/555/emojis/4"),
+    ];
+    assert_eq!(requests.len(), expected.len());
+    for (request, (method, path)) in requests.iter().zip(expected) {
+        assert_request_basics(request, method, path, Some("Bot raw-admin-token"));
+    }
+}
+
+#[tokio::test]
 async fn typed_emoji_wrappers_hit_expected_paths() {
     let responses = vec![
         PlannedResponse::json(StatusCode::OK, json!([emoji_payload("1", "guild_one")])),
@@ -2336,6 +2642,17 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
         }
     });
     let responses = vec![
+        PlannedResponse::json(StatusCode::OK, user_payload("555", "current")),
+        PlannedResponse::json(StatusCode::OK, user_payload("556", "target")),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{ "id": "200", "name": "Guild", "icon": null, "banner": null, "owner": false, "permissions": "8", "features": [], "approximate_member_count": 10, "approximate_presence_count": 3 }]),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{ "id": "201", "name": "Guild Page", "icon": null, "banner": null, "owner": true, "permissions": "8", "features": [] }]),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(
             StatusCode::OK,
             json!([{
@@ -2362,6 +2679,23 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
         .platform_name("Example")
         .platform_username("user-42")
         .metadata([("level", "7")]);
+
+    assert_eq!(client.get_current_user().await.unwrap().username, "current");
+    assert_eq!(client.get_user("556").await.unwrap().username, "target");
+    assert_eq!(client.get_current_user_guilds().await.unwrap().len(), 1);
+    assert_eq!(
+        client
+            .get_current_user_guilds_with_query(&CurrentUserGuildsQuery {
+                before: None,
+                after: Some(Snowflake::from("200")),
+                limit: Some(1),
+                with_counts: Some(true),
+            })
+            .await
+            .unwrap()[0]["name"],
+        json!("Guild Page")
+    );
+    client.leave_guild("200").await.unwrap();
 
     let connections = client
         .get_current_user_connections("oauth.access")
@@ -2402,33 +2736,53 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 10);
+    assert_request_basics(&requests[0], "GET", "/users/@me", Some("Bot bot-token"));
+    assert_request_basics(&requests[1], "GET", "/users/556", Some("Bot bot-token"));
     assert_request_basics(
-        &requests[0],
+        &requests[2],
+        "GET",
+        "/users/@me/guilds",
+        Some("Bot bot-token"),
+    );
+    assert_request_basics(
+        &requests[3],
+        "GET",
+        "/users/@me/guilds?after=200&limit=1&with_counts=true",
+        Some("Bot bot-token"),
+    );
+    assert_request_basics(
+        &requests[4],
+        "DELETE",
+        "/users/@me/guilds/200",
+        Some("Bot bot-token"),
+    );
+    assert_request_basics(
+        &requests[5],
         "GET",
         "/users/@me/connections",
         Some("Bearer oauth.access"),
     );
     assert_request_basics(
-        &requests[1],
+        &requests[6],
         "GET",
         "/users/@me/guilds/200/member",
         Some("Bearer oauth.access"),
     );
     assert_request_basics(
-        &requests[2],
+        &requests[7],
         "GET",
         "/users/@me/applications/555/role-connection",
         Some("Bearer oauth.access"),
     );
     assert_request_basics(
-        &requests[3],
+        &requests[8],
         "PUT",
         "/users/@me/applications/555/role-connection",
         Some("Bearer oauth.access"),
     );
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&requests[8].body).unwrap(),
         json!({
             "platform_name": "Example",
             "platform_username": "user-42",
@@ -2437,7 +2791,7 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
             }
         })
     );
-    assert_request_basics(&requests[4], "PATCH", "/users/@me", Some("Bot bot-token"));
+    assert_request_basics(&requests[9], "PATCH", "/users/@me", Some("Bot bot-token"));
 }
 
 #[tokio::test]
@@ -2712,6 +3066,271 @@ async fn legacy_pin_template_and_nick_wrappers_hit_expected_paths() {
         "/guilds/200/members/@me/nick",
         Some("Bot legacy-token"),
     );
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
+    let thread_list_payload = || {
+        json!({
+            "threads": [channel_payload("900", 11, Some("thread"))],
+            "members": [{
+                "id": "900",
+                "user_id": "42",
+                "join_timestamp": "2024-01-01T00:00:00.000000+00:00",
+                "flags": 0
+            }],
+            "has_more": false
+        })
+    };
+    let thread_member_payload = || {
+        json!({
+            "id": "900",
+            "user_id": "42",
+            "join_timestamp": "2024-01-01T00:00:00.000000+00:00",
+            "flags": 0
+        })
+    };
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([message_payload("5", "100", "pinned")]),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::OK,
+            channel_payload("900", 11, Some("from-message")),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            channel_payload("901", 11, Some("standalone")),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, thread_member_payload()),
+        PlannedResponse::json(StatusCode::OK, json!([thread_member_payload()])),
+        PlannedResponse::json(StatusCode::OK, json!([thread_member_payload()])),
+        PlannedResponse::json(StatusCode::OK, thread_list_payload()),
+        PlannedResponse::json(StatusCode::OK, thread_list_payload()),
+        PlannedResponse::json(StatusCode::OK, thread_list_payload()),
+        PlannedResponse::json(StatusCode::OK, thread_list_payload()),
+        PlannedResponse::json(StatusCode::OK, thread_list_payload()),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("thread-token", 555, base_url);
+
+    assert_eq!(
+        client
+            .get_pinned_messages(Snowflake::from("100"))
+            .await
+            .unwrap()[0]
+            .content,
+        "pinned"
+    );
+    client
+        .set_voice_channel_status(
+            Snowflake::from("100"),
+            &SetVoiceChannelStatus {
+                status: Some("focus".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .trigger_typing_indicator(Snowflake::from("100"))
+        .await
+        .unwrap();
+    client
+        .edit_channel_permissions(
+            Snowflake::from("100"),
+            Snowflake::from("200"),
+            &json!({ "type": 0, "allow": "8" }),
+        )
+        .await
+        .unwrap();
+    client
+        .edit_channel_permissions_typed(
+            Snowflake::from("100"),
+            Snowflake::from("201"),
+            &EditChannelPermission {
+                kind: 1,
+                allow: Some(PermissionsBitField(8)),
+                deny: None,
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .delete_channel_permission(Snowflake::from("100"), Snowflake::from("202"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .create_thread_from_message(
+                Snowflake::from("100"),
+                Snowflake::from("5"),
+                &json!({ "name": "from-message" }),
+            )
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "900"
+    );
+    assert_eq!(
+        client
+            .create_thread(Snowflake::from("100"), &json!({ "name": "standalone" }))
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "901"
+    );
+    client.join_thread(Snowflake::from("900")).await.unwrap();
+    client
+        .add_thread_member(Snowflake::from("900"), Snowflake::from("42"))
+        .await
+        .unwrap();
+    client.leave_thread(Snowflake::from("900")).await.unwrap();
+    client
+        .remove_thread_member(Snowflake::from("900"), Snowflake::from("42"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .get_thread_member(Snowflake::from("900"), Snowflake::from("42"), Some(true))
+            .await
+            .unwrap()
+            .user_id
+            .unwrap()
+            .as_str(),
+        "42"
+    );
+    assert_eq!(
+        client
+            .get_thread_members(Snowflake::from("900"))
+            .await
+            .unwrap()[0]
+            .flags,
+        0
+    );
+    assert_eq!(
+        client
+            .list_thread_members(
+                Snowflake::from("900"),
+                &ThreadMemberQuery {
+                    with_member: Some(false),
+                    after: Some(Snowflake::from("41")),
+                    limit: Some(1),
+                },
+            )
+            .await
+            .unwrap()[0]
+            .id
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "900"
+    );
+    assert!(!client
+        .get_public_archived_threads(Snowflake::from("100"), Some(2))
+        .await
+        .unwrap()["has_more"]
+        .as_bool()
+        .unwrap());
+    assert!(
+        !client
+            .list_public_archived_threads(
+                Snowflake::from("100"),
+                &ArchivedThreadsQuery {
+                    before: Some("abc".to_string()),
+                    limit: Some(3),
+                },
+            )
+            .await
+            .unwrap()
+            .has_more
+    );
+    assert!(
+        !client
+            .list_private_archived_threads(
+                Snowflake::from("100"),
+                &ArchivedThreadsQuery {
+                    before: Some("def".to_string()),
+                    limit: Some(4),
+                },
+            )
+            .await
+            .unwrap()
+            .has_more
+    );
+    assert!(
+        !client
+            .list_joined_private_archived_threads(
+                Snowflake::from("100"),
+                &JoinedArchivedThreadsQuery {
+                    before: Some(Snowflake::from("899")),
+                    limit: Some(5),
+                },
+            )
+            .await
+            .unwrap()
+            .has_more
+    );
+    assert!(
+        !client
+            .get_active_guild_threads(Snowflake::from("300"))
+            .await
+            .unwrap()
+            .has_more
+    );
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let expected = [
+        ("GET", "/channels/100/pins"),
+        ("PUT", "/channels/100/voice-status"),
+        ("POST", "/channels/100/typing"),
+        ("PUT", "/channels/100/permissions/200"),
+        ("PUT", "/channels/100/permissions/201"),
+        ("DELETE", "/channels/100/permissions/202"),
+        ("POST", "/channels/100/messages/5/threads"),
+        ("POST", "/channels/100/threads"),
+        ("PUT", "/channels/900/thread-members/@me"),
+        ("PUT", "/channels/900/thread-members/42"),
+        ("DELETE", "/channels/900/thread-members/@me"),
+        ("DELETE", "/channels/900/thread-members/42"),
+        ("GET", "/channels/900/thread-members/42?with_member=true"),
+        ("GET", "/channels/900/thread-members"),
+        (
+            "GET",
+            "/channels/900/thread-members?with_member=false&after=41&limit=1",
+        ),
+        ("GET", "/channels/100/threads/archived/public?limit=2"),
+        (
+            "GET",
+            "/channels/100/threads/archived/public?before=abc&limit=3",
+        ),
+        (
+            "GET",
+            "/channels/100/threads/archived/private?before=def&limit=4",
+        ),
+        (
+            "GET",
+            "/channels/100/users/@me/threads/archived/private?before=899&limit=5",
+        ),
+        ("GET", "/guilds/300/threads/active"),
+    ];
+    assert_eq!(requests.len(), expected.len());
+    for (request, (method, path)) in requests.iter().zip(expected) {
+        assert_request_basics(request, method, path, Some("Bot thread-token"));
+    }
 }
 
 #[tokio::test]
@@ -3560,6 +4179,72 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
 }
 
 #[tokio::test]
+async fn raw_sticker_wrappers_preserve_multipart_and_json_bodies() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, sticker_payload("13")),
+        PlannedResponse::json(StatusCode::OK, sticker_payload("13")),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("admin-token", 555, base_url);
+    let body = json!({ "name": "name", "description": "desc", "tags": "tag" });
+
+    assert_eq!(
+        client
+            .create_guild_sticker(
+                Snowflake::from("200"),
+                &body,
+                sample_file("sticker.png", "png"),
+            )
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "13"
+    );
+    assert_eq!(
+        client
+            .modify_guild_sticker(Snowflake::from("200"), Snowflake::from("13"), &body)
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "13"
+    );
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/guilds/200/stickers");
+    assert_eq!(requests[0].header("authorization"), Some("Bot admin-token"));
+    assert_eq!(
+        requests[0].header("user-agent"),
+        Some(concat!(
+            "DiscordBot (discordrs, ",
+            env!("CARGO_PKG_VERSION"),
+            ")"
+        ))
+    );
+    assert!(requests[0]
+        .header("content-type")
+        .is_some_and(|value| value.starts_with("multipart/form-data; boundary=")));
+    assert!(requests[0].body.contains(r#"name="name""#));
+    assert!(requests[0].body.contains(r#"name="description""#));
+    assert!(requests[0].body.contains(r#"name="tags""#));
+    assert!(requests[0].body.contains(r#"name="file""#));
+    assert_request_basics(
+        &requests[1],
+        "PATCH",
+        "/guilds/200/stickers/13",
+        Some("Bot admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[1].body).unwrap(),
+        body
+    );
+}
+
+#[tokio::test]
 async fn scheduled_event_wrappers_return_typed_models() {
     let responses = vec![
         PlannedResponse::json(StatusCode::OK, json!([scheduled_event_payload("1")])),
@@ -3567,6 +4252,8 @@ async fn scheduled_event_wrappers_return_typed_models() {
         PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
         PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
         PlannedResponse::json(StatusCode::OK, scheduled_event_payload("2")),
+        PlannedResponse::json(StatusCode::OK, scheduled_event_payload("3")),
+        PlannedResponse::json(StatusCode::OK, scheduled_event_payload("3")),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(
             StatusCode::OK,
@@ -3575,6 +4262,18 @@ async fn scheduled_event_wrappers_return_typed_models() {
                 "user": {
                     "id": "500",
                     "username": "attendee",
+                    "discriminator": "0000",
+                    "bot": false
+                }
+            }]),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{
+                "guild_scheduled_event_id": "2",
+                "user": {
+                    "id": "501",
+                    "username": "standby",
                     "discriminator": "0000",
                     "bot": false
                 }
@@ -3627,6 +4326,24 @@ async fn scheduled_event_wrappers_return_typed_models() {
             .user_count,
         Some(5)
     );
+    assert_eq!(
+        client
+            .create_guild_scheduled_event(Snowflake::from("200"), &body)
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "3"
+    );
+    assert_eq!(
+        client
+            .modify_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("3"), &body)
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "3"
+    );
     client
         .delete_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
         .await
@@ -3640,10 +4357,19 @@ async fn scheduled_event_wrappers_return_typed_models() {
             .username,
         "attendee"
     );
+    assert_eq!(
+        client
+            .get_guild_scheduled_event_users(Snowflake::from("200"), Snowflake::from("2"), None)
+            .await
+            .unwrap()[0]
+            .user
+            .username,
+        "standby"
+    );
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 10);
     assert_request_basics(
         &requests[0],
         "GET",
@@ -3652,16 +4378,40 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_request_basics(
         &requests[5],
+        "POST",
+        "/guilds/200/scheduled-events",
+        Some("Bot scheduled-token"),
+    );
+    assert_request_basics(
+        &requests[6],
+        "PATCH",
+        "/guilds/200/scheduled-events/3",
+        Some("Bot scheduled-token"),
+    );
+    assert_request_basics(
+        &requests[7],
         "DELETE",
         "/guilds/200/scheduled-events/2",
         Some("Bot scheduled-token"),
     );
     assert_request_basics(
-        &requests[6],
+        &requests[8],
         "GET",
         "/guilds/200/scheduled-events/2/users?limit=50",
         Some("Bot scheduled-token"),
     );
+    assert_request_basics(
+        &requests[9],
+        "GET",
+        "/guilds/200/scheduled-events/2/users",
+        Some("Bot scheduled-token"),
+    );
+}
+
+#[test]
+fn default_http_client_builds_for_public_constructors() {
+    let client = default_http_client();
+    drop(client);
 }
 
 #[tokio::test]

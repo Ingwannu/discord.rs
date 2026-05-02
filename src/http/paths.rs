@@ -30,17 +30,36 @@ pub(crate) fn validate_token_path_segment(
     if value.trim().is_empty() {
         return Err(invalid_data_error(format!("{name} must not be empty")));
     }
-    if value.contains('/')
-        || value.contains('\\')
-        || value.contains('?')
-        || value.contains('#')
-        || value.chars().any(char::is_control)
-    {
+    if !value.bytes().all(|byte| {
+        matches!(
+            byte,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'-'
+                | b'_'
+                | b'.'
+                | b'~'
+        )
+    }) {
         return Err(invalid_data_error(format!(
             "{name} contains characters that are unsafe in a Discord path segment"
         )));
     }
     Ok(())
+}
+
+pub(crate) fn validate_snowflake_path_segment(
+    name: &str,
+    value: &Snowflake,
+) -> Result<(), DiscordError> {
+    if value.is_valid() {
+        Ok(())
+    } else {
+        Err(invalid_data_error(format!(
+            "{name} must be a valid Discord snowflake containing only ASCII digits"
+        )))
+    }
 }
 
 pub(crate) fn global_commands_path(application_id: u64) -> Result<String, DiscordError> {
@@ -52,6 +71,7 @@ pub(crate) fn interaction_callback_path(
     interaction_id: Snowflake,
     interaction_token: &str,
 ) -> Result<String, DiscordError> {
+    validate_snowflake_path_segment("interaction_id", &interaction_id)?;
     let interaction_token = interaction_token.trim();
     validate_token_path_segment("interaction_token", interaction_token, false)?;
     Ok(format!(
@@ -80,6 +100,7 @@ pub(crate) fn execute_webhook_path_with_query(
     query: &WebhookExecuteQuery,
     suffix: Option<&str>,
 ) -> Result<String, DiscordError> {
+    validate_snowflake_path_segment("webhook_id", &webhook_id)?;
     validate_token_path_segment("webhook_token", token, false)?;
     let suffix = suffix.unwrap_or_default();
     Ok(format!(
@@ -109,6 +130,7 @@ pub(crate) fn webhook_message_path_with_query(
     query: &WebhookMessageQuery,
     include_components: bool,
 ) -> Result<String, DiscordError> {
+    validate_snowflake_path_segment("webhook_id", &webhook_id)?;
     validate_token_path_segment("webhook_token", token, false)?;
     validate_token_path_segment("message_id", message_id, true)?;
     Ok(format!(

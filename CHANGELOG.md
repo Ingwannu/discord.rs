@@ -4,7 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 2.0.1 - 2026-05-02
+
+- Added bounded REST client connect/request timeouts so Discord HTTP calls do not wait indefinitely on stalled network paths.
+- Made REST rate-limit mutex state recover from mutex poisoning instead of panicking on later requests.
+- Reduced cache read-path write-lock contention by using read locks for member, message, and presence lookups unless TTL pruning is required.
+- Added `Arc`-returning hot cache read APIs for members, messages, and presences, plus manager `cached_arc(...)` helpers, while keeping existing owned-return APIs compatible.
+- Added a `CacheBackend` trait for external member/message/presence cache stores; the default `CacheHandle` implements it.
+- Added route-level REST rate-limit gates so concurrent tasks for the same Discord bucket are serialized before request dispatch.
+- Bounded Gateway shard command queues to avoid unbounded command accumulation during reconnects, outages, or stalled shards.
+- Hardened tokenized webhook/interaction path validation with an allowlist, added Snowflake path-segment validation helpers, and capped generated Axum interaction endpoints at 64 KiB request bodies.
+- Split cache managers, focused channel/thread model groups, and automoderation, emoji, monetization, scheduled event, thread, sticker, and soundboard REST routes into internal modules while preserving public re-exports.
+- Deprecated raw JSON legacy helpers `get_public_archived_threads(...)` and `get_guild_audit_log(...)`; use `list_public_archived_threads(...)` and `get_guild_audit_log_typed(...)` instead.
+- Documented that compatibility aliases `Error` and `BoxError` remain for the 2.x line and are candidates for removal in the next major release.
 
 ## 2.0.0 - 2026-05-02
 

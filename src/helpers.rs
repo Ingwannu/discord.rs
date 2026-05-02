@@ -59,7 +59,7 @@ impl ComponentsV2Payload {
     }
 }
 
-/// Runs the `send_container_message` helper.
+/// Provides the `send_container_message` helper.
 pub async fn send_container_message(
     http: &DiscordHttpClient,
     channel_id: u64,
@@ -69,7 +69,7 @@ pub async fn send_container_message(
     http.send_message_json(channel_id, &body).await
 }
 
-/// Runs the `send_message` helper.
+/// Provides the `send_message` helper.
 pub async fn send_message(
     http: &DiscordHttpClient,
     channel_id: impl Into<Snowflake>,
@@ -78,7 +78,7 @@ pub async fn send_message(
     http.create_message(channel_id, body).await
 }
 
-/// Runs the `send_to_channel` helper.
+/// Provides the `send_to_channel` helper.
 pub async fn send_to_channel(
     http: &DiscordHttpClient,
     channel_id: u64,
@@ -91,7 +91,7 @@ pub async fn send_to_channel(
     send_container_message(http, channel_id, container).await
 }
 
-/// Runs the `respond_with_container` helper.
+/// Provides the `respond_with_container` helper.
 pub async fn respond_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -111,7 +111,7 @@ pub async fn respond_with_container(
         .await
 }
 
-/// Runs the `respond_to_interaction` helper.
+/// Provides the `respond_to_interaction` helper.
 pub async fn respond_to_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -121,7 +121,7 @@ pub async fn respond_to_interaction(
         .await
 }
 
-/// Runs the `respond_with_message` helper.
+/// Provides the `respond_with_message` helper.
 pub async fn respond_with_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -143,7 +143,7 @@ pub async fn respond_with_message(
     .await
 }
 
-/// Runs the `respond_component_with_container` helper.
+/// Provides the `respond_component_with_container` helper.
 pub async fn respond_component_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -163,7 +163,7 @@ pub async fn respond_component_with_container(
         .await
 }
 
-/// Runs the `respond_modal_with_container` helper.
+/// Provides the `respond_modal_with_container` helper.
 pub async fn respond_modal_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -183,7 +183,7 @@ pub async fn respond_modal_with_container(
         .await
 }
 
-/// Runs the `followup_with_container` helper.
+/// Provides the `followup_with_container` helper.
 pub async fn followup_with_container(
     http: &DiscordHttpClient,
     interaction_token: &str,
@@ -197,7 +197,7 @@ pub async fn followup_with_container(
         .await
 }
 
-/// Runs the `followup_message` helper.
+/// Provides the `followup_message` helper.
 pub async fn followup_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -216,7 +216,7 @@ pub async fn followup_message(
     .await
 }
 
-/// Runs the `get_original_response` helper.
+/// Provides the `get_original_response` helper.
 pub async fn get_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -228,7 +228,7 @@ pub async fn get_original_response(
     .await
 }
 
-/// Runs the `edit_original_response` helper.
+/// Provides the `edit_original_response` helper.
 pub async fn edit_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -242,7 +242,7 @@ pub async fn edit_original_response(
     .await
 }
 
-/// Runs the `delete_original_response` helper.
+/// Provides the `delete_original_response` helper.
 pub async fn delete_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -254,7 +254,7 @@ pub async fn delete_original_response(
     .await
 }
 
-/// Runs the `delete_followup_response` helper.
+/// Provides the `delete_followup_response` helper.
 pub async fn delete_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -268,7 +268,7 @@ pub async fn delete_followup_response(
     .await
 }
 
-/// Runs the `edit_followup_response` helper.
+/// Provides the `edit_followup_response` helper.
 pub async fn edit_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -284,7 +284,7 @@ pub async fn edit_followup_response(
     .await
 }
 
-/// Runs the `edit_message_with_container` helper.
+/// Provides the `edit_message_with_container` helper.
 pub async fn edit_message_with_container(
     http: &DiscordHttpClient,
     channel_id: u64,
@@ -295,7 +295,7 @@ pub async fn edit_message_with_container(
     http.edit_message_json(channel_id, message_id, &body).await
 }
 
-/// Runs the `update_component_with_container` helper.
+/// Provides the `update_component_with_container` helper.
 pub async fn update_component_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -312,7 +312,7 @@ pub async fn update_component_with_container(
         .await
 }
 
-/// Runs the `respond_with_modal` helper.
+/// Provides the `respond_with_modal` helper.
 pub async fn respond_with_modal(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -328,7 +328,7 @@ pub async fn respond_with_modal(
         .await
 }
 
-/// Runs the `respond_with_modal_typed` helper.
+/// Provides the `respond_with_modal_typed` helper.
 pub async fn respond_with_modal_typed(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -337,7 +337,7 @@ pub async fn respond_with_modal_typed(
     respond_with_modal(http, context.id.as_str(), &context.token, modal).await
 }
 
-/// Runs the `defer_interaction` helper.
+/// Provides the `defer_interaction` helper.
 pub async fn defer_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -359,7 +359,7 @@ pub async fn defer_interaction(
     .await
 }
 
-/// Runs the `defer_update_interaction` helper.
+/// Provides the `defer_update_interaction` helper.
 pub async fn defer_update_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -375,7 +375,7 @@ pub async fn defer_update_interaction(
     .await
 }
 
-/// Runs the `update_interaction_message` helper.
+/// Provides the `update_interaction_message` helper.
 pub async fn update_interaction_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -392,7 +392,7 @@ pub async fn update_interaction_message(
     .await
 }
 
-/// Runs the `respond_with_autocomplete_choices` helper.
+/// Provides the `respond_with_autocomplete_choices` helper.
 pub async fn respond_with_autocomplete_choices(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -409,7 +409,7 @@ pub async fn respond_with_autocomplete_choices(
     .await
 }
 
-/// Runs the `launch_activity` helper.
+/// Provides the `launch_activity` helper.
 pub async fn launch_activity(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
@@ -425,7 +425,7 @@ pub async fn launch_activity(
     .await
 }
 
-/// Runs the `defer_and_followup_container` helper.
+/// Provides the `defer_and_followup_container` helper.
 pub async fn defer_and_followup_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -449,7 +449,7 @@ pub async fn defer_and_followup_container(
     followup_with_container(http, interaction_token, container, ephemeral).await
 }
 
-/// Runs the `send_components_v2` helper.
+/// Provides the `send_components_v2` helper.
 pub async fn send_components_v2(
     http: &DiscordHttpClient,
     channel_id: u64,
@@ -459,7 +459,7 @@ pub async fn send_components_v2(
     http.send_message_json(channel_id, &body).await
 }
 
-/// Runs the `respond_with_components_v2` helper.
+/// Provides the `respond_with_components_v2` helper.
 pub async fn respond_with_components_v2(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -479,7 +479,7 @@ pub async fn respond_with_components_v2(
         .await
 }
 
-/// Runs the `respond_component_with_components_v2` helper.
+/// Provides the `respond_component_with_components_v2` helper.
 pub async fn respond_component_with_components_v2(
     http: &DiscordHttpClient,
     interaction_id: &str,

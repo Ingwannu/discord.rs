@@ -1,4 +1,4 @@
-﻿# Gateway API
+# Gateway API
 
 Gateway runtime is provided behind the `gateway` feature.
 
@@ -16,7 +16,7 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 ```
 
 ## Boot Pattern

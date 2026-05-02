@@ -176,14 +176,11 @@ pub enum V2ModalComponent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Typed Discord API object for `V2ModalSubmission`.
 pub struct V2ModalSubmission {
-    /// Discord API payload field `custom_id`.
     pub custom_id: String,
-    /// Discord API payload field `components`.
     pub components: Vec<V2ModalComponent>,
 }
 
 impl V2ModalSubmission {
-    /// Runs the `get_text` operation.
     pub fn get_text(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -196,7 +193,6 @@ impl V2ModalSubmission {
             })
     }
 
-    /// Runs the `get_select_values` operation.
     pub fn get_select_values(&self, custom_id: &str) -> Option<&[String]> {
         self.components
             .iter()
@@ -229,7 +225,6 @@ impl V2ModalSubmission {
             })
     }
 
-    /// Runs the `get_file_values` operation.
     pub fn get_file_values(&self, custom_id: &str) -> Option<&[String]> {
         self.components
             .iter()
@@ -242,7 +237,6 @@ impl V2ModalSubmission {
             })
     }
 
-    /// Runs the `get_radio_value` operation.
     pub fn get_radio_value(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -256,7 +250,7 @@ impl V2ModalSubmission {
     }
 }
 
-/// Runs the `parse_modal_submission` helper.
+/// Provides the `parse_modal_submission` helper.
 pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, DiscordError> {
     let modal_data = if data.get("custom_id").is_some() && data.get("components").is_some() {
         data

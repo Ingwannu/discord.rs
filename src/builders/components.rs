@@ -27,7 +27,7 @@ pub struct ButtonBuilder {
 }
 
 impl ButtonBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
             component_type: component_type::BUTTON,
@@ -40,31 +40,26 @@ impl ButtonBuilder {
         }
     }
 
-    /// Runs the `style` operation.
     pub fn style(mut self, style: u8) -> Self {
         self.style = style;
         self
     }
 
-    /// Runs the `label` operation.
     pub fn label(mut self, label: &str) -> Self {
         self.label = Some(label.to_string());
         self
     }
 
-    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: Emoji) -> Self {
         self.emoji = Some(emoji);
         self
     }
 
-    /// Runs the `emoji_unicode` operation.
     pub fn emoji_unicode(mut self, emoji: &str) -> Self {
         self.emoji = Some(Emoji::unicode(emoji));
         self
     }
 
-    /// Runs the `custom_id` operation.
     pub fn custom_id(mut self, custom_id: &str) -> Self {
         self.custom_id = Some(custom_id.to_string());
         self.url = None;
@@ -74,7 +69,6 @@ impl ButtonBuilder {
         self
     }
 
-    /// Runs the `url` operation.
     pub fn url(mut self, url: &str) -> Self {
         self.url = Some(url.to_string());
         self.custom_id = None;
@@ -82,7 +76,6 @@ impl ButtonBuilder {
         self
     }
 
-    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
@@ -98,17 +91,14 @@ impl ButtonBuilder {
         self
     }
 
-    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self.normalize()
     }
 
-    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
@@ -125,7 +115,7 @@ pub struct ActionRowBuilder {
 }
 
 impl ActionRowBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
             component_type: component_type::ACTION_ROW,
@@ -134,47 +124,39 @@ impl ActionRowBuilder {
         }
     }
 
-    /// Runs the `add_button` operation.
     pub fn add_button(mut self, button: ButtonBuilder) -> Self {
         self.components.push(button.build());
         self
     }
 
-    /// Runs the `add_select_menu` operation.
     pub fn add_select_menu(mut self, select_menu: SelectMenuBuilder) -> Self {
         self.components.push(select_menu.build());
         self
     }
 
-    /// Runs the `add_text_input` operation.
     pub fn add_text_input(mut self, input: TextInputBuilder) -> Self {
         self.components.push(input.build());
         self
     }
 
-    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
-    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
-    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self
     }
 
-    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
@@ -215,17 +197,17 @@ pub struct SelectDefaultValue {
 }
 
 impl SelectDefaultValue {
-    /// Creates or returns `user` data.
+    /// Creates a `user` value.
     pub fn user(id: impl Into<String>) -> Self {
         Self::new(id, "user")
     }
 
-    /// Creates or returns `role` data.
+    /// Creates a `role` value.
     pub fn role(id: impl Into<String>) -> Self {
         Self::new(id, "role")
     }
 
-    /// Creates or returns `channel` data.
+    /// Creates a `channel` value.
     pub fn channel(id: impl Into<String>) -> Self {
         Self::new(id, "channel")
     }
@@ -239,7 +221,7 @@ impl SelectDefaultValue {
 }
 
 impl SelectMenuBuilder {
-    /// Creates or returns `string` data.
+    /// Creates a `string` value.
     pub fn string(custom_id: &str) -> Self {
         Self {
             component_type: component_type::STRING_SELECT,
@@ -256,7 +238,7 @@ impl SelectMenuBuilder {
         }
     }
 
-    /// Creates or returns `role` data.
+    /// Creates a `role` value.
     pub fn role(custom_id: &str) -> Self {
         Self {
             component_type: component_type::ROLE_SELECT,
@@ -273,7 +255,7 @@ impl SelectMenuBuilder {
         }
     }
 
-    /// Creates or returns `channel` data.
+    /// Creates a `channel` value.
     pub fn channel(custom_id: &str) -> Self {
         Self {
             component_type: component_type::CHANNEL_SELECT,
@@ -290,7 +272,7 @@ impl SelectMenuBuilder {
         }
     }
 
-    /// Creates or returns `user` data.
+    /// Creates a `user` value.
     pub fn user(custom_id: &str) -> Self {
         Self {
             component_type: component_type::USER_SELECT,
@@ -307,7 +289,7 @@ impl SelectMenuBuilder {
         }
     }
 
-    /// Creates or returns `mentionable` data.
+    /// Creates a `mentionable` value.
     pub fn mentionable(custom_id: &str) -> Self {
         Self {
             component_type: component_type::MENTIONABLE_SELECT,
@@ -324,82 +306,68 @@ impl SelectMenuBuilder {
         }
     }
 
-    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
-    /// Runs the `placeholder` operation.
     pub fn placeholder(mut self, placeholder: &str) -> Self {
         self.placeholder = Some(placeholder.to_string());
         self
     }
 
-    /// Runs the `add_option` operation.
     pub fn add_option(mut self, option: SelectOption) -> Self {
         self.options.push(option);
         self
     }
 
-    /// Runs the `add_options` operation.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
         self.options.extend(options);
         self
     }
 
-    /// Runs the `default_value` operation.
     pub fn default_value(mut self, value: SelectDefaultValue) -> Self {
         self.default_values.push(value);
         self
     }
 
-    /// Runs the `default_values` operation.
     pub fn default_values(mut self, values: Vec<SelectDefaultValue>) -> Self {
         self.default_values.extend(values);
         self
     }
 
-    /// Runs the `default_user` operation.
     pub fn default_user(self, id: impl Into<String>) -> Self {
         self.default_value(SelectDefaultValue::user(id))
     }
 
-    /// Runs the `default_role` operation.
     pub fn default_role(self, id: impl Into<String>) -> Self {
         self.default_value(SelectDefaultValue::role(id))
     }
 
-    /// Runs the `default_channel` operation.
     pub fn default_channel(self, id: impl Into<String>) -> Self {
         self.default_value(SelectDefaultValue::channel(id))
     }
 
-    /// Runs the `channel_types` operation.
     pub fn channel_types(mut self, channel_types: Vec<u8>) -> Self {
         self.channel_types = Some(channel_types);
         self
     }
 
-    /// Runs the `min_values` operation.
     pub fn min_values(mut self, min: u8) -> Self {
         self.min_values = Some(min);
         self
     }
 
-    /// Runs the `max_values` operation.
     pub fn max_values(mut self, max: u8) -> Self {
         self.max_values = Some(max);
         self
     }
 
-    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
-    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
@@ -422,17 +390,14 @@ impl SelectMenuBuilder {
         self
     }
 
-    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self.normalize()
     }
 
-    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
@@ -450,62 +415,53 @@ impl Default for ComponentsV2Message {
 }
 
 impl ComponentsV2Message {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
             components: Vec::new(),
         }
     }
 
-    /// Runs the `add_container` operation.
     pub fn add_container(mut self, container: ContainerBuilder) -> Self {
         self.components.push(container.build());
         self
     }
 
-    /// Runs the `add_text_display` operation.
     pub fn add_text_display(mut self, text: TextDisplayBuilder) -> Self {
         self.components.push(text.build());
         self
     }
 
-    /// Runs the `add_media_gallery` operation.
     pub fn add_media_gallery(mut self, gallery: MediaGalleryBuilder) -> Self {
         self.components.push(gallery.build());
         self
     }
 
-    /// Runs the `add_separator` operation.
     pub fn add_separator(mut self, separator: SeparatorBuilder) -> Self {
         self.components.push(separator.build());
         self
     }
 
-    /// Runs the `add_section` operation.
     pub fn add_section(mut self, section: SectionBuilder) -> Self {
         self.components.push(section.build());
         self
     }
 
-    /// Runs the `add_file` operation.
     pub fn add_file(mut self, file: FileBuilder) -> Self {
         self.components.push(file.build());
         self
     }
 
-    /// Runs the `add_action_row` operation.
     pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
         self.components.push(row.build());
         self
     }
 
-    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
-    /// Runs the `build` operation.
     pub fn build(self) -> Vec<Value> {
         self.components
     }

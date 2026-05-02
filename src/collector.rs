@@ -32,12 +32,12 @@ impl Default for CollectorHub {
 
 #[cfg(feature = "collectors")]
 impl CollectorHub {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self::with_capacity(256)
     }
 
-    /// Creates or returns `with_capacity` data.
+    /// Creates a `with_capacity` value.
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity.max(1));
         Self { sender }
@@ -47,22 +47,18 @@ impl CollectorHub {
         let _ = self.sender.send(event);
     }
 
-    /// Runs the `message_collector` operation.
     pub fn message_collector(&self) -> MessageCollector {
         MessageCollector::new(self.sender.subscribe())
     }
 
-    /// Runs the `interaction_collector` operation.
     pub fn interaction_collector(&self) -> InteractionCollector {
         InteractionCollector::new(self.sender.subscribe())
     }
 
-    /// Runs the `component_collector` operation.
     pub fn component_collector(&self) -> ComponentCollector {
         ComponentCollector::new(self.sender.subscribe())
     }
 
-    /// Runs the `modal_collector` operation.
     pub fn modal_collector(&self) -> ModalCollector {
         ModalCollector::new(self.sender.subscribe())
     }
@@ -92,7 +88,6 @@ impl MessageCollector {
         }
     }
 
-    /// Runs the `filter` operation.
     pub fn filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(&Message) -> bool + Send + Sync + 'static,
@@ -101,24 +96,20 @@ impl MessageCollector {
         self
     }
 
-    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
     }
 
-    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.max_items = Some(max_items);
         self
     }
 
-    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.lagged_events
     }
 
-    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<Message> {
         let timeout = remaining_timeout(self.timeout, &mut self.deadline);
         recv_with_timeout(timeout, async {
@@ -145,7 +136,6 @@ impl MessageCollector {
         .await
     }
 
-    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<Message> {
         let mut messages = Vec::new();
         while let Some(message) = self.next().await {
@@ -184,7 +174,6 @@ impl InteractionCollector {
         }
     }
 
-    /// Runs the `filter` operation.
     pub fn filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(&Interaction) -> bool + Send + Sync + 'static,
@@ -193,24 +182,20 @@ impl InteractionCollector {
         self
     }
 
-    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
     }
 
-    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.max_items = Some(max_items);
         self
     }
 
-    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.lagged_events
     }
 
-    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<Interaction> {
         let timeout = remaining_timeout(self.timeout, &mut self.deadline);
         recv_with_timeout(timeout, async {
@@ -237,7 +222,6 @@ impl InteractionCollector {
         .await
     }
 
-    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<Interaction> {
         let mut interactions = Vec::new();
         while let Some(interaction) = self.next().await {
@@ -266,24 +250,20 @@ impl ComponentCollector {
         }
     }
 
-    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.inner = self.inner.timeout(duration);
         self
     }
 
-    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.inner.lagged_events()
     }
 
-    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.inner = self.inner.max_items(max_items);
         self
     }
 
-    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<ComponentInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::Component(component) = interaction {
@@ -293,7 +273,6 @@ impl ComponentCollector {
         None
     }
 
-    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<ComponentInteraction> {
         let mut components = Vec::new();
         while let Some(component) = self.next().await {
@@ -322,24 +301,20 @@ impl ModalCollector {
         }
     }
 
-    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.inner = self.inner.timeout(duration);
         self
     }
 
-    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.inner.lagged_events()
     }
 
-    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.inner = self.inner.max_items(max_items);
         self
     }
 
-    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<ModalSubmitInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::ModalSubmit(modal) = interaction {
@@ -349,7 +324,6 @@ impl ModalCollector {
         None
     }
 
-    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<ModalSubmitInteraction> {
         let mut modals = Vec::new();
         while let Some(modal) = self.next().await {

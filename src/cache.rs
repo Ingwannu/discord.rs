@@ -1,605 +1,37 @@
 use std::sync::Arc;
-use std::time::Duration;
 
-#[cfg(feature = "cache")]
-use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "cache")]
 use std::time::Instant;
 #[cfg(feature = "cache")]
 use tokio::sync::RwLock;
 
-#[cfg(feature = "gateway")]
-use async_trait::async_trait;
-
-use crate::error::DiscordError;
 use crate::event::ScheduledEvent;
-use crate::http::DiscordHttpClient;
 use crate::model::{
     Channel, Guild, Member, Message, Presence, Role, Snowflake, SoundboardSound, StageInstance,
     Sticker, User, VoiceState,
 };
 use crate::types::Emoji;
 
-#[cfg(feature = "gateway")]
-use crate::manager::CachedManager;
-
-const DEFAULT_MAX_MESSAGES_PER_CHANNEL: usize = 100;
-const DEFAULT_MAX_TOTAL_MESSAGES: usize = 10_000;
-const DEFAULT_MAX_PRESENCES: usize = 50_000;
-const DEFAULT_MAX_MEMBERS_PER_GUILD: usize = 25_000;
-const DEFAULT_MAX_GUILDS: usize = 1_000;
-const DEFAULT_MAX_CHANNELS: usize = 50_000;
-const DEFAULT_MAX_USERS: usize = 100_000;
-const DEFAULT_MAX_ROLES: usize = 50_000;
-const DEFAULT_MAX_VOICE_STATES: usize = 50_000;
-const DEFAULT_MAX_SOUNDBOARD_SOUNDS: usize = 50_000;
-const DEFAULT_MAX_EMOJIS: usize = 50_000;
-const DEFAULT_MAX_STICKERS: usize = 50_000;
-const DEFAULT_MAX_SCHEDULED_EVENTS: usize = 50_000;
-const DEFAULT_MAX_STAGE_INSTANCES: usize = 50_000;
-const DEFAULT_MESSAGE_TTL_SECS: u64 = 60 * 60;
-const DEFAULT_PRESENCE_TTL_SECS: u64 = 10 * 60;
-const DEFAULT_MEMBER_TTL_SECS: u64 = 24 * 60 * 60;
+#[path = "cache/config.rs"]
+mod config;
+pub use config::CacheConfig;
 
 #[cfg(feature = "cache")]
-#[derive(Clone, Default)]
-struct CacheStore {
-    guilds: HashMap<Snowflake, Guild>,
-    channels: HashMap<Snowflake, Channel>,
-    users: HashMap<Snowflake, User>,
-    members: HashMap<(Snowflake, Snowflake), Member>,
-    messages: HashMap<(Snowflake, Snowflake), Message>,
-    roles: HashMap<(Snowflake, Snowflake), Role>,
-    presences: HashMap<(Snowflake, Snowflake), Presence>,
-    voice_states: HashMap<(Snowflake, Snowflake), VoiceState>,
-    soundboard_sounds: HashMap<(Snowflake, Snowflake), SoundboardSound>,
-    emojis: HashMap<(Snowflake, Snowflake), Emoji>,
-    stickers: HashMap<(Snowflake, Snowflake), Sticker>,
-    scheduled_events: HashMap<(Snowflake, Snowflake), ScheduledEvent>,
-    stage_instances: HashMap<(Snowflake, Snowflake), StageInstance>,
-    guild_order: VecDeque<Snowflake>,
-    channel_order: VecDeque<Snowflake>,
-    user_order: VecDeque<Snowflake>,
-    member_order: VecDeque<(Snowflake, Snowflake)>,
-    message_order: VecDeque<(Snowflake, Snowflake)>,
-    role_order: VecDeque<(Snowflake, Snowflake)>,
-    presence_order: VecDeque<(Snowflake, Snowflake)>,
-    voice_state_order: VecDeque<(Snowflake, Snowflake)>,
-    soundboard_sound_order: VecDeque<(Snowflake, Snowflake)>,
-    emoji_order: VecDeque<(Snowflake, Snowflake)>,
-    sticker_order: VecDeque<(Snowflake, Snowflake)>,
-    scheduled_event_order: VecDeque<(Snowflake, Snowflake)>,
-    stage_instance_order: VecDeque<(Snowflake, Snowflake)>,
-    member_seen: HashMap<(Snowflake, Snowflake), Instant>,
-    message_seen: HashMap<(Snowflake, Snowflake), Instant>,
-    presence_seen: HashMap<(Snowflake, Snowflake), Instant>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-/// Typed Discord API object for `CacheConfig`.
-pub struct CacheConfig {
-    /// Discord API payload field `max_messages_per_channel`.
-    pub max_messages_per_channel: Option<usize>,
-    /// Discord API payload field `max_total_messages`.
-    pub max_total_messages: Option<usize>,
-    /// Discord API payload field `max_presences`.
-    pub max_presences: Option<usize>,
-    /// Discord API payload field `max_members_per_guild`.
-    pub max_members_per_guild: Option<usize>,
-    /// Discord API payload field `max_guilds`.
-    pub max_guilds: Option<usize>,
-    /// Discord API payload field `max_channels`.
-    pub max_channels: Option<usize>,
-    /// Discord API payload field `max_users`.
-    pub max_users: Option<usize>,
-    /// Discord API payload field `max_roles`.
-    pub max_roles: Option<usize>,
-    /// Discord API payload field `max_voice_states`.
-    pub max_voice_states: Option<usize>,
-    /// Discord API payload field `max_soundboard_sounds`.
-    pub max_soundboard_sounds: Option<usize>,
-    /// Discord API payload field `max_emojis`.
-    pub max_emojis: Option<usize>,
-    /// Discord API payload field `max_stickers`.
-    pub max_stickers: Option<usize>,
-    /// Discord API payload field `max_scheduled_events`.
-    pub max_scheduled_events: Option<usize>,
-    /// Discord API payload field `max_stage_instances`.
-    pub max_stage_instances: Option<usize>,
-    /// Discord API payload field `message_ttl`.
-    pub message_ttl: Option<Duration>,
-    /// Discord API payload field `presence_ttl`.
-    pub presence_ttl: Option<Duration>,
-    /// Discord API payload field `member_ttl`.
-    pub member_ttl: Option<Duration>,
-    /// Discord API payload field `cache_emojis`.
-    pub cache_emojis: bool,
-    /// Discord API payload field `cache_stickers`.
-    pub cache_stickers: bool,
-    /// Discord API payload field `cache_scheduled_events`.
-    pub cache_scheduled_events: bool,
-    /// Discord API payload field `cache_stage_instances`.
-    pub cache_stage_instances: bool,
-}
-
-impl Default for CacheConfig {
-    fn default() -> Self {
-        Self::bounded()
-    }
-}
-
-impl CacheConfig {
-    /// Creates or returns `bounded` data.
-    pub fn bounded() -> Self {
-        Self {
-            max_messages_per_channel: Some(DEFAULT_MAX_MESSAGES_PER_CHANNEL),
-            max_total_messages: Some(DEFAULT_MAX_TOTAL_MESSAGES),
-            max_presences: Some(DEFAULT_MAX_PRESENCES),
-            max_members_per_guild: Some(DEFAULT_MAX_MEMBERS_PER_GUILD),
-            max_guilds: Some(DEFAULT_MAX_GUILDS),
-            max_channels: Some(DEFAULT_MAX_CHANNELS),
-            max_users: Some(DEFAULT_MAX_USERS),
-            max_roles: Some(DEFAULT_MAX_ROLES),
-            max_voice_states: Some(DEFAULT_MAX_VOICE_STATES),
-            max_soundboard_sounds: Some(DEFAULT_MAX_SOUNDBOARD_SOUNDS),
-            max_emojis: Some(DEFAULT_MAX_EMOJIS),
-            max_stickers: Some(DEFAULT_MAX_STICKERS),
-            max_scheduled_events: Some(DEFAULT_MAX_SCHEDULED_EVENTS),
-            max_stage_instances: Some(DEFAULT_MAX_STAGE_INSTANCES),
-            message_ttl: Some(Duration::from_secs(DEFAULT_MESSAGE_TTL_SECS)),
-            presence_ttl: Some(Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS)),
-            member_ttl: Some(Duration::from_secs(DEFAULT_MEMBER_TTL_SECS)),
-            cache_emojis: true,
-            cache_stickers: true,
-            cache_scheduled_events: true,
-            cache_stage_instances: true,
-        }
-    }
-
-    /// Creates or returns `unbounded` data.
-    pub fn unbounded() -> Self {
-        Self {
-            max_messages_per_channel: None,
-            max_total_messages: None,
-            max_presences: None,
-            max_members_per_guild: None,
-            max_guilds: None,
-            max_channels: None,
-            max_users: None,
-            max_roles: None,
-            max_voice_states: None,
-            max_soundboard_sounds: None,
-            max_emojis: None,
-            max_stickers: None,
-            max_scheduled_events: None,
-            max_stage_instances: None,
-            message_ttl: None,
-            presence_ttl: None,
-            member_ttl: None,
-            cache_emojis: true,
-            cache_stickers: true,
-            cache_scheduled_events: true,
-            cache_stage_instances: true,
-        }
-    }
-
-    /// Runs the `max_messages_per_channel` operation.
-    pub fn max_messages_per_channel(mut self, max: usize) -> Self {
-        self.max_messages_per_channel = Some(max);
-        self
-    }
-
-    /// Runs the `max_total_messages` operation.
-    pub fn max_total_messages(mut self, max: usize) -> Self {
-        self.max_total_messages = Some(max);
-        self
-    }
-
-    /// Runs the `max_presences` operation.
-    pub fn max_presences(mut self, max: usize) -> Self {
-        self.max_presences = Some(max);
-        self
-    }
-
-    /// Runs the `max_members_per_guild` operation.
-    pub fn max_members_per_guild(mut self, max: usize) -> Self {
-        self.max_members_per_guild = Some(max);
-        self
-    }
-
-    /// Runs the `max_guilds` operation.
-    pub fn max_guilds(mut self, max: usize) -> Self {
-        self.max_guilds = Some(max);
-        self
-    }
-
-    /// Runs the `max_channels` operation.
-    pub fn max_channels(mut self, max: usize) -> Self {
-        self.max_channels = Some(max);
-        self
-    }
-
-    /// Runs the `max_users` operation.
-    pub fn max_users(mut self, max: usize) -> Self {
-        self.max_users = Some(max);
-        self
-    }
-
-    /// Runs the `max_roles` operation.
-    pub fn max_roles(mut self, max: usize) -> Self {
-        self.max_roles = Some(max);
-        self
-    }
-
-    /// Runs the `max_voice_states` operation.
-    pub fn max_voice_states(mut self, max: usize) -> Self {
-        self.max_voice_states = Some(max);
-        self
-    }
-
-    /// Runs the `max_soundboard_sounds` operation.
-    pub fn max_soundboard_sounds(mut self, max: usize) -> Self {
-        self.max_soundboard_sounds = Some(max);
-        self
-    }
-
-    /// Runs the `max_emojis` operation.
-    pub fn max_emojis(mut self, max: usize) -> Self {
-        self.max_emojis = Some(max);
-        self
-    }
-
-    /// Runs the `max_stickers` operation.
-    pub fn max_stickers(mut self, max: usize) -> Self {
-        self.max_stickers = Some(max);
-        self
-    }
-
-    /// Runs the `max_scheduled_events` operation.
-    pub fn max_scheduled_events(mut self, max: usize) -> Self {
-        self.max_scheduled_events = Some(max);
-        self
-    }
-
-    /// Runs the `max_stage_instances` operation.
-    pub fn max_stage_instances(mut self, max: usize) -> Self {
-        self.max_stage_instances = Some(max);
-        self
-    }
-
-    /// Runs the `message_ttl` operation.
-    pub fn message_ttl(mut self, ttl: Duration) -> Self {
-        self.message_ttl = Some(ttl);
-        self
-    }
-
-    /// Runs the `presence_ttl` operation.
-    pub fn presence_ttl(mut self, ttl: Duration) -> Self {
-        self.presence_ttl = Some(ttl);
-        self
-    }
-
-    /// Runs the `member_ttl` operation.
-    pub fn member_ttl(mut self, ttl: Duration) -> Self {
-        self.member_ttl = Some(ttl);
-        self
-    }
-
-    /// Runs the `cache_emojis` operation.
-    pub fn cache_emojis(mut self, enabled: bool) -> Self {
-        self.cache_emojis = enabled;
-        self
-    }
-
-    /// Runs the `cache_stickers` operation.
-    pub fn cache_stickers(mut self, enabled: bool) -> Self {
-        self.cache_stickers = enabled;
-        self
-    }
-
-    /// Runs the `cache_scheduled_events` operation.
-    pub fn cache_scheduled_events(mut self, enabled: bool) -> Self {
-        self.cache_scheduled_events = enabled;
-        self
-    }
-
-    /// Runs the `cache_stage_instances` operation.
-    pub fn cache_stage_instances(mut self, enabled: bool) -> Self {
-        self.cache_stage_instances = enabled;
-        self
-    }
-}
+#[path = "cache/backend.rs"]
+mod backend;
+#[cfg(feature = "cache")]
+pub use backend::CacheBackend;
 
 #[cfg(feature = "cache")]
-fn remember_key<K>(order: &mut VecDeque<K>, key: K)
-where
-    K: Clone + Eq,
-{
-    if let Some(index) = order.iter().position(|stored| stored == &key) {
-        order.remove(index);
-    }
-    order.push_back(key);
-}
-
+#[path = "cache/store.rs"]
+mod store;
 #[cfg(feature = "cache")]
-fn ordered_overflow_keys<K>(order: &mut VecDeque<K>, len: usize, max: Option<usize>) -> Vec<K>
-where
-    K: Clone,
-{
-    let Some(max) = max else {
-        return Vec::new();
-    };
-
-    (0..len.saturating_sub(max))
-        .filter_map(|_| order.pop_front())
-        .collect()
-}
-
-#[cfg(feature = "cache")]
-fn enforce_guild_limit(store: &mut CacheStore, config: &CacheConfig) {
-    let Some(max) = config.max_guilds else {
-        return;
-    };
-
-    while store.guilds.len() > max {
-        let Some(guild_id) = store.guild_order.pop_front() else {
-            break;
-        };
-        if store.guilds.contains_key(&guild_id) {
-            evict_guild_entries(store, &guild_id);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-fn enforce_channel_limit(store: &mut CacheStore, config: &CacheConfig) {
-    let Some(max) = config.max_channels else {
-        return;
-    };
-
-    while store.channels.len() > max {
-        let Some(channel_id) = store.channel_order.pop_front() else {
-            break;
-        };
-        if store.channels.contains_key(&channel_id) {
-            evict_channel_entries(store, &channel_id);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-fn enforce_message_limits(store: &mut CacheStore, config: &CacheConfig, channel_id: &Snowflake) {
-    if let Some(max) = config.max_messages_per_channel {
-        while store
-            .messages
-            .keys()
-            .filter(|(stored_channel_id, _)| stored_channel_id == channel_id)
-            .count()
-            > max
-        {
-            let Some(index) = store
-                .message_order
-                .iter()
-                .position(|(stored_channel_id, _)| stored_channel_id == channel_id)
-            else {
-                break;
-            };
-            if let Some(key) = store.message_order.remove(index) {
-                store.messages.remove(&key);
-                store.message_seen.remove(&key);
-            }
-        }
-    }
-
-    if let Some(max) = config.max_total_messages {
-        while store.messages.len() > max {
-            let Some(key) = store.message_order.pop_front() else {
-                break;
-            };
-            store.messages.remove(&key);
-            store.message_seen.remove(&key);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-fn enforce_member_limit(store: &mut CacheStore, config: &CacheConfig, guild_id: &Snowflake) {
-    let Some(max) = config.max_members_per_guild else {
-        return;
-    };
-    while store
-        .members
-        .keys()
-        .filter(|(stored_guild_id, _)| stored_guild_id == guild_id)
-        .count()
-        > max
-    {
-        let Some(index) = store
-            .member_order
-            .iter()
-            .position(|(stored_guild_id, _)| stored_guild_id == guild_id)
-        else {
-            break;
-        };
-        if let Some(key) = store.member_order.remove(index) {
-            store.members.remove(&key);
-            store.member_seen.remove(&key);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-fn remove_message_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    store.messages.remove(key);
-    store.message_seen.remove(key);
-    store.message_order.retain(|stored_key| stored_key != key);
-}
-
-#[cfg(feature = "cache")]
-fn remove_member_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    store.members.remove(key);
-    store.member_seen.remove(key);
-    store.member_order.retain(|stored_key| stored_key != key);
-}
-
-#[cfg(feature = "cache")]
-fn remove_presence_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    store.presences.remove(key);
-    store.presence_seen.remove(key);
-    store.presence_order.retain(|stored_key| stored_key != key);
-}
-
-#[cfg(feature = "cache")]
-fn prune_expired(store: &mut CacheStore, config: &CacheConfig, now: Instant) {
-    if let Some(ttl) = config.message_ttl {
-        let expired: Vec<_> = store
-            .message_seen
-            .iter()
-            .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in expired {
-            remove_message_key(store, &key);
-        }
-    }
-
-    if let Some(ttl) = config.presence_ttl {
-        let expired: Vec<_> = store
-            .presence_seen
-            .iter()
-            .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in expired {
-            remove_presence_key(store, &key);
-        }
-    }
-
-    if let Some(ttl) = config.member_ttl {
-        let expired: Vec<_> = store
-            .member_seen
-            .iter()
-            .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
-            .collect();
-        for key in expired {
-            remove_member_key(store, &key);
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-fn evict_channel_entries(store: &mut CacheStore, channel_id: &Snowflake) {
-    store.channels.remove(channel_id);
-    store
-        .channel_order
-        .retain(|stored_id| stored_id != channel_id);
-    store
-        .messages
-        .retain(|(stored_channel_id, _), _| stored_channel_id != channel_id);
-    store
-        .message_seen
-        .retain(|(stored_channel_id, _), _| stored_channel_id != channel_id);
-    store
-        .message_order
-        .retain(|(stored_channel_id, _)| stored_channel_id != channel_id);
-}
-
-#[cfg(feature = "cache")]
-fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) {
-    let removed_channel_ids: HashSet<_> = store
-        .channels
-        .iter()
-        .filter(|(_, channel)| channel.guild_id.as_ref() == Some(guild_id))
-        .map(|(channel_id, _)| channel_id.clone())
-        .collect();
-
-    store.guilds.remove(guild_id);
-    store.guild_order.retain(|stored_id| stored_id != guild_id);
-    store
-        .channels
-        .retain(|_, channel| channel.guild_id.as_ref() != Some(guild_id));
-    store.channel_order.retain(|channel_id| {
-        store
-            .channels
-            .get(channel_id)
-            .is_some_and(|channel| channel.guild_id.as_ref() != Some(guild_id))
-    });
-    store
-        .members
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .member_seen
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .member_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store.messages.retain(|(stored_channel_id, _), message| {
-        !removed_channel_ids.contains(stored_channel_id)
-            && message.guild_id.as_ref() != Some(guild_id)
-    });
-    let remaining_message_keys: HashSet<_> = store.messages.keys().cloned().collect();
-    store
-        .message_seen
-        .retain(|key, _| remaining_message_keys.contains(key));
-    store
-        .message_order
-        .retain(|(stored_channel_id, message_id)| {
-            !removed_channel_ids.contains(stored_channel_id)
-                && remaining_message_keys.contains(&(stored_channel_id.clone(), message_id.clone()))
-        });
-    store
-        .roles
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .role_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .presences
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .presence_seen
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .presence_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .voice_states
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .voice_state_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .soundboard_sounds
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .soundboard_sound_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .emojis
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .emoji_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .stickers
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .sticker_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .scheduled_events
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .scheduled_event_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-    store
-        .stage_instances
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
-    store
-        .stage_instance_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
-}
+use store::{
+    any_seen_expired, enforce_channel_limit, enforce_guild_limit, enforce_member_limit,
+    enforce_message_limits, evict_channel_entries, evict_guild_entries, ordered_overflow_keys,
+    prune_expired, remember_key, remove_member_key, remove_message_key, remove_presence_key,
+    seen_expired, CacheStore,
+};
 
 #[derive(Clone, Default)]
 /// Typed Discord API object for `CacheHandle`.
@@ -610,12 +42,12 @@ pub struct CacheHandle {
 }
 
 impl CacheHandle {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates or returns `with_config` data.
+    /// Creates a `with_config` value.
     pub fn with_config(config: CacheConfig) -> Self {
         Self {
             #[cfg(feature = "cache")]
@@ -624,18 +56,15 @@ impl CacheHandle {
         }
     }
 
-    /// Runs the `config` operation.
     pub fn config(&self) -> &CacheConfig {
         &self.config
     }
 
-    /// Runs the `is_enabled` operation.
     pub fn is_enabled(&self) -> bool {
         cfg!(feature = "cache")
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `clear` operation.
     pub async fn clear(&self) {
         let mut store = self.store.write().await;
         store.guilds.clear();
@@ -673,7 +102,6 @@ impl CacheHandle {
     pub async fn clear(&self) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `purge_expired` operation.
     pub async fn purge_expired(&self) {
         let mut store = self.store.write().await;
         prune_expired(&mut store, &self.config, Instant::now());
@@ -683,7 +111,6 @@ impl CacheHandle {
     pub async fn purge_expired(&self) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_guild` operation.
     pub async fn upsert_guild(&self, guild: Guild) {
         let mut store = self.store.write().await;
         let guild_id = guild.id.clone();
@@ -696,7 +123,6 @@ impl CacheHandle {
     pub async fn upsert_guild(&self, _guild: Guild) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_guild` operation.
     pub async fn remove_guild(&self, guild_id: &Snowflake) {
         let mut store = self.store.write().await;
         evict_guild_entries(&mut store, guild_id);
@@ -706,7 +132,6 @@ impl CacheHandle {
     pub async fn remove_guild(&self, _guild_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `guild` operation.
     pub async fn guild(&self, guild_id: &Snowflake) -> Option<Guild> {
         self.store.read().await.guilds.get(guild_id).cloned()
     }
@@ -717,7 +142,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `guilds` operation.
     pub async fn guilds(&self) -> Vec<Guild> {
         self.store.read().await.guilds.values().cloned().collect()
     }
@@ -727,13 +151,11 @@ impl CacheHandle {
         Vec::new()
     }
 
-    /// Runs the `contains_guild` operation.
     pub async fn contains_guild(&self, guild_id: &Snowflake) -> bool {
         self.guild(guild_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_channel` operation.
     pub async fn upsert_channel(&self, channel: Channel) {
         let mut store = self.store.write().await;
         let channel_id = channel.id.clone();
@@ -746,7 +168,6 @@ impl CacheHandle {
     pub async fn upsert_channel(&self, _channel: Channel) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_channel` operation.
     pub async fn remove_channel(&self, channel_id: &Snowflake) {
         let mut store = self.store.write().await;
         evict_channel_entries(&mut store, channel_id);
@@ -761,13 +182,11 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `channel` operation.
     pub async fn channel(&self, channel_id: &Snowflake) -> Option<Channel> {
         self.store.read().await.channels.get(channel_id).cloned()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `channels` operation.
     pub async fn channels(&self) -> Vec<Channel> {
         self.store.read().await.channels.values().cloned().collect()
     }
@@ -777,13 +196,11 @@ impl CacheHandle {
         Vec::new()
     }
 
-    /// Runs the `contains_channel` operation.
     pub async fn contains_channel(&self, channel_id: &Snowflake) -> bool {
         self.channel(channel_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_user` operation.
     pub async fn upsert_user(&self, user: User) {
         let mut store = self.store.write().await;
         let user_id = user.id.clone();
@@ -799,7 +216,6 @@ impl CacheHandle {
     pub async fn upsert_user(&self, _user: User) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_user` operation.
     pub async fn remove_user(&self, user_id: &Snowflake) {
         let mut store = self.store.write().await;
         store.users.remove(user_id);
@@ -810,7 +226,6 @@ impl CacheHandle {
     pub async fn remove_user(&self, _user_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `user` operation.
     pub async fn user(&self, user_id: &Snowflake) -> Option<User> {
         self.store.read().await.users.get(user_id).cloned()
     }
@@ -821,7 +236,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `users` operation.
     pub async fn users(&self) -> Vec<User> {
         self.store.read().await.users.values().cloned().collect()
     }
@@ -831,17 +245,15 @@ impl CacheHandle {
         Vec::new()
     }
 
-    /// Runs the `contains_user` operation.
     pub async fn contains_user(&self, user_id: &Snowflake) -> bool {
         self.user(user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_member` operation.
     pub async fn upsert_member(&self, guild_id: Snowflake, user_id: Snowflake, member: Member) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), user_id);
-        store.members.insert(key.clone(), member);
+        store.members.insert(key.clone(), Arc::new(member));
         store.member_seen.insert(key.clone(), Instant::now());
         remember_key(&mut store.member_order, key);
         prune_expired(&mut store, &self.config, Instant::now());
@@ -852,7 +264,6 @@ impl CacheHandle {
     pub async fn upsert_member(&self, _guild_id: Snowflake, _user_id: Snowflake, _member: Member) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_member` operation.
     pub async fn remove_member(&self, guild_id: &Snowflake, user_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), user_id.clone());
@@ -868,21 +279,67 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `member` operation.
     pub async fn member(&self, guild_id: &Snowflake, user_id: &Snowflake) -> Option<Member> {
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
-        store
-            .members
-            .get(&(guild_id.clone(), user_id.clone()))
-            .cloned()
+        self.member_arc(guild_id, user_id)
+            .await
+            .map(|member| member.as_ref().clone())
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `members` operation.
-    pub async fn members(&self, guild_id: &Snowflake) -> Vec<Member> {
+    pub async fn member_arc(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Option<Arc<Member>> {
+        let key = (guild_id.clone(), user_id.clone());
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !seen_expired(store.member_seen.get(&key), self.config.member_ttl, now) {
+                return store.members.get(&key).cloned();
+            }
+        }
+
         let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
+        prune_expired(&mut store, &self.config, now);
+        store.members.get(&key).cloned()
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn member_arc(
+        &self,
+        _guild_id: &Snowflake,
+        _user_id: &Snowflake,
+    ) -> Option<Arc<Member>> {
+        None
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn members(&self, guild_id: &Snowflake) -> Vec<Member> {
+        self.members_arc(guild_id)
+            .await
+            .into_iter()
+            .map(|member| member.as_ref().clone())
+            .collect()
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn members_arc(&self, guild_id: &Snowflake) -> Vec<Arc<Member>> {
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !any_seen_expired(store.member_seen.values(), self.config.member_ttl, now) {
+                return store
+                    .members
+                    .iter()
+                    .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
+                    .map(|(_, member)| member.clone())
+                    .collect();
+            }
+        }
+
+        let mut store = self.store.write().await;
+        prune_expired(&mut store, &self.config, now);
         store
             .members
             .iter()
@@ -892,23 +349,26 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
+    pub async fn members_arc(&self, _guild_id: &Snowflake) -> Vec<Arc<Member>> {
+        Vec::new()
+    }
+
+    #[cfg(not(feature = "cache"))]
     pub async fn members(&self, _guild_id: &Snowflake) -> Vec<Member> {
         Vec::new()
     }
 
-    /// Runs the `contains_member` operation.
     pub async fn contains_member(&self, guild_id: &Snowflake, user_id: &Snowflake) -> bool {
         self.member(guild_id, user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_message` operation.
     pub async fn upsert_message(&self, message: Message) {
         let channel_id = message.channel_id.clone();
         let message_id = message.id.clone();
         let mut store = self.store.write().await;
         let key = (channel_id.clone(), message_id);
-        store.messages.insert(key.clone(), message);
+        store.messages.insert(key.clone(), Arc::new(message));
         store.message_seen.insert(key.clone(), Instant::now());
         remember_key(&mut store.message_order, key);
         prune_expired(&mut store, &self.config, Instant::now());
@@ -919,7 +379,6 @@ impl CacheHandle {
     pub async fn upsert_message(&self, _message: Message) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_message` operation.
     pub async fn remove_message(&self, channel_id: &Snowflake, message_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (channel_id.clone(), message_id.clone());
@@ -930,7 +389,6 @@ impl CacheHandle {
     pub async fn remove_message(&self, _channel_id: &Snowflake, _message_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_messages_bulk` operation.
     pub async fn remove_messages_bulk(&self, channel_id: &Snowflake, message_ids: &[Snowflake]) {
         let mut store = self.store.write().await;
         store
@@ -963,21 +421,67 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `message` operation.
     pub async fn message(&self, channel_id: &Snowflake, message_id: &Snowflake) -> Option<Message> {
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
-        store
-            .messages
-            .get(&(channel_id.clone(), message_id.clone()))
-            .cloned()
+        self.message_arc(channel_id, message_id)
+            .await
+            .map(|message| message.as_ref().clone())
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `messages` operation.
-    pub async fn messages(&self, channel_id: &Snowflake) -> Vec<Message> {
+    pub async fn message_arc(
+        &self,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
+    ) -> Option<Arc<Message>> {
+        let key = (channel_id.clone(), message_id.clone());
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
+                return store.messages.get(&key).cloned();
+            }
+        }
+
         let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
+        prune_expired(&mut store, &self.config, now);
+        store.messages.get(&key).cloned()
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn message_arc(
+        &self,
+        _channel_id: &Snowflake,
+        _message_id: &Snowflake,
+    ) -> Option<Arc<Message>> {
+        None
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn messages(&self, channel_id: &Snowflake) -> Vec<Message> {
+        self.messages_arc(channel_id)
+            .await
+            .into_iter()
+            .map(|message| message.as_ref().clone())
+            .collect()
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn messages_arc(&self, channel_id: &Snowflake) -> Vec<Arc<Message>> {
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !any_seen_expired(store.message_seen.values(), self.config.message_ttl, now) {
+                return store
+                    .messages
+                    .iter()
+                    .filter(|((stored_channel_id, _), _)| stored_channel_id == channel_id)
+                    .map(|(_, message)| message.clone())
+                    .collect();
+            }
+        }
+
+        let mut store = self.store.write().await;
+        prune_expired(&mut store, &self.config, now);
         store
             .messages
             .iter()
@@ -987,17 +491,20 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
+    pub async fn messages_arc(&self, _channel_id: &Snowflake) -> Vec<Arc<Message>> {
+        Vec::new()
+    }
+
+    #[cfg(not(feature = "cache"))]
     pub async fn messages(&self, _channel_id: &Snowflake) -> Vec<Message> {
         Vec::new()
     }
 
-    /// Runs the `contains_message` operation.
     pub async fn contains_message(&self, channel_id: &Snowflake, message_id: &Snowflake) -> bool {
         self.message(channel_id, message_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_role` operation.
     pub async fn upsert_role(&self, guild_id: Snowflake, role: Role) {
         let mut store = self.store.write().await;
         let key = (guild_id, role.id.clone());
@@ -1013,7 +520,6 @@ impl CacheHandle {
     pub async fn upsert_role(&self, _guild_id: Snowflake, _role: Role) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_role` operation.
     pub async fn remove_role(&self, guild_id: &Snowflake, role_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), role_id.clone());
@@ -1030,7 +536,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `roles` operation.
     pub async fn roles(&self, guild_id: &Snowflake) -> Vec<Role> {
         self.store
             .read()
@@ -1043,7 +548,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `role` operation.
     pub async fn role(&self, guild_id: &Snowflake, role_id: &Snowflake) -> Option<Role> {
         self.store
             .read()
@@ -1058,13 +562,11 @@ impl CacheHandle {
         None
     }
 
-    /// Runs the `contains_role` operation.
     pub async fn contains_role(&self, guild_id: &Snowflake, role_id: &Snowflake) -> bool {
         self.role(guild_id, role_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_presence` operation.
     pub async fn upsert_presence(
         &self,
         guild_id: Snowflake,
@@ -1073,7 +575,7 @@ impl CacheHandle {
     ) {
         let mut store = self.store.write().await;
         let key = (guild_id, user_id);
-        store.presences.insert(key.clone(), presence);
+        store.presences.insert(key.clone(), Arc::new(presence));
         store.presence_seen.insert(key.clone(), Instant::now());
         remember_key(&mut store.presence_order, key);
         prune_expired(&mut store, &self.config, Instant::now());
@@ -1098,7 +600,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_presence` operation.
     pub async fn remove_presence(&self, guild_id: &Snowflake, user_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), user_id.clone());
@@ -1109,14 +610,39 @@ impl CacheHandle {
     pub async fn remove_presence(&self, _guild_id: &Snowflake, _user_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `presence` operation.
     pub async fn presence(&self, guild_id: &Snowflake, user_id: &Snowflake) -> Option<Presence> {
+        self.presence_arc(guild_id, user_id)
+            .await
+            .map(|presence| presence.as_ref().clone())
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn presence_arc(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Option<Arc<Presence>> {
+        let key = (guild_id.clone(), user_id.clone());
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !seen_expired(store.presence_seen.get(&key), self.config.presence_ttl, now) {
+                return store.presences.get(&key).cloned();
+            }
+        }
+
         let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
-        store
-            .presences
-            .get(&(guild_id.clone(), user_id.clone()))
-            .cloned()
+        prune_expired(&mut store, &self.config, now);
+        store.presences.get(&key).cloned()
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn presence_arc(
+        &self,
+        _guild_id: &Snowflake,
+        _user_id: &Snowflake,
+    ) -> Option<Arc<Presence>> {
+        None
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1125,10 +651,31 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `presences` operation.
     pub async fn presences(&self, guild_id: &Snowflake) -> Vec<Presence> {
+        self.presences_arc(guild_id)
+            .await
+            .into_iter()
+            .map(|presence| presence.as_ref().clone())
+            .collect()
+    }
+
+    #[cfg(feature = "cache")]
+    pub async fn presences_arc(&self, guild_id: &Snowflake) -> Vec<Arc<Presence>> {
+        let now = Instant::now();
+        {
+            let store = self.store.read().await;
+            if !any_seen_expired(store.presence_seen.values(), self.config.presence_ttl, now) {
+                return store
+                    .presences
+                    .iter()
+                    .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
+                    .map(|(_, presence)| presence.clone())
+                    .collect();
+            }
+        }
+
         let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, Instant::now());
+        prune_expired(&mut store, &self.config, now);
         store
             .presences
             .iter()
@@ -1138,17 +685,20 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
+    pub async fn presences_arc(&self, _guild_id: &Snowflake) -> Vec<Arc<Presence>> {
+        Vec::new()
+    }
+
+    #[cfg(not(feature = "cache"))]
     pub async fn presences(&self, _guild_id: &Snowflake) -> Vec<Presence> {
         Vec::new()
     }
 
-    /// Runs the `contains_presence` operation.
     pub async fn contains_presence(&self, guild_id: &Snowflake, user_id: &Snowflake) -> bool {
         self.presence(guild_id, user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_voice_state` operation.
     pub async fn upsert_voice_state(
         &self,
         guild_id: Snowflake,
@@ -1179,7 +729,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_voice_state` operation.
     pub async fn remove_voice_state(&self, guild_id: &Snowflake, user_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), user_id.clone());
@@ -1193,7 +742,6 @@ impl CacheHandle {
     pub async fn remove_voice_state(&self, _guild_id: &Snowflake, _user_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `voice_state` operation.
     pub async fn voice_state(
         &self,
         guild_id: &Snowflake,
@@ -1217,7 +765,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `voice_states` operation.
     pub async fn voice_states(&self, guild_id: &Snowflake) -> Vec<VoiceState> {
         self.store
             .read()
@@ -1234,13 +781,11 @@ impl CacheHandle {
         Vec::new()
     }
 
-    /// Runs the `contains_voice_state` operation.
     pub async fn contains_voice_state(&self, guild_id: &Snowflake, user_id: &Snowflake) -> bool {
         self.voice_state(guild_id, user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_soundboard_sound` operation.
     pub async fn upsert_soundboard_sound(&self, guild_id: Snowflake, sound: SoundboardSound) {
         let mut store = self.store.write().await;
         let key = (guild_id, sound.sound_id.clone());
@@ -1260,7 +805,6 @@ impl CacheHandle {
     pub async fn upsert_soundboard_sound(&self, _guild_id: Snowflake, _sound: SoundboardSound) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `replace_soundboard_sounds` operation.
     pub async fn replace_soundboard_sounds(
         &self,
         guild_id: Snowflake,
@@ -1297,7 +841,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_soundboard_sound` operation.
     pub async fn remove_soundboard_sound(&self, guild_id: &Snowflake, sound_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), sound_id.clone());
@@ -1311,7 +854,6 @@ impl CacheHandle {
     pub async fn remove_soundboard_sound(&self, _guild_id: &Snowflake, _sound_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `soundboard_sound` operation.
     pub async fn soundboard_sound(
         &self,
         guild_id: &Snowflake,
@@ -1335,7 +877,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `soundboard_sounds` operation.
     pub async fn soundboard_sounds(&self, guild_id: &Snowflake) -> Vec<SoundboardSound> {
         self.store
             .read()
@@ -1352,7 +893,6 @@ impl CacheHandle {
         Vec::new()
     }
 
-    /// Runs the `contains_soundboard_sound` operation.
     pub async fn contains_soundboard_sound(
         &self,
         guild_id: &Snowflake,
@@ -1362,7 +902,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `replace_emojis` operation.
     pub async fn replace_emojis(&self, guild_id: Snowflake, emojis: Vec<Emoji>) {
         if !self.config.cache_emojis {
             return;
@@ -1391,7 +930,6 @@ impl CacheHandle {
     pub async fn replace_emojis(&self, _guild_id: Snowflake, _emojis: Vec<Emoji>) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `emoji` operation.
     pub async fn emoji(&self, guild_id: &Snowflake, emoji_id: &Snowflake) -> Option<Emoji> {
         self.store
             .read()
@@ -1407,7 +945,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `emojis` operation.
     pub async fn emojis(&self, guild_id: &Snowflake) -> Vec<Emoji> {
         self.store
             .read()
@@ -1425,7 +962,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `replace_stickers` operation.
     pub async fn replace_stickers(&self, guild_id: Snowflake, stickers: Vec<Sticker>) {
         if !self.config.cache_stickers {
             return;
@@ -1452,7 +988,6 @@ impl CacheHandle {
     pub async fn replace_stickers(&self, _guild_id: Snowflake, _stickers: Vec<Sticker>) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `sticker` operation.
     pub async fn sticker(&self, guild_id: &Snowflake, sticker_id: &Snowflake) -> Option<Sticker> {
         self.store
             .read()
@@ -1468,7 +1003,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `stickers` operation.
     pub async fn stickers(&self, guild_id: &Snowflake) -> Vec<Sticker> {
         self.store
             .read()
@@ -1486,7 +1020,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_scheduled_event` operation.
     pub async fn upsert_scheduled_event(&self, event: ScheduledEvent) {
         if !self.config.cache_scheduled_events {
             return;
@@ -1512,7 +1045,6 @@ impl CacheHandle {
     pub async fn upsert_scheduled_event(&self, _event: ScheduledEvent) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_scheduled_event` operation.
     pub async fn remove_scheduled_event(&self, guild_id: &Snowflake, event_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), event_id.clone());
@@ -1526,7 +1058,6 @@ impl CacheHandle {
     pub async fn remove_scheduled_event(&self, _guild_id: &Snowflake, _event_id: &Snowflake) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `scheduled_event` operation.
     pub async fn scheduled_event(
         &self,
         guild_id: &Snowflake,
@@ -1550,7 +1081,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `scheduled_events` operation.
     pub async fn scheduled_events(&self, guild_id: &Snowflake) -> Vec<ScheduledEvent> {
         self.store
             .read()
@@ -1568,7 +1098,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `upsert_stage_instance` operation.
     pub async fn upsert_stage_instance(&self, stage_instance: StageInstance) {
         if !self.config.cache_stage_instances {
             return;
@@ -1591,7 +1120,6 @@ impl CacheHandle {
     pub async fn upsert_stage_instance(&self, _stage_instance: StageInstance) {}
 
     #[cfg(feature = "cache")]
-    /// Runs the `remove_stage_instance` operation.
     pub async fn remove_stage_instance(&self, guild_id: &Snowflake, stage_instance_id: &Snowflake) {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), stage_instance_id.clone());
@@ -1610,7 +1138,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `stage_instance` operation.
     pub async fn stage_instance(
         &self,
         guild_id: &Snowflake,
@@ -1634,7 +1161,6 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    /// Runs the `stage_instances` operation.
     pub async fn stage_instances(&self, guild_id: &Snowflake) -> Vec<StageInstance> {
         self.store
             .read()
@@ -1652,352 +1178,14 @@ impl CacheHandle {
     }
 }
 
-#[derive(Clone)]
-/// Typed Discord API object for `UserManager`.
-pub struct UserManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl UserManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `get` operation.
-    pub async fn get(&self, user_id: impl Into<Snowflake>) -> Result<User, DiscordError> {
-        let user_id = user_id.into();
-        if let Some(user) = self.cache.user(&user_id).await {
-            return Ok(user);
-        }
-        self.http.get_user(user_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(&self, user_id: impl Into<Snowflake>) -> Option<User> {
-        self.cache.user(&user_id.into()).await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(&self, user_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_user(&user_id.into()).await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self) -> Vec<User> {
-        self.cache.users().await
-    }
-}
-
-#[derive(Clone)]
-/// Typed Discord API object for `GuildManager`.
-pub struct GuildManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl GuildManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `get` operation.
-    pub async fn get(&self, guild_id: impl Into<Snowflake>) -> Result<Guild, DiscordError> {
-        let guild_id = guild_id.into();
-        if let Some(guild) = self.cache.guild(&guild_id).await {
-            return Ok(guild);
-        }
-        self.http.get_guild(guild_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(&self, guild_id: impl Into<Snowflake>) -> Option<Guild> {
-        self.cache.guild(&guild_id.into()).await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(&self, guild_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_guild(&guild_id.into()).await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self) -> Vec<Guild> {
-        self.cache.guilds().await
-    }
-}
-
-#[derive(Clone)]
-/// Typed Discord API object for `ChannelManager`.
-pub struct ChannelManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl ChannelManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `get` operation.
-    pub async fn get(&self, channel_id: impl Into<Snowflake>) -> Result<Channel, DiscordError> {
-        let channel_id = channel_id.into();
-        if let Some(channel) = self.cache.channel(&channel_id).await {
-            return Ok(channel);
-        }
-        self.http.get_channel(channel_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(&self, channel_id: impl Into<Snowflake>) -> Option<Channel> {
-        self.cache.channel(&channel_id.into()).await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(&self, channel_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_channel(&channel_id.into()).await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self) -> Vec<Channel> {
-        self.cache.channels().await
-    }
-}
-
-#[derive(Clone)]
-/// Typed Discord API object for `MemberManager`.
-pub struct MemberManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl MemberManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `get` operation.
-    pub async fn get(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> Result<Member, DiscordError> {
-        let guild_id = guild_id.into();
-        let user_id = user_id.into();
-        if let Some(member) = self.cache.member(&guild_id, &user_id).await {
-            return Ok(member);
-        }
-        self.http.get_member(guild_id, user_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> Option<Member> {
-        self.cache.member(&guild_id.into(), &user_id.into()).await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_member(&guild_id.into(), &user_id.into())
-            .await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self, guild_id: impl Into<Snowflake>) -> Vec<Member> {
-        self.cache.members(&guild_id.into()).await
-    }
-}
-
-#[derive(Clone)]
-/// Typed Discord API object for `MessageManager`.
-pub struct MessageManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl MessageManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `get` operation.
-    pub async fn get(
-        &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> Result<Message, DiscordError> {
-        let channel_id = channel_id.into();
-        let message_id = message_id.into();
-        if let Some(message) = self.cache.message(&channel_id, &message_id).await {
-            return Ok(message);
-        }
-        self.http.get_message(channel_id, message_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(
-        &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> Option<Message> {
-        self.cache
-            .message(&channel_id.into(), &message_id.into())
-            .await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(
-        &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_message(&channel_id.into(), &message_id.into())
-            .await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self, channel_id: impl Into<Snowflake>) -> Vec<Message> {
-        self.cache.messages(&channel_id.into()).await
-    }
-}
-
-#[derive(Clone)]
-/// Typed Discord API object for `RoleManager`.
-pub struct RoleManager {
-    http: Arc<DiscordHttpClient>,
-    cache: CacheHandle,
-}
-
-impl RoleManager {
-    #[cfg(feature = "gateway")]
-    pub(crate) fn new(http: Arc<DiscordHttpClient>, cache: CacheHandle) -> Self {
-        Self { http, cache }
-    }
-
-    /// Runs the `list` operation.
-    pub async fn list(&self, guild_id: impl Into<Snowflake>) -> Result<Vec<Role>, DiscordError> {
-        let guild_id = guild_id.into();
-        let cached = self.cache.roles(&guild_id).await;
-        if !cached.is_empty() {
-            return Ok(cached);
-        }
-        self.http.list_roles(guild_id).await
-    }
-
-    /// Runs the `cached` operation.
-    pub async fn cached(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
-    ) -> Option<Role> {
-        self.cache.role(&guild_id.into(), &role_id.into()).await
-    }
-
-    /// Runs the `contains` operation.
-    pub async fn contains(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_role(&guild_id.into(), &role_id.into())
-            .await
-    }
-
-    /// Runs the `list_cached` operation.
-    pub async fn list_cached(&self, guild_id: impl Into<Snowflake>) -> Vec<Role> {
-        self.cache.roles(&guild_id.into()).await
-    }
-}
-
-#[cfg(feature = "gateway")]
-#[async_trait]
-impl CachedManager<Guild> for GuildManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Guild, DiscordError> {
-        let id = id.into();
-        if let Some(guild) = self.cache.guild(&id).await {
-            return Ok(guild);
-        }
-        self.http.get_guild(id).await
-    }
-
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<Guild> {
-        self.cache.guild(&id.into()).await
-    }
-
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_guild(&id.into()).await
-    }
-
-    async fn list_cached(&self) -> Vec<Guild> {
-        self.cache.guilds().await
-    }
-}
-
-#[cfg(feature = "gateway")]
-#[async_trait]
-impl CachedManager<Channel> for ChannelManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Channel, DiscordError> {
-        let id = id.into();
-        if let Some(channel) = self.cache.channel(&id).await {
-            return Ok(channel);
-        }
-        self.http.get_channel(id).await
-    }
-
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<Channel> {
-        self.cache.channel(&id.into()).await
-    }
-
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_channel(&id.into()).await
-    }
-
-    async fn list_cached(&self) -> Vec<Channel> {
-        self.cache.channels().await
-    }
-}
-
-#[cfg(feature = "gateway")]
-#[async_trait]
-impl CachedManager<User> for UserManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<User, DiscordError> {
-        let id = id.into();
-        if let Some(user) = self.cache.user(&id).await {
-            return Ok(user);
-        }
-        self.http.get_user(id).await
-    }
-
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<User> {
-        self.cache.user(&id.into()).await
-    }
-
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_user(&id.into()).await
-    }
-
-    async fn list_cached(&self) -> Vec<User> {
-        self.cache.users().await
-    }
-}
+#[path = "cache/managers.rs"]
+mod managers;
+pub use managers::{
+    ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager, UserManager,
+};
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
-    #[cfg(feature = "gateway")]
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -2010,7 +1198,7 @@ mod tests {
     };
     use crate::types::Emoji;
 
-    use super::{CacheConfig, CacheHandle};
+    use super::{CacheBackend, CacheConfig, CacheHandle};
     #[cfg(feature = "gateway")]
     use super::{
         ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager, UserManager,
@@ -2570,6 +1758,381 @@ mod tests {
         assert!(cache.messages(&channel_id).await.is_empty());
         assert!(cache.presences(&guild_id).await.is_empty());
         assert!(cache.members(&guild_id).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cache_read_paths_return_fresh_message_presence_and_member_entries() {
+        let cache = CacheHandle::with_config(
+            CacheConfig::unbounded()
+                .message_ttl(Duration::from_secs(60))
+                .presence_ttl(Duration::from_secs(60))
+                .member_ttl(Duration::from_secs(60)),
+        );
+        let guild_id = Snowflake::from("1");
+        let channel_id = Snowflake::from("10");
+        let user_id = Snowflake::from("20");
+        let message_id = Snowflake::from("30");
+
+        cache
+            .upsert_message(Message {
+                id: message_id.clone(),
+                channel_id: channel_id.clone(),
+                guild_id: Some(guild_id.clone()),
+                content: "fresh".to_string(),
+                ..Message::default()
+            })
+            .await;
+        cache
+            .upsert_presence(
+                guild_id.clone(),
+                user_id.clone(),
+                Presence {
+                    user_id: Some(user_id.clone()),
+                    status: Some("online".to_string()),
+                    ..Presence::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_member(
+                guild_id.clone(),
+                user_id.clone(),
+                crate::model::Member {
+                    user: Some(User {
+                        id: user_id.clone(),
+                        username: "fresh".to_string(),
+                        ..User::default()
+                    }),
+                    ..crate::model::Member::default()
+                },
+            )
+            .await;
+
+        assert!(cache.message(&channel_id, &message_id).await.is_some());
+        assert_eq!(cache.messages(&channel_id).await.len(), 1);
+        assert!(cache.presence(&guild_id, &user_id).await.is_some());
+        assert_eq!(cache.presences(&guild_id).await.len(), 1);
+        assert!(cache.member(&guild_id, &user_id).await.is_some());
+        assert_eq!(cache.members(&guild_id).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_arc_read_paths_share_hot_cached_entries_without_breaking_owned_reads() {
+        let cache = CacheHandle::with_config(
+            CacheConfig::unbounded()
+                .message_ttl(Duration::from_secs(60))
+                .presence_ttl(Duration::from_secs(60))
+                .member_ttl(Duration::from_secs(60)),
+        );
+        let guild_id = Snowflake::from("1");
+        let channel_id = Snowflake::from("10");
+        let user_id = Snowflake::from("20");
+        let message_id = Snowflake::from("30");
+
+        cache
+            .upsert_message(Message {
+                id: message_id.clone(),
+                channel_id: channel_id.clone(),
+                content: "arc message".to_string(),
+                ..Message::default()
+            })
+            .await;
+        cache
+            .upsert_presence(
+                guild_id.clone(),
+                user_id.clone(),
+                Presence {
+                    user_id: Some(user_id.clone()),
+                    status: Some("online".to_string()),
+                    ..Presence::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_member(
+                guild_id.clone(),
+                user_id.clone(),
+                crate::model::Member {
+                    user: Some(User {
+                        id: user_id.clone(),
+                        username: "arc member".to_string(),
+                        ..User::default()
+                    }),
+                    ..crate::model::Member::default()
+                },
+            )
+            .await;
+
+        let message = cache.message_arc(&channel_id, &message_id).await.unwrap();
+        let same_message = cache.message_arc(&channel_id, &message_id).await.unwrap();
+        assert!(Arc::ptr_eq(&message, &same_message));
+        assert_eq!(
+            cache.messages_arc(&channel_id).await[0].content,
+            "arc message"
+        );
+        assert_eq!(
+            cache
+                .message(&channel_id, &message_id)
+                .await
+                .unwrap()
+                .content,
+            "arc message"
+        );
+
+        let presence = cache.presence_arc(&guild_id, &user_id).await.unwrap();
+        let same_presence = cache.presence_arc(&guild_id, &user_id).await.unwrap();
+        assert!(Arc::ptr_eq(&presence, &same_presence));
+        assert_eq!(
+            cache.presences_arc(&guild_id).await[0].status.as_deref(),
+            Some("online")
+        );
+        assert_eq!(
+            cache
+                .presence(&guild_id, &user_id)
+                .await
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("online")
+        );
+
+        let member = cache.member_arc(&guild_id, &user_id).await.unwrap();
+        let same_member = cache.member_arc(&guild_id, &user_id).await.unwrap();
+        assert!(Arc::ptr_eq(&member, &same_member));
+        assert_eq!(
+            cache.members_arc(&guild_id).await[0]
+                .user
+                .as_ref()
+                .unwrap()
+                .username,
+            "arc member"
+        );
+        assert_eq!(
+            cache
+                .member(&guild_id, &user_id)
+                .await
+                .unwrap()
+                .user
+                .unwrap()
+                .username,
+            "arc member"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_backend_trait_delegates_hot_paths_to_cache_handle() {
+        async fn exercise_backend<B: CacheBackend + ?Sized>(
+            backend: &B,
+            guild_id: Snowflake,
+            channel_id: Snowflake,
+            user_id: Snowflake,
+            message_id: Snowflake,
+        ) {
+            backend
+                .put_member(
+                    guild_id.clone(),
+                    user_id.clone(),
+                    crate::model::Member {
+                        user: Some(User {
+                            id: user_id.clone(),
+                            username: "backend member".to_string(),
+                            ..User::default()
+                        }),
+                        ..crate::model::Member::default()
+                    },
+                )
+                .await
+                .unwrap();
+            backend
+                .put_message(Message {
+                    id: message_id.clone(),
+                    channel_id: channel_id.clone(),
+                    content: "backend message".to_string(),
+                    ..Message::default()
+                })
+                .await
+                .unwrap();
+            backend
+                .put_presence(
+                    guild_id.clone(),
+                    user_id.clone(),
+                    Presence {
+                        user_id: Some(user_id.clone()),
+                        status: Some("idle".to_string()),
+                        ..Presence::default()
+                    },
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                backend
+                    .get_member(&guild_id, &user_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .user
+                    .as_ref()
+                    .unwrap()
+                    .username,
+                "backend member"
+            );
+            assert_eq!(
+                backend
+                    .get_message(&channel_id, &message_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content,
+                "backend message"
+            );
+            assert_eq!(
+                backend
+                    .get_presence(&guild_id, &user_id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .status
+                    .as_deref(),
+                Some("idle")
+            );
+            assert_eq!(backend.list_members(&guild_id).await.unwrap().len(), 1);
+            assert_eq!(backend.list_messages(&channel_id).await.unwrap().len(), 1);
+            assert_eq!(backend.list_presences(&guild_id).await.unwrap().len(), 1);
+
+            backend
+                .delete_message(&channel_id, &message_id)
+                .await
+                .unwrap();
+            backend.delete_presence(&guild_id, &user_id).await.unwrap();
+            backend.delete_member(&guild_id, &user_id).await.unwrap();
+            assert!(backend
+                .get_message(&channel_id, &message_id)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(backend
+                .get_presence(&guild_id, &user_id)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(backend
+                .get_member(&guild_id, &user_id)
+                .await
+                .unwrap()
+                .is_none());
+        }
+
+        let cache = CacheHandle::new();
+        exercise_backend(
+            &cache,
+            Snowflake::from("1"),
+            Snowflake::from("10"),
+            Snowflake::from("20"),
+            Snowflake::from("30"),
+        )
+        .await;
+
+        CacheBackend::put_message(
+            &cache,
+            Message {
+                id: Snowflake::from("31"),
+                channel_id: Snowflake::from("10"),
+                content: "clear me".to_string(),
+                ..Message::default()
+            },
+        )
+        .await
+        .unwrap();
+        cache.purge_expired_entries().await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache
+            .message_arc(&Snowflake::from("10"), &Snowflake::from("31"))
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_read_paths_lazily_prune_expired_entries() {
+        let seed_cache = |suffix: &'static str| async move {
+            let cache = CacheHandle::with_config(
+                CacheConfig::unbounded()
+                    .message_ttl(Duration::from_millis(1))
+                    .presence_ttl(Duration::from_millis(1))
+                    .member_ttl(Duration::from_millis(1)),
+            );
+            let guild_id = Snowflake::from(format!("1{suffix}"));
+            let channel_id = Snowflake::from(format!("10{suffix}"));
+            let user_id = Snowflake::from(format!("20{suffix}"));
+            let message_id = Snowflake::from(format!("30{suffix}"));
+
+            cache
+                .upsert_message(Message {
+                    id: message_id.clone(),
+                    channel_id: channel_id.clone(),
+                    guild_id: Some(guild_id.clone()),
+                    content: "soon-expired".to_string(),
+                    ..Message::default()
+                })
+                .await;
+            cache
+                .upsert_presence(
+                    guild_id.clone(),
+                    user_id.clone(),
+                    Presence {
+                        user_id: Some(user_id.clone()),
+                        status: Some("online".to_string()),
+                        ..Presence::default()
+                    },
+                )
+                .await;
+            cache
+                .upsert_member(
+                    guild_id.clone(),
+                    user_id.clone(),
+                    crate::model::Member {
+                        user: Some(User {
+                            id: user_id.clone(),
+                            username: "soon-expired".to_string(),
+                            ..User::default()
+                        }),
+                        ..crate::model::Member::default()
+                    },
+                )
+                .await;
+
+            (cache, guild_id, channel_id, user_id, message_id)
+        };
+
+        let (message_cache, _, channel_id, _, message_id) = seed_cache("1").await;
+        let (presence_cache, presence_guild_id, _, presence_user_id, _) = seed_cache("2").await;
+        let (member_cache, member_guild_id, _, member_user_id, _) = seed_cache("3").await;
+        let (messages_cache, _, messages_channel_id, _, _) = seed_cache("4").await;
+        let (presences_cache, presences_guild_id, _, _, _) = seed_cache("5").await;
+        let (members_cache, members_guild_id, _, _, _) = seed_cache("6").await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(message_cache
+            .message(&channel_id, &message_id)
+            .await
+            .is_none());
+        assert!(presence_cache
+            .presence(&presence_guild_id, &presence_user_id)
+            .await
+            .is_none());
+        assert!(member_cache
+            .member(&member_guild_id, &member_user_id)
+            .await
+            .is_none());
+        assert!(messages_cache
+            .messages(&messages_channel_id)
+            .await
+            .is_empty());
+        assert!(presences_cache
+            .presences(&presences_guild_id)
+            .await
+            .is_empty());
+        assert!(members_cache.members(&members_guild_id).await.is_empty());
     }
 
     #[tokio::test]
@@ -3182,6 +2745,14 @@ mod tests {
                 .map(|user| user.id.clone()),
             Some(user_id.clone())
         );
+        let member_arc = member_manager
+            .cached_arc(guild_id.clone(), user_id.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            member_arc.user.as_ref().map(|user| user.id.clone()),
+            Some(user_id.clone())
+        );
         assert_eq!(
             message_manager
                 .cached(channel_id.clone(), message_id.clone())
@@ -3190,6 +2761,11 @@ mod tests {
                 .id,
             message_id
         );
+        let message_arc = message_manager
+            .cached_arc(channel_id.clone(), message_id.clone())
+            .await
+            .unwrap();
+        assert_eq!(message_arc.id, message_id);
         assert_eq!(
             role_manager
                 .cached(guild_id.clone(), role_id.clone())
@@ -3204,7 +2780,18 @@ mod tests {
         assert_eq!(user_manager.list_cached().await.len(), 1);
         assert_eq!(member_manager.list_cached(guild_id.clone()).await.len(), 1);
         assert_eq!(
+            member_manager.list_cached_arc(guild_id.clone()).await.len(),
+            1
+        );
+        assert_eq!(
             message_manager.list_cached(channel_id.clone()).await.len(),
+            1
+        );
+        assert_eq!(
+            message_manager
+                .list_cached_arc(channel_id.clone())
+                .await
+                .len(),
             1
         );
         assert_eq!(role_manager.list_cached(guild_id.clone()).await.len(), 1);

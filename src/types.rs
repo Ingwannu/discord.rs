@@ -20,18 +20,15 @@ pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
 /// Typed Discord API object for `Emoji`.
 pub struct Emoji {
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `id`.
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `name`.
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `animated`.
     pub animated: Option<bool>,
 }
 
 impl Emoji {
-    /// Creates or returns `unicode` data.
+    /// Creates a `unicode` value.
     pub fn unicode(emoji: &str) -> Self {
         Self {
             name: Some(emoji.to_string()),
@@ -40,7 +37,7 @@ impl Emoji {
         }
     }
 
-    /// Creates or returns `custom` data.
+    /// Creates a `custom` value.
     pub fn custom(name: &str, id: &str, animated: bool) -> Self {
         Self {
             name: Some(name.to_string()),
@@ -53,25 +50,21 @@ impl Emoji {
 #[derive(Clone, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MediaGalleryItem`.
 pub struct MediaGalleryItem {
-    /// Discord API payload field `media`.
     pub media: MediaInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `description`.
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `spoiler`.
     pub spoiler: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MediaInfo`.
 pub struct MediaInfo {
-    /// Discord API payload field `url`.
     pub url: String,
 }
 
 impl MediaGalleryItem {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(url: &str) -> Self {
         Self {
             media: MediaInfo {
@@ -82,13 +75,11 @@ impl MediaGalleryItem {
         }
     }
 
-    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
-    /// Runs the `spoiler` operation.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
         self.spoiler = Some(spoiler);
         self
@@ -98,23 +89,18 @@ impl MediaGalleryItem {
 #[derive(Clone, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `SelectOption`.
 pub struct SelectOption {
-    /// Discord API payload field `label`.
     pub label: String,
-    /// Discord API payload field `value`.
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `description`.
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `emoji`.
     pub emoji: Option<Emoji>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    /// Discord API payload field `default`.
     pub default: Option<bool>,
 }
 
 impl SelectOption {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(label: &str, value: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -125,19 +111,16 @@ impl SelectOption {
         }
     }
 
-    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
-    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: &str) -> Self {
         self.emoji = Some(Emoji::unicode(emoji));
         self
     }
 
-    /// Runs the `default_selected` operation.
     pub fn default_selected(mut self, default: bool) -> Self {
         self.default = Some(default);
         self
@@ -147,18 +130,14 @@ impl SelectOption {
 #[derive(Clone, Default)]
 /// Typed Discord API object for `ButtonConfig`.
 pub struct ButtonConfig {
-    /// Discord API payload field `custom_id`.
     pub custom_id: String,
-    /// Discord API payload field `label`.
     pub label: String,
-    /// Discord API payload field `style`.
     pub style: u8,
-    /// Discord API payload field `emoji`.
     pub emoji: Option<String>,
 }
 
 impl ButtonConfig {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(custom_id: &str, label: &str) -> Self {
         Self {
             custom_id: custom_id.to_string(),
@@ -168,13 +147,11 @@ impl ButtonConfig {
         }
     }
 
-    /// Runs the `style` operation.
     pub fn style(mut self, style: u8) -> Self {
         self.style = style;
         self
     }
 
-    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: &str) -> Self {
         self.emoji = Some(emoji.to_string());
         self

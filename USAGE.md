@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "2.0.0"
+discordrs = "2.0.1"
 
 # Gateway runtime
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.0", default-features = false }
+discordrs = { version = "2.0.1", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "2.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.1", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "2.0.0", features = ["voice"] }
+discordrs = { version = "2.0.1", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hooks
-discordrs = { version = "2.0.0", features = ["voice", "dave"] }
+discordrs = { version = "2.0.1", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "2.0.0", features = ["gateway", "voice"] }
+discordrs = { version = "2.0.1", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.1", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -58,6 +58,8 @@ The public API was tightened to make the typed surface the default:
 - Builder implementation submodules are private. Import from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
 - `1.2.2` fixes Gateway compression handling so default connections no longer request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
+- `get_public_archived_threads(...)` and `get_guild_audit_log(...)` are legacy raw-JSON helpers. Prefer `list_public_archived_threads(...)` and `get_guild_audit_log_typed(...)` for typed responses.
+- `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
 
 Common replacements:
 
@@ -862,6 +864,18 @@ let client = Client::builder("bot-token", gateway_intents::GUILD_MESSAGES)
 
 Use `CacheConfig::unbounded()` only when retaining all cached gateway data is an intentional operator decision.
 
+For hot member, message, and presence reads, use the `Arc` variants to avoid deep cloning cached payloads:
+
+```rust
+async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::Snowflake, user_id: discordrs::Snowflake) {
+    if let Some(member) = ctx.members().cached_arc(guild_id, user_id).await {
+        println!("Cached member: {}", member.user.id);
+    }
+}
+```
+
+The `cache` feature also exposes `CacheBackend`, an async trait for external member/message/presence stores. The default `CacheHandle` implements it, so custom backends can follow the same `Arc`-returning read shape without changing the owned manager APIs.
+
 ## 8.5 REST Safety Notes
 
 `RestClient` validates token-like path segments before authenticated routes are built. This includes invite codes passed to `get_invite`, `get_invite_with_options`, and `delete_invite`, so user-provided invite text cannot inject `/`, `\`, `?`, `#`, or control characters into bot-authorized REST paths.
@@ -1291,7 +1305,7 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `try_interactions_endpoint(...)`
 - `try_typed_interactions_endpoint(...)`
 - `AppFramework`, `AppFrameworkBuilder`, `RouteKey`
-- `CacheHandle`, `GuildManager`, `ChannelManager`, `MemberManager`, `MessageManager`, `RoleManager`
+- `CacheConfig`, `CacheHandle`, `CacheBackend`, `GuildManager`, `ChannelManager`, `MemberManager`, `MessageManager`, `RoleManager`
 - `ShardMessenger`
 - `ShardSupervisor`
 - `VoiceRuntimeConfig`

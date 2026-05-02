@@ -11,7 +11,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
 - Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
-- Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults and explicit `CacheConfig` overrides
+- Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults, cheap `Arc` read APIs for hot member/message/presence paths, and explicit `CacheConfig` overrides
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
@@ -32,43 +32,43 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.0.0"
+discordrs = "2.0.1"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.0", default-features = false }
+discordrs = { version = "2.0.1", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "2.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.1", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "2.0.0", features = ["voice"] }
+discordrs = { version = "2.0.1", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "2.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
 
 # DAVE receive/outbound media integration
-discordrs = { version = "2.0.0", features = ["voice", "dave"] }
+discordrs = { version = "2.0.1", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.1", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.0", features = ["gateway", "interactions"] }
+discordrs = { version = "2.0.1", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup
@@ -262,11 +262,11 @@ fn app(public_key: &str) -> Router {
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio, async-trait |
 | `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
-| `cache` | Enables the in-memory cache storage used by gateway cache managers; included in default features | tokio |
+| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
 | `collectors` | Async collectors for messages and interactions | tokio |
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
 | `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
@@ -284,6 +284,8 @@ fn app(public_key: &str) -> Router {
 - `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
 - Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.
 - Use `CacheHandle::is_enabled()` when code may be compiled with `default-features = false`; cache storage is enabled in the default feature set.
+- Use `member_arc(...)`, `message_arc(...)`, `presence_arc(...)`, and the manager `cached_arc(...)` helpers when hot cache reads should avoid deep cloning large cached payloads.
+- Implement `CacheBackend` when experimenting with an external member/message/presence store; `CacheHandle` implements the same trait for the default in-memory backend.
 - Invite codes, webhook tokens, interaction tokens, and other token-like REST path segments are validated before authenticated paths are built.
 - Generated REST query strings are percent-encoded, and repeated HTTP 429 responses are retried up to a bounded limit before returning `DiscordError::RateLimit`.
 - Use `OAuth2Client` for OAuth2 authorization-code or refresh-token flows; it is intentionally separate from bot-token `RestClient` authorization.

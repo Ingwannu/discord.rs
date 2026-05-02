@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
@@ -71,6 +71,7 @@ struct InteractionsState<H> {
 }
 
 const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
+const INTERACTION_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
     let public_key_bytes = hex::decode(public_key)?;
@@ -181,7 +182,7 @@ fn verify_discord_request_signature_at_time(
     .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
-/// Runs the `verify_discord_signature` helper.
+/// Provides the `verify_discord_signature` helper.
 pub fn verify_discord_signature(
     public_key: &str,
     signature: &str,
@@ -285,7 +286,7 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
-/// Runs the `try_interactions_endpoint` helper.
+/// Provides the `try_interactions_endpoint` helper.
 pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, DiscordError>
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
@@ -294,19 +295,22 @@ where
 
     Ok(Router::new()
         .route("/interactions", post(handle_interactions_request::<H>))
+        .layer(DefaultBodyLimit::max(INTERACTION_BODY_LIMIT_BYTES))
         .with_state(InteractionsState {
             verifying_key,
             handler,
         }))
 }
 
-/// Runs the `interactions_endpoint` helper.
+/// Provides the `interactions_endpoint` helper.
 pub fn interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
 {
-    try_interactions_endpoint(public_key, handler)
-        .expect("invalid Discord public key for interactions endpoint")
+    match try_interactions_endpoint(public_key, handler) {
+        Ok(router) => router,
+        Err(error) => panic!("invalid Discord public key for interactions endpoint: {error}"),
+    }
 }
 
 async fn handle_typed_interactions_request<H>(
@@ -366,7 +370,7 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
-/// Runs the `try_typed_interactions_endpoint` helper.
+/// Provides the `try_typed_interactions_endpoint` helper.
 pub fn try_typed_interactions_endpoint<H>(
     public_key: &str,
     handler: H,
@@ -381,19 +385,24 @@ where
             "/interactions",
             post(handle_typed_interactions_request::<H>),
         )
+        .layer(DefaultBodyLimit::max(INTERACTION_BODY_LIMIT_BYTES))
         .with_state(InteractionsState {
             verifying_key,
             handler,
         }))
 }
 
-/// Runs the `typed_interactions_endpoint` helper.
+/// Provides the `typed_interactions_endpoint` helper.
 pub fn typed_interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: TypedInteractionHandler + Clone + Send + Sync + 'static,
 {
-    try_typed_interactions_endpoint(public_key, handler)
-        .expect("invalid Discord public key for typed interactions endpoint")
+    match try_typed_interactions_endpoint(public_key, handler) {
+        Ok(router) => router,
+        Err(error) => {
+            panic!("invalid Discord public key for typed interactions endpoint: {error}")
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     future::Future,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
@@ -99,6 +99,12 @@ pub struct AppFramework {
 }
 
 impl AppFramework {
+    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<(RouteKey, Snowflake), Instant>> {
+        self.cooldown_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Starts building a new application framework.
     pub fn builder() -> AppFrameworkBuilder {
         AppFrameworkBuilder::default()
@@ -138,7 +144,13 @@ impl AppFramework {
         let cooldown = self.cooldowns.get(&ctx.route)?;
         let user_id = ctx.user_id()?.clone();
         let now = Instant::now();
-        let mut state = self.cooldown_state.lock().ok()?;
+        let mut state = self.lock_cooldowns();
+        state.retain(|(route, _), last_seen| {
+            self.cooldowns
+                .get(route)
+                .map(|duration| now.saturating_duration_since(*last_seen) < *duration)
+                .unwrap_or(false)
+        });
         let key = (ctx.route.clone(), user_id);
 
         if let Some(last_seen) = state.get(&key) {
@@ -408,6 +420,33 @@ mod tests {
             }
             _ => panic!("unexpected response"),
         }
+
+        let framework = AppFramework::builder()
+            .command("short", |_ctx| async {
+                InteractionResponse::ChannelMessage(json!({ "content": "ok" }))
+            })
+            .cooldown(
+                RouteKey::Command("short".to_string()),
+                Duration::from_millis(1),
+            )
+            .build();
+
+        let (mut ctx, interaction) = command("short", "12");
+        ctx.guild_id = Some(Snowflake::from("200"));
+        assert!(matches!(
+            framework.dispatch(ctx, interaction).await,
+            InteractionResponse::ChannelMessage(_)
+        ));
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let (mut ctx, interaction) = command("short", "12");
+        ctx.guild_id = Some(Snowflake::from("200"));
+        match framework.dispatch(ctx, interaction).await {
+            InteractionResponse::ChannelMessage(value) => {
+                assert_eq!(value["content"], json!("ok"));
+            }
+            _ => panic!("unexpected response"),
+        }
+        assert_eq!(framework.lock_cooldowns().len(), 1);
     }
 
     #[tokio::test]

@@ -2,7 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use flate2::{Decompress, FlushDecompress};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -19,7 +18,10 @@ use tracing::{debug, error, info, warn};
 use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
-use crate::ws::{GatewayCompression, GatewayConnectionConfig};
+use crate::ws::GatewayConnectionConfig;
+
+use super::compression::{decode_gateway_message, GatewayCompressionDecoder};
+use super::outbound::{run_gateway_outbound_worker, send_gateway_outbound, GatewayOutboundMessage};
 
 // Gateway opcodes
 const OP_DISPATCH: u64 = 0;
@@ -30,10 +32,8 @@ const OP_RECONNECT: u64 = 7;
 const OP_INVALID_SESSION: u64 = 9;
 const OP_HELLO: u64 = 10;
 const OP_HEARTBEAT_ACK: u64 = 11;
-const ZLIB_SUFFIX: &[u8] = &[0x00, 0x00, 0xff, 0xff];
-const PRESENCE_UPDATE_LIMIT: usize = 5;
-const PRESENCE_UPDATE_WINDOW: Duration = Duration::from_secs(60);
-const GATEWAY_COMMAND_MIN_SPACING: Duration = Duration::from_millis(250);
+pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
+static JITTER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct GatewayClient {
     token: String,
@@ -42,7 +42,8 @@ pub(crate) struct GatewayClient {
     resume_gateway_url: Option<String>,
     gateway_config: GatewayConnectionConfig,
     shard_info: Option<[u32; 2]>,
-    command_rx: Option<mpsc::UnboundedReceiver<GatewayCommand>>,
+    command_rx: Option<mpsc::Receiver<GatewayCommand>>,
+    deferred_commands: VecDeque<GatewayCommand>,
     #[cfg(feature = "sharding")]
     supervisor_callback: Option<SupervisorCallback>,
     sequence: Arc<AtomicU64>,
@@ -65,79 +66,6 @@ pub(crate) enum GatewayCommand {
     SendPayload(Value),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GatewayCommandClass {
-    PresenceUpdate,
-    BurstSensitive,
-    Other,
-}
-
-#[derive(Default)]
-struct GatewayOutboundLimiter {
-    presence_updates: VecDeque<Instant>,
-    next_burst_sensitive_at: Option<Instant>,
-}
-
-impl GatewayOutboundLimiter {
-    async fn wait_for_command(&mut self, command: &GatewayCommand) {
-        while let Some(delay) = self.reserve_delay(command, Instant::now()) {
-            sleep(delay).await;
-        }
-    }
-
-    fn reserve_delay(&mut self, command: &GatewayCommand, now: Instant) -> Option<Duration> {
-        match classify_gateway_command(command) {
-            GatewayCommandClass::PresenceUpdate => self.reserve_presence_update(now),
-            GatewayCommandClass::BurstSensitive => self.reserve_burst_sensitive(now),
-            GatewayCommandClass::Other => None,
-        }
-    }
-
-    fn reserve_presence_update(&mut self, now: Instant) -> Option<Duration> {
-        while self.presence_updates.front().is_some_and(|sent_at| {
-            now.saturating_duration_since(*sent_at) >= PRESENCE_UPDATE_WINDOW
-        }) {
-            self.presence_updates.pop_front();
-        }
-
-        if self.presence_updates.len() >= PRESENCE_UPDATE_LIMIT {
-            let next_allowed = self.presence_updates[0] + PRESENCE_UPDATE_WINDOW;
-            return Some(next_allowed.saturating_duration_since(now));
-        }
-
-        self.presence_updates.push_back(now);
-        None
-    }
-
-    fn reserve_burst_sensitive(&mut self, now: Instant) -> Option<Duration> {
-        if let Some(next_allowed) = self.next_burst_sensitive_at {
-            if next_allowed > now {
-                return Some(next_allowed.saturating_duration_since(now));
-            }
-        }
-
-        self.next_burst_sensitive_at = Some(now + GATEWAY_COMMAND_MIN_SPACING);
-        None
-    }
-}
-
-fn classify_gateway_command(command: &GatewayCommand) -> GatewayCommandClass {
-    match command {
-        GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_) => {
-            GatewayCommandClass::PresenceUpdate
-        }
-        GatewayCommand::RequestGuildMembers(_) | GatewayCommand::RequestChannelInfo(_) => {
-            GatewayCommandClass::BurstSensitive
-        }
-        GatewayCommand::SendPayload(payload) => match payload.get("op").and_then(Value::as_u64) {
-            Some(3) => GatewayCommandClass::PresenceUpdate,
-            Some(4 | 8 | 14 | 31 | 43) => GatewayCommandClass::BurstSensitive,
-            _ => GatewayCommandClass::Other,
-        },
-        GatewayCommand::Shutdown | GatewayCommand::Reconnect => GatewayCommandClass::Other,
-    }
-}
-
 impl GatewayClient {
     pub fn new(token: String, intents: u64) -> Self {
         Self {
@@ -148,6 +76,7 @@ impl GatewayClient {
             gateway_config: GatewayConnectionConfig::default(),
             shard_info: None,
             command_rx: None,
+            deferred_commands: VecDeque::new(),
             #[cfg(feature = "sharding")]
             supervisor_callback: None,
             sequence: Arc::new(AtomicU64::new(0)),
@@ -169,7 +98,7 @@ impl GatewayClient {
         self
     }
 
-    pub fn control(mut self, command_rx: mpsc::UnboundedReceiver<GatewayCommand>) -> Self {
+    pub fn control(mut self, command_rx: mpsc::Receiver<GatewayCommand>) -> Self {
         self.command_rx = Some(command_rx);
         self
     }
@@ -241,8 +170,10 @@ impl GatewayClient {
     ) -> Result<ReconnectAction, crate::error::DiscordError> {
         let (ws_stream, _) = connect_async(url).await?;
         let (mut write, mut read) = ws_stream.split();
-        let mut compression_decoder =
-            GatewayCompressionDecoder::new(self.gateway_config.compression_kind());
+        let mut compression_decoder = GatewayCompressionDecoder::new(
+            self.gateway_config.compression_kind(),
+        )
+        .map_err(|error| format!("failed to initialize gateway compression decoder: {error}"))?;
 
         // Wait for Hello
         let hello_text = loop {
@@ -316,8 +247,16 @@ impl GatewayClient {
             }
         });
 
-        // Main read loop
-        let mut outbound_limiter = GatewayOutboundLimiter::default();
+        // Main read loop. The websocket sink lives in a worker so rate-limit
+        // sleeps never block inbound frames or heartbeat ACK processing.
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (outbound_error_tx, mut outbound_error_rx) = mpsc::unbounded_channel();
+        let mut outbound_handle = tokio::spawn(async move {
+            if let Err(error) = run_gateway_outbound_worker(write, outbound_rx).await {
+                let _ = outbound_error_tx.send(error.to_string());
+            }
+        });
+
         let action = loop {
             tokio::select! {
                 msg = read.next() => {
@@ -404,7 +343,10 @@ impl GatewayClient {
                                 "op": OP_HEARTBEAT,
                                 "d": if seq == 0 { Value::Null } else { Value::Number(seq.into()) }
                             });
-                            write.send(WsMessage::Text(hb.to_string().into())).await?;
+                            send_gateway_outbound(
+                                &outbound_tx,
+                                GatewayOutboundMessage::ImmediatePayload(hb),
+                            )?;
                         }
                         OP_HEARTBEAT_ACK => {
                             self.heartbeat_ack_received.store(true, Ordering::Relaxed);
@@ -440,66 +382,32 @@ impl GatewayClient {
                         warn!("Zombie connection detected, reconnecting");
                         break ReconnectAction::Resume;
                     }
-                    write.send(WsMessage::Text(msg.into())).await?;
+                    send_gateway_outbound(
+                        &outbound_tx,
+                        GatewayOutboundMessage::ImmediateText(msg),
+                    )?;
                     debug!("Sent heartbeat");
                 }
-                command = recv_control_command(&mut self.command_rx) => {
+                Some(error) = outbound_error_rx.recv() => {
+                    #[cfg(feature = "sharding")]
+                    self.publish_error(error.clone());
+                    warn!("Gateway outbound worker failed: {error}");
+                    break ReconnectAction::Resume;
+                }
+                command = recv_control_command(&mut self.command_rx, &mut self.deferred_commands) => {
                     match command {
                         Some(GatewayCommand::Shutdown) => {
-                            let _ = write
-                                .send(WsMessage::Close(Some(CloseFrame {
+                            let _ = outbound_tx.send(GatewayOutboundMessage::Close(Some(CloseFrame {
                                     code: CloseCode::Normal,
                                     reason: "supervisor shutdown".into(),
-                                })))
-                                .await;
+                                })));
                             break ReconnectAction::Shutdown;
                         }
                         Some(GatewayCommand::Reconnect) => break ReconnectAction::Resume,
-                        Some(GatewayCommand::UpdatePresence(status)) => {
-                            let command = GatewayCommand::UpdatePresence(status);
-                            outbound_limiter.wait_for_command(&command).await;
-                            let GatewayCommand::UpdatePresence(status) = command else {
-                                unreachable!("command was constructed as UpdatePresence");
-                            };
-                            let payload =
-                                update_presence_payload(UpdatePresence::online_with_activity(status));
-                            write.send(WsMessage::Text(payload.to_string().into())).await?;
-                        }
-                        Some(GatewayCommand::UpdatePresenceData(presence)) => {
-                            let command = GatewayCommand::UpdatePresenceData(presence);
-                            outbound_limiter.wait_for_command(&command).await;
-                            let GatewayCommand::UpdatePresenceData(presence) = command else {
-                                unreachable!("command was constructed as UpdatePresenceData");
-                            };
-                            let payload = update_presence_payload(presence);
-                            write.send(WsMessage::Text(payload.to_string().into())).await?;
-                        }
-                        Some(GatewayCommand::RequestGuildMembers(request)) => {
-                            let command = GatewayCommand::RequestGuildMembers(request);
-                            outbound_limiter.wait_for_command(&command).await;
-                            let GatewayCommand::RequestGuildMembers(request) = command else {
-                                unreachable!("command was constructed as RequestGuildMembers");
-                            };
-                            let payload = request_guild_members_payload(request);
-                            write.send(WsMessage::Text(payload.to_string().into())).await?;
-                        }
-                        Some(GatewayCommand::RequestChannelInfo(request)) => {
-                            let command = GatewayCommand::RequestChannelInfo(request);
-                            outbound_limiter.wait_for_command(&command).await;
-                            let GatewayCommand::RequestChannelInfo(request) = command else {
-                                unreachable!("command was constructed as RequestChannelInfo");
-                            };
-                            let payload = request_channel_info_payload(request);
-                            write.send(WsMessage::Text(payload.to_string().into())).await?;
-                        }
-                        Some(GatewayCommand::SendPayload(payload)) => {
-                            let command = GatewayCommand::SendPayload(payload);
-                            outbound_limiter.wait_for_command(&command).await;
-                            let GatewayCommand::SendPayload(payload) = command else {
-                                unreachable!("command was constructed as SendPayload");
-                            };
-                            write.send(WsMessage::Text(payload.to_string().into())).await?;
-                        }
+                        Some(command) => send_gateway_outbound(
+                            &outbound_tx,
+                            GatewayOutboundMessage::Limited(command),
+                        )?,
                         None => {}
                     }
                 }
@@ -507,18 +415,19 @@ impl GatewayClient {
         };
 
         heartbeat_handle.abort();
+        if matches!(action, ReconnectAction::Shutdown) {
+            drop(outbound_tx);
+            if timeout(Duration::from_secs(1), &mut outbound_handle)
+                .await
+                .is_err()
+            {
+                warn!("Gateway outbound worker did not stop after shutdown close");
+                outbound_handle.abort();
+            }
+        } else {
+            outbound_handle.abort();
+        }
         Ok(action)
-    }
-}
-
-fn decode_gateway_message(
-    message: WsMessage,
-    compression_decoder: &mut GatewayCompressionDecoder,
-) -> Result<Option<String>, String> {
-    match message {
-        WsMessage::Text(text) => Ok(Some(text.to_string())),
-        WsMessage::Binary(bytes) => compression_decoder.decode(&bytes),
-        _ => Ok(None),
     }
 }
 
@@ -529,8 +438,13 @@ enum ReconnectAction {
 }
 
 async fn recv_control_command(
-    command_rx: &mut Option<mpsc::UnboundedReceiver<GatewayCommand>>,
+    command_rx: &mut Option<mpsc::Receiver<GatewayCommand>>,
+    deferred_commands: &mut VecDeque<GatewayCommand>,
 ) -> Option<GatewayCommand> {
+    if let Some(command) = deferred_commands.pop_front() {
+        return Some(command);
+    }
+
     match command_rx {
         Some(command_rx) => command_rx.recv().await,
         None => std::future::pending::<Option<GatewayCommand>>().await,
@@ -589,12 +503,21 @@ pub(crate) fn request_channel_info_payload(request: RequestChannelInfo) -> Value
 }
 
 fn rand_jitter() -> f64 {
-    // Simple jitter: use current time nanos as pseudo-random
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    (nanos as f64 % 1000.0) / 1000.0
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let counter = JITTER_COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
+    let pid = u64::from(std::process::id());
+    let mut mixed = nanos ^ counter.rotate_left(17) ^ pid.rotate_left(32);
+
+    mixed ^= mixed >> 30;
+    mixed = mixed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed ^= mixed >> 27;
+    mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^= mixed >> 31;
+
+    ((mixed >> 11) as f64) / ((1_u64 << 53) as f64)
 }
 
 fn initial_heartbeat_delay(heartbeat_interval_ms: u64, jitter_factor: f64) -> Duration {
@@ -661,139 +584,6 @@ fn terminal_close_error(frame: Option<CloseFrame>) -> String {
     }
 }
 
-struct GatewayZlibStream {
-    decoder: Decompress,
-    pending: Vec<u8>,
-}
-
-enum GatewayCompressionDecoder {
-    None,
-    Zlib(GatewayZlibStream),
-    #[cfg(feature = "zstd-stream")]
-    Zstd(GatewayZstdStream),
-}
-
-impl GatewayCompressionDecoder {
-    fn new(compression: Option<GatewayCompression>) -> Self {
-        match compression {
-            Some(GatewayCompression::ZlibStream) => Self::Zlib(GatewayZlibStream::new()),
-            #[cfg(feature = "zstd-stream")]
-            Some(GatewayCompression::ZstdStream) => Self::Zstd(GatewayZstdStream::new()),
-            None => Self::None,
-        }
-    }
-
-    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
-        match self {
-            GatewayCompressionDecoder::None => String::from_utf8(bytes.to_vec())
-                .map(Some)
-                .map_err(|e| format!("binary gateway payload was not valid UTF-8: {e}")),
-            GatewayCompressionDecoder::Zlib(stream) => stream.decode(bytes),
-            #[cfg(feature = "zstd-stream")]
-            GatewayCompressionDecoder::Zstd(stream) => stream.decode(bytes),
-        }
-    }
-}
-
-#[cfg(feature = "zstd-stream")]
-struct GatewayZstdStream {
-    decoder: zstd::stream::raw::Decoder<'static>,
-}
-
-#[cfg(feature = "zstd-stream")]
-impl GatewayZstdStream {
-    fn new() -> Self {
-        Self {
-            decoder: zstd::stream::raw::Decoder::new()
-                .expect("zstd-stream decoder should initialize"),
-        }
-    }
-
-    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
-        use zstd::stream::raw::{Operation, OutBuffer};
-
-        let mut input = bytes;
-        let mut decompressed = Vec::new();
-        while !input.is_empty() {
-            let mut output = [0_u8; 8192];
-            let status = self
-                .decoder
-                .run_on_buffers(input, &mut output)
-                .map_err(|e| format!("zstd-stream decompression failed: {e}"))?;
-            decompressed.extend_from_slice(&output[..status.bytes_written]);
-            input = &input[status.bytes_read..];
-
-            if status.bytes_read == 0 && status.bytes_written == 0 {
-                break;
-            }
-        }
-
-        loop {
-            let mut output = [0_u8; 8192];
-            let mut output_buffer = OutBuffer::around(&mut output);
-            let remaining = self
-                .decoder
-                .flush(&mut output_buffer)
-                .map_err(|e| format!("zstd-stream flush failed: {e}"))?;
-            let written = output_buffer.pos();
-            decompressed.extend_from_slice(&output[..written]);
-            if remaining == 0 || written == 0 {
-                break;
-            }
-        }
-
-        if decompressed.is_empty() {
-            return Ok(None);
-        }
-
-        String::from_utf8(decompressed)
-            .map(Some)
-            .map_err(|e| format!("zstd-stream payload was not valid UTF-8: {e}"))
-    }
-}
-
-impl GatewayZlibStream {
-    fn new() -> Self {
-        Self {
-            decoder: Decompress::new(true),
-            pending: Vec::new(),
-        }
-    }
-
-    fn decode(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
-        let mut input = bytes;
-        loop {
-            let input_before = self.decoder.total_in();
-            let output_before = self.decoder.total_out();
-            let mut output = [0_u8; 8192];
-            self.decoder
-                .decompress(input, &mut output, FlushDecompress::Sync)
-                .map_err(|e| format!("zlib-stream decompression failed: {e}"))?;
-
-            let consumed = (self.decoder.total_in() - input_before) as usize;
-            let produced = (self.decoder.total_out() - output_before) as usize;
-            self.pending.extend_from_slice(&output[..produced]);
-
-            if consumed == 0 && produced == 0 {
-                break;
-            }
-            input = &input[consumed..];
-            if input.is_empty() {
-                break;
-            }
-        }
-
-        if !bytes.ends_with(ZLIB_SUFFIX) {
-            return Ok(None);
-        }
-
-        let decompressed = std::mem::take(&mut self.pending);
-        String::from_utf8(decompressed)
-            .map(Some)
-            .map_err(|e| format!("zlib-stream payload was not valid UTF-8: {e}"))
-    }
-}
-
 #[cfg(feature = "sharding")]
 impl GatewayClient {
     fn current_shard_id(&self) -> u32 {
@@ -831,46 +621,96 @@ impl GatewayClient {
             return Ok(false);
         };
 
-        match timeout(duration, command_rx.recv()).await {
-            Ok(Some(GatewayCommand::Shutdown)) => Ok(true),
-            Ok(Some(GatewayCommand::Reconnect)) => {
-                self.session_id = None;
-                self.resume_gateway_url = None;
-                self.sequence.store(0, Ordering::Relaxed);
-                Ok(false)
+        let deadline = Instant::now() + duration;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(false);
             }
-            Ok(Some(_)) => Ok(false),
-            Ok(None) | Err(_) => Ok(false),
+
+            match timeout(deadline - now, command_rx.recv()).await {
+                Ok(Some(GatewayCommand::Shutdown)) => return Ok(true),
+                Ok(Some(GatewayCommand::Reconnect)) => {
+                    self.session_id = None;
+                    self.resume_gateway_url = None;
+                    self.sequence.store(0, Ordering::Relaxed);
+                    return Ok(false);
+                }
+                Ok(Some(command)) => {
+                    self.deferred_commands.push_back(command);
+                }
+                Ok(None) | Err(_) => return Ok(false),
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::io::Write;
+    use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use super::super::compression::{GatewayCompressionDecoder, GatewayZlibStream, ZLIB_SUFFIX};
+    use super::super::outbound::{
+        classify_gateway_command, run_gateway_outbound_worker, GatewayCommandClass,
+        GatewayOutboundLimiter, GatewayOutboundMessage, GATEWAY_COMMAND_MIN_SPACING,
+        PRESENCE_UPDATE_LIMIT, PRESENCE_UPDATE_WINDOW,
+    };
     use super::{
-        classify_gateway_command, identify_payload, initial_heartbeat_delay,
-        is_terminal_close_code, is_terminal_close_frame, recv_control_command,
-        request_channel_info_payload, request_guild_members_payload, resume_payload,
-        terminal_close_error, update_presence_payload, voice_state_update_payload, EventCallback,
-        GatewayClient, GatewayCommand, GatewayCommandClass, GatewayCompressionDecoder,
-        GatewayOutboundLimiter, GatewayZlibStream, ReconnectAction, GATEWAY_COMMAND_MIN_SPACING,
-        PRESENCE_UPDATE_LIMIT, PRESENCE_UPDATE_WINDOW, ZLIB_SUFFIX,
+        identify_payload, initial_heartbeat_delay, is_terminal_close_code, is_terminal_close_frame,
+        rand_jitter, recv_control_command, request_channel_info_payload,
+        request_guild_members_payload, resume_payload, terminal_close_error,
+        update_presence_payload, voice_state_update_payload, EventCallback, GatewayClient,
+        GatewayCommand, ReconnectAction, GATEWAY_COMMAND_QUEUE_CAPACITY,
     };
     use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
     use crate::ws::{GatewayCompression, GatewayConnectionConfig};
     use flate2::{write::ZlibEncoder, Compression};
+    use futures_util::Sink;
     use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
     use tokio::sync::mpsc;
     use tokio::time::Instant;
     use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+    use tokio_tungstenite::tungstenite::Error as WsError;
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+
+    struct RecordingSink(mpsc::UnboundedSender<WsMessage>);
+
+    impl Sink<WsMessage> for RecordingSink {
+        type Error = WsError;
+
+        fn poll_ready(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, item: WsMessage) -> Result<(), Self::Error> {
+            self.0.send(item).map_err(|_| WsError::ConnectionClosed)
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     fn compress_gateway_payloads(payloads: &[&str]) -> Vec<Vec<u8>> {
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -1117,7 +957,8 @@ mod tests {
             0,
         )
         .expect("zstd payload");
-        let mut decoder = GatewayCompressionDecoder::new(Some(GatewayCompression::ZstdStream));
+        let mut decoder = GatewayCompressionDecoder::new(Some(GatewayCompression::ZstdStream))
+            .expect("zstd decoder");
 
         assert_eq!(
             decoder.decode(&first).expect("first payload").as_deref(),
@@ -1143,6 +984,16 @@ mod tests {
             initial_heartbeat_delay(1_000, 1.5),
             Duration::from_millis(1_000)
         );
+    }
+
+    #[test]
+    fn rand_jitter_stays_in_range_and_mixes_successive_calls() {
+        let first = rand_jitter();
+        let second = rand_jitter();
+
+        assert!((0.0..1.0).contains(&first));
+        assert!((0.0..1.0).contains(&second));
+        assert_ne!(first, second);
     }
 
     #[test]
@@ -1205,16 +1056,16 @@ mod tests {
 
     #[tokio::test]
     async fn recv_control_command_and_wait_for_backoff_command_handle_control_flow() {
-        let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let mut shutdown_client =
             GatewayClient::new("secret-token".into(), 513).control(shutdown_rx);
-        shutdown_tx.send(GatewayCommand::Shutdown).unwrap();
+        shutdown_tx.send(GatewayCommand::Shutdown).await.unwrap();
         assert!(shutdown_client
             .wait_for_backoff_command(Duration::from_millis(10))
             .await
             .unwrap());
 
-        let (reconnect_tx, reconnect_rx) = mpsc::unbounded_channel();
+        let (reconnect_tx, reconnect_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let mut reconnect_client =
             GatewayClient::new("secret-token".into(), 513).control(reconnect_rx);
         reconnect_client.session_id = Some("session".into());
@@ -1222,7 +1073,7 @@ mod tests {
         reconnect_client
             .sequence
             .store(42, std::sync::atomic::Ordering::Relaxed);
-        reconnect_tx.send(GatewayCommand::Reconnect).unwrap();
+        reconnect_tx.send(GatewayCommand::Reconnect).await.unwrap();
         assert!(!reconnect_client
             .wait_for_backoff_command(Duration::from_millis(10))
             .await
@@ -1236,16 +1087,26 @@ mod tests {
             0
         );
 
-        let (presence_tx, presence_rx) = mpsc::unbounded_channel();
+        let (presence_tx, presence_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let mut presence_client =
             GatewayClient::new("secret-token".into(), 513).control(presence_rx);
         presence_tx
             .send(GatewayCommand::UpdatePresence("busy".into()))
+            .await
             .unwrap();
         assert!(!presence_client
             .wait_for_backoff_command(Duration::from_millis(10))
             .await
             .unwrap());
+        match recv_control_command(
+            &mut presence_client.command_rx,
+            &mut presence_client.deferred_commands,
+        )
+        .await
+        {
+            Some(GatewayCommand::UpdatePresence(status)) => assert_eq!(status, "busy"),
+            other => panic!("unexpected deferred command: {other:?}"),
+        }
 
         let mut no_control_client = GatewayClient::new("secret-token".into(), 513);
         assert!(!no_control_client
@@ -1256,12 +1117,14 @@ mod tests {
 
     #[tokio::test]
     async fn recv_control_command_reads_payloads_and_handles_missing_channel() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let mut command_rx = Some(rx);
+        let mut deferred = VecDeque::new();
 
         tx.send(GatewayCommand::SendPayload(serde_json::json!({ "op": 4 })))
+            .await
             .unwrap();
-        match recv_control_command(&mut command_rx).await {
+        match recv_control_command(&mut command_rx, &mut deferred).await {
             Some(GatewayCommand::SendPayload(payload)) => {
                 assert_eq!(payload["op"], serde_json::json!(4));
             }
@@ -1269,17 +1132,88 @@ mod tests {
         }
 
         let mut none_rx = None;
-        let pending =
-            tokio::time::timeout(Duration::from_millis(5), recv_control_command(&mut none_rx))
-                .await;
+        let pending = tokio::time::timeout(
+            Duration::from_millis(5),
+            recv_control_command(&mut none_rx, &mut deferred),
+        )
+        .await;
         assert!(pending.is_err());
+    }
+
+    #[tokio::test]
+    async fn recv_control_command_prefers_deferred_commands() {
+        let (tx, rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut command_rx = Some(rx);
+        let mut deferred = VecDeque::new();
+
+        tx.send(GatewayCommand::UpdatePresence("online".into()))
+            .await
+            .unwrap();
+        deferred.push_back(GatewayCommand::Reconnect);
+
+        assert!(matches!(
+            recv_control_command(&mut command_rx, &mut deferred).await,
+            Some(GatewayCommand::Reconnect)
+        ));
+        match recv_control_command(&mut command_rx, &mut deferred).await {
+            Some(GatewayCommand::UpdatePresence(status)) => assert_eq!(status, "online"),
+            other => panic!("unexpected command order: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn outbound_worker_sends_immediate_messages_while_presence_limited() {
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (sent_tx, mut sent_rx) = mpsc::unbounded_channel();
+        let worker = tokio::spawn(run_gateway_outbound_worker(
+            RecordingSink(sent_tx),
+            outbound_rx,
+        ));
+
+        for index in 0..=PRESENCE_UPDATE_LIMIT {
+            outbound_tx
+                .send(GatewayOutboundMessage::Limited(
+                    GatewayCommand::UpdatePresence(format!("presence-{index}")),
+                ))
+                .unwrap();
+        }
+        outbound_tx
+            .send(GatewayOutboundMessage::ImmediatePayload(
+                serde_json::json!({
+                    "op": 1,
+                    "d": null
+                }),
+            ))
+            .unwrap();
+
+        let mut saw_immediate_heartbeat = false;
+        for _ in 0..=PRESENCE_UPDATE_LIMIT {
+            let message = tokio::time::timeout(Duration::from_millis(200), sent_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let text = message.into_text().unwrap();
+            let payload: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if payload["op"] == serde_json::json!(1) {
+                saw_immediate_heartbeat = true;
+                break;
+            }
+        }
+        assert!(saw_immediate_heartbeat);
+
+        drop(outbound_tx);
+        tokio::time::timeout(Duration::from_millis(200), worker)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test]
     async fn connect_and_run_identifies_processes_ready_and_shuts_down() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let events = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
         let events_for_callback = Arc::clone(&events);
         let server = tokio::spawn(async move {
@@ -1328,7 +1262,7 @@ mod tests {
 
         let shutdown = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            command_tx.send(GatewayCommand::Shutdown).unwrap();
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
         });
 
         let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
@@ -1366,7 +1300,7 @@ mod tests {
     async fn connect_and_run_decodes_compressed_hello_and_dispatch_payloads() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let events = Arc::new(Mutex::new(Vec::<(String, serde_json::Value)>::new()));
         let events_for_callback = Arc::clone(&events);
         let compressed = compress_gateway_payloads(&[
@@ -1413,7 +1347,7 @@ mod tests {
 
         let shutdown = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            command_tx.send(GatewayCommand::Shutdown).unwrap();
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
         });
 
         let mut client = GatewayClient::new("secret-token".into(), 513)
@@ -1558,7 +1492,7 @@ mod tests {
     async fn connect_and_run_replies_to_server_heartbeat_requests() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut ws = accept_async(stream).await.unwrap();
@@ -1599,7 +1533,7 @@ mod tests {
 
         let shutdown = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(30)).await;
-            command_tx.send(GatewayCommand::Shutdown).unwrap();
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
         });
 
         let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
@@ -1624,7 +1558,7 @@ mod tests {
     async fn run_reconnects_after_invalid_session_and_then_shuts_down_cleanly() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let payloads = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         let payloads_for_server = Arc::clone(&payloads);
 
@@ -1669,7 +1603,7 @@ mod tests {
 
         let shutdown = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(80)).await;
-            command_tx.send(GatewayCommand::Shutdown).unwrap();
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
         });
 
         let mut client = GatewayClient::new("secret-token".into(), 513)

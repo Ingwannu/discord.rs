@@ -34,7 +34,7 @@ impl fmt::Debug for OAuth2Client {
 }
 
 impl OAuth2Client {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
@@ -47,7 +47,7 @@ impl OAuth2Client {
         }
     }
 
-    /// Creates or returns `public_client` data.
+    /// Creates a `public_client` value.
     pub fn public_client(client_id: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
@@ -76,7 +76,6 @@ impl OAuth2Client {
         }
     }
 
-    /// Runs the `authorization_url` operation.
     pub fn authorization_url(
         &self,
         request: OAuth2AuthorizationRequest,
@@ -112,7 +111,6 @@ impl OAuth2Client {
         Ok(url)
     }
 
-    /// Runs the `exchange_code` operation.
     pub async fn exchange_code(
         &self,
         request: OAuth2CodeExchange,
@@ -130,7 +128,6 @@ impl OAuth2Client {
         self.send_token_request(&form).await
     }
 
-    /// Runs the `refresh_token` operation.
     pub async fn refresh_token(
         &self,
         request: OAuth2RefreshToken,
@@ -190,22 +187,16 @@ impl OAuth2Client {
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Typed Discord API object for `OAuth2AuthorizationRequest`.
 pub struct OAuth2AuthorizationRequest {
-    /// Discord API payload field `redirect_uri`.
     pub redirect_uri: String,
-    /// Discord API payload field `scopes`.
     pub scopes: Vec<OAuth2Scope>,
-    /// Discord API payload field `response_type`.
     pub response_type: String,
-    /// Discord API payload field `state`.
     pub state: Option<String>,
-    /// Discord API payload field `prompt`.
     pub prompt: Option<String>,
-    /// Discord API payload field `integration_type`.
     pub integration_type: Option<u8>,
 }
 
 impl OAuth2AuthorizationRequest {
-    /// Creates or returns `code` data.
+    /// Creates a `code` value.
     pub fn code(
         redirect_uri: impl Into<String>,
         scopes: impl IntoIterator<Item = OAuth2Scope>,
@@ -220,19 +211,16 @@ impl OAuth2AuthorizationRequest {
         }
     }
 
-    /// Runs the `state` operation.
     pub fn state(mut self, state: impl Into<String>) -> Self {
         self.state = Some(state.into());
         self
     }
 
-    /// Runs the `prompt` operation.
     pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
         self.prompt = Some(prompt.into());
         self
     }
 
-    /// Runs the `integration_type` operation.
     pub fn integration_type(mut self, integration_type: u8) -> Self {
         self.integration_type = Some(integration_type);
         self
@@ -255,42 +243,41 @@ impl OAuth2AuthorizationRequest {
 pub struct OAuth2Scope(String);
 
 impl OAuth2Scope {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(scope: impl Into<String>) -> Self {
         Self(scope.into())
     }
 
-    /// Creates or returns `identify` data.
+    /// Creates a `identify` value.
     pub fn identify() -> Self {
         Self::new("identify")
     }
 
-    /// Creates or returns `email` data.
+    /// Creates a `email` value.
     pub fn email() -> Self {
         Self::new("email")
     }
 
-    /// Creates or returns `guilds` data.
+    /// Creates a `guilds` value.
     pub fn guilds() -> Self {
         Self::new("guilds")
     }
 
-    /// Creates or returns `guilds_join` data.
+    /// Creates a `guilds_join` value.
     pub fn guilds_join() -> Self {
         Self::new("guilds.join")
     }
 
-    /// Creates or returns `applications_commands_update` data.
+    /// Creates a `applications_commands_update` value.
     pub fn applications_commands_update() -> Self {
         Self::new("applications.commands.update")
     }
 
-    /// Creates or returns `role_connections_write` data.
+    /// Creates a `role_connections_write` value.
     pub fn role_connections_write() -> Self {
         Self::new("role_connections.write")
     }
 
-    /// Runs the `as_str` operation.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -299,14 +286,12 @@ impl OAuth2Scope {
 #[derive(Clone, PartialEq, Eq)]
 /// Typed Discord API object for `OAuth2CodeExchange`.
 pub struct OAuth2CodeExchange {
-    /// Discord API payload field `code`.
     pub code: String,
-    /// Discord API payload field `redirect_uri`.
     pub redirect_uri: String,
 }
 
 impl OAuth2CodeExchange {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(code: impl Into<String>, redirect_uri: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -337,7 +322,6 @@ impl fmt::Debug for OAuth2CodeExchange {
 #[derive(Clone, PartialEq, Eq)]
 /// Typed Discord API object for `OAuth2RefreshToken`.
 pub struct OAuth2RefreshToken {
-    /// Discord API payload field `refresh_token`.
     pub refresh_token: String,
 }
 
@@ -350,7 +334,7 @@ impl fmt::Debug for OAuth2RefreshToken {
 }
 
 impl OAuth2RefreshToken {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new(refresh_token: impl Into<String>) -> Self {
         Self {
             refresh_token: refresh_token.into(),
@@ -368,17 +352,12 @@ impl OAuth2RefreshToken {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `OAuth2TokenResponse`.
 pub struct OAuth2TokenResponse {
-    /// Discord API payload field `access_token`.
     pub access_token: String,
-    /// Discord API payload field `token_type`.
     pub token_type: String,
-    /// Discord API payload field `expires_in`.
     pub expires_in: u64,
     #[serde(default)]
-    /// Discord API payload field `refresh_token`.
     pub refresh_token: Option<String>,
     #[serde(default)]
-    /// Discord API payload field `scope`.
     pub scope: Option<String>,
 }
 

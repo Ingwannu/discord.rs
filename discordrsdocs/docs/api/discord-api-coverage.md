@@ -1,6 +1,6 @@
 # Discord API Coverage Audit
 
-This page records the current coverage claim for discord.rs 2.0.0 against the official Discord API documentation.
+This page records the current coverage claim for discord.rs 2.0.1 against the official Discord API documentation.
 
 Audit source:
 
@@ -25,7 +25,7 @@ Audit source:
 
 `223 / 223` is a REST route-shape result, not a blanket claim that every Discord object field, gateway event edge case, Social SDK behavior, or undocumented rollout behavior has live integration coverage.
 
-The broader API coverage claim for 2.0.0 is:
+The broader API coverage claim for 2.0.1 is:
 
 - Official REST routes are represented.
 - Official Gateway send and receive event names are represented by typed payload helpers, runtime command helpers, event decoder branches, or opcode handling.

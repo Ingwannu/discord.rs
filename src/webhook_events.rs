@@ -20,28 +20,19 @@ impl WebhookPayloadType {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookEventPayload`.
 pub struct WebhookEventPayload {
-    /// Discord API payload field `version`.
     pub version: u8,
-    /// Discord API payload field `application_id`.
     pub application_id: Snowflake,
-    /// Discord API payload field `kind`.
     pub kind: WebhookPayloadType,
-    /// Discord API payload field `event`.
     pub event: Option<WebhookEventBody>,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookEventBody`.
 pub struct WebhookEventBody {
-    /// Discord API payload field `kind`.
     pub kind: String,
-    /// Discord API payload field `timestamp`.
     pub timestamp: String,
-    /// Discord API payload field `event`.
     pub event: WebhookEvent,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
@@ -84,80 +75,52 @@ pub enum WebhookEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ApplicationAuthorizedWebhookEvent`.
 pub struct ApplicationAuthorizedWebhookEvent {
-    /// Discord API payload field `integration_type`.
     pub integration_type: Option<u8>,
-    /// Discord API payload field `user`.
     pub user: User,
-    /// Discord API payload field `scopes`.
     pub scopes: Vec<String>,
-    /// Discord API payload field `guild`.
     pub guild: Option<Guild>,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ApplicationDeauthorizedWebhookEvent`.
 pub struct ApplicationDeauthorizedWebhookEvent {
-    /// Discord API payload field `user`.
     pub user: User,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookSocialMessage`.
 pub struct WebhookSocialMessage {
-    /// Discord API payload field `id`.
     pub id: Snowflake,
-    /// Discord API payload field `kind`.
     pub kind: Option<u8>,
-    /// Discord API payload field `content`.
     pub content: Option<String>,
-    /// Discord API payload field `lobby_id`.
     pub lobby_id: Option<Snowflake>,
-    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
-    /// Discord API payload field `author`.
     pub author: Option<User>,
-    /// Discord API payload field `metadata`.
     pub metadata: Option<HashMap<String, String>>,
-    /// Discord API payload field `flags`.
     pub flags: Option<u64>,
-    /// Discord API payload field `application_id`.
     pub application_id: Option<Snowflake>,
-    /// Discord API payload field `timestamp`.
     pub timestamp: Option<String>,
-    /// Discord API payload field `edited_timestamp`.
     pub edited_timestamp: Option<String>,
-    /// Discord API payload field `attachments`.
     pub attachments: Vec<Value>,
-    /// Discord API payload field `components`.
     pub components: Vec<Value>,
-    /// Discord API payload field `channel`.
     pub channel: Option<Channel>,
-    /// Discord API payload field `recipient_id`.
     pub recipient_id: Option<Snowflake>,
-    /// Discord API payload field `activity`.
     pub activity: Option<Value>,
-    /// Discord API payload field `application`.
     pub application: Option<Application>,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookDeletedMessage`.
 pub struct WebhookDeletedMessage {
-    /// Discord API payload field `id`.
     pub id: Snowflake,
-    /// Discord API payload field `lobby_id`.
     pub lobby_id: Option<Snowflake>,
-    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
-/// Runs the `parse_webhook_event_payload` helper.
+/// Provides the `parse_webhook_event_payload` helper.
 pub fn parse_webhook_event_payload(payload: Value) -> Result<WebhookEventPayload, DiscordError> {
     let version = required_u8(&payload, "version")?;
     let application_id = required_snowflake(&payload, "application_id")?;

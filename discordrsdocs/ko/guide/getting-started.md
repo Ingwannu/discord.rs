@@ -10,23 +10,23 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.0", features = ["gateway"] }
+discordrs = { version = "2.0.1", features = ["gateway"] }
 ```
 
 필요한 런타임 기능만 켜는 것을 권장합니다.
 
 ```toml
 # REST, 빌더, 타입 모델만 사용할 때
-discordrs = "2.0.0"
+discordrs = "2.0.1"
 
 # Interactions Endpoint와 앱 프레임워크
-discordrs = { version = "2.0.0", features = ["interactions"] }
+discordrs = { version = "2.0.1", features = ["interactions"] }
 
 # Voice receive와 Opus PCM decode
-discordrs = { version = "2.0.0", features = ["voice"] }
+discordrs = { version = "2.0.1", features = ["voice"] }
 
 # DAVE/MLS hook
-discordrs = { version = "2.0.0", features = ["voice", "dave"] }
+discordrs = { version = "2.0.1", features = ["voice", "dave"] }
 ```
 
 ## 최소 Typed Gateway Bot

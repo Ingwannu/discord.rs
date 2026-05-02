@@ -39,36 +39,31 @@ struct EmbedFieldData {
 }
 
 impl EmbedBuilder {
-    /// Creates or returns `new` data.
+    /// Creates a `new` value.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Runs the `title` operation.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// Runs the `description` operation.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
-    /// Runs the `url` operation.
     pub fn url(mut self, url: impl Into<String>) -> Self {
         self.url = Some(url.into());
         self
     }
 
-    /// Runs the `color` operation.
     pub fn color(mut self, color: u32) -> Self {
         self.color = Some(color);
         self
     }
 
-    /// Runs the `field` operation.
     pub fn field(
         mut self,
         name: impl Into<String>,
@@ -83,7 +78,6 @@ impl EmbedBuilder {
         self
     }
 
-    /// Runs the `blank_field` operation.
     pub fn blank_field(mut self, inline: bool) -> Self {
         self.fields.push(EmbedFieldData {
             name: "\u{200B}".to_string(),
@@ -93,7 +87,6 @@ impl EmbedBuilder {
         self
     }
 
-    /// Runs the `author` operation.
     pub fn author(
         mut self,
         name: impl Into<String>,
@@ -111,19 +104,16 @@ impl EmbedBuilder {
         self
     }
 
-    /// Runs the `thumbnail` operation.
     pub fn thumbnail(mut self, url: impl Into<String>) -> Self {
         self.thumbnail = Some(serde_json::json!({ "url": url.into() }));
         self
     }
 
-    /// Runs the `image` operation.
     pub fn image(mut self, url: impl Into<String>) -> Self {
         self.image = Some(serde_json::json!({ "url": url.into() }));
         self
     }
 
-    /// Runs the `footer` operation.
     pub fn footer(mut self, text: impl Into<String>, icon_url: Option<String>) -> Self {
         let mut footer = serde_json::json!({ "text": text.into() });
         if let Some(icon_url) = icon_url {
@@ -139,11 +129,13 @@ impl EmbedBuilder {
     /// use discordrs::builders::EmbedBuilder;
     ///
     /// let embed = EmbedBuilder::new().timestamp_now().build();
-    /// let timestamp = embed.get("timestamp").and_then(|value| value.as_str()).unwrap();
-    ///
-    /// assert_eq!(timestamp.len(), 24);
-    /// assert_eq!(&timestamp[10..11], "T");
-    /// assert!(timestamp.ends_with('Z'));
+    /// if let Some(timestamp) = embed.get("timestamp").and_then(|value| value.as_str()) {
+    ///     assert_eq!(timestamp.len(), 24);
+    ///     assert_eq!(&timestamp[10..11], "T");
+    ///     assert!(timestamp.ends_with('Z'));
+    /// } else {
+    ///     panic!("timestamp should be present");
+    /// }
     /// ```
     pub fn timestamp_now(mut self) -> Self {
         let now = SystemTime::now()
@@ -153,7 +145,6 @@ impl EmbedBuilder {
         self
     }
 
-    /// Runs the `timestamp_iso` operation.
     pub fn timestamp_iso(mut self, iso: impl Into<String>) -> Self {
         self.timestamp = Some(iso.into());
         self
