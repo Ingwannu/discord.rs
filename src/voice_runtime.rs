@@ -1644,27 +1644,25 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                             state.dave.proposals.push(payload);
                                         })?;
                                     }
-                                    VOICE_OP_DAVE_MLS_ANNOUNCE_COMMIT_TRANSITION => {
-                                        if payload.len() >= 2 {
-                                            let transition_id =
-                                                u64::from(u16::from_be_bytes([payload[0], payload[1]]));
-                                            let commit = payload[2..].to_vec();
-                                            update_state(&state_tx, |state| {
-                                                state.dave.transition_id = Some(transition_id);
-                                                state.dave.pending_commit = Some(commit);
-                                            })?;
-                                        }
+                                    VOICE_OP_DAVE_MLS_ANNOUNCE_COMMIT_TRANSITION
+                                        if payload.len() >= 2 =>
+                                    {
+                                        let transition_id =
+                                            u64::from(u16::from_be_bytes([payload[0], payload[1]]));
+                                        let commit = payload[2..].to_vec();
+                                        update_state(&state_tx, |state| {
+                                            state.dave.transition_id = Some(transition_id);
+                                            state.dave.pending_commit = Some(commit);
+                                        })?;
                                     }
-                                    VOICE_OP_DAVE_MLS_WELCOME => {
-                                        if payload.len() >= 2 {
-                                            let transition_id =
-                                                u64::from(u16::from_be_bytes([payload[0], payload[1]]));
-                                            let welcome = payload[2..].to_vec();
-                                            update_state(&state_tx, |state| {
-                                                state.dave.transition_id = Some(transition_id);
-                                                state.dave.pending_welcome = Some(welcome);
-                                            })?;
-                                        }
+                                    VOICE_OP_DAVE_MLS_WELCOME if payload.len() >= 2 => {
+                                        let transition_id =
+                                            u64::from(u16::from_be_bytes([payload[0], payload[1]]));
+                                        let welcome = payload[2..].to_vec();
+                                        update_state(&state_tx, |state| {
+                                            state.dave.transition_id = Some(transition_id);
+                                            state.dave.pending_welcome = Some(welcome);
+                                        })?;
                                     }
                                     _ => {}
                                 }
