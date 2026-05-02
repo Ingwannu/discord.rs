@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 #[cfg(feature = "dave")]
 use std::num::NonZeroU16;
 use std::sync::Arc;
@@ -53,19 +54,44 @@ const DISCORD_OPUS_STEREO_FRAME_SAMPLES: usize =
     DISCORD_OPUS_CHANNELS * DISCORD_OPUS_SAMPLES_PER_CHANNEL;
 const DISCORD_OPUS_FRAME_MS: u64 = 20;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceRuntimeConfig`.
 pub struct VoiceRuntimeConfig {
+    /// Discord API payload field `server_id`.
     pub server_id: Snowflake,
+    /// Discord API payload field `user_id`.
     pub user_id: Snowflake,
+    /// Discord API payload field `session_id`.
     pub session_id: String,
+    /// Discord API payload field `token`.
     pub token: String,
+    /// Discord API payload field `endpoint`.
     pub endpoint: String,
+    /// Discord API payload field `gateway_version`.
     pub gateway_version: u8,
+    /// Discord API payload field `preferred_mode`.
     pub preferred_mode: Option<VoiceEncryptionMode>,
+    /// Discord API payload field `max_dave_protocol_version`.
     pub max_dave_protocol_version: Option<u8>,
 }
 
+impl fmt::Debug for VoiceRuntimeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceRuntimeConfig")
+            .field("server_id", &self.server_id)
+            .field("user_id", &self.user_id)
+            .field("session_id", &self.session_id)
+            .field("token", &"<redacted>")
+            .field("endpoint", &self.endpoint)
+            .field("gateway_version", &self.gateway_version)
+            .field("preferred_mode", &self.preferred_mode)
+            .field("max_dave_protocol_version", &self.max_dave_protocol_version)
+            .finish()
+    }
+}
+
 impl VoiceRuntimeConfig {
+    /// Creates or returns `new` data.
     pub fn new(
         server_id: impl Into<Snowflake>,
         user_id: impl Into<Snowflake>,
@@ -85,21 +111,25 @@ impl VoiceRuntimeConfig {
         }
     }
 
+    /// Runs the `gateway_version` operation.
     pub fn gateway_version(mut self, gateway_version: u8) -> Self {
         self.gateway_version = gateway_version.max(4);
         self
     }
 
+    /// Runs the `preferred_mode` operation.
     pub fn preferred_mode(mut self, preferred_mode: VoiceEncryptionMode) -> Self {
         self.preferred_mode = Some(preferred_mode);
         self
     }
 
+    /// Runs the `max_dave_protocol_version` operation.
     pub fn max_dave_protocol_version(mut self, version: u8) -> Self {
         self.max_dave_protocol_version = Some(version);
         self
     }
 
+    /// Runs the `websocket_url` operation.
     pub fn websocket_url(&self) -> String {
         let mut endpoint = if self.endpoint.contains("://") {
             self.endpoint.clone()
@@ -117,55 +147,130 @@ impl VoiceRuntimeConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSessionDescription`.
 pub struct VoiceSessionDescription {
+    /// Discord API payload field `mode`.
     pub mode: VoiceEncryptionMode,
     #[serde(default)]
+    /// Discord API payload field `secret_key`.
     pub secret_key: Vec<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `audio_codec`.
     pub audio_codec: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `dave_protocol_version`.
     pub dave_protocol_version: Option<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+impl fmt::Debug for VoiceSessionDescription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VoiceSessionDescription")
+            .field("mode", &self.mode)
+            .field(
+                "secret_key",
+                &format_args!("<redacted:{} bytes>", self.secret_key.len()),
+            )
+            .field("audio_codec", &self.audio_codec)
+            .field("dave_protocol_version", &self.dave_protocol_version)
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceDaveState`.
 pub struct VoiceDaveState {
+    /// Discord API payload field `protocol_version`.
     pub protocol_version: Option<u8>,
+    /// Discord API payload field `transition_id`.
     pub transition_id: Option<u64>,
+    /// Discord API payload field `epoch`.
     pub epoch: Option<u64>,
+    /// Discord API payload field `passthrough`.
     pub passthrough: bool,
     #[serde(default)]
+    /// Discord API payload field `external_sender`.
     pub external_sender: Option<Vec<u8>>,
     #[serde(default)]
+    /// Discord API payload field `proposals`.
     pub proposals: Vec<Vec<u8>>,
     #[serde(default)]
+    /// Discord API payload field `pending_commit`.
     pub pending_commit: Option<Vec<u8>>,
     #[serde(default)]
+    /// Discord API payload field `pending_welcome`.
     pub pending_welcome: Option<Vec<u8>>,
 }
 
+impl fmt::Debug for VoiceDaveState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let proposal_lengths = self.proposals.iter().map(Vec::len).collect::<Vec<_>>();
+        f.debug_struct("VoiceDaveState")
+            .field("protocol_version", &self.protocol_version)
+            .field("transition_id", &self.transition_id)
+            .field("epoch", &self.epoch)
+            .field("passthrough", &self.passthrough)
+            .field(
+                "external_sender",
+                &self
+                    .external_sender
+                    .as_ref()
+                    .map(|sender| format!("<redacted:{} bytes>", sender.len())),
+            )
+            .field("proposal_lengths", &proposal_lengths)
+            .field(
+                "pending_commit_len",
+                &self.pending_commit.as_ref().map(Vec::len),
+            )
+            .field(
+                "pending_welcome_len",
+                &self.pending_welcome.as_ref().map(Vec::len),
+            )
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceRuntimeState`.
 pub struct VoiceRuntimeState {
+    /// Discord API payload field `config`.
     pub config: VoiceRuntimeConfig,
+    /// Discord API payload field `heartbeat_interval_ms`.
     pub heartbeat_interval_ms: u64,
+    /// Discord API payload field `last_sequence`.
     pub last_sequence: Option<i64>,
+    /// Discord API payload field `ready`.
     pub ready: VoiceGatewayReady,
+    /// Discord API payload field `discovery`.
     pub discovery: VoiceUdpDiscoveryPacket,
+    /// Discord API payload field `selected_mode`.
     pub selected_mode: VoiceEncryptionMode,
+    /// Discord API payload field `session_description`.
     pub session_description: Option<VoiceSessionDescription>,
+    /// Discord API payload field `ssrc_users`.
     pub ssrc_users: HashMap<u32, Snowflake>,
+    /// Discord API payload field `speaking`.
     pub speaking: HashMap<u32, VoiceSpeakingUpdate>,
+    /// Discord API payload field `dave`.
     pub dave: VoiceDaveState,
+    /// Discord API payload field `resumed`.
     pub resumed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceRawUdpPacket`.
 pub struct VoiceRawUdpPacket {
+    /// Discord API payload field `bytes`.
     pub bytes: Vec<u8>,
+    /// Discord API payload field `version`.
     pub version: Option<u8>,
+    /// Discord API payload field `payload_type`.
     pub payload_type: Option<u8>,
+    /// Discord API payload field `sequence`.
     pub sequence: Option<u16>,
+    /// Discord API payload field `timestamp`.
     pub timestamp: Option<u32>,
+    /// Discord API payload field `ssrc`.
     pub ssrc: Option<u32>,
 }
 
@@ -197,42 +302,67 @@ impl VoiceRawUdpPacket {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceRtpHeader`.
 pub struct VoiceRtpHeader {
+    /// Discord API payload field `version`.
     pub version: u8,
+    /// Discord API payload field `padding`.
     pub padding: bool,
+    /// Discord API payload field `extension`.
     pub extension: bool,
+    /// Discord API payload field `marker`.
     pub marker: bool,
+    /// Discord API payload field `payload_type`.
     pub payload_type: u8,
+    /// Discord API payload field `sequence`.
     pub sequence: u16,
+    /// Discord API payload field `timestamp`.
     pub timestamp: u32,
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
+    /// Discord API payload field `header_len`.
     pub header_len: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceReceivedPacket`.
 pub struct VoiceReceivedPacket {
+    /// Discord API payload field `raw`.
     pub raw: VoiceRawUdpPacket,
+    /// Discord API payload field `rtp`.
     pub rtp: VoiceRtpHeader,
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
+    /// Discord API payload field `opus_frame`.
     pub opus_frame: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceDecodedPacket`.
 pub struct VoiceDecodedPacket {
+    /// Discord API payload field `packet`.
     pub packet: VoiceReceivedPacket,
+    /// Discord API payload field `sample_rate`.
     pub sample_rate: u32,
+    /// Discord API payload field `channels`.
     pub channels: usize,
+    /// Discord API payload field `samples_per_channel`.
     pub samples_per_channel: usize,
+    /// Discord API payload field `pcm`.
     pub pcm: Vec<i16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceOpusFrame`.
 pub struct VoiceOpusFrame {
+    /// Discord API payload field `bytes`.
     pub bytes: Vec<u8>,
+    /// Discord API payload field `duration`.
     pub duration: Duration,
 }
 
 impl VoiceOpusFrame {
+    /// Creates or returns `new` data.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Self {
         Self {
             bytes: bytes.into(),
@@ -240,6 +370,7 @@ impl VoiceOpusFrame {
         }
     }
 
+    /// Runs the `duration` operation.
     pub fn duration(mut self, duration: Duration) -> Self {
         self.duration = duration;
         self
@@ -248,6 +379,7 @@ impl VoiceOpusFrame {
 
 #[cfg(feature = "voice-encode")]
 #[derive(Clone, Debug, PartialEq)]
+/// Typed Discord API object for `PcmFrame`.
 pub struct PcmFrame {
     samples: Vec<f32>,
     sample_rate: u32,
@@ -257,6 +389,7 @@ pub struct PcmFrame {
 
 #[cfg(feature = "voice-encode")]
 impl PcmFrame {
+    /// Creates or returns `new` data.
     pub fn new(
         samples: impl Into<Vec<f32>>,
         sample_rate: u32,
@@ -293,6 +426,7 @@ impl PcmFrame {
         })
     }
 
+    /// Creates or returns `discord_stereo_20ms` data.
     pub fn discord_stereo_20ms(samples: impl Into<Vec<f32>>) -> Result<Self, DiscordError> {
         Self::new(
             samples,
@@ -302,33 +436,41 @@ impl PcmFrame {
         )
     }
 
+    /// Runs the `samples` operation.
     pub fn samples(&self) -> &[f32] {
         &self.samples
     }
 
+    /// Runs the `sample_rate` operation.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    /// Runs the `channels` operation.
     pub fn channels(&self) -> usize {
         self.channels
     }
 
+    /// Runs the `samples_per_channel` operation.
     pub fn samples_per_channel(&self) -> usize {
         self.samples.len() / self.channels
     }
 
+    /// Runs the `duration` operation.
     pub fn duration(&self) -> Duration {
         self.duration
     }
 }
 
 #[cfg(feature = "voice-encode")]
+/// Trait for `AudioSource` behavior.
 pub trait AudioSource {
+    /// Returns the next Discord-sized PCM frame, or `None` when the source is exhausted.
     fn next_pcm_frame(&mut self) -> Result<Option<PcmFrame>, DiscordError>;
 }
 
 #[cfg(feature = "voice-encode")]
+/// Typed Discord API object for `AudioMixer`.
 pub struct AudioMixer {
     sources: Vec<Box<dyn AudioSource + Send>>,
     volume: f32,
@@ -336,6 +478,7 @@ pub struct AudioMixer {
 
 #[cfg(feature = "voice-encode")]
 impl AudioMixer {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             sources: Vec::new(),
@@ -343,6 +486,7 @@ impl AudioMixer {
         }
     }
 
+    /// Creates or returns `with_volume` data.
     pub fn with_volume(volume: f32) -> Self {
         Self {
             sources: Vec::new(),
@@ -350,6 +494,7 @@ impl AudioMixer {
         }
     }
 
+    /// Runs the `push_source` operation.
     pub fn push_source<S>(&mut self, source: S)
     where
         S: AudioSource + Send + 'static,
@@ -357,14 +502,17 @@ impl AudioMixer {
         self.sources.push(Box::new(source));
     }
 
+    /// Runs the `active_sources` operation.
     pub fn active_sources(&self) -> usize {
         self.sources.len()
     }
 
+    /// Runs the `volume` operation.
     pub fn volume(&self) -> f32 {
         self.volume
     }
 
+    /// Runs the `set_volume` operation.
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume;
     }
@@ -421,6 +569,7 @@ impl AudioSource for AudioMixer {
 }
 
 #[cfg(feature = "voice-encode")]
+/// Typed Discord API object for `VoiceOpusEncoder`.
 pub struct VoiceOpusEncoder {
     encoder: RawOpusEncoder,
     bitrate_bps: i32,
@@ -430,6 +579,7 @@ pub struct VoiceOpusEncoder {
 
 #[cfg(feature = "voice-encode")]
 impl VoiceOpusEncoder {
+    /// Creates or returns `new` data.
     pub fn new(bitrate_bps: i32, use_cbr: bool) -> Result<Self, DiscordError> {
         let mut encoder = RawOpusEncoder::new(
             DISCORD_OPUS_SAMPLE_RATE as i32,
@@ -448,42 +598,51 @@ impl VoiceOpusEncoder {
         })
     }
 
+    /// Creates or returns `discord_music` data.
     pub fn discord_music() -> Result<Self, DiscordError> {
         Self::new(128_000, true)
     }
 
+    /// Runs the `with_bitrate_bps` operation.
     pub fn with_bitrate_bps(mut self, bitrate_bps: i32) -> Self {
         self.encoder.bitrate_bps = bitrate_bps;
         self.bitrate_bps = bitrate_bps;
         self
     }
 
+    /// Runs the `with_cbr` operation.
     pub fn with_cbr(mut self, use_cbr: bool) -> Self {
         self.encoder.use_cbr = use_cbr;
         self.use_cbr = use_cbr;
         self
     }
 
+    /// Runs the `sample_rate` operation.
     pub fn sample_rate(&self) -> u32 {
         DISCORD_OPUS_SAMPLE_RATE
     }
 
+    /// Runs the `channels` operation.
     pub fn channels(&self) -> usize {
         DISCORD_OPUS_CHANNELS
     }
 
+    /// Runs the `samples_per_channel` operation.
     pub fn samples_per_channel(&self) -> usize {
         DISCORD_OPUS_SAMPLES_PER_CHANNEL
     }
 
+    /// Runs the `bitrate_bps` operation.
     pub fn bitrate_bps(&self) -> i32 {
         self.bitrate_bps
     }
 
+    /// Runs the `use_cbr` operation.
     pub fn use_cbr(&self) -> bool {
         self.use_cbr
     }
 
+    /// Runs the `encode_pcm_frame` operation.
     pub fn encode_pcm_frame(&mut self, frame: &PcmFrame) -> Result<VoiceOpusFrame, DiscordError> {
         if frame.sample_rate() != DISCORD_OPUS_SAMPLE_RATE
             || frame.channels() != DISCORD_OPUS_CHANNELS
@@ -509,6 +668,7 @@ impl VoiceOpusEncoder {
         })
     }
 
+    /// Runs the `encode_source_frames` operation.
     pub fn encode_source_frames<S>(
         &mut self,
         source: &mut S,
@@ -529,24 +689,37 @@ impl VoiceOpusEncoder {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceOutboundPacket`.
 pub struct VoiceOutboundPacket {
+    /// Discord API payload field `rtp`.
     pub rtp: VoiceRtpHeader,
+    /// Discord API payload field `nonce_suffix`.
     pub nonce_suffix: [u8; 4],
+    /// Discord API payload field `opus_frame`.
     pub opus_frame: Vec<u8>,
+    /// Discord API payload field `bytes`.
     pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceOutboundRtpState`.
 pub struct VoiceOutboundRtpState {
+    /// Discord API payload field `sequence`.
     pub sequence: u16,
+    /// Discord API payload field `timestamp`.
     pub timestamp: u32,
+    /// Discord API payload field `nonce_suffix`.
     pub nonce_suffix: u32,
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
+    /// Discord API payload field `payload_type`.
     pub payload_type: u8,
+    /// Discord API payload field `sample_rate`.
     pub sample_rate: u32,
 }
 
 impl VoiceOutboundRtpState {
+    /// Creates or returns `new` data.
     pub fn new(ssrc: u32) -> Self {
         Self {
             sequence: 0,
@@ -558,6 +731,7 @@ impl VoiceOutboundRtpState {
         }
     }
 
+    /// Creates or returns `with_counters` data.
     pub fn with_counters(ssrc: u32, sequence: u16, timestamp: u32, nonce_suffix: u32) -> Self {
         Self {
             sequence,
@@ -569,6 +743,7 @@ impl VoiceOutboundRtpState {
         }
     }
 
+    /// Runs the `build_packet` operation.
     pub fn build_packet(
         &mut self,
         opus_frame: &[u8],
@@ -612,6 +787,7 @@ impl VoiceOutboundRtpState {
     }
 }
 
+/// Typed Discord API object for `VoiceOpusDecoder`.
 pub struct VoiceOpusDecoder {
     decoder: OpusDecoder,
     sample_rate: u32,
@@ -620,6 +796,7 @@ pub struct VoiceOpusDecoder {
 }
 
 impl VoiceOpusDecoder {
+    /// Creates or returns `new` data.
     pub fn new(sample_rate: u32, channels: usize) -> Result<Self, DiscordError> {
         let decoder = OpusDecoder::new(sample_rate, channels).map_err(|error| {
             invalid_data_error(format!("failed to create Opus decoder: {error}"))
@@ -633,18 +810,22 @@ impl VoiceOpusDecoder {
         })
     }
 
+    /// Creates or returns `discord_default` data.
     pub fn discord_default() -> Result<Self, DiscordError> {
         Self::new(48_000, 2)
     }
 
+    /// Runs the `sample_rate` operation.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
     }
 
+    /// Runs the `channels` operation.
     pub fn channels(&self) -> usize {
         self.channels
     }
 
+    /// Runs the `decode_opus_frame` operation.
     pub fn decode_opus_frame(
         &mut self,
         opus_frame: &[u8],
@@ -659,6 +840,7 @@ impl VoiceOpusDecoder {
         Ok((samples_per_channel, pcm))
     }
 
+    /// Runs the `decode_packet` operation.
     pub fn decode_packet(
         &mut self,
         packet: VoiceReceivedPacket,
@@ -673,28 +855,41 @@ impl VoiceOpusDecoder {
         })
     }
 
+    /// Runs the `reset` operation.
     pub fn reset(&mut self) {
         self.decoder.reset();
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceDaveUnencryptedRange`.
 pub struct VoiceDaveUnencryptedRange {
+    /// Discord API payload field `offset`.
     pub offset: u64,
+    /// Discord API payload field `len`.
     pub len: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceDaveFrame`.
 pub struct VoiceDaveFrame {
+    /// Discord API payload field `bytes`.
     pub bytes: Vec<u8>,
+    /// Discord API payload field `ciphertext`.
     pub ciphertext: Vec<u8>,
+    /// Discord API payload field `auth_tag`.
     pub auth_tag: [u8; 8],
+    /// Discord API payload field `nonce`.
     pub nonce: u32,
+    /// Discord API payload field `unencrypted_ranges`.
     pub unencrypted_ranges: Vec<VoiceDaveUnencryptedRange>,
+    /// Discord API payload field `supplemental_size`.
     pub supplemental_size: u8,
 }
 
+/// Trait for `VoiceDaveFrameDecryptor` behavior.
 pub trait VoiceDaveFrameDecryptor {
+    /// Decrypts one DAVE media frame into an Opus payload.
     fn decrypt_frame(
         &mut self,
         rtp: &VoiceRtpHeader,
@@ -704,20 +899,25 @@ pub trait VoiceDaveFrameDecryptor {
 }
 
 #[cfg(feature = "dave")]
+/// Trait for `VoiceDaveFrameEncryptor` behavior.
 pub trait VoiceDaveFrameEncryptor {
+    /// Encrypts one Opus payload for DAVE media transport.
     fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError>;
 }
 
 #[cfg(feature = "dave")]
+/// Typed Discord API object for `VoiceDaveySession`.
 pub struct VoiceDaveySession {
     session: davey::DaveSession,
 }
 
 #[cfg(feature = "dave")]
+/// Type alias for `VoiceDaveyDecryptor`.
 pub type VoiceDaveyDecryptor = VoiceDaveySession;
 
 #[cfg(feature = "dave")]
 impl VoiceDaveySession {
+    /// Creates or returns `new` data.
     pub fn new(
         protocol_version: NonZeroU16,
         user_id: u64,
@@ -730,22 +930,27 @@ impl VoiceDaveySession {
         Ok(Self { session })
     }
 
+    /// Runs the `session` operation.
     pub fn session(&self) -> &davey::DaveSession {
         &self.session
     }
 
+    /// Runs the `session_mut` operation.
     pub fn session_mut(&mut self) -> &mut davey::DaveSession {
         &mut self.session
     }
 
+    /// Runs the `is_ready` operation.
     pub fn is_ready(&self) -> bool {
         self.session.is_ready()
     }
 
+    /// Runs the `voice_privacy_code` operation.
     pub fn voice_privacy_code(&self) -> Option<&str> {
         self.session.voice_privacy_code()
     }
 
+    /// Runs the `set_external_sender` operation.
     pub fn set_external_sender(&mut self, external_sender: &[u8]) -> Result<(), DiscordError> {
         self.session
             .set_external_sender(external_sender)
@@ -754,24 +959,28 @@ impl VoiceDaveySession {
             })
     }
 
+    /// Runs the `create_key_package` operation.
     pub fn create_key_package(&mut self) -> Result<Vec<u8>, DiscordError> {
         self.session.create_key_package().map_err(|error| {
             invalid_data_error(format!("failed to create DAVE key package: {error:?}"))
         })
     }
 
+    /// Runs the `process_welcome` operation.
     pub fn process_welcome(&mut self, welcome: &[u8]) -> Result<(), DiscordError> {
         self.session.process_welcome(welcome).map_err(|error| {
             invalid_data_error(format!("failed to process DAVE welcome: {error:?}"))
         })
     }
 
+    /// Runs the `process_commit` operation.
     pub fn process_commit(&mut self, commit: &[u8]) -> Result<(), DiscordError> {
         self.session.process_commit(commit).map_err(|error| {
             invalid_data_error(format!("failed to process DAVE commit: {error:?}"))
         })
     }
 
+    /// Runs the `process_proposals` operation.
     pub fn process_proposals(
         &mut self,
         operation_type: davey::ProposalsOperationType,
@@ -785,11 +994,13 @@ impl VoiceDaveySession {
             })
     }
 
+    /// Runs the `set_passthrough_mode` operation.
     pub fn set_passthrough_mode(&mut self, enabled: bool, transition_expiry: Option<u32>) {
         self.session
             .set_passthrough_mode(enabled, transition_expiry);
     }
 
+    /// Runs the `encrypt_opus` operation.
     pub fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError> {
         self.session
             .encrypt_opus(opus_frame)
@@ -825,10 +1036,14 @@ impl VoiceDaveFrameDecryptor for VoiceDaveySession {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSpeakingUpdate`.
 pub struct VoiceSpeakingUpdate {
+    /// Discord API payload field `speaking`.
     pub speaking: u64,
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
 }
 
@@ -959,6 +1174,7 @@ fn parse_dave_frame(frame: &[u8]) -> Result<VoiceDaveFrame, DiscordError> {
     })
 }
 
+/// Typed Discord API object for `VoiceRuntimeHandle`.
 pub struct VoiceRuntimeHandle {
     state_rx: watch::Receiver<VoiceRuntimeState>,
     command_tx: mpsc::UnboundedSender<VoiceGatewayCommand>,
@@ -969,18 +1185,22 @@ pub struct VoiceRuntimeHandle {
 }
 
 impl VoiceRuntimeHandle {
+    /// Runs the `state` operation.
     pub fn state(&self) -> VoiceRuntimeState {
         self.state_rx.borrow().clone()
     }
 
+    /// Runs the `subscribe` operation.
     pub fn subscribe(&self) -> watch::Receiver<VoiceRuntimeState> {
         self.state_rx.clone()
     }
 
+    /// Runs the `udp_socket` operation.
     pub fn udp_socket(&self) -> Arc<UdpSocket> {
         Arc::clone(&self.udp_socket)
     }
 
+    /// Runs the `recv_raw_udp_packet` operation.
     pub async fn recv_raw_udp_packet(
         &self,
         max_len: usize,
@@ -995,6 +1215,7 @@ impl VoiceRuntimeHandle {
         Ok(VoiceRawUdpPacket::from_bytes(buffer))
     }
 
+    /// Runs the `recv_voice_packet` operation.
     pub async fn recv_voice_packet(
         &self,
         max_len: usize,
@@ -1028,6 +1249,7 @@ impl VoiceRuntimeHandle {
         })
     }
 
+    /// Runs the `recv_voice_packet_with_dave` operation.
     pub async fn recv_voice_packet_with_dave<D>(
         &self,
         max_len: usize,
@@ -1065,6 +1287,7 @@ impl VoiceRuntimeHandle {
         })
     }
 
+    /// Runs the `recv_decoded_voice_packet` operation.
     pub async fn recv_decoded_voice_packet(
         &self,
         decoder: &mut VoiceOpusDecoder,
@@ -1074,6 +1297,7 @@ impl VoiceRuntimeHandle {
         decoder.decode_packet(packet)
     }
 
+    /// Runs the `recv_decoded_voice_packet_with_dave` operation.
     pub async fn recv_decoded_voice_packet_with_dave<D>(
         &self,
         decoder: &mut VoiceOpusDecoder,
@@ -1089,12 +1313,14 @@ impl VoiceRuntimeHandle {
         decoder.decode_packet(packet)
     }
 
+    /// Runs the `send` operation.
     pub fn send(&self, command: VoiceGatewayCommand) -> Result<(), DiscordError> {
         self.command_tx
             .send(command)
             .map_err(|error| invalid_data_error(format!("failed to send voice command: {error}")))
     }
 
+    /// Runs the `set_speaking` operation.
     pub fn set_speaking(&self, flags: VoiceSpeakingFlags, delay: u32) -> Result<(), DiscordError> {
         let ssrc = self.state().ready.ssrc;
         self.send(VoiceGatewayCommand::Speaking(
@@ -1103,11 +1329,13 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "dave")]
+    /// Runs the `send_dave_transition_ready` operation.
     pub fn send_dave_transition_ready(&self, transition_id: u64) -> Result<(), DiscordError> {
         self.send(VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id })
     }
 
     #[cfg(feature = "dave")]
+    /// Runs the `send_dave_mls_key_package` operation.
     pub fn send_dave_mls_key_package(
         &self,
         key_package: impl Into<Vec<u8>>,
@@ -1118,6 +1346,7 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "dave")]
+    /// Runs the `send_dave_mls_commit_welcome` operation.
     pub fn send_dave_mls_commit_welcome(
         &self,
         commit: impl Into<Vec<u8>>,
@@ -1130,6 +1359,7 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "dave")]
+    /// Runs the `send_dave_mls_invalid_commit_welcome` operation.
     pub fn send_dave_mls_invalid_commit_welcome(
         &self,
         transition_id: u64,
@@ -1137,6 +1367,7 @@ impl VoiceRuntimeHandle {
         self.send(VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { transition_id })
     }
 
+    /// Runs the `send_opus_frame` operation.
     pub async fn send_opus_frame(
         &self,
         opus_frame: &[u8],
@@ -1182,6 +1413,7 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "dave")]
+    /// Runs the `send_opus_frame_with_dave` operation.
     pub async fn send_opus_frame_with_dave<E>(
         &self,
         opus_frame: &[u8],
@@ -1196,6 +1428,7 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "voice-encode")]
+    /// Runs the `play_audio_source` operation.
     pub async fn play_audio_source<S>(
         &self,
         source: &mut S,
@@ -1208,6 +1441,7 @@ impl VoiceRuntimeHandle {
     }
 
     #[cfg(feature = "voice-encode")]
+    /// Runs the `play_audio_source_limited` operation.
     pub async fn play_audio_source_limited<S>(
         &self,
         source: &mut S,
@@ -1221,6 +1455,7 @@ impl VoiceRuntimeHandle {
         self.play_opus_frames(frames).await
     }
 
+    /// Runs the `play_opus_frames` operation.
     pub async fn play_opus_frames<I>(&self, frames: I) -> Result<usize, DiscordError>
     where
         I: IntoIterator<Item = VoiceOpusFrame>,
@@ -1242,6 +1477,7 @@ impl VoiceRuntimeHandle {
         Ok(sent)
     }
 
+    /// Runs the `close` operation.
     pub async fn close(mut self) -> Result<(), DiscordError> {
         if let Some(close_tx) = self.close_tx.take() {
             let _ = close_tx.send(());
@@ -1256,6 +1492,7 @@ impl VoiceRuntimeHandle {
     }
 }
 
+/// Runs the `connect` helper.
 pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, DiscordError> {
     let websocket_url = config.websocket_url();
     let (ws_stream, _) = connect_async(&websocket_url).await?;
@@ -1505,14 +1742,26 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                         })?;
                                     }
                                     VOICE_OP_DAVE_MLS_ANNOUNCE_COMMIT_TRANSITION => {
-                                        update_state(&state_tx, |state| {
-                                            state.dave.pending_commit = Some(payload);
-                                        })?;
+                                        if payload.len() >= 2 {
+                                            let transition_id =
+                                                u64::from(u16::from_be_bytes([payload[0], payload[1]]));
+                                            let commit = payload[2..].to_vec();
+                                            update_state(&state_tx, |state| {
+                                                state.dave.transition_id = Some(transition_id);
+                                                state.dave.pending_commit = Some(commit);
+                                            })?;
+                                        }
                                     }
                                     VOICE_OP_DAVE_MLS_WELCOME => {
-                                        update_state(&state_tx, |state| {
-                                            state.dave.pending_welcome = Some(payload);
-                                        })?;
+                                        if payload.len() >= 2 {
+                                            let transition_id =
+                                                u64::from(u16::from_be_bytes([payload[0], payload[1]]));
+                                            let welcome = payload[2..].to_vec();
+                                            update_state(&state_tx, |state| {
+                                                state.dave.transition_id = Some(transition_id);
+                                                state.dave.pending_welcome = Some(welcome);
+                                            })?;
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -1876,6 +2125,49 @@ mod tests {
             Some(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize())
         );
         assert_eq!(config.max_dave_protocol_version, Some(3));
+    }
+
+    #[test]
+    fn voice_runtime_debug_redacts_live_secret_material() {
+        let config = VoiceRuntimeConfig::new(
+            "1",
+            "2",
+            "session",
+            "voice-token-value",
+            "voice.discord.media",
+        );
+        let config_debug = format!("{config:?}");
+        assert!(config_debug.contains("<redacted>"));
+        assert!(!config_debug.contains("voice-token-value"));
+
+        let description = VoiceSessionDescription {
+            mode: VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            secret_key: vec![7; 32],
+            audio_codec: Some("opus".to_string()),
+            dave_protocol_version: Some(1),
+        };
+        let description_debug = format!("{description:?}");
+        assert!(description_debug.contains("<redacted:32 bytes>"));
+        assert!(!description_debug.contains("[7, 7"));
+
+        let dave = VoiceDaveState {
+            protocol_version: Some(1),
+            transition_id: Some(9),
+            epoch: Some(1),
+            passthrough: false,
+            external_sender: Some(vec![8; 70]),
+            proposals: vec![vec![9; 11]],
+            pending_commit: Some(vec![10; 12]),
+            pending_welcome: Some(vec![11; 13]),
+        };
+        let dave_debug = format!("{dave:?}");
+        assert!(dave_debug.contains("<redacted:70 bytes>"));
+        assert!(dave_debug.contains("proposal_lengths"));
+        assert!(dave_debug.contains("pending_commit_len"));
+        assert!(!dave_debug.contains("[8, 8"));
+        assert!(!dave_debug.contains("[9, 9"));
+        assert!(!dave_debug.contains("[10, 10"));
+        assert!(!dave_debug.contains("[11, 11"));
     }
 
     #[test]
@@ -2546,10 +2838,10 @@ mod tests {
             ws.send(WsMessage::Binary(vec![0, 15, 27, 4, 5].into()))
                 .await
                 .unwrap();
-            ws.send(WsMessage::Binary(vec![0, 16, 29, 6].into()))
+            ws.send(WsMessage::Binary(vec![0, 16, 29, 0, 99, 6].into()))
                 .await
                 .unwrap();
-            ws.send(WsMessage::Binary(vec![0, 17, 30, 7].into()))
+            ws.send(WsMessage::Binary(vec![0, 17, 30, 0, 99, 7].into()))
                 .await
                 .unwrap();
             ws.send(WsMessage::Binary(vec![0, 25].into()))

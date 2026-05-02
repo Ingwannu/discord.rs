@@ -8,12 +8,14 @@ pub struct HttpError {
 }
 
 impl HttpError {
+    /// Creates or returns `new` data.
     pub fn new(err: &reqwest::Error) -> Self {
         Self {
             message: err.to_string(),
         }
     }
 
+    /// Runs the `message` operation.
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -35,29 +37,50 @@ impl std::error::Error for HttpError {}
 pub enum DiscordError {
     /// Discord API returned an error response (4xx/5xx).
     Api {
+        /// HTTP response status code.
         status: u16,
+        /// Discord JSON error code, when present.
         code: Option<u64>,
+        /// Discord error message or fallback response text.
         message: String,
     },
     /// An HTTP transport error occurred.
     Http(HttpError),
     /// A rate limit was encountered.
-    RateLimit { route: String, retry_after: f64 },
+    RateLimit {
+        /// Route bucket or request path that was limited.
+        route: String,
+        /// Retry delay in seconds.
+        retry_after: f64,
+    },
     /// JSON serialization or deserialization failed.
     Json(String),
     /// An I/O error occurred.
     Io(String),
     /// A model validation or data error.
-    Model { message: String },
+    Model {
+        /// Validation error message.
+        message: String,
+    },
     /// A gateway protocol error.
-    Gateway { message: String },
+    Gateway {
+        /// Gateway error message.
+        message: String,
+    },
     /// A voice subsystem error.
-    Voice { message: String },
+    Voice {
+        /// Voice subsystem error message.
+        message: String,
+    },
     /// A cache operation error.
-    Cache { message: String },
+    Cache {
+        /// Cache operation error message.
+        message: String,
+    },
 }
 
 impl DiscordError {
+    /// Creates or returns `api` data.
     pub fn api(status: u16, code: Option<u64>, message: impl Into<String>) -> Self {
         Self::Api {
             status,
@@ -66,12 +89,14 @@ impl DiscordError {
         }
     }
 
+    /// Creates or returns `model` data.
     pub fn model(message: impl Into<String>) -> Self {
         Self::Model {
             message: message.into(),
         }
     }
 
+    /// Creates or returns `rate_limit` data.
     pub fn rate_limit(route: impl Into<String>, retry_after: f64) -> Self {
         Self::RateLimit {
             route: route.into(),
@@ -79,18 +104,21 @@ impl DiscordError {
         }
     }
 
+    /// Creates or returns `gateway` data.
     pub fn gateway(message: impl Into<String>) -> Self {
         Self::Gateway {
             message: message.into(),
         }
     }
 
+    /// Creates or returns `voice` data.
     pub fn voice(message: impl Into<String>) -> Self {
         Self::Voice {
             message: message.into(),
         }
     }
 
+    /// Creates or returns `cache` data.
     pub fn cache(message: impl Into<String>) -> Self {
         Self::Cache {
             message: message.into(),

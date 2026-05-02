@@ -18,6 +18,7 @@ type EventFilter<T> = Arc<dyn Fn(&T) -> bool + Send + Sync>;
 
 #[cfg(feature = "collectors")]
 #[derive(Clone)]
+/// Typed Discord API object for `CollectorHub`.
 pub struct CollectorHub {
     sender: broadcast::Sender<Event>,
 }
@@ -31,10 +32,12 @@ impl Default for CollectorHub {
 
 #[cfg(feature = "collectors")]
 impl CollectorHub {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self::with_capacity(256)
     }
 
+    /// Creates or returns `with_capacity` data.
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity.max(1));
         Self { sender }
@@ -44,24 +47,29 @@ impl CollectorHub {
         let _ = self.sender.send(event);
     }
 
+    /// Runs the `message_collector` operation.
     pub fn message_collector(&self) -> MessageCollector {
         MessageCollector::new(self.sender.subscribe())
     }
 
+    /// Runs the `interaction_collector` operation.
     pub fn interaction_collector(&self) -> InteractionCollector {
         InteractionCollector::new(self.sender.subscribe())
     }
 
+    /// Runs the `component_collector` operation.
     pub fn component_collector(&self) -> ComponentCollector {
         ComponentCollector::new(self.sender.subscribe())
     }
 
+    /// Runs the `modal_collector` operation.
     pub fn modal_collector(&self) -> ModalCollector {
         ModalCollector::new(self.sender.subscribe())
     }
 }
 
 #[cfg(feature = "collectors")]
+/// Typed Discord API object for `MessageCollector`.
 pub struct MessageCollector {
     receiver: broadcast::Receiver<Event>,
     filter: Option<EventFilter<Message>>,
@@ -84,6 +92,7 @@ impl MessageCollector {
         }
     }
 
+    /// Runs the `filter` operation.
     pub fn filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(&Message) -> bool + Send + Sync + 'static,
@@ -92,20 +101,24 @@ impl MessageCollector {
         self
     }
 
+    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
     }
 
+    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.max_items = Some(max_items);
         self
     }
 
+    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.lagged_events
     }
 
+    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<Message> {
         let timeout = remaining_timeout(self.timeout, &mut self.deadline);
         recv_with_timeout(timeout, async {
@@ -132,6 +145,7 @@ impl MessageCollector {
         .await
     }
 
+    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<Message> {
         let mut messages = Vec::new();
         while let Some(message) = self.next().await {
@@ -147,6 +161,7 @@ impl MessageCollector {
 }
 
 #[cfg(feature = "collectors")]
+/// Typed Discord API object for `InteractionCollector`.
 pub struct InteractionCollector {
     receiver: broadcast::Receiver<Event>,
     filter: Option<EventFilter<Interaction>>,
@@ -169,6 +184,7 @@ impl InteractionCollector {
         }
     }
 
+    /// Runs the `filter` operation.
     pub fn filter<F>(mut self, filter: F) -> Self
     where
         F: Fn(&Interaction) -> bool + Send + Sync + 'static,
@@ -177,20 +193,24 @@ impl InteractionCollector {
         self
     }
 
+    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
     }
 
+    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.max_items = Some(max_items);
         self
     }
 
+    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.lagged_events
     }
 
+    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<Interaction> {
         let timeout = remaining_timeout(self.timeout, &mut self.deadline);
         recv_with_timeout(timeout, async {
@@ -217,6 +237,7 @@ impl InteractionCollector {
         .await
     }
 
+    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<Interaction> {
         let mut interactions = Vec::new();
         while let Some(interaction) = self.next().await {
@@ -232,6 +253,7 @@ impl InteractionCollector {
 }
 
 #[cfg(feature = "collectors")]
+/// Typed Discord API object for `ComponentCollector`.
 pub struct ComponentCollector {
     inner: InteractionCollector,
 }
@@ -244,20 +266,24 @@ impl ComponentCollector {
         }
     }
 
+    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.inner = self.inner.timeout(duration);
         self
     }
 
+    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.inner.lagged_events()
     }
 
+    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.inner = self.inner.max_items(max_items);
         self
     }
 
+    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<ComponentInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::Component(component) = interaction {
@@ -267,6 +293,7 @@ impl ComponentCollector {
         None
     }
 
+    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<ComponentInteraction> {
         let mut components = Vec::new();
         while let Some(component) = self.next().await {
@@ -282,6 +309,7 @@ impl ComponentCollector {
 }
 
 #[cfg(feature = "collectors")]
+/// Typed Discord API object for `ModalCollector`.
 pub struct ModalCollector {
     inner: InteractionCollector,
 }
@@ -294,20 +322,24 @@ impl ModalCollector {
         }
     }
 
+    /// Runs the `timeout` operation.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.inner = self.inner.timeout(duration);
         self
     }
 
+    /// Runs the `lagged_events` operation.
     pub fn lagged_events(&self) -> u64 {
         self.inner.lagged_events()
     }
 
+    /// Runs the `max_items` operation.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.inner = self.inner.max_items(max_items);
         self
     }
 
+    /// Runs the `next` operation.
     pub async fn next(&mut self) -> Option<ModalSubmitInteraction> {
         while let Some(interaction) = self.inner.next().await {
             if let Interaction::ModalSubmit(modal) = interaction {
@@ -317,6 +349,7 @@ impl ModalCollector {
         None
     }
 
+    /// Runs the `collect` operation.
     pub async fn collect(mut self) -> Vec<ModalSubmitInteraction> {
         let mut modals = Vec::new();
         while let Some(modal) = self.next().await {
@@ -462,6 +495,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_hub_and_message_filter_cover_default_paths() {
+        let hub = CollectorHub::default();
+        let mut collector = hub
+            .message_collector()
+            .filter(|message| message.content == "keep")
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(
+            decode_event(
+                "MESSAGE_CREATE",
+                json!({
+                    "id": "2",
+                    "channel_id": "1",
+                    "content": "skip",
+                    "mentions": [],
+                    "attachments": []
+                }),
+            )
+            .unwrap(),
+        );
+        hub.publish(ping_interaction("3"));
+        hub.publish(
+            decode_event(
+                "MESSAGE_UPDATE",
+                json!({
+                    "id": "4",
+                    "channel_id": "1",
+                    "content": "keep",
+                    "mentions": [],
+                    "attachments": []
+                }),
+            )
+            .unwrap(),
+        );
+
+        let message = collector.next().await.expect("matching message update");
+        assert_eq!(message.id.as_str(), "4");
+        assert_eq!(message.content, "keep");
+    }
+
+    #[tokio::test]
     async fn interaction_component_and_modal_collectors_yield_typed_variants() {
         let hub = CollectorHub::new();
         let mut interaction_collector = hub
@@ -580,6 +654,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn component_and_modal_collectors_collect_and_expose_lagged_counts() {
+        let component_hub = CollectorHub::new();
+        let component_collector = component_hub
+            .component_collector()
+            .max_items(2)
+            .timeout(Duration::from_secs(1));
+        component_hub.publish(component_interaction("1", "first"));
+        component_hub.publish(component_interaction("2", "second"));
+        component_hub.publish(component_interaction("3", "third"));
+
+        let components = component_collector.collect().await;
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].data.custom_id, "first");
+        assert_eq!(components[1].data.custom_id, "second");
+
+        let modal_hub = CollectorHub::with_capacity(1);
+        let mut lagged_modal_collector = modal_hub
+            .modal_collector()
+            .max_items(1)
+            .timeout(Duration::from_secs(1));
+        modal_hub.publish(component_interaction("4", "skipped"));
+        modal_hub.publish(modal_interaction("5", "latest"));
+        let modal = lagged_modal_collector.next().await.expect("latest modal");
+        assert_eq!(modal.submission.custom_id, "latest");
+        assert!(lagged_modal_collector.lagged_events() >= 1);
+
+        let modal_collector = modal_hub
+            .modal_collector()
+            .max_items(1)
+            .timeout(Duration::from_secs(1));
+        modal_hub.publish(modal_interaction("6", "collected"));
+        let modals = modal_collector.collect().await;
+        assert_eq!(modals.len(), 1);
+        assert_eq!(modals[0].submission.custom_id, "collected");
+    }
+
+    #[tokio::test]
     async fn component_collector_timeout_is_absolute_across_non_matching_interactions() {
         let hub = CollectorHub::new();
         let mut collector = hub.component_collector().timeout(Duration::from_millis(30));
@@ -669,10 +780,10 @@ mod tests {
 
     #[tokio::test]
     async fn recv_with_timeout_returns_none_when_future_exceeds_deadline() {
-        let timed_out = recv_with_timeout(Some(Duration::from_millis(5)), async {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            Some(1_u8)
-        })
+        let timed_out = recv_with_timeout(
+            Some(Duration::from_millis(5)),
+            std::future::pending::<Option<u8>>(),
+        )
         .await;
         assert_eq!(timed_out, None);
 

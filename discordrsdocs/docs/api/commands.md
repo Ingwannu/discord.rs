@@ -35,3 +35,12 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 - Build the command definition with the typed builders
 - Send it with the REST layer instead of hand-written JSON
 - Keep raw overwrite calls only for compatibility or uncovered routes
+
+## Permissions
+
+Application command permission reads are typed through:
+
+- `get_guild_application_command_permissions(guild_id)`
+- `get_application_command_permissions(guild_id, command_id)`
+
+Permission writes use `EditApplicationCommandPermissions` and `ApplicationCommandPermission`. Discord requires an OAuth2 Bearer token for the write route, so `edit_application_command_permissions(...)` does not use the bot token.

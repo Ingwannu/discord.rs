@@ -17,16 +17,21 @@ pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `Emoji`.
 pub struct Emoji {
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `id`.
     pub id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `name`.
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `animated`.
     pub animated: Option<bool>,
 }
 
 impl Emoji {
+    /// Creates or returns `unicode` data.
     pub fn unicode(emoji: &str) -> Self {
         Self {
             name: Some(emoji.to_string()),
@@ -35,6 +40,7 @@ impl Emoji {
         }
     }
 
+    /// Creates or returns `custom` data.
     pub fn custom(name: &str, id: &str, animated: bool) -> Self {
         Self {
             name: Some(name.to_string()),
@@ -45,20 +51,27 @@ impl Emoji {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `MediaGalleryItem`.
 pub struct MediaGalleryItem {
+    /// Discord API payload field `media`.
     pub media: MediaInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `description`.
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `spoiler`.
     pub spoiler: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `MediaInfo`.
 pub struct MediaInfo {
+    /// Discord API payload field `url`.
     pub url: String,
 }
 
 impl MediaGalleryItem {
+    /// Creates or returns `new` data.
     pub fn new(url: &str) -> Self {
         Self {
             media: MediaInfo {
@@ -69,11 +82,13 @@ impl MediaGalleryItem {
         }
     }
 
+    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
+    /// Runs the `spoiler` operation.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
         self.spoiler = Some(spoiler);
         self
@@ -81,18 +96,25 @@ impl MediaGalleryItem {
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `SelectOption`.
 pub struct SelectOption {
+    /// Discord API payload field `label`.
     pub label: String,
+    /// Discord API payload field `value`.
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `description`.
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `emoji`.
     pub emoji: Option<Emoji>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `default`.
     pub default: Option<bool>,
 }
 
 impl SelectOption {
+    /// Creates or returns `new` data.
     pub fn new(label: &str, value: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -103,16 +125,19 @@ impl SelectOption {
         }
     }
 
+    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
+    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: &str) -> Self {
         self.emoji = Some(Emoji::unicode(emoji));
         self
     }
 
+    /// Runs the `default_selected` operation.
     pub fn default_selected(mut self, default: bool) -> Self {
         self.default = Some(default);
         self
@@ -120,14 +145,20 @@ impl SelectOption {
 }
 
 #[derive(Clone, Default)]
+/// Typed Discord API object for `ButtonConfig`.
 pub struct ButtonConfig {
+    /// Discord API payload field `custom_id`.
     pub custom_id: String,
+    /// Discord API payload field `label`.
     pub label: String,
+    /// Discord API payload field `style`.
     pub style: u8,
+    /// Discord API payload field `emoji`.
     pub emoji: Option<String>,
 }
 
 impl ButtonConfig {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str, label: &str) -> Self {
         Self {
             custom_id: custom_id.to_string(),
@@ -137,11 +168,13 @@ impl ButtonConfig {
         }
     }
 
+    /// Runs the `style` operation.
     pub fn style(mut self, style: u8) -> Self {
         self.style = style;
         self
     }
 
+    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: &str) -> Self {
         self.emoji = Some(emoji.to_string());
         self
@@ -178,13 +211,13 @@ mod tests {
 
     #[test]
     fn emoji_builders_round_trip_through_serde() {
-        let unicode = Emoji::unicode("🔥");
-        assert_eq!(unicode.name.as_deref(), Some("🔥"));
+        let unicode = Emoji::unicode("?뵦");
+        assert_eq!(unicode.name.as_deref(), Some("?뵦"));
         assert_eq!(unicode.id, None);
         assert_eq!(unicode.animated, None);
         assert_eq!(
             serde_json::to_value(&unicode).unwrap(),
-            json!({ "name": "🔥" })
+            json!({ "name": "?뵦" })
         );
 
         let custom = Emoji::custom("party", "42", true);
@@ -242,7 +275,7 @@ mod tests {
     fn select_option_builder_serializes_nested_unicode_emoji() {
         let option = SelectOption::new("Support", "support")
             .description("Open a support ticket")
-            .emoji("🔥")
+            .emoji("?뵦")
             .default_selected(true);
 
         assert_eq!(option.label, "Support");
@@ -254,7 +287,7 @@ mod tests {
                 .emoji
                 .as_ref()
                 .and_then(|emoji| emoji.name.as_deref()),
-            Some("🔥")
+            Some("?뵦")
         );
 
         let serialized = serde_json::to_value(&option).unwrap();
@@ -265,7 +298,7 @@ mod tests {
                 "value": "support",
                 "description": "Open a support ticket",
                 "emoji": {
-                    "name": "🔥"
+                    "name": "?뵦"
                 },
                 "default": true
             })
@@ -299,11 +332,11 @@ mod tests {
 
         let button = ButtonConfig::new("open-ticket", "Open")
             .style(button_style::DANGER)
-            .emoji("🛠");
+            .emoji("?썱");
         assert_eq!(button.custom_id, "open-ticket");
         assert_eq!(button.label, "Open");
         assert_eq!(button.style, button_style::DANGER);
-        assert_eq!(button.emoji.as_deref(), Some("🛠"));
+        assert_eq!(button.emoji.as_deref(), Some("?썱"));
 
         let primary_button = ButtonConfig::new("primary", "Primary");
         assert_eq!(primary_button.style, button_style::PRIMARY);

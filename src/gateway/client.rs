@@ -16,7 +16,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::model::{RequestGuildMembers, Snowflake, UpdatePresence};
+use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
 use crate::ws::{GatewayCompression, GatewayConnectionConfig};
@@ -61,6 +61,7 @@ pub(crate) enum GatewayCommand {
     UpdatePresence(String),
     UpdatePresenceData(UpdatePresence),
     RequestGuildMembers(RequestGuildMembers),
+    RequestChannelInfo(RequestChannelInfo),
     SendPayload(Value),
 }
 
@@ -125,10 +126,12 @@ fn classify_gateway_command(command: &GatewayCommand) -> GatewayCommandClass {
         GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_) => {
             GatewayCommandClass::PresenceUpdate
         }
-        GatewayCommand::RequestGuildMembers(_) => GatewayCommandClass::BurstSensitive,
+        GatewayCommand::RequestGuildMembers(_) | GatewayCommand::RequestChannelInfo(_) => {
+            GatewayCommandClass::BurstSensitive
+        }
         GatewayCommand::SendPayload(payload) => match payload.get("op").and_then(Value::as_u64) {
             Some(3) => GatewayCommandClass::PresenceUpdate,
-            Some(4 | 8 | 14 | 31) => GatewayCommandClass::BurstSensitive,
+            Some(4 | 8 | 14 | 31 | 43) => GatewayCommandClass::BurstSensitive,
             _ => GatewayCommandClass::Other,
         },
         GatewayCommand::Shutdown | GatewayCommand::Reconnect => GatewayCommandClass::Other,
@@ -480,6 +483,15 @@ impl GatewayClient {
                             let payload = request_guild_members_payload(request);
                             write.send(WsMessage::Text(payload.to_string().into())).await?;
                         }
+                        Some(GatewayCommand::RequestChannelInfo(request)) => {
+                            let command = GatewayCommand::RequestChannelInfo(request);
+                            outbound_limiter.wait_for_command(&command).await;
+                            let GatewayCommand::RequestChannelInfo(request) = command else {
+                                unreachable!("command was constructed as RequestChannelInfo");
+                            };
+                            let payload = request_channel_info_payload(request);
+                            write.send(WsMessage::Text(payload.to_string().into())).await?;
+                        }
                         Some(GatewayCommand::SendPayload(payload)) => {
                             let command = GatewayCommand::SendPayload(payload);
                             outbound_limiter.wait_for_command(&command).await;
@@ -566,6 +578,13 @@ pub(crate) fn request_soundboard_sounds_payload(
             "guild_ids": guild_ids,
             "channels": channels
         }
+    })
+}
+
+pub(crate) fn request_channel_info_payload(request: RequestChannelInfo) -> Value {
+    serde_json::json!({
+        "op": 43,
+        "d": request
     })
 }
 
@@ -835,13 +854,13 @@ mod tests {
     use super::{
         classify_gateway_command, identify_payload, initial_heartbeat_delay,
         is_terminal_close_code, is_terminal_close_frame, recv_control_command,
-        request_guild_members_payload, resume_payload, terminal_close_error,
-        update_presence_payload, voice_state_update_payload, EventCallback, GatewayClient,
-        GatewayCommand, GatewayCommandClass, GatewayCompressionDecoder, GatewayOutboundLimiter,
-        GatewayZlibStream, ReconnectAction, GATEWAY_COMMAND_MIN_SPACING, PRESENCE_UPDATE_LIMIT,
-        PRESENCE_UPDATE_WINDOW, ZLIB_SUFFIX,
+        request_channel_info_payload, request_guild_members_payload, resume_payload,
+        terminal_close_error, update_presence_payload, voice_state_update_payload, EventCallback,
+        GatewayClient, GatewayCommand, GatewayCommandClass, GatewayCompressionDecoder,
+        GatewayOutboundLimiter, GatewayZlibStream, ReconnectAction, GATEWAY_COMMAND_MIN_SPACING,
+        PRESENCE_UPDATE_LIMIT, PRESENCE_UPDATE_WINDOW, ZLIB_SUFFIX,
     };
-    use crate::model::{RequestGuildMembers, Snowflake, UpdatePresence};
+    use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
     use crate::ws::{GatewayCompression, GatewayConnectionConfig};
@@ -939,6 +958,14 @@ mod tests {
         assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
         assert_eq!(payload["d"]["user_ids"], serde_json::json!(["2"]));
         assert_eq!(payload["d"]["nonce"], serde_json::json!("nonce"));
+
+        let payload = request_channel_info_payload(RequestChannelInfo::voice_metadata("1"));
+        assert_eq!(payload["op"], serde_json::json!(43));
+        assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
+        assert_eq!(
+            payload["d"]["fields"],
+            serde_json::json!(["status", "voice_start_time"])
+        );
     }
 
     #[test]
@@ -965,11 +992,23 @@ mod tests {
             GatewayCommandClass::BurstSensitive
         );
         assert_eq!(
+            classify_gateway_command(&GatewayCommand::RequestChannelInfo(
+                RequestChannelInfo::new("1", ["status"])
+            )),
+            GatewayCommandClass::BurstSensitive
+        );
+        assert_eq!(
             classify_gateway_command(&GatewayCommand::SendPayload(serde_json::json!({ "op": 3 }))),
             GatewayCommandClass::PresenceUpdate
         );
         assert_eq!(
             classify_gateway_command(&GatewayCommand::SendPayload(serde_json::json!({ "op": 8 }))),
+            GatewayCommandClass::BurstSensitive
+        );
+        assert_eq!(
+            classify_gateway_command(&GatewayCommand::SendPayload(
+                serde_json::json!({ "op": 43 })
+            )),
             GatewayCommandClass::BurstSensitive
         );
         assert_eq!(

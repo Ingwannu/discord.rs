@@ -1,4 +1,4 @@
-# Interactions Endpoint API
+﻿# Interactions Endpoint API
 
 Use this mode when Discord sends interaction callbacks to your HTTP server.
 
@@ -6,7 +6,7 @@ Use this mode when Discord sends interaction callbacks to your HTTP server.
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.2", features = ["interactions"] }
+discordrs = { version = "2.0.0", features = ["interactions"] }
 ```
 
 ## Capabilities
@@ -15,6 +15,7 @@ discordrs = { version = "1.2.2", features = ["interactions"] }
 - Axum routing helpers
 - Typed interaction parsing
 - Structured response encoding (`Pong`, message, deferred, modal, update)
+- Optional `AppFramework` routing for commands, components, and modals
 
 ## Typical Flow
 
@@ -29,4 +30,30 @@ discordrs = { version = "1.2.2", features = ["interactions"] }
 - Slash-command-first bots
 - serverless or HTTP-native infrastructure
 - apps where websocket Gateway runtime is not preferred
+
+## `AppFramework`
+
+`AppFramework` implements `TypedInteractionHandler`, so it can be passed directly to `try_typed_interactions_endpoint(...)`. It routes:
+
+- slash/user/message commands by command name
+- component interactions by `custom_id`
+- modal submissions by `custom_id`
+
+```rust
+use discordrs::{AppFramework, InteractionResponse, RouteKey};
+
+let handler = AppFramework::builder()
+    .command("hello", |_ctx| async move {
+        InteractionResponse::ChannelMessage(serde_json::json!({
+            "content": "Hello from discord.rs"
+        }))
+    })
+    .modal("ticket:create", |_ctx| async move {
+        InteractionResponse::DeferredMessage
+    })
+    .cooldown(RouteKey::Command("hello".to_string()), std::time::Duration::from_secs(5))
+    .build();
+```
+
+Use guards for shared authorization checks and `fallback(...)` for a custom unknown-route response.
 

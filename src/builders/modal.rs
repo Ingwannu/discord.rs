@@ -7,6 +7,7 @@ use crate::types::{to_json_value, SelectOption};
 use super::components::{ActionRowBuilder, SelectMenuBuilder};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `TextInputBuilder`.
 pub struct TextInputBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -26,6 +27,7 @@ pub struct TextInputBuilder {
 }
 
 impl TextInputBuilder {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str, label: &str, style: u8) -> Self {
         Self {
             component_type: component_type::TEXT_INPUT,
@@ -40,45 +42,54 @@ impl TextInputBuilder {
         }
     }
 
+    /// Creates or returns `short` data.
     pub fn short(custom_id: &str, label: &str) -> Self {
         Self::new(custom_id, label, text_input_style::SHORT)
     }
 
+    /// Creates or returns `paragraph` data.
     pub fn paragraph(custom_id: &str, label: &str) -> Self {
         Self::new(custom_id, label, text_input_style::PARAGRAPH)
     }
 
+    /// Runs the `placeholder` operation.
     pub fn placeholder(mut self, placeholder: &str) -> Self {
         self.placeholder = Some(placeholder.to_string());
         self
     }
 
+    /// Runs the `value` operation.
     pub fn value(mut self, value: &str) -> Self {
         self.value = Some(value.to_string());
         self
     }
 
+    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
+    /// Runs the `min_length` operation.
     pub fn min_length(mut self, min: u16) -> Self {
         self.min_length = Some(min);
         self
     }
 
+    /// Runs the `max_length` operation.
     pub fn max_length(mut self, max: u16) -> Self {
         self.max_length = Some(max);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `RadioGroupBuilder`.
 pub struct RadioGroupBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -93,6 +104,7 @@ pub struct RadioGroupBuilder {
 }
 
 impl RadioGroupBuilder {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str) -> Self {
         Self {
             component_type: component_type::RADIO_GROUP,
@@ -104,37 +116,44 @@ impl RadioGroupBuilder {
         }
     }
 
+    /// Runs the `add_option` operation.
     pub fn add_option(mut self, option: SelectOption) -> Self {
         self.options.push(option);
         self
     }
 
+    /// Runs the `add_options` operation.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
         self.options.extend(options);
         self
     }
 
+    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
+    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `CheckboxGroupBuilder`.
 pub struct CheckboxGroupBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -153,6 +172,7 @@ pub struct CheckboxGroupBuilder {
 }
 
 impl CheckboxGroupBuilder {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str) -> Self {
         Self {
             component_type: component_type::CHECKBOX_GROUP,
@@ -166,47 +186,56 @@ impl CheckboxGroupBuilder {
         }
     }
 
+    /// Runs the `add_option` operation.
     pub fn add_option(mut self, option: SelectOption) -> Self {
         self.options.push(option);
         self
     }
 
+    /// Runs the `add_options` operation.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
         self.options.extend(options);
         self
     }
 
+    /// Runs the `min_values` operation.
     pub fn min_values(mut self, min: u8) -> Self {
         self.min_values = Some(min);
         self
     }
 
+    /// Runs the `max_values` operation.
     pub fn max_values(mut self, max: u8) -> Self {
         self.max_values = Some(max);
         self
     }
 
+    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
+    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `CheckboxBuilder`.
 pub struct CheckboxBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -222,6 +251,7 @@ pub struct CheckboxBuilder {
 }
 
 impl CheckboxBuilder {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str) -> Self {
         Self {
             component_type: component_type::CHECKBOX,
@@ -233,32 +263,38 @@ impl CheckboxBuilder {
         }
     }
 
+    /// Runs the `checked` operation.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = Some(checked);
         self
     }
 
+    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
+    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `FileUploadBuilder`.
 pub struct FileUploadBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -274,6 +310,7 @@ pub struct FileUploadBuilder {
 }
 
 impl FileUploadBuilder {
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str) -> Self {
         Self {
             component_type: component_type::FILE_UPLOAD,
@@ -285,32 +322,38 @@ impl FileUploadBuilder {
         }
     }
 
+    /// Runs the `min_values` operation.
     pub fn min_values(mut self, min: u8) -> Self {
         self.min_values = Some(min);
         self
     }
 
+    /// Runs the `max_values` operation.
     pub fn max_values(mut self, max: u8) -> Self {
         self.max_values = Some(max);
         self
     }
 
+    /// Runs the `required` operation.
     pub fn required(mut self, required: bool) -> Self {
         self.required = Some(required);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `LabelBuilder`.
 pub struct LabelBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -323,6 +366,7 @@ pub struct LabelBuilder {
 }
 
 impl LabelBuilder {
+    /// Creates or returns `with_select_menu` data.
     pub fn with_select_menu(label: &str, select: SelectMenuBuilder) -> Self {
         Self {
             component_type: component_type::LABEL,
@@ -333,6 +377,7 @@ impl LabelBuilder {
         }
     }
 
+    /// Creates or returns `with_file_upload` data.
     pub fn with_file_upload(label: &str, file_upload: FileUploadBuilder) -> Self {
         Self {
             component_type: component_type::LABEL,
@@ -343,6 +388,7 @@ impl LabelBuilder {
         }
     }
 
+    /// Creates or returns `with_radio_group` data.
     pub fn with_radio_group(label: &str, radio_group: RadioGroupBuilder) -> Self {
         Self {
             component_type: component_type::LABEL,
@@ -353,6 +399,7 @@ impl LabelBuilder {
         }
     }
 
+    /// Creates or returns `with_checkbox_group` data.
     pub fn with_checkbox_group(label: &str, checkbox_group: CheckboxGroupBuilder) -> Self {
         Self {
             component_type: component_type::LABEL,
@@ -363,6 +410,7 @@ impl LabelBuilder {
         }
     }
 
+    /// Creates or returns `with_checkbox` data.
     pub fn with_checkbox(label: &str, checkbox: CheckboxBuilder) -> Self {
         Self {
             component_type: component_type::LABEL,
@@ -373,22 +421,26 @@ impl LabelBuilder {
         }
     }
 
+    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ModalBuilder`.
 pub struct ModalBuilder {
     custom_id: String,
     title: String,
@@ -404,6 +456,7 @@ impl ModalBuilder {
         }
     }
 
+    /// Creates or returns `new` data.
     pub fn new(custom_id: &str, title: &str) -> Self {
         Self {
             custom_id: custom_id.to_string(),
@@ -412,12 +465,14 @@ impl ModalBuilder {
         }
     }
 
+    /// Runs the `add_text_input` operation.
     pub fn add_text_input(mut self, input: TextInputBuilder) -> Self {
         let row = ActionRowBuilder::new().add_component(input.build());
         self.components.push(row.build());
         self
     }
 
+    /// Runs the `add_select_menu` operation.
     pub fn add_select_menu(
         mut self,
         label: &str,
@@ -434,6 +489,7 @@ impl ModalBuilder {
         self
     }
 
+    /// Runs the `add_file_upload` operation.
     pub fn add_file_upload(
         mut self,
         label: &str,
@@ -450,6 +506,7 @@ impl ModalBuilder {
         self
     }
 
+    /// Runs the `add_radio_group` operation.
     pub fn add_radio_group(
         mut self,
         label: &str,
@@ -466,6 +523,7 @@ impl ModalBuilder {
         self
     }
 
+    /// Runs the `add_checkbox_group` operation.
     pub fn add_checkbox_group(
         mut self,
         label: &str,
@@ -482,6 +540,7 @@ impl ModalBuilder {
         self
     }
 
+    /// Runs the `add_checkbox` operation.
     pub fn add_checkbox(
         mut self,
         label: &str,
@@ -498,21 +557,25 @@ impl ModalBuilder {
         self
     }
 
+    /// Runs the `add_label` operation.
     pub fn add_label(mut self, label: LabelBuilder) -> Self {
         self.components.push(label.build());
         self
     }
 
+    /// Runs the `add_action_row` operation.
     pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
         self.components.push(row.build());
         self
     }
 
+    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }

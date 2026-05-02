@@ -23,6 +23,21 @@ let row = ActionRowBuilder::new().add_button(btn);
 let message = ComponentsV2Message::new().add_action_row(row);
 ```
 
+Auto-populated selects support Discord's `default_values`, `id`, and modal `required` fields:
+
+```rust
+use discordrs::{ActionRowBuilder, SelectDefaultValue, SelectMenuBuilder};
+
+let row = ActionRowBuilder::new().add_select_menu(
+    SelectMenuBuilder::mentionable("notify_targets")
+        .id(12)
+        .default_value(SelectDefaultValue::role("701"))
+        .min_values(0)
+        .max_values(2)
+        .required(false),
+);
+```
+
 ## Container Helper
 
 ```rust

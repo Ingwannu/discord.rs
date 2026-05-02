@@ -10,6 +10,7 @@ const API_BASE: &str = "https://discord.com/api/v10";
 const AUTHORIZE_BASE: &str = "https://discord.com/oauth2/authorize";
 
 #[derive(Clone)]
+/// Typed Discord API object for `OAuth2Client`.
 pub struct OAuth2Client {
     client: Client,
     client_id: String,
@@ -33,6 +34,7 @@ impl fmt::Debug for OAuth2Client {
 }
 
 impl OAuth2Client {
+    /// Creates or returns `new` data.
     pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
@@ -45,6 +47,7 @@ impl OAuth2Client {
         }
     }
 
+    /// Creates or returns `public_client` data.
     pub fn public_client(client_id: impl Into<String>) -> Self {
         Self {
             client: Client::new(),
@@ -73,6 +76,7 @@ impl OAuth2Client {
         }
     }
 
+    /// Runs the `authorization_url` operation.
     pub fn authorization_url(
         &self,
         request: OAuth2AuthorizationRequest,
@@ -108,6 +112,7 @@ impl OAuth2Client {
         Ok(url)
     }
 
+    /// Runs the `exchange_code` operation.
     pub async fn exchange_code(
         &self,
         request: OAuth2CodeExchange,
@@ -125,6 +130,7 @@ impl OAuth2Client {
         self.send_token_request(&form).await
     }
 
+    /// Runs the `refresh_token` operation.
     pub async fn refresh_token(
         &self,
         request: OAuth2RefreshToken,
@@ -182,16 +188,24 @@ impl OAuth2Client {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `OAuth2AuthorizationRequest`.
 pub struct OAuth2AuthorizationRequest {
+    /// Discord API payload field `redirect_uri`.
     pub redirect_uri: String,
+    /// Discord API payload field `scopes`.
     pub scopes: Vec<OAuth2Scope>,
+    /// Discord API payload field `response_type`.
     pub response_type: String,
+    /// Discord API payload field `state`.
     pub state: Option<String>,
+    /// Discord API payload field `prompt`.
     pub prompt: Option<String>,
+    /// Discord API payload field `integration_type`.
     pub integration_type: Option<u8>,
 }
 
 impl OAuth2AuthorizationRequest {
+    /// Creates or returns `code` data.
     pub fn code(
         redirect_uri: impl Into<String>,
         scopes: impl IntoIterator<Item = OAuth2Scope>,
@@ -206,16 +220,19 @@ impl OAuth2AuthorizationRequest {
         }
     }
 
+    /// Runs the `state` operation.
     pub fn state(mut self, state: impl Into<String>) -> Self {
         self.state = Some(state.into());
         self
     }
 
+    /// Runs the `prompt` operation.
     pub fn prompt(mut self, prompt: impl Into<String>) -> Self {
         self.prompt = Some(prompt.into());
         self
     }
 
+    /// Runs the `integration_type` operation.
     pub fn integration_type(mut self, integration_type: u8) -> Self {
         self.integration_type = Some(integration_type);
         self
@@ -234,49 +251,62 @@ impl OAuth2AuthorizationRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
+/// Typed Discord API object for `OAuth2Scope`.
 pub struct OAuth2Scope(String);
 
 impl OAuth2Scope {
+    /// Creates or returns `new` data.
     pub fn new(scope: impl Into<String>) -> Self {
         Self(scope.into())
     }
 
+    /// Creates or returns `identify` data.
     pub fn identify() -> Self {
         Self::new("identify")
     }
 
+    /// Creates or returns `email` data.
     pub fn email() -> Self {
         Self::new("email")
     }
 
+    /// Creates or returns `guilds` data.
     pub fn guilds() -> Self {
         Self::new("guilds")
     }
 
+    /// Creates or returns `guilds_join` data.
     pub fn guilds_join() -> Self {
         Self::new("guilds.join")
     }
 
+    /// Creates or returns `applications_commands_update` data.
     pub fn applications_commands_update() -> Self {
         Self::new("applications.commands.update")
     }
 
+    /// Creates or returns `role_connections_write` data.
     pub fn role_connections_write() -> Self {
         Self::new("role_connections.write")
     }
 
+    /// Runs the `as_str` operation.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Typed Discord API object for `OAuth2CodeExchange`.
 pub struct OAuth2CodeExchange {
+    /// Discord API payload field `code`.
     pub code: String,
+    /// Discord API payload field `redirect_uri`.
     pub redirect_uri: String,
 }
 
 impl OAuth2CodeExchange {
+    /// Creates or returns `new` data.
     pub fn new(code: impl Into<String>, redirect_uri: impl Into<String>) -> Self {
         Self {
             code: code.into(),
@@ -305,7 +335,9 @@ impl fmt::Debug for OAuth2CodeExchange {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+/// Typed Discord API object for `OAuth2RefreshToken`.
 pub struct OAuth2RefreshToken {
+    /// Discord API payload field `refresh_token`.
     pub refresh_token: String,
 }
 
@@ -318,6 +350,7 @@ impl fmt::Debug for OAuth2RefreshToken {
 }
 
 impl OAuth2RefreshToken {
+    /// Creates or returns `new` data.
     pub fn new(refresh_token: impl Into<String>) -> Self {
         Self {
             refresh_token: refresh_token.into(),
@@ -333,13 +366,19 @@ impl OAuth2RefreshToken {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `OAuth2TokenResponse`.
 pub struct OAuth2TokenResponse {
+    /// Discord API payload field `access_token`.
     pub access_token: String,
+    /// Discord API payload field `token_type`.
     pub token_type: String,
+    /// Discord API payload field `expires_in`.
     pub expires_in: u64,
     #[serde(default)]
+    /// Discord API payload field `refresh_token`.
     pub refresh_token: Option<String>,
     #[serde(default)]
+    /// Discord API payload field `scope`.
     pub scope: Option<String>,
 }
 
@@ -438,6 +477,34 @@ mod tests {
         assert!(error.to_string().contains("at least one OAuth2 scope"));
     }
 
+    #[test]
+    fn authorization_url_rejects_blank_redirect_and_scope_helpers_are_stable() {
+        let client = OAuth2Client::public_client("123");
+        let error = client
+            .authorization_url(OAuth2AuthorizationRequest::code(
+                "   ",
+                [OAuth2Scope::identify()],
+            ))
+            .unwrap_err();
+        assert!(error.to_string().contains("redirect_uri must not be empty"));
+
+        let scopes = [
+            OAuth2Scope::email(),
+            OAuth2Scope::guilds(),
+            OAuth2Scope::applications_commands_update(),
+            OAuth2Scope::role_connections_write(),
+        ];
+        assert_eq!(
+            scopes.map(|scope| scope.as_str().to_string()),
+            [
+                "email".to_string(),
+                "guilds".to_string(),
+                "applications.commands.update".to_string(),
+                "role_connections.write".to_string(),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn token_exchange_sends_form_without_bot_authorization() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -483,6 +550,45 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn refresh_token_sends_form_and_surfaces_error_bodies() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0_u8; 4096];
+            let received = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..received]);
+
+            assert!(request.starts_with("POST /oauth2/token HTTP/1.1"));
+            assert!(request
+                .contains("grant_type=refresh_token&refresh_token=refresh+token&client_id=123"));
+
+            let body = r#"{"error":"invalid_grant"}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client = OAuth2Client::new_with_base_url(
+            "123",
+            None,
+            format!("http://127.0.0.1:{port}"),
+            "https://discord.com/oauth2/authorize",
+        );
+        let error = client
+            .refresh_token(OAuth2RefreshToken::new("refresh token"))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("400 Bad Request"));
+        assert!(error.to_string().contains("invalid_grant"));
+        server.await.unwrap();
+    }
+
     #[test]
     fn token_requests_validate_required_fields() {
         assert!(OAuth2CodeExchange::new("", "https://app.example/callback")
@@ -490,6 +596,11 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("code must not be empty"));
+        assert!(OAuth2CodeExchange::new("abc", "")
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("redirect_uri must not be empty"));
         assert!(OAuth2RefreshToken::new("")
             .validate()
             .unwrap_err()

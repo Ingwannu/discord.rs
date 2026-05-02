@@ -47,6 +47,7 @@ use super::client::{
 };
 
 #[cfg(feature = "sharding")]
+/// Typed Discord API object for `ShardSupervisor`.
 pub struct ShardSupervisor {
     manager: Arc<StdMutex<ShardingManager>>,
     tasks: Vec<(u32, JoinHandle<Result<(), DiscordError>>)>,
@@ -56,10 +57,12 @@ pub struct ShardSupervisor {
 impl ShardSupervisor {
     const SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(15_000);
 
+    /// Runs the `manager` operation.
     pub fn manager(&self) -> Arc<StdMutex<ShardingManager>> {
         Arc::clone(&self.manager)
     }
 
+    /// Runs the `statuses` operation.
     pub fn statuses(&self) -> Vec<ShardRuntimeStatus> {
         self.manager
             .lock()
@@ -67,6 +70,7 @@ impl ShardSupervisor {
             .statuses()
     }
 
+    /// Runs the `drain_events` operation.
     pub fn drain_events(&self) -> Result<Vec<ShardSupervisorEvent>, DiscordError> {
         self.manager
             .lock()
@@ -74,6 +78,7 @@ impl ShardSupervisor {
             .drain_events()
     }
 
+    /// Runs the `send` operation.
     pub fn send(&self, shard_id: u32, message: ShardIpcMessage) -> Result<(), DiscordError> {
         self.manager
             .lock()
@@ -81,10 +86,12 @@ impl ShardSupervisor {
             .send(shard_id, message)
     }
 
+    /// Runs the `reconnect` operation.
     pub fn reconnect(&self, shard_id: u32) -> Result<(), DiscordError> {
         self.send(shard_id, ShardIpcMessage::Reconnect)
     }
 
+    /// Runs the `update_presence` operation.
     pub fn update_presence(
         &self,
         shard_id: u32,
@@ -93,6 +100,7 @@ impl ShardSupervisor {
         self.send(shard_id, ShardIpcMessage::UpdatePresence(status.into()))
     }
 
+    /// Runs the `update_voice_state` operation.
     pub fn update_voice_state(
         &self,
         shard_id: u32,
@@ -112,6 +120,7 @@ impl ShardSupervisor {
         )
     }
 
+    /// Runs the `join_voice` operation.
     pub fn join_voice(
         &self,
         shard_id: u32,
@@ -129,6 +138,7 @@ impl ShardSupervisor {
         )
     }
 
+    /// Runs the `leave_voice` operation.
     pub fn leave_voice(
         &self,
         shard_id: u32,
@@ -139,6 +149,7 @@ impl ShardSupervisor {
         self.update_voice_state(shard_id, guild_id, None, self_mute, self_deaf)
     }
 
+    /// Runs the `broadcast` operation.
     pub fn broadcast(&self, message: ShardIpcMessage) -> Result<(), DiscordError> {
         self.manager
             .lock()
@@ -146,19 +157,23 @@ impl ShardSupervisor {
             .broadcast(message)
     }
 
+    /// Runs the `shutdown` operation.
     pub fn shutdown(&self) -> Result<(), DiscordError> {
         self.broadcast(ShardIpcMessage::Shutdown)
     }
 
+    /// Runs the `shutdown_and_wait` operation.
     pub async fn shutdown_and_wait(self) -> Result<(), DiscordError> {
         self.shutdown()?;
         self.wait_for_shutdown(Self::SHUTDOWN_TIMEOUT).await
     }
 
+    /// Runs the `wait_for_shutdown` operation.
     pub async fn wait_for_shutdown(self, timeout_duration: Duration) -> Result<(), DiscordError> {
         self.wait_with_timeout(Some(timeout_duration)).await
     }
 
+    /// Runs the `wait` operation.
     pub async fn wait(self) -> Result<(), DiscordError> {
         self.wait_with_timeout(None).await
     }
@@ -194,23 +209,28 @@ impl ShardSupervisor {
     }
 }
 
+/// Typed Discord API object for `TypeMap`.
 pub struct TypeMap(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
 
 #[derive(Clone)]
+/// Typed Discord API object for `ShardMessenger`.
 pub struct ShardMessenger {
     shard_id: u32,
     command_tx: mpsc::UnboundedSender<GatewayCommand>,
 }
 
 impl ShardMessenger {
+    /// Runs the `shard_id` operation.
     pub fn shard_id(&self) -> u32 {
         self.shard_id
     }
 
+    /// Runs the `update_presence` operation.
     pub fn update_presence(&self, status: impl Into<String>) -> Result<(), DiscordError> {
         self.send(GatewayCommand::UpdatePresence(status.into()))
     }
 
+    /// Runs the `update_presence_typed` operation.
     pub fn update_presence_typed(
         &self,
         presence: crate::model::UpdatePresence,
@@ -218,6 +238,7 @@ impl ShardMessenger {
         self.send(GatewayCommand::UpdatePresenceData(presence))
     }
 
+    /// Runs the `request_guild_members` operation.
     pub fn request_guild_members(
         &self,
         request: crate::model::RequestGuildMembers,
@@ -225,6 +246,15 @@ impl ShardMessenger {
         self.send(GatewayCommand::RequestGuildMembers(request))
     }
 
+    /// Sends a Gateway channel-info request through this shard.
+    pub fn request_channel_info(
+        &self,
+        request: crate::model::RequestChannelInfo,
+    ) -> Result<(), DiscordError> {
+        self.send(GatewayCommand::RequestChannelInfo(request))
+    }
+
+    /// Runs the `update_voice_state` operation.
     pub fn update_voice_state(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -240,6 +270,7 @@ impl ShardMessenger {
         )))
     }
 
+    /// Runs the `request_soundboard_sounds` operation.
     pub fn request_soundboard_sounds(
         &self,
         guild_ids: impl IntoIterator<Item = crate::model::Snowflake>,
@@ -249,6 +280,7 @@ impl ShardMessenger {
         ))
     }
 
+    /// Runs the `join_voice` operation.
     pub fn join_voice(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -259,6 +291,7 @@ impl ShardMessenger {
         self.update_voice_state(guild_id, Some(channel_id.into()), self_mute, self_deaf)
     }
 
+    /// Runs the `leave_voice` operation.
     pub fn leave_voice(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -268,10 +301,12 @@ impl ShardMessenger {
         self.update_voice_state(guild_id, None, self_mute, self_deaf)
     }
 
+    /// Runs the `reconnect` operation.
     pub fn reconnect(&self) -> Result<(), DiscordError> {
         self.send(GatewayCommand::Reconnect)
     }
 
+    /// Runs the `shutdown` operation.
     pub fn shutdown(&self) -> Result<(), DiscordError> {
         self.send(GatewayCommand::Shutdown)
     }
@@ -284,20 +319,24 @@ impl ShardMessenger {
 }
 
 impl TypeMap {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Runs the `insert` operation.
     pub fn insert<T: Send + Sync + 'static>(&mut self, val: T) {
         self.0.insert(TypeId::of::<T>(), Box::new(val));
     }
 
+    /// Runs the `get` operation.
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<&T> {
         self.0
             .get(&TypeId::of::<T>())
             .and_then(|b| b.downcast_ref())
     }
 
+    /// Runs the `get_mut` operation.
     pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
         self.0
             .get_mut(&TypeId::of::<T>())
@@ -312,11 +351,17 @@ impl Default for TypeMap {
 }
 
 #[derive(Clone)]
+/// Typed Discord API object for `Context`.
 pub struct Context {
+    /// Discord API payload field `http`.
     pub http: Arc<DiscordHttpClient>,
+    /// Discord API payload field `data`.
     pub data: Arc<RwLock<TypeMap>>,
+    /// Discord API payload field `cache`.
     pub cache: CacheHandle,
+    /// Discord API payload field `shard_id`.
     pub shard_id: u32,
+    /// Discord API payload field `shard_count`.
     pub shard_count: u32,
     gateway_commands: Arc<RwLock<HashMap<u32, ShardMessenger>>>,
     #[cfg(feature = "voice")]
@@ -326,6 +371,7 @@ pub struct Context {
 }
 
 impl Context {
+    /// Creates or returns `new` data.
     pub fn new(http: Arc<DiscordHttpClient>, data: Arc<RwLock<TypeMap>>) -> Self {
         Self {
             http,
@@ -341,15 +387,18 @@ impl Context {
         }
     }
 
+    /// Runs the `rest` operation.
     pub fn rest(&self) -> Arc<DiscordHttpClient> {
         Arc::clone(&self.http)
     }
 
+    /// Runs the `shard_pair` operation.
     pub fn shard_pair(&self) -> (u32, u32) {
         (self.shard_id, self.shard_count)
     }
 
     #[cfg(feature = "sharding")]
+    /// Runs the `shard_info` operation.
     pub fn shard_info(&self) -> ShardInfo {
         ShardInfo {
             id: self.shard_id,
@@ -357,15 +406,18 @@ impl Context {
         }
     }
 
+    /// Runs the `insert_data` operation.
     pub async fn insert_data<T: Send + Sync + 'static>(&self, value: T) {
         self.data.write().await.insert(value);
     }
 
+    /// Runs the `with_data` operation.
     pub async fn with_data<R>(&self, map: impl FnOnce(&TypeMap) -> Option<R>) -> Option<R> {
         let data = self.data.read().await;
         map(&data)
     }
 
+    /// Runs the `get_data_cloned` operation.
     pub async fn get_data_cloned<T>(&self) -> Option<T>
     where
         T: Send + Sync + Clone + 'static,
@@ -374,30 +426,37 @@ impl Context {
         data.get::<T>().cloned()
     }
 
+    /// Runs the `guilds` operation.
     pub fn guilds(&self) -> GuildManager {
         GuildManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `channels` operation.
     pub fn channels(&self) -> ChannelManager {
         ChannelManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `users` operation.
     pub fn users(&self) -> crate::cache::UserManager {
         crate::cache::UserManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `members` operation.
     pub fn members(&self) -> MemberManager {
         MemberManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `messages` operation.
     pub fn messages(&self) -> MessageManager {
         MessageManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `roles` operation.
     pub fn roles(&self) -> RoleManager {
         RoleManager::new(Arc::clone(&self.http), self.cache.clone())
     }
 
+    /// Runs the `shard_messenger` operation.
     pub async fn shard_messenger(&self) -> Option<ShardMessenger> {
         self.gateway_commands
             .read()
@@ -406,6 +465,7 @@ impl Context {
             .cloned()
     }
 
+    /// Runs the `update_presence` operation.
     pub async fn update_presence(&self, status: impl Into<String>) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -414,6 +474,7 @@ impl Context {
         messenger.update_presence(status)
     }
 
+    /// Runs the `update_presence_typed` operation.
     pub async fn update_presence_typed(
         &self,
         presence: crate::model::UpdatePresence,
@@ -425,6 +486,7 @@ impl Context {
         messenger.update_presence_typed(presence)
     }
 
+    /// Runs the `request_guild_members` operation.
     pub async fn request_guild_members(
         &self,
         request: crate::model::RequestGuildMembers,
@@ -436,6 +498,19 @@ impl Context {
         messenger.request_guild_members(request)
     }
 
+    /// Requests ephemeral channel metadata through the active shard.
+    pub async fn request_channel_info(
+        &self,
+        request: crate::model::RequestChannelInfo,
+    ) -> Result<(), DiscordError> {
+        let messenger = self
+            .shard_messenger()
+            .await
+            .ok_or_else(|| invalid_data_error("missing shard messenger"))?;
+        messenger.request_channel_info(request)
+    }
+
+    /// Runs the `reconnect_shard` operation.
     pub async fn reconnect_shard(&self) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -444,6 +519,7 @@ impl Context {
         messenger.reconnect()
     }
 
+    /// Runs the `shutdown_shard` operation.
     pub async fn shutdown_shard(&self) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -452,6 +528,7 @@ impl Context {
         messenger.shutdown()
     }
 
+    /// Runs the `update_voice_state` operation.
     pub async fn update_voice_state(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -466,6 +543,7 @@ impl Context {
         messenger.update_voice_state(guild_id, channel_id, self_mute, self_deaf)
     }
 
+    /// Runs the `request_soundboard_sounds` operation.
     pub async fn request_soundboard_sounds(
         &self,
         guild_ids: impl IntoIterator<Item = crate::model::Snowflake>,
@@ -477,6 +555,7 @@ impl Context {
         messenger.request_soundboard_sounds(guild_ids)
     }
 
+    /// Runs the `join_voice` operation.
     pub async fn join_voice(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -491,6 +570,7 @@ impl Context {
         messenger.join_voice(guild_id, channel_id, self_mute, self_deaf)
     }
 
+    /// Runs the `leave_voice` operation.
     pub async fn leave_voice(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -505,17 +585,20 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `voice` operation.
     pub fn voice(&self) -> Arc<RwLock<VoiceManager>> {
         Arc::clone(&self.voice)
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `connect_voice` operation.
     pub async fn connect_voice(&self, config: VoiceConnectionConfig) -> VoiceConnectionState {
         let mut voice = self.voice.write().await;
         voice.connect(config)
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `disconnect_voice` operation.
     pub async fn disconnect_voice(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -525,6 +608,7 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `enqueue_voice_track` operation.
     pub async fn enqueue_voice_track(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -535,6 +619,7 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `voice_runtime_config` operation.
     pub async fn voice_runtime_config(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -545,6 +630,7 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
+    /// Runs the `connect_voice_runtime` operation.
     pub async fn connect_voice_runtime(
         &self,
         guild_id: impl Into<crate::model::Snowflake>,
@@ -560,13 +646,17 @@ impl Context {
     }
 
     #[cfg(feature = "collectors")]
+    /// Runs the `collectors` operation.
     pub fn collectors(&self) -> &CollectorHub {
         &self.collectors
     }
 }
 
+/// Trait for `EventHandler` behavior.
+#[allow(missing_docs)]
 #[async_trait]
 pub trait EventHandler: Send + Sync + 'static {
+    /// Handles one decoded Gateway event and dispatches to typed convenience hooks by default.
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {
             Event::Ready(event) => self.ready(ctx, event.data).await,
@@ -681,6 +771,8 @@ pub trait EventHandler: Send + Sync + 'static {
             Event::VoiceChannelStatusUpdate(event) => {
                 self.voice_channel_status_update(ctx, event).await
             }
+            Event::ChannelInfo(event) => self.channel_info(ctx, event).await,
+            Event::RateLimited(event) => self.gateway_rate_limited(ctx, event).await,
             Event::ApplicationCommandPermissionsUpdate(event) => {
                 self.application_command_permissions_update(ctx, event)
                     .await
@@ -935,6 +1027,9 @@ pub trait EventHandler: Send + Sync + 'static {
         _event: crate::event::VoiceChannelStatusUpdateEvent,
     ) {
     }
+    /// Handles typed `CHANNEL_INFO` Gateway dispatches.
+    async fn channel_info(&self, _ctx: Context, _event: crate::event::ChannelInfoEvent) {}
+    async fn gateway_rate_limited(&self, _ctx: Context, _event: crate::event::RateLimitedEvent) {}
     async fn application_command_permissions_update(
         &self,
         _ctx: Context,
@@ -974,6 +1069,7 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn raw_event(&self, _ctx: Context, _event_name: String, _data: Value) {}
 }
 
+/// Typed Discord API object for `ClientBuilder`.
 pub struct ClientBuilder {
     token: String,
     intents: u64,
@@ -986,31 +1082,37 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Runs the `event_handler` operation.
     pub fn event_handler<H: EventHandler>(mut self, handler: H) -> Self {
         self.handler = Some(Arc::new(handler));
         self
     }
 
+    /// Runs the `application_id` operation.
     pub fn application_id(mut self, id: u64) -> Self {
         self.application_id = Some(id);
         self
     }
 
+    /// Runs the `type_map_insert` operation.
     pub fn type_map_insert<T: Send + Sync + 'static>(mut self, val: T) -> Self {
         self.data.insert(val);
         self
     }
 
+    /// Runs the `gateway_config` operation.
     pub fn gateway_config(mut self, gateway_config: GatewayConnectionConfig) -> Self {
         self.gateway_config = gateway_config;
         self
     }
 
+    /// Runs the `cache_config` operation.
     pub fn cache_config(mut self, cache_config: CacheConfig) -> Self {
         self.cache_config = cache_config;
         self
     }
 
+    /// Runs the `shard` operation.
     pub fn shard(mut self, shard_id: u32, shard_count: u32) -> Self {
         self.shard = Some((shard_id, shard_count.max(1)));
         self
@@ -1022,6 +1124,7 @@ impl ClientBuilder {
         Arc::new(DiscordHttpClient::new(self.token, application_id))
     }
 
+    /// Runs the `start` operation.
     pub async fn start(self) -> Result<(), DiscordError> {
         let ClientBuilder {
             token,
@@ -1059,6 +1162,7 @@ impl ClientBuilder {
         }
     }
 
+    /// Runs the `start_shards` operation.
     pub async fn start_shards(self, shard_count: u32) -> Result<(), DiscordError> {
         #[cfg(feature = "sharding")]
         {
@@ -1072,6 +1176,7 @@ impl ClientBuilder {
         }
     }
 
+    /// Runs the `start_auto_shards` operation.
     pub async fn start_auto_shards(self) -> Result<(), DiscordError> {
         #[cfg(feature = "sharding")]
         {
@@ -1085,6 +1190,7 @@ impl ClientBuilder {
     }
 
     #[cfg(feature = "sharding")]
+    /// Runs the `spawn_shards` operation.
     pub async fn spawn_shards(self, shard_count: u32) -> Result<ShardSupervisor, DiscordError> {
         let ClientBuilder {
             token,
@@ -1114,6 +1220,7 @@ impl ClientBuilder {
     }
 
     #[cfg(feature = "sharding")]
+    /// Runs the `spawn_auto_shards` operation.
     pub async fn spawn_auto_shards(self) -> Result<ShardSupervisor, DiscordError> {
         let ClientBuilder {
             token,
@@ -1147,9 +1254,11 @@ impl ClientBuilder {
     }
 }
 
+/// Typed Discord API object for `Client`.
 pub struct Client;
 
 impl Client {
+    /// Creates or returns `builder` data.
     pub fn builder(
         token: impl Into<String>,
         intents: impl Into<crate::bitfield::Intents>,
@@ -1166,12 +1275,15 @@ impl Client {
         }
     }
 
+    /// Creates or returns `rest` data.
     pub fn rest(token: impl Into<String>, application_id: u64) -> DiscordHttpClient {
         DiscordHttpClient::new(token, application_id)
     }
 }
 
+/// Type alias for `BotClient`.
 pub type BotClient = Client;
+/// Type alias for `BotClientBuilder`.
 pub type BotClientBuilder = ClientBuilder;
 
 #[cfg(feature = "sharding")]
@@ -1692,17 +1804,19 @@ async fn apply_cache_updates(cache: &CacheHandle, event: &Event) {
         Event::MessageReactionAdd(_)
         | Event::MessageReactionRemove(_)
         | Event::MessagePollVoteAdd(_)
-        | Event::MessagePollVoteRemove(_) => {}
+        | Event::MessagePollVoteRemove(_)
+        | Event::RateLimited(_) => {}
         Event::MessageReactionRemoveAll(_) => {}
         Event::TypingStart(_) => {}
         Event::PresenceUpdate(event) => {
             if let (Some(guild_id), Some(user_id)) =
                 (event.guild_id.as_ref(), event.user_id.as_ref())
             {
-                let activities = event
-                    .raw
-                    .get("activities")
-                    .and_then(|activities| serde_json::from_value(activities.clone()).ok());
+                let activities = if event.activities.is_empty() {
+                    None
+                } else {
+                    Some(event.activities.clone())
+                };
                 cache
                     .upsert_presence(
                         guild_id.clone(),
@@ -1711,6 +1825,7 @@ async fn apply_cache_updates(cache: &CacheHandle, event: &Event) {
                             user_id: Some(user_id.clone()),
                             status: event.status.clone(),
                             activities,
+                            client_status: event.client_status.clone(),
                         },
                     )
                     .await;
@@ -1851,17 +1966,17 @@ mod tests {
         GuildBanEvent, GuildDeleteEvent, GuildDeletePayload, GuildEmojisUpdateEvent, GuildEvent,
         GuildIntegrationsUpdateEvent, GuildStickersUpdateEvent, InviteEvent, MemberEvent,
         MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload,
-        MessageEvent, PresenceUpdateEvent, ReactionEvent, ReactionRemoveAllEvent, ReadyEvent,
-        ReadyPayload, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
+        MessageEvent, PresenceUpdateEvent, RateLimitedEvent, ReactionEvent, ReactionRemoveAllEvent,
+        ReadyEvent, ReadyPayload, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
         StageInstanceEvent, TypingStartEvent, UserUpdateEvent, VoiceServerEvent, VoiceStateEvent,
         WebhooksUpdateEvent,
     };
     use crate::gateway::client::GatewayCommand;
     use crate::http::DiscordHttpClient;
     use crate::model::{
-        Attachment, ComponentInteraction, ComponentInteractionData, Embed, Interaction,
-        InteractionContextData, Member, Message, Reaction, Role, Snowflake, SoundboardSound,
-        StageInstance, Sticker, User, VoiceServerUpdate, VoiceState,
+        Activity, Attachment, ComponentInteraction, ComponentInteractionData, Embed, Interaction,
+        InteractionContextData, Member, Message, Reaction, RequestChannelInfo, Role, Snowflake,
+        SoundboardSound, StageInstance, Sticker, User, VoiceServerUpdate, VoiceState,
     };
     #[cfg(feature = "sharding")]
     use crate::model::{GatewayBot, SessionStartLimit};
@@ -2106,12 +2221,17 @@ mod tests {
                 user_id: Some(user_id.clone()),
                 guild_id: Some(guild_id.clone()),
                 status: Some("online".to_string()),
+                activities: vec![Activity {
+                    name: "testing".to_string(),
+                    ..Activity::default()
+                }],
                 raw: json!({
                     "user": { "id": user_id.as_str() },
                     "guild_id": guild_id.as_str(),
                     "status": "online",
                     "activities": [{ "name": "testing" }]
                 }),
+                ..PresenceUpdateEvent::default()
             }),
         )
         .await;
@@ -2662,6 +2782,10 @@ mod tests {
             .request_soundboard_sounds(vec![Snowflake::from("3")])
             .await
             .unwrap();
+        context
+            .request_channel_info(RequestChannelInfo::voice_metadata("3"))
+            .await
+            .unwrap();
 
         assert!(matches!(
             command_rx.try_recv().unwrap(),
@@ -2701,6 +2825,17 @@ mod tests {
                 assert_eq!(payload["op"], json!(31));
                 assert_eq!(payload["d"]["guild_ids"], json!(["3"]));
                 assert_eq!(payload["d"]["channels"], Value::Null);
+            }
+            other => panic!("unexpected gateway command: {other:?}"),
+        }
+
+        match command_rx.try_recv().unwrap() {
+            GatewayCommand::RequestChannelInfo(request) => {
+                assert_eq!(request.guild_id.as_str(), "3");
+                assert_eq!(
+                    request.fields,
+                    vec!["status".to_string(), "voice_start_time".to_string()]
+                );
             }
             other => panic!("unexpected gateway command: {other:?}"),
         }
@@ -3234,6 +3369,7 @@ mod tests {
                 guild_id: Some(guild_id.clone()),
                 emoji: None,
                 raw: json!({}),
+                ..ReactionEvent::default()
             }),
             Event::MessageReactionRemove(ReactionEvent {
                 user_id: Some(Snowflake::from("404")),
@@ -3242,6 +3378,7 @@ mod tests {
                 guild_id: Some(guild_id.clone()),
                 emoji: None,
                 raw: json!({}),
+                ..ReactionEvent::default()
             }),
             Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
                 channel_id: Some(channel_id.clone()),
@@ -3261,6 +3398,7 @@ mod tests {
                 guild_id: Some(guild_id.clone()),
                 status: Some("online".to_string()),
                 raw: json!({}),
+                ..PresenceUpdateEvent::default()
             }),
             Event::Unknown {
                 kind: "UNKNOWN_EVENT".to_string(),
@@ -3376,6 +3514,13 @@ mod tests {
                     event.status.unwrap()
                 ));
             }
+
+            async fn gateway_rate_limited(&self, _ctx: super::Context, event: RateLimitedEvent) {
+                self.hits
+                    .lock()
+                    .await
+                    .push(format!("rate_limited:{}", event.opcode.unwrap()));
+            }
         }
 
         let hits = Arc::new(Mutex::new(Vec::new()));
@@ -3480,11 +3625,23 @@ mod tests {
             .await;
         handler
             .handle_event(
-                context,
+                context.clone(),
                 Event::PresenceUpdate(PresenceUpdateEvent {
                     user_id: Some(Snowflake::from("13")),
                     guild_id: Some(Snowflake::from("14")),
                     status: Some("online".to_string()),
+                    raw: json!({}),
+                    ..PresenceUpdateEvent::default()
+                }),
+            )
+            .await;
+        handler
+            .handle_event(
+                context.clone(),
+                Event::RateLimited(RateLimitedEvent {
+                    opcode: Some(8),
+                    retry_after: Some(1.5),
+                    meta: Some(json!({ "guild_id": "14" })),
                     raw: json!({}),
                 }),
             )
@@ -3501,6 +3658,7 @@ mod tests {
                 "voice_server:10:voice-token".to_string(),
                 "reaction_all:11:12".to_string(),
                 "presence:13:online".to_string(),
+                "rate_limited:8".to_string(),
             ]
         );
     }
@@ -3678,6 +3836,7 @@ mod tests {
                 guild_id: Some(guild_id.clone()),
                 emoji: None,
                 raw: json!({}),
+                ..ReactionEvent::default()
             }),
             Event::MessageReactionRemove(ReactionEvent {
                 user_id: Some(user_id),
@@ -3686,6 +3845,7 @@ mod tests {
                 guild_id: Some(guild_id),
                 emoji: None,
                 raw: json!({}),
+                ..ReactionEvent::default()
             }),
             Event::TypingStart(TypingStartEvent {
                 channel_id: Some(channel_id),

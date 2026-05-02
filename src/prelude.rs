@@ -1,7 +1,7 @@
 pub use crate::bitfield::{BitField, Intents, MessageFlags, Permissions};
 pub use crate::builders::{
     create_container, ActionRowBuilder, ButtonBuilder, ComponentsV2Message, ContainerBuilder,
-    EmbedBuilder, ModalBuilder, SelectMenuBuilder, TextInputBuilder,
+    EmbedBuilder, ModalBuilder, SelectDefaultValue, SelectMenuBuilder, TextInputBuilder,
 };
 #[cfg(feature = "collectors")]
 pub use crate::collector::{
@@ -25,19 +25,37 @@ pub use crate::helpers::{
     respond_with_autocomplete_choices, respond_with_message, respond_with_modal_typed,
     send_message, update_interaction_message,
 };
-pub use crate::http::RestClient;
+pub use crate::http::{FileAttachment, FileUpload, RestClient};
 pub use crate::model::{
-    Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
-    ActivityType, Application, ApplicationCommandHandlerType, ApplicationCommandOptionChoice,
-    ApplicationIntegrationType, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
-    AutoModerationRule, BulkGuildBanRequest, BulkGuildBanResponse, CommandInteractionData,
-    CommandInteractionOption, CreateMessage, CreateTestEntitlement, CurrentUserGuild, Entitlement,
-    EntitlementQuery, GatewayBot, GuildPreview, GuildPruneCount, GuildScheduledEventRecurrenceRule,
-    Integration, Interaction, InteractionCallbackResponse, InteractionContextData,
-    InteractionContextType, JoinedArchivedThreadsQuery, Message, PermissionsBitField,
-    PollAnswerVoters, RequestGuildMembers, SessionStartLimit, Sku, Snowflake, SoundboardSound,
-    SoundboardSoundList, Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember,
-    ThreadMemberQuery, UpdatePresence, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
+    Activity, ActivityAssets, ActivityButton, ActivityInstance, ActivityLocation, ActivityParty,
+    ActivitySecrets, ActivityTimestamps, ActivityType, AddGroupDmRecipient, AddGuildMember,
+    AddLobbyMember, AllowedMentions, Application, ApplicationCommandHandlerType,
+    ApplicationCommandOptionChoice, ApplicationCommandPermission, ApplicationInstallParams,
+    ApplicationIntegrationType, ApplicationIntegrationTypeConfig,
+    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, AuditLog, AuditLogQuery,
+    AuthorizationInformation, AutoModerationRule, BeginGuildPruneRequest, BulkGuildBanRequest,
+    BulkGuildBanResponse, ChannelPinsQuery, ClientStatus, CommandInteractionData,
+    CommandInteractionOption, CreateChannelInvite, CreateGroupDmChannel, CreateGuildBan,
+    CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateLobby, CreateMessage,
+    CreateStageInstance, CreateTestEntitlement, CreateWebhook, CurrentUserGuild,
+    CurrentUserGuildsQuery, EditApplicationCommandPermissions, EditChannelPermission, Entitlement,
+    EntitlementQuery, Gateway, GatewayBot, GetGuildQuery, GuildApplicationCommandPermissions,
+    GuildBansQuery, GuildIncidentsData, GuildMembersQuery, GuildPreview, GuildPruneCount,
+    GuildScheduledEventRecurrenceRule, GuildWidget, GuildWidgetImageStyle, Integration,
+    Interaction, InteractionCallbackResponse, InteractionContextData, InteractionContextType,
+    Invite, InviteTargetUsersJobStatus, JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby,
+    LobbyMember, LobbyMemberUpdate, Message, MessageCall, MessageSnapshot,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField,
+    PollAnswerVoters, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, RoleColors,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SessionStartLimit, SetVoiceChannelStatus,
+    SharedClientTheme, Sku, Snowflake, SoundboardSound, SoundboardSoundList, Subscription,
+    SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, UpdatePresence,
+    UpdateUserApplicationRoleConnection, UserApplicationRoleConnection, UserConnection, VanityUrl,
+    VoiceRegion, VoiceServerUpdate, VoiceState, WebhookExecuteQuery, WebhookMessageQuery,
 };
 pub use crate::oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
@@ -59,11 +77,19 @@ pub use crate::voice_runtime::{
 pub use crate::voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
 #[cfg(all(feature = "voice", feature = "dave"))]
 pub use crate::voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
+pub use crate::webhook_events::{
+    parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,
+    ApplicationDeauthorizedWebhookEvent, WebhookDeletedMessage, WebhookEvent, WebhookEventBody,
+    WebhookEventPayload, WebhookPayloadType, WebhookSocialMessage,
+};
 
 #[cfg(test)]
 mod tests {
     use crate::prelude::{
-        button_style, gateway_intents, ButtonBuilder, MessageBuilder, SlashCommandBuilder,
+        button_style, gateway_intents, AllowedMentions, ApplicationInstallParams,
+        ApplicationIntegrationTypeConfig, AuthorizationInformation, ButtonBuilder, CreateWebhook,
+        Gateway, MessageBuilder, ModifyCurrentApplication, ModifyWebhook, ModifyWebhookWithToken,
+        ReactionCountDetails, SlashCommandBuilder, WebhookExecuteQuery, WebhookMessageQuery,
     };
 
     #[test]
@@ -73,5 +99,28 @@ mod tests {
         let _command =
             SlashCommandBuilder::new("ping", "Ping").string_option("target", "Target", false);
         let _message = MessageBuilder::new().content("hello");
+        let _application_edit = ModifyCurrentApplication {
+            install_params: Some(ApplicationInstallParams {
+                scopes: vec!["bot".to_string()],
+                permissions: crate::prelude::PermissionsBitField(0),
+            }),
+            integration_types_config: Some(std::collections::HashMap::from([(
+                "0".to_string(),
+                ApplicationIntegrationTypeConfig::default(),
+            )])),
+            ..ModifyCurrentApplication::default()
+        };
+        let _webhook_create = CreateWebhook {
+            name: "deployments".to_string(),
+            avatar: None,
+        };
+        let _webhook_modify = ModifyWebhook::default();
+        let _webhook_token_modify = ModifyWebhookWithToken::default();
+        let _webhook_execute_query = WebhookExecuteQuery::default();
+        let _webhook_message_query = WebhookMessageQuery::default();
+        let _gateway = Gateway::default();
+        let _authorization = AuthorizationInformation::default();
+        let _allowed_mentions = AllowedMentions::default();
+        let _reaction_count_details = ReactionCountDetails::default();
     }
 }

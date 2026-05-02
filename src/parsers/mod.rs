@@ -3,7 +3,9 @@ use serde_json::Value;
 use crate::error::DiscordError;
 use crate::types::invalid_data_error;
 
+/// Public module for `interaction` APIs.
 pub mod interaction;
+/// Public module for `modal` APIs.
 pub mod modal;
 
 pub use interaction::{

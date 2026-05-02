@@ -4,10 +4,12 @@ use std::time::{Duration, Instant};
 
 use super::body::{header_string, parse_body_value};
 use super::paths::{
-    archived_threads_query, configured_application_id, execute_webhook_path, followup_webhook_path,
-    global_commands_path, interaction_callback_path, invite_query, joined_archived_threads_query,
-    poll_answer_voters_query, rate_limit_route_key, request_uses_bot_authorization,
-    subscription_query, thread_member_query, validate_token_path_segment,
+    archived_threads_query, audit_log_query, configured_application_id, current_user_guilds_query,
+    execute_webhook_path, followup_webhook_path, get_guild_query, global_commands_path,
+    guild_bans_query, guild_members_query, interaction_callback_path, invite_query,
+    joined_archived_threads_query, poll_answer_voters_query, rate_limit_route_key,
+    request_uses_bot_authorization, search_guild_members_query, subscription_query,
+    thread_member_query, validate_token_path_segment,
 };
 use super::rate_limit::RateLimitState;
 use super::{
@@ -16,9 +18,22 @@ use super::{
 use crate::command::{command_type, CommandDefinition};
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, BulkGuildBanRequest, CreateMessage,
-    CreateTestEntitlement, EntitlementQuery, InteractionCallbackResponse,
-    JoinedArchivedThreadsQuery, Snowflake, SubscriptionQuery, ThreadMemberQuery,
+    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, ApplicationCommandPermission,
+    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, AuditLogQuery, BeginGuildPruneRequest,
+    BulkGuildBanRequest, ChannelPinsQuery, CreateChannelInvite, CreateGuildBan, CreateGuildChannel,
+    CreateGuildRole, CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance,
+    CreateTestEntitlement, CreateWebhook, CurrentUserGuildsQuery,
+    EditApplicationCommandPermissions, EditChannelPermission, EntitlementQuery, GetGuildQuery,
+    GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
+    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField, RoleColors,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, Snowflake,
+    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
+    WebhookMessageQuery, WelcomeScreenChannel,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -212,6 +227,24 @@ fn channel_payload(id: &str, kind: u8, name: Option<&str>) -> serde_json::Value 
     channel
 }
 
+fn lobby_payload(id: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "application_id": "555",
+        "metadata": {
+            "topic": "redstone"
+        },
+        "members": [{
+            "id": "42",
+            "metadata": {
+                "role": "host"
+            },
+            "flags": 1
+        }],
+        "linked_channel": channel_payload("700", 0, Some("lobby"))
+    })
+}
+
 fn guild_payload(id: &str, name: &str) -> serde_json::Value {
     json!({
         "id": id,
@@ -223,9 +256,20 @@ fn current_user_guild_payload(id: &str, name: &str) -> serde_json::Value {
     json!({
         "id": id,
         "name": name,
+        "banner": "banner_hash",
         "owner": false,
         "permissions": "8",
-        "features": ["COMMUNITY"]
+        "features": ["COMMUNITY"],
+        "approximate_member_count": 3268,
+        "approximate_presence_count": 784
+    })
+}
+
+fn user_payload(id: &str, username: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "username": username,
+        "discriminator": "0000"
     })
 }
 
@@ -271,6 +315,21 @@ fn stage_payload(channel_id: &str) -> serde_json::Value {
     })
 }
 
+fn voice_state_payload(user_id: &str, channel_id: &str) -> serde_json::Value {
+    json!({
+        "guild_id": "200",
+        "channel_id": channel_id,
+        "user_id": user_id,
+        "session_id": "voice-session",
+        "deaf": false,
+        "mute": false,
+        "self_deaf": false,
+        "self_mute": false,
+        "self_video": false,
+        "suppress": true
+    })
+}
+
 fn welcome_screen_payload() -> serde_json::Value {
     json!({
         "description": "welcome",
@@ -289,6 +348,15 @@ fn onboarding_payload() -> serde_json::Value {
         "default_channel_ids": ["300"],
         "enabled": true,
         "mode": 1
+    })
+}
+
+fn incidents_payload() -> serde_json::Value {
+    json!({
+        "invites_disabled_until": "2026-05-01T12:00:00.000000+00:00",
+        "dms_disabled_until": null,
+        "dm_spam_detected_at": null,
+        "raid_detected_at": "2026-05-01T11:00:00.000000+00:00"
     })
 }
 
@@ -332,7 +400,14 @@ fn sku_payload(id: &str) -> serde_json::Value {
         "application_id": "555",
         "name": "Premium",
         "slug": "premium",
-        "flags": 128
+        "flags": 128,
+        "dependent_sku_id": null,
+        "manifest_labels": null,
+        "access_type": 1,
+        "features": [],
+        "release_date": null,
+        "premium": false,
+        "show_age_gate": false
     })
 }
 
@@ -342,12 +417,15 @@ fn entitlement_payload(id: &str) -> serde_json::Value {
         "sku_id": "900",
         "application_id": "555",
         "user_id": "777",
+        "promotion_id": null,
         "type": 8,
         "deleted": false,
+        "gift_code_flags": 0,
         "consumed": false,
         "starts_at": "2026-01-01T00:00:00.000000+00:00",
         "ends_at": "2026-02-01T00:00:00.000000+00:00",
-        "guild_id": "200"
+        "guild_id": "200",
+        "subscription_id": "950"
     })
 }
 
@@ -509,6 +587,39 @@ fn assert_multipart_request(
     );
     assert!(request.body.contains(r#"name="payload_json""#));
     assert!(request.body.contains(r#"name="files[0]""#));
+}
+
+fn assert_named_file_multipart_request(
+    request: &RecordedRequest,
+    method: &str,
+    path: &str,
+    expected_authorization: Option<&str>,
+    field_name: &str,
+    expect_payload_json: bool,
+) {
+    assert_eq!(request.method, method);
+    assert_eq!(request.path, path);
+    assert_eq!(request.header("authorization"), expected_authorization);
+    assert_eq!(
+        request.header("user-agent"),
+        Some(concat!(
+            "DiscordBot (discordrs, ",
+            env!("CARGO_PKG_VERSION"),
+            ")"
+        ))
+    );
+    assert!(
+        request
+            .header("content-type")
+            .is_some_and(|value| value.starts_with("multipart/form-data; boundary=")),
+        "expected multipart content-type, got {:?}",
+        request.header("content-type")
+    );
+    assert_eq!(
+        request.body.contains(r#"name="payload_json""#),
+        expect_payload_json
+    );
+    assert!(request.body.contains(&format!(r#"name="{field_name}""#)));
 }
 
 fn sample_command() -> CommandDefinition {
@@ -806,6 +917,20 @@ async fn invite_helpers_reject_unsafe_codes_before_network() {
             client.delete_invite(code).await,
             Err(DiscordError::Model { .. })
         ));
+        assert!(matches!(
+            client.get_invite_target_users(code).await,
+            Err(DiscordError::Model { .. })
+        ));
+        assert!(matches!(
+            client
+                .update_invite_target_users(code, &sample_file("users.csv", "user_id\n1\n"))
+                .await,
+            Err(DiscordError::Model { .. })
+        ));
+        assert!(matches!(
+            client.get_invite_target_users_job_status(code).await,
+            Err(DiscordError::Model { .. })
+        ));
     }
 }
 
@@ -835,6 +960,10 @@ fn authorization_and_error_helpers_cover_query_and_fallback_cases() {
     ));
     assert!(!request_uses_bot_authorization(
         "/webhooks/123/token?wait=true"
+    ));
+    assert!(request_uses_bot_authorization("/webhooks/123"));
+    assert!(!request_uses_bot_authorization(
+        "/webhooks/123/token/messages/456"
     ));
 
     match discord_api_error(StatusCode::BAD_REQUEST, "plain body") {
@@ -904,6 +1033,53 @@ fn new_coverage_query_helpers_build_expected_paths() {
     assert_eq!(
         poll_answer_voters_query(Some(Snowflake::from("40")), Some(15)),
         "?after=40&limit=15"
+    );
+    assert_eq!(
+        audit_log_query(&AuditLogQuery {
+            user_id: Some(Snowflake::from("50")),
+            action_type: Some(192),
+            before: Some(Snowflake::from("60")),
+            after: Some(Snowflake::from("55")),
+            limit: Some(25),
+        }),
+        "?user_id=50&action_type=192&before=60&after=55&limit=25"
+    );
+    assert_eq!(
+        current_user_guilds_query(&CurrentUserGuildsQuery {
+            before: Some(Snowflake::from("70")),
+            after: Some(Snowflake::from("65")),
+            limit: Some(50),
+            with_counts: Some(true),
+        }),
+        "?before=70&after=65&limit=50&with_counts=true"
+    );
+    assert_eq!(
+        get_guild_query(&GetGuildQuery {
+            with_counts: Some(true),
+        }),
+        "?with_counts=true"
+    );
+    assert_eq!(
+        guild_bans_query(&GuildBansQuery {
+            limit: Some(100),
+            before: Some(Snowflake::from("90")),
+            after: Some(Snowflake::from("10")),
+        }),
+        "?limit=100&before=90&after=10"
+    );
+    assert_eq!(
+        guild_members_query(&GuildMembersQuery {
+            limit: Some(100),
+            after: Some(Snowflake::from("80")),
+        }),
+        "?limit=100&after=80"
+    );
+    assert_eq!(
+        search_guild_members_query(&SearchGuildMembersQuery {
+            query: "alice & bob".to_string(),
+            limit: Some(5),
+        }),
+        "?query=alice+%26+bob&limit=5"
     );
 }
 
@@ -1214,11 +1390,274 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
 }
 
 #[tokio::test]
+async fn webhook_message_query_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "threaded")),
+        PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "edited")),
+        PlannedResponse::json(StatusCode::OK, message_payload("900", "500", "edited-file")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("bot-token", 123, base_url);
+    let body = sample_message();
+    let files = vec![sample_file("webhook.txt", "webhook file")];
+    let thread_query = WebhookMessageQuery {
+        thread_id: Some(Snowflake::from("42")),
+        with_components: None,
+    };
+    let edit_query = WebhookMessageQuery {
+        thread_id: Some(Snowflake::from("42")),
+        with_components: Some(true),
+    };
+
+    assert_eq!(
+        client
+            .get_webhook_message_with_query(Snowflake::from("777"), "token", "900", &thread_query)
+            .await
+            .expect("get webhook message with query")
+            .content,
+        "threaded"
+    );
+    assert_eq!(
+        client
+            .edit_webhook_message_with_query(
+                Snowflake::from("777"),
+                "token",
+                "900",
+                &edit_query,
+                &body,
+            )
+            .await
+            .expect("edit webhook message with query")
+            .content,
+        "edited"
+    );
+    assert_eq!(
+        client
+            .edit_webhook_message_with_files_and_query(
+                Snowflake::from("777"),
+                "token",
+                "900",
+                &edit_query,
+                &body,
+                &files,
+            )
+            .await
+            .expect("edit webhook message with files and query")
+            .content,
+        "edited-file"
+    );
+    client
+        .delete_webhook_message_with_query(Snowflake::from("777"), "token", "900", &thread_query)
+        .await
+        .expect("delete webhook message with query");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 4);
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/webhooks/777/token/messages/900?thread_id=42",
+        None,
+    );
+    assert_request_basics(
+        &requests[1],
+        "PATCH",
+        "/webhooks/777/token/messages/900?thread_id=42&with_components=true",
+        None,
+    );
+    assert_multipart_request(
+        &requests[2],
+        "PATCH",
+        "/webhooks/777/token/messages/900?thread_id=42&with_components=true",
+        None,
+    );
+    assert_request_basics(
+        &requests[3],
+        "DELETE",
+        "/webhooks/777/token/messages/900?thread_id=42",
+        None,
+    );
+    assert!(requests[2].body.contains("webhook file"));
+}
+
+#[tokio::test]
+async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
+        PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
+        PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
+        PlannedResponse::json(StatusCode::OK, json!({ "id": "800", "content": "query" })),
+        PlannedResponse::json(StatusCode::OK, json!({ "ok": "slack" })),
+        PlannedResponse::json(StatusCode::OK, json!({ "ok": "github" })),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("webhook-token", 123, base_url);
+    let query = WebhookExecuteQuery {
+        wait: Some(false),
+        thread_id: Some(Snowflake::from("42")),
+        with_components: Some(true),
+    };
+    let compatible_query = WebhookExecuteQuery {
+        wait: Some(true),
+        thread_id: Some(Snowflake::from("43")),
+        with_components: Some(true),
+    };
+
+    assert_eq!(
+        client
+            .create_webhook_from_request(
+                Snowflake::from("500"),
+                &CreateWebhook {
+                    name: "deployments".to_string(),
+                    avatar: Some(None),
+                },
+            )
+            .await
+            .expect("create webhook")
+            .id
+            .as_ref()
+            .map(Snowflake::as_str),
+        Some("700")
+    );
+    client
+        .modify_webhook_from_request(
+            Snowflake::from("700"),
+            &ModifyWebhook {
+                name: Some("ops".to_string()),
+                avatar: Some(None),
+                channel_id: Some(Snowflake::from("501")),
+            },
+        )
+        .await
+        .expect("modify webhook");
+    client
+        .modify_webhook_with_token_from_request(
+            Snowflake::from("700"),
+            "token",
+            &ModifyWebhookWithToken {
+                name: Some("public".to_string()),
+                avatar: Some(None),
+            },
+        )
+        .await
+        .expect("modify webhook with token");
+    assert_eq!(
+        client
+            .execute_webhook_with_query(
+                Snowflake::from("700"),
+                "token",
+                &query,
+                &json!({ "content": "query" }),
+            )
+            .await
+            .expect("execute webhook with query")["id"],
+        json!("800")
+    );
+    assert_eq!(
+        client
+            .execute_slack_compatible_webhook(
+                Snowflake::from("700"),
+                "token",
+                &compatible_query,
+                &json!({ "text": "deploy" }),
+            )
+            .await
+            .expect("execute slack-compatible webhook")["ok"],
+        json!("slack")
+    );
+    assert_eq!(
+        client
+            .execute_github_compatible_webhook(
+                Snowflake::from("700"),
+                "token",
+                &compatible_query,
+                &json!({ "zen": "Keep it logically awesome." }),
+            )
+            .await
+            .expect("execute github-compatible webhook")["ok"],
+        json!("github")
+    );
+    client
+        .delete_webhook_with_token(Snowflake::from("700"), "token")
+        .await
+        .expect("delete webhook with token");
+
+    server.await.expect("server finished");
+    {
+        let requests = captured.lock().expect("captured requests");
+        assert_eq!(requests.len(), 7);
+        assert_request_basics(
+            &requests[0],
+            "POST",
+            "/channels/500/webhooks",
+            Some("Bot webhook-token"),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[0].body).unwrap(),
+            json!({ "name": "deployments", "avatar": null })
+        );
+        assert_request_basics(
+            &requests[1],
+            "PATCH",
+            "/webhooks/700",
+            Some("Bot webhook-token"),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[1].body).unwrap(),
+            json!({ "name": "ops", "avatar": null, "channel_id": "501" })
+        );
+        assert_request_basics(&requests[2], "PATCH", "/webhooks/700/token", None);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap(),
+            json!({ "name": "public", "avatar": null })
+        );
+        assert_request_basics(
+            &requests[3],
+            "POST",
+            "/webhooks/700/token?wait=false&thread_id=42&with_components=true",
+            None,
+        );
+        assert_request_basics(
+            &requests[4],
+            "POST",
+            "/webhooks/700/token/slack?wait=true&thread_id=43",
+            None,
+        );
+        assert_request_basics(
+            &requests[5],
+            "POST",
+            "/webhooks/700/token/github?wait=true&thread_id=43",
+            None,
+        );
+        assert_request_basics(&requests[6], "DELETE", "/webhooks/700/token", None);
+    }
+
+    assert!(client
+        .modify_webhook_with_token(Snowflake::from("700"), "bad/token", &json!({}))
+        .await
+        .is_err());
+    assert!(client
+        .delete_webhook_with_token(Snowflake::from("700"), "bad/token")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     let responses = vec![
         PlannedResponse::json(
             StatusCode::OK,
             json!({ "banned_users": ["1"], "failed_users": ["2"] }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{
+                "reason": "spam",
+                "user": user_payload("3", "banned")
+            }]),
         ),
         PlannedResponse::json(StatusCode::OK, role_payload("9", "admin")),
         PlannedResponse::json(StatusCode::OK, json!([auto_moderation_rule_payload("7")])),
@@ -1226,8 +1665,30 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
         PlannedResponse::json(StatusCode::OK, auto_moderation_rule_payload("8")),
         PlannedResponse::json(StatusCode::OK, auto_moderation_rule_payload("8")),
         PlannedResponse::json(StatusCode::OK, guild_preview_payload()),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "application_commands": [],
+                "audit_log_entries": [{
+                    "id": "900",
+                    "user_id": "901",
+                    "target_id": "902",
+                    "action_type": 192,
+                    "changes": [{ "key": "status", "new_value": "live" }],
+                    "options": { "channel_id": "903", "status": "live" },
+                    "reason": "voice status"
+                }],
+                "auto_moderation_rules": [],
+                "guild_scheduled_events": [],
+                "integrations": [],
+                "threads": [],
+                "users": [{ "id": "901", "username": "moderator" }],
+                "webhooks": []
+            }),
+        ),
         PlannedResponse::json(StatusCode::OK, json!({ "pruned": 3 })),
         PlannedResponse::json(StatusCode::OK, json!({ "pruned": 2 })),
+        PlannedResponse::json(StatusCode::OK, json!({ "pruned": 4 })),
         PlannedResponse::json(StatusCode::OK, json!({ "code": "discordrs", "uses": 10 })),
         PlannedResponse::json(
             StatusCode::OK,
@@ -1254,6 +1715,19 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     assert_eq!(ban.banned_users[0].as_str(), "1");
+    let bans = client
+        .get_guild_bans_with_query(
+            Snowflake::from("200"),
+            &GuildBansQuery {
+                limit: Some(100),
+                before: Some(Snowflake::from("90")),
+                after: Some(Snowflake::from("10")),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(bans[0].reason.as_deref(), Some("spam"));
+    assert_eq!(bans[0].user.as_ref().unwrap().id.as_str(), "3");
     assert_eq!(
         client
             .get_guild_role(Snowflake::from("200"), Snowflake::from("9"))
@@ -1305,6 +1779,28 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
             .approximate_member_count,
         100
     );
+    let audit_log = client
+        .get_guild_audit_log_typed(
+            Snowflake::from("200"),
+            &AuditLogQuery {
+                user_id: Some(Snowflake::from("901")),
+                action_type: Some(192),
+                before: Some(Snowflake::from("950")),
+                after: Some(Snowflake::from("850")),
+                limit: Some(25),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        audit_log.audit_log_entries[0].id.as_ref().unwrap().as_str(),
+        "900"
+    );
+    assert_eq!(
+        audit_log.audit_log_entries[0].options.as_ref().unwrap()["status"],
+        json!("live")
+    );
+    assert_eq!(audit_log.users[0].username, "moderator");
     assert_eq!(
         client
             .get_guild_prune_count_typed(Snowflake::from("200"), Some(7), &[Snowflake::from("9")])
@@ -1323,6 +1819,22 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
+            .begin_guild_prune_with_request(
+                Snowflake::from("200"),
+                &BeginGuildPruneRequest {
+                    days: Some(7),
+                    compute_prune_count: Some(false),
+                    include_roles: Some(vec![Snowflake::from("9")]),
+                    reason: None,
+                },
+            )
+            .await
+            .unwrap()
+            .pruned,
+        Some(4)
+    );
+    assert_eq!(
+        client
             .get_guild_vanity_url(Snowflake::from("200"))
             .await
             .unwrap()
@@ -1337,7 +1849,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 11);
+    assert_eq!(requests.len(), 14);
     assert_request_basics(
         &requests[0],
         "POST",
@@ -1348,59 +1860,85 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert_request_basics(
         &requests[1],
         "GET",
-        "/guilds/200/roles/9",
+        "/guilds/200/bans?limit=100&before=90&after=10",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
         &requests[2],
         "GET",
-        "/guilds/200/auto-moderation/rules",
+        "/guilds/200/roles/9",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
         &requests[3],
         "GET",
-        "/guilds/200/auto-moderation/rules/7",
+        "/guilds/200/auto-moderation/rules",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
         &requests[4],
+        "GET",
+        "/guilds/200/auto-moderation/rules/7",
+        Some("Bot typed-admin-token"),
+    );
+    assert_request_basics(
+        &requests[5],
         "POST",
         "/guilds/200/auto-moderation/rules",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
-        &requests[5],
+        &requests[6],
         "PATCH",
         "/guilds/200/auto-moderation/rules/8",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
-        &requests[6],
+        &requests[7],
         "GET",
         "/guilds/200/preview",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
-        &requests[7],
-        "GET",
-        "/guilds/200/prune?days=7&include_roles=9",
-        Some("Bot typed-admin-token"),
-    );
-    assert_request_basics(
         &requests[8],
-        "POST",
-        "/guilds/200/prune?days=7&compute_prune_count=false",
+        "GET",
+        "/guilds/200/audit-logs?user_id=901&action_type=192&before=950&after=850&limit=25",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
         &requests[9],
         "GET",
-        "/guilds/200/vanity-url",
+        "/guilds/200/prune?days=7&include_roles=9",
         Some("Bot typed-admin-token"),
     );
     assert_request_basics(
         &requests[10],
+        "POST",
+        "/guilds/200/prune?days=7&compute_prune_count=false",
+        Some("Bot typed-admin-token"),
+    );
+    assert_request_basics(
+        &requests[11],
+        "POST",
+        "/guilds/200/prune",
+        Some("Bot typed-admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[11].body).unwrap(),
+        json!({
+            "days": 7,
+            "compute_prune_count": false,
+            "include_roles": ["9"]
+        })
+    );
+    assert_request_basics(
+        &requests[12],
+        "GET",
+        "/guilds/200/vanity-url",
+        Some("Bot typed-admin-token"),
+    );
+    assert_request_basics(
+        &requests[13],
         "GET",
         "/voice/regions",
         Some("Bot typed-admin-token"),
@@ -1556,6 +2094,21 @@ async fn application_management_wrappers_hit_expected_paths() {
         PlannedResponse::json(StatusCode::OK, application_payload("555", "renamed")),
         PlannedResponse::json(
             StatusCode::OK,
+            json!({
+                "application_id": "555",
+                "instance_id": "i-123",
+                "launch_id": "999",
+                "location": {
+                    "id": "gc-200-300",
+                    "kind": "gc",
+                    "channel_id": "300",
+                    "guild_id": "200"
+                },
+                "users": ["400"]
+            }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
             json!([role_connection_metadata_payload("score")]),
         ),
         PlannedResponse::json(
@@ -1576,12 +2129,23 @@ async fn application_management_wrappers_hit_expected_paths() {
     assert_eq!(client.get_current_application().await.unwrap().name, "app");
     assert_eq!(
         client
-            .edit_current_application(&json!({ "description": "updated" }))
+            .edit_current_application_from_request(&ModifyCurrentApplication {
+                description: Some("updated".to_string()),
+                icon: Some(None),
+                tags: Some(vec!["utility".to_string()]),
+                ..ModifyCurrentApplication::default()
+            })
             .await
             .unwrap()
             .name,
         "renamed"
     );
+    let activity = client
+        .get_application_activity_instance("i-123")
+        .await
+        .unwrap();
+    assert_eq!(activity.location.kind, "gc");
+    assert_eq!(activity.users[0].as_str(), "400");
     assert_eq!(
         client
             .get_application_role_connection_metadata_records()
@@ -1601,7 +2165,7 @@ async fn application_management_wrappers_hit_expected_paths() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_request_basics(
         &requests[0],
         "GET",
@@ -1614,17 +2178,539 @@ async fn application_management_wrappers_hit_expected_paths() {
         "/applications/@me",
         Some("Bot app-token"),
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[1].body).unwrap(),
+        json!({
+            "description": "updated",
+            "icon": null,
+            "tags": ["utility"]
+        })
+    );
     assert_request_basics(
         &requests[2],
+        "GET",
+        "/applications/555/activity-instances/i-123",
+        Some("Bot app-token"),
+    );
+    assert_request_basics(
+        &requests[3],
         "GET",
         "/applications/555/role-connections/metadata",
         Some("Bot app-token"),
     );
     assert_request_basics(
-        &requests[3],
+        &requests[4],
         "PUT",
         "/applications/555/role-connections/metadata",
         Some("Bot app-token"),
+    );
+}
+
+#[tokio::test]
+async fn application_command_permissions_use_expected_auth_and_payloads() {
+    let permissions_payload = json!({
+        "id": "401",
+        "application_id": "555",
+        "guild_id": "200",
+        "permissions": [{
+            "id": "300",
+            "type": 1,
+            "permission": true
+        }]
+    });
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!([permissions_payload.clone()])),
+        PlannedResponse::json(StatusCode::OK, permissions_payload.clone()),
+        PlannedResponse::json(StatusCode::OK, json!([permissions_payload.clone()])),
+        PlannedResponse::json(StatusCode::OK, permissions_payload),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("command-token", 555, base_url);
+    let edit =
+        EditApplicationCommandPermissions::new([ApplicationCommandPermission::role("300", true)]);
+
+    let all = client
+        .get_guild_application_command_permissions("200")
+        .await
+        .unwrap();
+    assert_eq!(
+        all[0].permissions[0],
+        ApplicationCommandPermission::role("300", true)
+    );
+
+    let single = client
+        .get_application_command_permissions("200", "401")
+        .await
+        .unwrap();
+    assert_eq!(single.guild_id.as_str(), "200");
+
+    let batch = client
+        .batch_edit_application_command_permissions(
+            "oauth.access-token",
+            "200",
+            std::slice::from_ref(&edit),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batch[0].id.as_str(), "401");
+
+    let edited = client
+        .edit_application_command_permissions("oauth.access-token", "200", "401", &edit)
+        .await
+        .unwrap();
+    assert_eq!(edited.id.as_str(), "401");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 4);
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/applications/555/guilds/200/commands/permissions",
+        Some("Bot command-token"),
+    );
+    assert_request_basics(
+        &requests[1],
+        "GET",
+        "/applications/555/guilds/200/commands/401/permissions",
+        Some("Bot command-token"),
+    );
+    assert_request_basics(
+        &requests[2],
+        "PUT",
+        "/applications/555/guilds/200/commands/permissions",
+        Some("Bearer oauth.access-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap(),
+        json!([{
+            "permissions": [{
+                "id": "300",
+                "type": 1,
+                "permission": true
+            }]
+        }])
+    );
+    assert_request_basics(
+        &requests[3],
+        "PUT",
+        "/applications/555/guilds/200/commands/401/permissions",
+        Some("Bearer oauth.access-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap(),
+        json!({
+            "permissions": [{
+                "id": "300",
+                "type": 1,
+                "permission": true
+            }]
+        })
+    );
+}
+
+#[tokio::test]
+async fn application_command_permissions_reject_unsafe_bearer_tokens_before_network() {
+    let (base_url, captured, server) = spawn_test_server(Vec::new()).await;
+    let client = RestClient::new_with_base_url("command-token", 555, base_url);
+    let edit =
+        EditApplicationCommandPermissions::new([ApplicationCommandPermission::user("301", false)]);
+
+    let error = client
+        .edit_application_command_permissions("bad\r\ntoken", "200", "401", &edit)
+        .await
+        .expect_err("control characters should be rejected before sending a request");
+    assert!(error.to_string().contains("Authorization header"));
+
+    server.await.expect("server finished");
+    assert!(captured.lock().expect("captured requests").is_empty());
+}
+
+#[tokio::test]
+async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
+    let role_connection = json!({
+        "platform_name": "Example",
+        "platform_username": "user-42",
+        "metadata": {
+            "level": "7"
+        }
+    });
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{
+                "id": "external-1",
+                "name": "example-user",
+                "type": "github",
+                "revoked": false,
+                "integrations": [{ "id": "integration-1" }],
+                "verified": true,
+                "friend_sync": false,
+                "show_activity": true,
+                "two_way_link": true,
+                "visibility": 1
+            }]),
+        ),
+        PlannedResponse::json(StatusCode::OK, member_payload("701", "oauth-member")),
+        PlannedResponse::json(StatusCode::OK, role_connection.clone()),
+        PlannedResponse::json(StatusCode::OK, role_connection),
+        PlannedResponse::json(StatusCode::OK, user_payload("900", "renamed")),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("bot-token", 555, base_url);
+    let role_update = UpdateUserApplicationRoleConnection::new()
+        .platform_name("Example")
+        .platform_username("user-42")
+        .metadata([("level", "7")]);
+
+    let connections = client
+        .get_current_user_connections("oauth.access")
+        .await
+        .unwrap();
+    assert_eq!(connections[0].kind, "github");
+    assert_eq!(connections[0].integrations[0]["id"], json!("integration-1"));
+
+    let member = client
+        .get_current_user_guild_member("oauth.access", "200")
+        .await
+        .unwrap();
+    assert_eq!(member.user.unwrap().username, "oauth-member");
+
+    let role_connection = client
+        .get_current_user_application_role_connection("oauth.access")
+        .await
+        .unwrap();
+    assert_eq!(
+        role_connection.metadata.get("level").map(String::as_str),
+        Some("7")
+    );
+
+    let updated = client
+        .update_current_user_application_role_connection("oauth.access", &role_update)
+        .await
+        .unwrap();
+    assert_eq!(updated.platform_username.as_deref(), Some("user-42"));
+
+    let user = client
+        .modify_current_user(&ModifyCurrentUser {
+            username: Some("renamed".to_string()),
+            ..ModifyCurrentUser::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(user.username, "renamed");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 5);
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/users/@me/connections",
+        Some("Bearer oauth.access"),
+    );
+    assert_request_basics(
+        &requests[1],
+        "GET",
+        "/users/@me/guilds/200/member",
+        Some("Bearer oauth.access"),
+    );
+    assert_request_basics(
+        &requests[2],
+        "GET",
+        "/users/@me/applications/555/role-connection",
+        Some("Bearer oauth.access"),
+    );
+    assert_request_basics(
+        &requests[3],
+        "PUT",
+        "/users/@me/applications/555/role-connection",
+        Some("Bearer oauth.access"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap(),
+        json!({
+            "platform_name": "Example",
+            "platform_username": "user-42",
+            "metadata": {
+                "level": "7"
+            }
+        })
+    );
+    assert_request_basics(&requests[4], "PATCH", "/users/@me", Some("Bot bot-token"));
+}
+
+#[tokio::test]
+async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
+    let member = json!({
+        "id": "42",
+        "metadata": {
+            "role": "host"
+        },
+        "flags": 1
+    });
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, lobby_payload("900")),
+        PlannedResponse::json(StatusCode::OK, lobby_payload("900")),
+        PlannedResponse::json(StatusCode::OK, lobby_payload("900")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, member.clone()),
+        PlannedResponse::json(StatusCode::OK, json!([member])),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, lobby_payload("900")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("lobby-token", 555, base_url);
+    let metadata = HashMap::from([("topic".to_string(), "redstone".to_string())]);
+    let member_metadata = HashMap::from([("role".to_string(), "host".to_string())]);
+
+    let lobby = client
+        .create_lobby(&CreateLobby {
+            metadata: Some(metadata.clone()),
+            members: Some(vec![LobbyMember {
+                id: Snowflake::from("42"),
+                metadata: Some(member_metadata.clone()),
+                flags: Some(1),
+            }]),
+            idle_timeout_seconds: Some(60),
+        })
+        .await
+        .unwrap();
+    assert_eq!(lobby.members[0].id.as_str(), "42");
+
+    assert_eq!(client.get_lobby("900").await.unwrap().id.as_str(), "900");
+    assert_eq!(
+        client
+            .modify_lobby(
+                "900",
+                &ModifyLobby {
+                    metadata: Some(metadata.clone()),
+                    members: None,
+                    idle_timeout_seconds: Some(120),
+                },
+            )
+            .await
+            .unwrap()
+            .application_id
+            .as_str(),
+        "555"
+    );
+    client.delete_lobby("900").await.unwrap();
+
+    let added = client
+        .add_lobby_member(
+            "900",
+            "42",
+            &AddLobbyMember {
+                metadata: Some(member_metadata.clone()),
+                flags: Some(1),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(added.flags, Some(1));
+
+    let updated = client
+        .bulk_update_lobby_members(
+            "900",
+            &[LobbyMemberUpdate {
+                id: Snowflake::from("42"),
+                metadata: Some(member_metadata),
+                flags: Some(1),
+                remove_member: None,
+            }],
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated[0].id.as_str(), "42");
+
+    client.remove_lobby_member("900", "42").await.unwrap();
+    client.leave_lobby("oauth.access", "900").await.unwrap();
+    client
+        .link_lobby_channel(
+            "oauth.access",
+            "900",
+            &LinkLobbyChannel {
+                channel_id: Some(Snowflake::from("700")),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .update_lobby_message_moderation_metadata("900", "777", &metadata)
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 10);
+    assert_request_basics(&requests[0], "POST", "/lobbies", Some("Bot lobby-token"));
+    assert_request_basics(&requests[1], "GET", "/lobbies/900", Some("Bot lobby-token"));
+    assert_request_basics(
+        &requests[2],
+        "PATCH",
+        "/lobbies/900",
+        Some("Bot lobby-token"),
+    );
+    assert_request_basics(
+        &requests[3],
+        "DELETE",
+        "/lobbies/900",
+        Some("Bot lobby-token"),
+    );
+    assert_request_basics(
+        &requests[4],
+        "PUT",
+        "/lobbies/900/members/42",
+        Some("Bot lobby-token"),
+    );
+    assert_request_basics(
+        &requests[5],
+        "POST",
+        "/lobbies/900/members/bulk",
+        Some("Bot lobby-token"),
+    );
+    assert_request_basics(
+        &requests[6],
+        "DELETE",
+        "/lobbies/900/members/42",
+        Some("Bot lobby-token"),
+    );
+    assert_request_basics(
+        &requests[7],
+        "DELETE",
+        "/lobbies/900/members/@me",
+        Some("Bearer oauth.access"),
+    );
+    assert_request_basics(
+        &requests[8],
+        "PATCH",
+        "/lobbies/900/channel-linking",
+        Some("Bearer oauth.access"),
+    );
+    assert_request_basics(
+        &requests[9],
+        "PUT",
+        "/lobbies/900/messages/777/moderation-metadata",
+        Some("Bot lobby-token"),
+    );
+}
+
+#[tokio::test]
+async fn gateway_and_oauth2_metadata_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!({ "url": "wss://gateway.discord.gg" })),
+        PlannedResponse::json(StatusCode::OK, application_payload("555", "discordrs")),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "application": application_payload("555", "discordrs"),
+                "scopes": ["identify", "guilds"],
+                "expires": "2026-05-02T00:00:00+00:00",
+                "user": user_payload("42", "oauth-user")
+            }),
+        ),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("metadata-token", 555, base_url);
+
+    assert_eq!(
+        client.get_gateway().await.unwrap().url,
+        "wss://gateway.discord.gg"
+    );
+    assert_eq!(
+        client
+            .get_current_bot_application_information()
+            .await
+            .unwrap()
+            .name,
+        "discordrs"
+    );
+    let authorization = client
+        .get_current_authorization_information("oauth.access")
+        .await
+        .unwrap();
+    assert_eq!(authorization.scopes, ["identify", "guilds"]);
+    assert_eq!(authorization.user.unwrap().username, "oauth-user");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    assert_request_basics(&requests[0], "GET", "/gateway", Some("Bot metadata-token"));
+    assert_request_basics(
+        &requests[1],
+        "GET",
+        "/oauth2/applications/@me",
+        Some("Bot metadata-token"),
+    );
+    assert_request_basics(
+        &requests[2],
+        "GET",
+        "/oauth2/@me",
+        Some("Bearer oauth.access"),
+    );
+}
+
+#[tokio::test]
+async fn legacy_pin_template_and_nick_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("legacy-token", 555, base_url);
+
+    client
+        .pin_message_legacy(Snowflake::from("100"), Snowflake::from("5"))
+        .await
+        .unwrap();
+    client
+        .unpin_message_legacy(Snowflake::from("100"), Snowflake::from("5"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .get_guild_template_by_code("tmpl")
+            .await
+            .unwrap()
+            .code,
+        "tmpl"
+    );
+    client
+        .modify_current_member_nick(Snowflake::from("200"), Some("nick"))
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 4);
+    assert_request_basics(
+        &requests[0],
+        "PUT",
+        "/channels/100/pins/5",
+        Some("Bot legacy-token"),
+    );
+    assert_request_basics(
+        &requests[1],
+        "DELETE",
+        "/channels/100/pins/5",
+        Some("Bot legacy-token"),
+    );
+    assert_request_basics(
+        &requests[2],
+        "GET",
+        "/guilds/templates/tmpl",
+        Some("Bot legacy-token"),
+    );
+    assert_request_basics(
+        &requests[3],
+        "PATCH",
+        "/guilds/200/members/@me/nick",
+        Some("Bot legacy-token"),
     );
 }
 
@@ -1635,6 +2721,10 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
         PlannedResponse::json(
             StatusCode::OK,
             json!([current_user_guild_payload("200", "guild")]),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([current_user_guild_payload("201", "guild-with-counts")]),
         ),
         PlannedResponse::json(StatusCode::OK, webhook_payload("300", "hook")),
         PlannedResponse::json(
@@ -1665,6 +2755,19 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
         client.get_current_user_guilds_typed().await.unwrap()[0].name,
         "guild"
     );
+    let guilds_with_counts = client
+        .get_current_user_guilds_typed_with_query(&CurrentUserGuildsQuery {
+            after: Some(Snowflake::from("199")),
+            limit: Some(50),
+            with_counts: Some(true),
+            ..CurrentUserGuildsQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(guilds_with_counts[0].name, "guild-with-counts");
+    assert_eq!(guilds_with_counts[0].banner.as_deref(), Some("banner_hash"));
+    assert_eq!(guilds_with_counts[0].approximate_member_count, Some(3268));
+    assert_eq!(guilds_with_counts[0].approximate_presence_count, Some(784));
     assert_eq!(
         client
             .get_webhook_with_token(Snowflake::from("300"), "token")
@@ -1685,7 +2788,7 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_request_basics(
         &requests[0],
         "PATCH",
@@ -1698,12 +2801,244 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
         "/users/@me/guilds",
         Some("Bot gap-token"),
     );
-    assert_request_basics(&requests[2], "GET", "/webhooks/300/token", None);
     assert_request_basics(
-        &requests[3],
+        &requests[2],
+        "GET",
+        "/users/@me/guilds?after=199&limit=50&with_counts=true",
+        Some("Bot gap-token"),
+    );
+    assert_request_basics(&requests[3], "GET", "/webhooks/300/token", None);
+    assert_request_basics(
+        &requests[4],
         "GET",
         "/guilds/200/regions",
         Some("Bot gap-token"),
+    );
+}
+
+#[tokio::test]
+async fn voice_state_resource_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, voice_state_payload("555", "300")),
+        PlannedResponse::json(StatusCode::OK, voice_state_payload("777", "300")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("voice-state-token", 555, base_url);
+
+    assert_eq!(
+        client
+            .get_current_user_voice_state(Snowflake::from("200"))
+            .await
+            .unwrap()
+            .user_id
+            .unwrap()
+            .as_str(),
+        "555"
+    );
+    assert_eq!(
+        client
+            .get_user_voice_state(Snowflake::from("200"), Snowflake::from("777"))
+            .await
+            .unwrap()
+            .user_id
+            .unwrap()
+            .as_str(),
+        "777"
+    );
+    client
+        .modify_current_user_voice_state_from_request(
+            Snowflake::from("200"),
+            &ModifyCurrentUserVoiceState {
+                channel_id: Some(Snowflake::from("300")),
+                suppress: Some(false),
+                request_to_speak_timestamp: Some(None),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .modify_user_voice_state_from_request(
+            Snowflake::from("200"),
+            Snowflake::from("777"),
+            &ModifyUserVoiceState {
+                channel_id: Some(Snowflake::from("300")),
+                suppress: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 4);
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/guilds/200/voice-states/@me",
+        Some("Bot voice-state-token"),
+    );
+    assert_request_basics(
+        &requests[1],
+        "GET",
+        "/guilds/200/voice-states/777",
+        Some("Bot voice-state-token"),
+    );
+    assert_request_basics(
+        &requests[2],
+        "PATCH",
+        "/guilds/200/voice-states/@me",
+        Some("Bot voice-state-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap(),
+        json!({
+            "channel_id": "300",
+            "suppress": false,
+            "request_to_speak_timestamp": null
+        })
+    );
+    assert_request_basics(
+        &requests[3],
+        "PATCH",
+        "/guilds/200/voice-states/777",
+        Some("Bot voice-state-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap(),
+        json!({
+            "channel_id": "300",
+            "suppress": true
+        })
+    );
+}
+
+#[tokio::test]
+async fn channel_resource_gap_wrappers_hit_current_routes() {
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!([{
+                "code": "abc",
+                "uses": 1,
+                "max_uses": 10,
+                "max_age": 3600,
+                "temporary": false,
+                "created_at": "2026-05-01T00:00:00.000000+00:00"
+            }]),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "code": "created",
+                "max_age": 600,
+                "max_uses": 2,
+                "temporary": true
+            }),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("channel-token", 0, base_url);
+
+    assert_eq!(
+        client
+            .get_channel_invites(Snowflake::from("100"))
+            .await
+            .unwrap()[0]
+            .code
+            .as_deref(),
+        Some("abc")
+    );
+    assert_eq!(
+        client
+            .create_channel_invite_typed(
+                Snowflake::from("100"),
+                &CreateChannelInvite {
+                    max_age: Some(600),
+                    max_uses: Some(2),
+                    temporary: Some(true),
+                    unique: Some(true),
+                    role_ids: Some(vec![Snowflake::from("300")]),
+                    ..CreateChannelInvite::default()
+                },
+            )
+            .await
+            .unwrap()
+            .code
+            .as_deref(),
+        Some("created")
+    );
+    client
+        .set_voice_channel_status(
+            Snowflake::from("200"),
+            &SetVoiceChannelStatus {
+                status: Some("Planning sprint".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .edit_channel_permissions_typed(
+            Snowflake::from("100"),
+            Snowflake::from("300"),
+            &EditChannelPermission {
+                kind: 0,
+                allow: Some(PermissionsBitField(1024)),
+                deny: Some(PermissionsBitField(2048)),
+            },
+        )
+        .await
+        .unwrap();
+    client
+        .delete_channel_permission(Snowflake::from("100"), Snowflake::from("300"))
+        .await
+        .unwrap();
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 5);
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/channels/100/invites",
+        Some("Bot channel-token"),
+    );
+    assert_request_basics(
+        &requests[1],
+        "POST",
+        "/channels/100/invites",
+        Some("Bot channel-token"),
+    );
+    assert!(requests[1].body.contains(r#""role_ids":["300"]"#));
+    assert_request_basics(
+        &requests[2],
+        "PUT",
+        "/channels/200/voice-status",
+        Some("Bot channel-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap()["status"],
+        json!("Planning sprint")
+    );
+    assert_request_basics(
+        &requests[3],
+        "PUT",
+        "/channels/100/permissions/300",
+        Some("Bot channel-token"),
+    );
+    let permission_body = serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap();
+    assert_eq!(permission_body["type"], json!(0));
+    assert_eq!(permission_body["allow"], json!("1024"));
+    assert_eq!(permission_body["deny"], json!("2048"));
+    assert_request_basics(
+        &requests[4],
+        "DELETE",
+        "/channels/100/permissions/300",
+        Some("Bot channel-token"),
     );
 }
 
@@ -1726,6 +3061,14 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
                 }]
             }),
         ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "id": "20",
+                "name": "pack",
+                "stickers": [sticker_payload("10")]
+            }),
+        ),
         PlannedResponse::json(StatusCode::OK, json!([sticker_payload("11")])),
         PlannedResponse::json(StatusCode::OK, sticker_payload("11")),
         PlannedResponse::json(StatusCode::OK, sticker_payload("12")),
@@ -1741,6 +3084,29 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
         PlannedResponse::json(StatusCode::OK, json!({ "id": "200", "name": "widget" })),
         PlannedResponse::json(
             StatusCode::OK,
+            json!({
+                "id": "200",
+                "name": "typed widget",
+                "instant_invite": "https://discord.gg/example",
+                "channels": [{
+                    "id": "300",
+                    "name": "voice",
+                    "position": 1
+                }],
+                "members": [{
+                    "id": "0",
+                    "username": "anon",
+                    "discriminator": "0000",
+                    "avatar": null,
+                    "status": "online",
+                    "avatar_url": "https://cdn.discordapp.com/widget-avatars/avatar"
+                }],
+                "presence_count": 1
+            }),
+        ),
+        PlannedResponse::text(StatusCode::OK, "PNGDATA"),
+        PlannedResponse::json(
+            StatusCode::OK,
             json!({ "channel_id": "100", "webhook_id": "101" }),
         ),
         PlannedResponse::json(StatusCode::OK, stage_payload("400")),
@@ -1751,6 +3117,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
         PlannedResponse::json(StatusCode::OK, welcome_screen_payload()),
         PlannedResponse::json(StatusCode::OK, onboarding_payload()),
         PlannedResponse::json(StatusCode::OK, onboarding_payload()),
+        PlannedResponse::json(StatusCode::OK, incidents_payload()),
         PlannedResponse::json(StatusCode::OK, json!([template_payload("tmpl")])),
         PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
         PlannedResponse::json(StatusCode::OK, template_payload("tmpl")),
@@ -1803,6 +3170,15 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
+            .get_sticker_pack(Snowflake::from("20"))
+            .await
+            .unwrap()
+            .id
+            .as_str(),
+        "20"
+    );
+    assert_eq!(
+        client
             .get_guild_stickers(Snowflake::from("200"))
             .await
             .unwrap()
@@ -1820,9 +3196,13 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_sticker(
+            .create_guild_sticker_from_request(
                 Snowflake::from("200"),
-                &body,
+                &CreateGuildSticker {
+                    name: "name".to_string(),
+                    description: "desc".to_string(),
+                    tags: "tag".to_string(),
+                },
                 sample_file("sticker.png", "png")
             )
             .await
@@ -1833,7 +3213,15 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_sticker(Snowflake::from("200"), Snowflake::from("12"), &body)
+            .modify_guild_sticker_from_request(
+                Snowflake::from("200"),
+                Snowflake::from("12"),
+                &ModifyGuildSticker {
+                    name: Some("name".to_string()),
+                    description: Some(Some("desc".to_string())),
+                    tags: Some("tag".to_string()),
+                },
+            )
             .await
             .unwrap()
             .id
@@ -1881,6 +3269,23 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
+            .get_guild_widget_typed(Snowflake::from("200"))
+            .await
+            .unwrap()
+            .members[0]
+            .status
+            .as_deref(),
+        Some("online")
+    );
+    assert_eq!(
+        client
+            .get_guild_widget_image(Snowflake::from("200"), Some(GuildWidgetImageStyle::Banner2))
+            .await
+            .unwrap(),
+        b"PNGDATA".to_vec()
+    );
+    assert_eq!(
+        client
             .follow_announcement_channel(Snowflake::from("100"), Snowflake::from("101"))
             .await
             .unwrap()
@@ -1890,7 +3295,13 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_stage_instance(&body)
+            .create_stage_instance_from_request(&CreateStageInstance {
+                channel_id: Snowflake::from("400"),
+                topic: "town hall".to_string(),
+                privacy_level: Some(2),
+                send_start_notification: Some(true),
+                guild_scheduled_event_id: Some(Snowflake::from("500")),
+            })
             .await
             .unwrap()
             .channel_id
@@ -1907,7 +3318,12 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_stage_instance(Snowflake::from("400"), &body)
+            .modify_stage_instance_from_request(
+                Snowflake::from("400"),
+                &ModifyStageInstance {
+                    privacy_level: Some(2),
+                },
+            )
             .await
             .unwrap()
             .privacy_level,
@@ -1948,6 +3364,21 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .await
             .unwrap()
             .enabled
+    );
+    assert_eq!(
+        client
+            .modify_guild_incident_actions(
+                Snowflake::from("200"),
+                &ModifyGuildIncidentActions {
+                    invites_disabled_until: Some("2026-05-01T12:00:00.000000+00:00".to_string()),
+                    dms_disabled_until: None,
+                },
+            )
+            .await
+            .unwrap()
+            .raid_detected_at
+            .as_deref(),
+        Some("2026-05-01T11:00:00.000000+00:00")
     );
     assert_eq!(
         client
@@ -1992,7 +3423,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 31);
+    assert_eq!(requests.len(), 35);
     assert_request_basics(
         &requests[0],
         "GET",
@@ -2009,54 +3440,119 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     assert_request_basics(
         &requests[7],
         "GET",
+        "/sticker-packs/20",
+        Some("Bot admin-token"),
+    );
+    assert_request_basics(
+        &requests[8],
+        "GET",
         "/guilds/200/stickers",
         Some("Bot admin-token"),
     );
-    assert_eq!(requests[9].method, "POST");
-    assert_eq!(requests[9].path, "/guilds/200/stickers");
-    assert_eq!(requests[9].header("authorization"), Some("Bot admin-token"));
-    assert!(requests[9]
+    assert_eq!(requests[10].method, "POST");
+    assert_eq!(requests[10].path, "/guilds/200/stickers");
+    assert_eq!(
+        requests[10].header("authorization"),
+        Some("Bot admin-token")
+    );
+    assert!(requests[10]
         .header("content-type")
         .is_some_and(|value| value.starts_with("multipart/form-data; boundary=")));
-    assert!(requests[9].body.contains(r#"name="file""#));
+    assert!(requests[10].body.contains(r#"name="file""#));
     assert_request_basics(
-        &requests[12],
+        &requests[11],
+        "PATCH",
+        "/guilds/200/stickers/12",
+        Some("Bot admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[11].body).unwrap(),
+        json!({
+            "name": "name",
+            "description": "desc",
+            "tags": "tag"
+        })
+    );
+    assert_request_basics(
+        &requests[13],
         "GET",
         "/guilds/200/prune?days=7&include_roles=9",
         Some("Bot admin-token"),
     );
     assert_request_basics(
-        &requests[13],
+        &requests[14],
         "POST",
         "/guilds/200/prune?days=7&compute_prune_count=false",
         Some("Bot admin-token"),
     );
     assert_request_basics(
-        &requests[17],
+        &requests[18],
+        "GET",
+        "/guilds/200/widget.json",
+        Some("Bot admin-token"),
+    );
+    assert_request_basics(
+        &requests[19],
+        "GET",
+        "/guilds/200/widget.png?style=banner2",
+        None,
+    );
+    assert_request_basics(
+        &requests[20],
         "POST",
         "/channels/100/followers",
         Some("Bot admin-token"),
     );
     assert_request_basics(
-        &requests[18],
+        &requests[21],
         "POST",
         "/stage-instances",
         Some("Bot admin-token"),
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[21].body).unwrap(),
+        json!({
+            "channel_id": "400",
+            "topic": "town hall",
+            "privacy_level": 2,
+            "send_start_notification": true,
+            "guild_scheduled_event_id": "500"
+        })
+    );
     assert_request_basics(
-        &requests[22],
+        &requests[23],
+        "PATCH",
+        "/stage-instances/400",
+        Some("Bot admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[23].body).unwrap(),
+        json!({ "privacy_level": 2 })
+    );
+    assert_request_basics(
+        &requests[25],
         "GET",
         "/guilds/200/welcome-screen",
         Some("Bot admin-token"),
     );
     assert_request_basics(
-        &requests[25],
+        &requests[28],
         "PUT",
         "/guilds/200/onboarding",
         Some("Bot admin-token"),
     );
     assert_request_basics(
-        &requests[28],
+        &requests[29],
+        "PUT",
+        "/guilds/200/incident-actions",
+        Some("Bot admin-token"),
+    );
+    assert!(requests[29]
+        .body
+        .contains(r#""invites_disabled_until":"2026-05-01T12:00:00.000000+00:00""#));
+    assert!(requests[29].body.contains(r#""dms_disabled_until":null"#));
+    assert_request_basics(
+        &requests[32],
         "PUT",
         "/guilds/200/templates/tmpl",
         Some("Bot admin-token"),
@@ -2208,7 +3704,12 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     };
     let sound_body = json!({ "sound_id": "1", "source_guild_id": "200" });
 
-    assert_eq!(client.get_skus().await.unwrap()[0].slug, "premium");
+    let sku = client.get_skus().await.unwrap().remove(0);
+    assert_eq!(sku.slug, "premium");
+    assert_eq!(sku.access_type, Some(1));
+    assert_eq!(sku.premium, Some(false));
+    assert_eq!(sku.show_age_gate, Some(false));
+    assert!(sku.features.is_empty());
     assert_eq!(
         client
             .get_sku_subscriptions(Snowflake::from("900"), &subscription_query)
@@ -2227,11 +3728,12 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
             .as_str(),
         "777"
     );
+    let entitlement = client.get_entitlements(&query).await.unwrap().remove(0);
+    assert_eq!(entitlement.sku_id.as_str(), "900");
+    assert_eq!(entitlement.gift_code_flags, Some(0));
     assert_eq!(
-        client.get_entitlements(&query).await.unwrap()[0]
-            .sku_id
-            .as_str(),
-        "900"
+        entitlement.subscription_id.as_ref().map(Snowflake::as_str),
+        Some("950")
     );
     assert_eq!(
         client
@@ -2394,6 +3896,27 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
         PlannedResponse::json(StatusCode::OK, json!({ "code": "abc", "uses": 2 })),
         PlannedResponse::json(
             StatusCode::OK,
+            json!({
+                "type": 0,
+                "code": "abc",
+                "roles": [{ "id": "701", "name": "invite role" }]
+            }),
+        ),
+        PlannedResponse::text(StatusCode::OK, "user_id\n777\n888\n"),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "status": 1,
+                "total_users": 2,
+                "processed_users": 1,
+                "created_at": "2025-01-08T12:00:00.000000+00:00",
+                "completed_at": null,
+                "error_message": null
+            }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
             json!([{
                 "id": "900",
                 "name": "integration",
@@ -2491,6 +4014,39 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
+            .create_channel_invite_with_target_users_file(
+                Snowflake::from("100"),
+                &CreateChannelInvite {
+                    role_ids: Some(vec![Snowflake::from("701")]),
+                    ..CreateChannelInvite::default()
+                },
+                &sample_file("target_users.csv", "user_id\n777\n888\n"),
+            )
+            .await
+            .unwrap()
+            .roles[0]
+            .id
+            .as_str(),
+        "701"
+    );
+    assert_eq!(
+        client.get_invite_target_users_csv("abc").await.unwrap(),
+        "user_id\n777\n888\n"
+    );
+    client
+        .update_invite_target_users("abc", &sample_file("target_users.csv", "user_id\n777\n"))
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .get_invite_target_users_job_status("abc")
+            .await
+            .unwrap()
+            .processed_users,
+        1
+    );
+    assert_eq!(
+        client
             .get_guild_integrations(Snowflake::from("200"))
             .await
             .unwrap()[0]
@@ -2528,7 +4084,7 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
-    assert_eq!(requests.len(), 13);
+    assert_eq!(requests.len(), 17);
     assert_request_basics(
         &requests[0],
         "PUT",
@@ -2565,20 +4121,48 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
         "/invites/abc?with_counts=true&with_expiration=true&guild_scheduled_event_id=300",
         Some("Bot coverage-token"),
     );
+    assert_named_file_multipart_request(
+        &requests[9],
+        "POST",
+        "/channels/100/invites",
+        Some("Bot coverage-token"),
+        "target_users_file",
+        true,
+    );
     assert_request_basics(
         &requests[10],
+        "GET",
+        "/invites/abc/target-users",
+        Some("Bot coverage-token"),
+    );
+    assert_named_file_multipart_request(
+        &requests[11],
+        "PUT",
+        "/invites/abc/target-users",
+        Some("Bot coverage-token"),
+        "target_users_file",
+        false,
+    );
+    assert_request_basics(
+        &requests[12],
+        "GET",
+        "/invites/abc/target-users/job-status",
+        Some("Bot coverage-token"),
+    );
+    assert_request_basics(
+        &requests[14],
         "DELETE",
         "/guilds/200/integrations/900",
         Some("Bot coverage-token"),
     );
     assert_request_basics(
-        &requests[11],
+        &requests[15],
         "GET",
         "/channels/100/polls/800/answers/1?after=777&limit=10",
         Some("Bot coverage-token"),
     );
     assert_request_basics(
-        &requests[12],
+        &requests[16],
         "POST",
         "/channels/100/polls/800/expire",
         Some("Bot coverage-token"),
@@ -2835,6 +4419,33 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
             json!({ "id": "903", "content": "edited raw" }),
         ),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "doing_deep_historical_index": false,
+                "total_results": 1,
+                "messages": [[message_payload("4", "100", "searched")]],
+                "threads": [channel_payload("700", 11, Some("thread"))],
+                "members": [{
+                    "id": "700",
+                    "user_id": "42",
+                    "join_timestamp": "2026-05-01T00:00:00.000000+00:00",
+                    "flags": 0
+                }]
+            }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "items": [{
+                    "pinned_at": "2026-05-01T00:00:00.000000+00:00",
+                    "message": message_payload("5", "100", "pinned")
+                }],
+                "has_more": false
+            }),
+        ),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("token", 321, base_url);
@@ -2989,6 +4600,49 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
         .await
         .expect("delete raw message");
 
+    let search = client
+        .search_guild_messages(
+            Snowflake::from("200"),
+            &SearchGuildMessagesQuery {
+                limit: Some(5),
+                content: Some("hello world & tea".to_string()),
+                channel_ids: vec![Snowflake::from("100"), Snowflake::from("101")],
+                author_types: vec!["bot".to_string()],
+                mention_everyone: Some(false),
+                has: vec!["link".to_string()],
+                include_nsfw: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("search guild messages");
+    assert_eq!(search.total_results, 1);
+    assert_eq!(search.messages[0][0].content, "searched");
+    assert_eq!(search.threads[0].id.as_str(), "700");
+    assert_eq!(search.members[0].user_id.as_ref().unwrap().as_str(), "42");
+
+    let pins = client
+        .get_channel_pins(
+            Snowflake::from("100"),
+            &ChannelPinsQuery {
+                before: Some("2026-05-01T00:00:00.000Z".to_string()),
+                limit: Some(10),
+            },
+        )
+        .await
+        .expect("get channel pins");
+    assert_eq!(pins.items[0].message.content, "pinned");
+    assert!(!pins.has_more);
+
+    client
+        .pin_message(Snowflake::from("100"), Snowflake::from("5"))
+        .await
+        .expect("pin message");
+    client
+        .unpin_message(Snowflake::from("100"), Snowflake::from("5"))
+        .await
+        .expect("unpin message");
+
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
     let auth = Some("Bot token");
@@ -3067,18 +4721,39 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_request_basics(&requests[18], "POST", "/channels/100/messages", auth);
     assert_request_basics(&requests[19], "PATCH", "/channels/100/messages/903", auth);
     assert_request_basics(&requests[20], "DELETE", "/channels/100/messages/903", auth);
+    assert_request_basics(
+        &requests[21],
+        "GET",
+        "/guilds/200/messages/search?limit=5&content=hello+world+%26+tea&channel_id=100&channel_id=101&author_type=bot&mention_everyone=false&has=link&include_nsfw=true",
+        auth,
+    );
+    assert_request_basics(
+        &requests[22],
+        "GET",
+        "/channels/100/messages/pins?before=2026-05-01T00%3A00%3A00.000Z&limit=10",
+        auth,
+    );
+    assert_request_basics(&requests[23], "PUT", "/channels/100/messages/pins/5", auth);
+    assert_request_basics(
+        &requests[24],
+        "DELETE",
+        "/channels/100/messages/pins/5",
+        auth,
+    );
 }
 
 #[tokio::test]
 async fn client_guild_and_command_wrappers_hit_local_server() {
     let responses = vec![
         PlannedResponse::json(StatusCode::OK, guild_payload("200", "guild")),
+        PlannedResponse::json(StatusCode::OK, guild_payload("200", "guild-counts")),
         PlannedResponse::json(StatusCode::OK, guild_payload("200", "guild-updated")),
         PlannedResponse::json(
             StatusCode::OK,
             json!([channel_payload("201", 0, Some("rules"))]),
         ),
         PlannedResponse::json(StatusCode::OK, channel_payload("202", 0, Some("new"))),
+        PlannedResponse::json(StatusCode::OK, json!([{}])),
         PlannedResponse::json(StatusCode::OK, json!([{}])),
         PlannedResponse::json(StatusCode::OK, json!([{}])),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
@@ -3088,6 +4763,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
         PlannedResponse::json(StatusCode::OK, role_payload("300", "mod")),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(StatusCode::OK, json!({})),
+        PlannedResponse::json(StatusCode::OK, json!([role_payload("300", "mod")])),
         PlannedResponse::json(StatusCode::OK, json!([role_payload("300", "mod")])),
         PlannedResponse::json(
             StatusCode::OK,
@@ -3115,6 +4791,17 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
         .expect("get guild");
     assert_eq!(guild.name, "guild");
 
+    let guild_with_counts = client
+        .get_guild_with_query(
+            Snowflake::from("200"),
+            &GetGuildQuery {
+                with_counts: Some(true),
+            },
+        )
+        .await
+        .expect("get guild with counts");
+    assert_eq!(guild_with_counts.name, "guild-counts");
+
     let updated = client
         .update_guild(Snowflake::from("200"), &json!({ "name": "guild-updated" }))
         .await
@@ -3138,6 +4825,20 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
             .get_guild_members(Snowflake::from("200"), Some(3))
             .await
             .expect("members with limit")
+            .len(),
+        1
+    );
+    assert_eq!(
+        client
+            .get_guild_members_with_query(
+                Snowflake::from("200"),
+                &GuildMembersQuery {
+                    limit: Some(2),
+                    after: Some(Snowflake::from("201")),
+                },
+            )
+            .await
+            .expect("members after cursor")
             .len(),
         1
     );
@@ -3203,6 +4904,18 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
         .expect("list roles");
     assert_eq!(roles[0].name, "mod");
 
+    let reordered_roles = client
+        .modify_guild_role_positions_typed(
+            Snowflake::from("200"),
+            &[ModifyGuildRolePosition {
+                id: Snowflake::from("300"),
+                position: Some(Some(1)),
+            }],
+        )
+        .await
+        .expect("modify guild role positions");
+    assert_eq!(reordered_roles[0].name, "mod");
+
     let overwritten = client
         .bulk_overwrite_global_commands_typed(std::slice::from_ref(&command))
         .await
@@ -3239,38 +4952,656 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     let auth = Some("Bot guild-token");
 
     assert_request_basics(&requests[0], "GET", "/guilds/200", auth);
-    assert_request_basics(&requests[1], "PATCH", "/guilds/200", auth);
-    assert_request_basics(&requests[2], "GET", "/guilds/200/channels", auth);
-    assert_request_basics(&requests[3], "POST", "/guilds/200/channels", auth);
-    assert_request_basics(&requests[4], "GET", "/guilds/200/members?limit=3", auth);
-    assert_request_basics(&requests[5], "GET", "/guilds/200/members", auth);
-    assert_request_basics(&requests[6], "DELETE", "/guilds/200/members/201", auth);
+    assert_request_basics(&requests[1], "GET", "/guilds/200?with_counts=true", auth);
+    assert_request_basics(&requests[2], "PATCH", "/guilds/200", auth);
+    assert_request_basics(&requests[3], "GET", "/guilds/200/channels", auth);
+    assert_request_basics(&requests[4], "POST", "/guilds/200/channels", auth);
+    assert_request_basics(&requests[5], "GET", "/guilds/200/members?limit=3", auth);
     assert_request_basics(
-        &requests[7],
+        &requests[6],
+        "GET",
+        "/guilds/200/members?limit=2&after=201",
+        auth,
+    );
+    assert_request_basics(&requests[7], "GET", "/guilds/200/members", auth);
+    assert_request_basics(&requests[8], "DELETE", "/guilds/200/members/201", auth);
+    assert_request_basics(
+        &requests[9],
         "PUT",
         "/guilds/200/members/201/roles/300",
         auth,
     );
     assert_request_basics(
-        &requests[8],
+        &requests[10],
         "DELETE",
         "/guilds/200/members/201/roles/300",
         auth,
     );
-    assert_request_basics(&requests[9], "POST", "/guilds/200/roles", auth);
-    assert_request_basics(&requests[10], "PATCH", "/guilds/200/roles/300", auth);
-    assert_request_basics(&requests[11], "DELETE", "/guilds/200/roles/300", auth);
-    assert_request_basics(&requests[12], "GET", "/guilds/200/members/201", auth);
-    assert_request_basics(&requests[13], "GET", "/guilds/200/roles", auth);
-    assert_request_basics(&requests[14], "PUT", "/applications/555/commands", auth);
-    assert_request_basics(&requests[15], "POST", "/applications/555/commands", auth);
-    assert_request_basics(&requests[16], "GET", "/applications/555/commands", auth);
-    assert_request_basics(&requests[17], "GET", "/gateway/bot", auth);
+    assert_request_basics(&requests[11], "POST", "/guilds/200/roles", auth);
+    assert_request_basics(&requests[12], "PATCH", "/guilds/200/roles/300", auth);
+    assert_request_basics(&requests[13], "DELETE", "/guilds/200/roles/300", auth);
+    assert_request_basics(&requests[14], "GET", "/guilds/200/members/201", auth);
+    assert_request_basics(&requests[15], "GET", "/guilds/200/roles", auth);
+    assert_request_basics(&requests[16], "PATCH", "/guilds/200/roles", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[16].body).unwrap(),
+        json!([{ "id": "300", "position": 1 }])
+    );
+    assert_request_basics(&requests[17], "PUT", "/applications/555/commands", auth);
+    assert_request_basics(&requests[18], "POST", "/applications/555/commands", auth);
+    assert_request_basics(&requests[19], "GET", "/applications/555/commands", auth);
+    assert_request_basics(&requests[20], "GET", "/gateway/bot", auth);
     assert_request_basics(
-        &requests[18],
+        &requests[21],
         "PUT",
         "/applications/555/guilds/200/commands",
         auth,
+    );
+}
+
+#[tokio::test]
+async fn single_command_wrappers_hit_expected_paths() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, command_payload("401", "global", "read")),
+        PlannedResponse::json(StatusCode::OK, command_payload("401", "global", "edited")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, command_payload("402", "guild", "read")),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("command-token", 555, base_url);
+
+    let global = client
+        .get_global_command(Snowflake::from("401"))
+        .await
+        .expect("get global command");
+    assert_eq!(global.name, "global");
+
+    let edited = client
+        .edit_global_command(Snowflake::from("401"), &json!({ "name": "global" }))
+        .await
+        .expect("edit global command");
+    assert_eq!(edited.description, "edited");
+
+    client
+        .delete_global_command(Snowflake::from("401"))
+        .await
+        .expect("delete global command");
+
+    let guild = client
+        .get_guild_command(Snowflake::from("200"), Snowflake::from("402"))
+        .await
+        .expect("get guild command");
+    assert_eq!(guild.description, "read");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let auth = Some("Bot command-token");
+    assert_request_basics(&requests[0], "GET", "/applications/555/commands/401", auth);
+    assert_request_basics(
+        &requests[1],
+        "PATCH",
+        "/applications/555/commands/401",
+        auth,
+    );
+    assert_request_basics(
+        &requests[2],
+        "DELETE",
+        "/applications/555/commands/401",
+        auth,
+    );
+    assert_request_basics(
+        &requests[3],
+        "GET",
+        "/applications/555/guilds/200/commands/402",
+        auth,
+    );
+}
+
+#[tokio::test]
+async fn client_typed_guild_request_bodies_hit_local_server() {
+    let responses = vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, role_payload("300", "gradient")),
+        PlannedResponse::json(StatusCode::OK, role_payload("300", "muted")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, member_payload("201", "bot")),
+        PlannedResponse::json(StatusCode::OK, guild_payload("200", "renamed")),
+        PlannedResponse::json(StatusCode::OK, channel_payload("202", 0, Some("rules"))),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({ "enabled": true, "channel_id": null }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "description": null,
+                "welcome_channels": []
+            }),
+        ),
+        PlannedResponse::json(
+            StatusCode::OK,
+            json!({
+                "guild_id": "200",
+                "prompts": [{ "id": "1", "title": "Pick a topic" }],
+                "default_channel_ids": ["202"],
+                "enabled": true,
+                "mode": 0
+            }),
+        ),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("guild-token", 0, base_url);
+
+    client
+        .create_guild_ban_typed(
+            Snowflake::from("200"),
+            Snowflake::from("201"),
+            &CreateGuildBan {
+                delete_message_days: None,
+                delete_message_seconds: Some(60),
+            },
+        )
+        .await
+        .expect("create guild ban");
+
+    let created_role = client
+        .create_guild_role(
+            Snowflake::from("200"),
+            &CreateGuildRole {
+                name: Some("gradient".to_string()),
+                colors: Some(RoleColors {
+                    primary_color: 11127295,
+                    secondary_color: Some(16759788),
+                    tertiary_color: Some(16761760),
+                }),
+                icon: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create guild role");
+    assert_eq!(created_role.name, "gradient");
+
+    let updated_role = client
+        .modify_guild_role(
+            Snowflake::from("200"),
+            Snowflake::from("300"),
+            &ModifyGuildRole {
+                name: Some(Some("muted".to_string())),
+                permissions: Some(Some(PermissionsBitField(8))),
+                unicode_emoji: Some(None),
+                mentionable: Some(Some(true)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("modify guild role");
+    assert_eq!(updated_role.name, "muted");
+
+    client
+        .modify_guild_member_typed(
+            Snowflake::from("200"),
+            Snowflake::from("201"),
+            &ModifyGuildMember {
+                nick: Some(None),
+                roles: Some(Some(vec![Snowflake::from("300")])),
+                mute: Some(Some(false)),
+                channel_id: Some(None),
+                communication_disabled_until: Some(Some("2026-05-01T00:00:00Z".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("modify guild member");
+
+    let current_member = client
+        .modify_current_member(
+            Snowflake::from("200"),
+            &ModifyCurrentMember {
+                nick: Some(Some("bot".to_string())),
+                avatar: Some(None),
+                bio: Some(Some("typed".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("modify current member");
+    assert_eq!(current_member.user.unwrap().username, "bot");
+
+    let guild = client
+        .modify_guild(
+            Snowflake::from("200"),
+            &ModifyGuild {
+                name: Some("renamed".to_string()),
+                afk_channel_id: Some(None),
+                features: Some(vec!["COMMUNITY".to_string()]),
+                description: Some(None),
+                premium_progress_bar_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("modify guild");
+    assert_eq!(guild.name, "renamed");
+
+    let channel = client
+        .create_guild_channel_from_request(
+            Snowflake::from("200"),
+            &CreateGuildChannel {
+                name: "rules".to_string(),
+                kind: Some(0),
+                topic: Some(Some("read first".to_string())),
+                parent_id: Some(None),
+                default_reaction_emoji: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create guild channel");
+    assert_eq!(channel.name.as_deref(), Some("rules"));
+
+    let widget = client
+        .modify_guild_widget(
+            Snowflake::from("200"),
+            &ModifyGuildWidgetSettings {
+                enabled: Some(true),
+                channel_id: Some(None),
+            },
+        )
+        .await
+        .expect("modify guild widget");
+    assert!(widget.enabled);
+
+    let welcome_screen = client
+        .modify_guild_welcome_screen_config(
+            Snowflake::from("200"),
+            &ModifyGuildWelcomeScreen {
+                enabled: Some(Some(true)),
+                welcome_channels: Some(Some(vec![WelcomeScreenChannel {
+                    channel_id: Snowflake::from("202"),
+                    description: "Start here".to_string(),
+                    emoji_id: None,
+                    emoji_name: Some("wave".to_string()),
+                }])),
+                description: Some(None),
+            },
+        )
+        .await
+        .expect("modify guild welcome screen");
+    assert!(welcome_screen.description.is_none());
+
+    let onboarding = client
+        .modify_guild_onboarding_config(
+            Snowflake::from("200"),
+            &ModifyGuildOnboarding {
+                prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
+                default_channel_ids: Some(vec![Snowflake::from("202")]),
+                enabled: Some(true),
+                mode: Some(0),
+            },
+        )
+        .await
+        .expect("modify guild onboarding");
+    assert!(onboarding.enabled);
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let auth = Some("Bot guild-token");
+    assert_request_basics(&requests[0], "PUT", "/guilds/200/bans/201", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[0].body).unwrap(),
+        json!({ "delete_message_seconds": 60 })
+    );
+    assert_request_basics(&requests[1], "POST", "/guilds/200/roles", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[1].body).unwrap(),
+        json!({
+            "name": "gradient",
+            "colors": {
+                "primary_color": 11127295,
+                "secondary_color": 16759788,
+                "tertiary_color": 16761760
+            },
+            "icon": null
+        })
+    );
+    assert_request_basics(&requests[2], "PATCH", "/guilds/200/roles/300", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap(),
+        json!({
+            "name": "muted",
+            "permissions": "8",
+            "unicode_emoji": null,
+            "mentionable": true
+        })
+    );
+    assert_request_basics(&requests[3], "PATCH", "/guilds/200/members/201", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).unwrap(),
+        json!({
+            "nick": null,
+            "roles": ["300"],
+            "mute": false,
+            "channel_id": null,
+            "communication_disabled_until": "2026-05-01T00:00:00Z"
+        })
+    );
+    assert_request_basics(&requests[4], "PATCH", "/guilds/200/members/@me", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[4].body).unwrap(),
+        json!({
+            "nick": "bot",
+            "avatar": null,
+            "bio": "typed"
+        })
+    );
+    assert_request_basics(&requests[5], "PATCH", "/guilds/200", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[5].body).unwrap(),
+        json!({
+            "name": "renamed",
+            "afk_channel_id": null,
+            "features": ["COMMUNITY"],
+            "description": null,
+            "premium_progress_bar_enabled": true
+        })
+    );
+    assert_request_basics(&requests[6], "POST", "/guilds/200/channels", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[6].body).unwrap(),
+        json!({
+            "name": "rules",
+            "type": 0,
+            "topic": "read first",
+            "parent_id": null,
+            "default_reaction_emoji": null
+        })
+    );
+    assert_request_basics(&requests[7], "PATCH", "/guilds/200/widget", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[7].body).unwrap(),
+        json!({ "enabled": true, "channel_id": null })
+    );
+    assert_request_basics(&requests[8], "PATCH", "/guilds/200/welcome-screen", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[8].body).unwrap(),
+        json!({
+            "enabled": true,
+            "welcome_channels": [{
+                "channel_id": "202",
+                "description": "Start here",
+                "emoji_name": "wave"
+            }],
+            "description": null
+        })
+    );
+    assert_request_basics(&requests[9], "PUT", "/guilds/200/onboarding", auth);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[9].body).unwrap(),
+        json!({
+            "prompts": [{ "id": "1", "title": "Pick a topic" }],
+            "default_channel_ids": ["202"],
+            "enabled": true,
+            "mode": 0
+        })
+    );
+}
+
+#[tokio::test]
+async fn client_search_guild_members_uses_shared_query_encoding() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!([member_payload("201", "alice")])),
+        PlannedResponse::json(StatusCode::OK, json!([member_payload("202", "bob")])),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("guild-token", 0, base_url);
+
+    let typed = client
+        .search_guild_members_with_query(
+            Snowflake::from("200"),
+            &SearchGuildMembersQuery {
+                query: "alice & bob".to_string(),
+                limit: Some(5),
+            },
+        )
+        .await
+        .expect("typed search members");
+    assert_eq!(typed[0].user.as_ref().unwrap().username.as_str(), "alice");
+
+    let legacy = client
+        .search_guild_members(Snowflake::from("200"), "bob/smith", None)
+        .await
+        .expect("legacy search members");
+    assert_eq!(legacy[0].user.as_ref().unwrap().id.as_str(), "202");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let auth = Some("Bot guild-token");
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/guilds/200/members/search?query=alice+%26+bob&limit=5",
+        auth,
+    );
+    assert_request_basics(
+        &requests[1],
+        "GET",
+        "/guilds/200/members/search?query=bob%2Fsmith",
+        auth,
+    );
+}
+
+#[tokio::test]
+async fn client_guild_member_and_channel_position_wrappers_hit_local_server() {
+    let responses = vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::CREATED, member_payload("201", "joined")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("guild-token", 0, base_url);
+
+    client
+        .modify_guild_channel_positions(
+            Snowflake::from("200"),
+            &[ModifyGuildChannelPosition {
+                id: Snowflake::from("202"),
+                position: Some(Some(1)),
+                lock_permissions: Some(Some(true)),
+                parent_id: Some(None),
+            }],
+        )
+        .await
+        .expect("modify guild channel positions");
+
+    let added = client
+        .add_guild_member(
+            Snowflake::from("200"),
+            Snowflake::from("201"),
+            &AddGuildMember {
+                access_token: "oauth-access-token".to_string(),
+                nick: Some("joined".to_string()),
+                roles: Some(vec![Snowflake::from("300")]),
+                mute: Some(false),
+                deaf: Some(false),
+            },
+        )
+        .await
+        .expect("add guild member");
+    assert_eq!(
+        added
+            .and_then(|member| member.user)
+            .map(|user| user.id)
+            .expect("joined user id")
+            .as_str(),
+        "201"
+    );
+
+    let already_member = client
+        .add_guild_member(
+            Snowflake::from("200"),
+            Snowflake::from("201"),
+            &AddGuildMember {
+                access_token: "oauth-access-token".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("add existing guild member");
+    assert!(already_member.is_none());
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    let auth = Some("Bot guild-token");
+
+    assert_request_basics(&requests[0], "PATCH", "/guilds/200/channels", auth);
+    let positions: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("position body json");
+    assert_eq!(
+        positions,
+        json!([{
+            "id": "202",
+            "position": 1,
+            "lock_permissions": true,
+            "parent_id": null
+        }])
+    );
+
+    assert_request_basics(&requests[1], "PUT", "/guilds/200/members/201", auth);
+    let add_body: serde_json::Value =
+        serde_json::from_str(&requests[1].body).expect("add guild member body json");
+    assert_eq!(add_body["access_token"], "oauth-access-token");
+    assert_eq!(add_body["nick"], "joined");
+    assert_eq!(add_body["roles"], json!(["300"]));
+    assert_eq!(add_body["mute"], false);
+    assert_eq!(add_body["deaf"], false);
+
+    assert_request_basics(&requests[2], "PUT", "/guilds/200/members/201", auth);
+    let existing_body: serde_json::Value =
+        serde_json::from_str(&requests[2].body).expect("existing member body json");
+    assert_eq!(
+        existing_body,
+        json!({ "access_token": "oauth-access-token" })
+    );
+}
+
+#[tokio::test]
+async fn client_guild_role_member_counts_wrapper_hits_local_server() {
+    let responses = vec![PlannedResponse::json(
+        StatusCode::OK,
+        json!({
+            "300": 7,
+            "301": 2
+        }),
+    )];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("guild-token", 0, base_url);
+
+    let counts = client
+        .get_guild_role_member_counts(Snowflake::from("200"))
+        .await
+        .expect("get guild role member counts");
+    assert_eq!(counts.get(&Snowflake::from("300")), Some(&7));
+    assert_eq!(counts.get(&Snowflake::from("301")), Some(&2));
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_request_basics(
+        &requests[0],
+        "GET",
+        "/guilds/200/roles/member-counts",
+        Some("Bot guild-token"),
+    );
+}
+
+#[tokio::test]
+async fn client_group_dm_recipient_wrappers_hit_local_server() {
+    let responses = vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("dm-token", 0, base_url);
+
+    client
+        .add_group_dm_recipient(
+            Snowflake::from("500"),
+            Snowflake::from("42"),
+            &AddGroupDmRecipient {
+                access_token: "oauth-gdm-token".to_string(),
+                nick: "friend".to_string(),
+            },
+        )
+        .await
+        .expect("add group dm recipient");
+    client
+        .remove_group_dm_recipient(Snowflake::from("500"), Snowflake::from("42"))
+        .await
+        .expect("remove group dm recipient");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_request_basics(
+        &requests[0],
+        "PUT",
+        "/channels/500/recipients/42",
+        Some("Bot dm-token"),
+    );
+    let body: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("group dm add body");
+    assert_eq!(body["access_token"], "oauth-gdm-token");
+    assert_eq!(body["nick"], "friend");
+    assert_request_basics(
+        &requests[1],
+        "DELETE",
+        "/channels/500/recipients/42",
+        Some("Bot dm-token"),
+    );
+}
+
+#[tokio::test]
+async fn public_widget_image_retries_rate_limits_and_surfaces_api_errors() {
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "retry_after": 0.0, "global": false }),
+        ),
+        PlannedResponse::text(StatusCode::OK, "PNGDATA"),
+        PlannedResponse::json(StatusCode::BAD_REQUEST, json!({ "message": "bad widget" })),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+    let client = RestClient::new_with_base_url("image-token", 0, base_url);
+
+    let image = client
+        .get_guild_widget_image(Snowflake::from("200"), None)
+        .await
+        .expect("widget image after retry");
+    assert_eq!(image, b"PNGDATA".to_vec());
+
+    match client
+        .get_guild_widget_image(Snowflake::from("200"), Some(GuildWidgetImageStyle::Shield))
+        .await
+        .expect_err("bad widget image should return api error")
+    {
+        DiscordError::Api {
+            status, message, ..
+        } => {
+            assert_eq!(status, 400);
+            assert_eq!(message, "bad widget");
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+    assert_request_basics(&requests[0], "GET", "/guilds/200/widget.png", None);
+    assert_request_basics(&requests[1], "GET", "/guilds/200/widget.png", None);
+    assert_request_basics(
+        &requests[2],
+        "GET",
+        "/guilds/200/widget.png?style=shield",
+        None,
     );
 }
 
@@ -3286,6 +5617,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         ),
         PlannedResponse::json(StatusCode::OK, json!({ "id": "901" })),
         PlannedResponse::json(StatusCode::OK, channel_payload("500", 1, None)),
+        PlannedResponse::json(StatusCode::OK, channel_payload("501", 3, Some("group"))),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(StatusCode::OK, json!({ "id": "902" })),
@@ -3348,6 +5680,15 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         .await
         .expect("create dm channel");
     assert_eq!(dm.id.as_str(), "500");
+
+    let group_dm = client
+        .create_group_dm_channel_typed(&crate::model::CreateGroupDmChannel {
+            access_tokens: vec!["oauth-gdm-one".to_string(), "oauth-gdm-two".to_string()],
+            nicks: HashMap::from([(Snowflake::from("43"), "friend".to_string())]),
+        })
+        .await
+        .expect("create group dm channel");
+    assert_eq!(group_dm.id.as_str(), "501");
 
     client
         .create_interaction_response_typed(
@@ -3476,28 +5817,25 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_request_basics(&requests[3], "POST", "/webhooks/777/token?wait=true", None);
     assert_request_basics(&requests[4], "POST", "/webhooks/777/token?wait=true", None);
     assert_request_basics(&requests[5], "POST", "/users/@me/channels", bot_auth);
+    assert_request_basics(&requests[6], "POST", "/users/@me/channels", bot_auth);
+    assert!(requests[6].body.contains("oauth-gdm-one"));
+    assert!(requests[6].body.contains("\"43\":\"friend\""));
     assert_request_basics(
-        &requests[6],
+        &requests[7],
         "POST",
         "/interactions/777/token/callback",
         None,
     );
     assert_request_basics(
-        &requests[7],
+        &requests[8],
         "POST",
         "/interactions/778/token/callback",
         None,
     );
-    assert_request_basics(&requests[8], "POST", "/webhooks/123/token", None);
     assert_request_basics(&requests[9], "POST", "/webhooks/123/token", None);
     assert_request_basics(&requests[10], "POST", "/webhooks/123/token", None);
     assert_request_basics(&requests[11], "POST", "/webhooks/123/token", None);
-    assert_request_basics(
-        &requests[12],
-        "GET",
-        "/webhooks/123/token/messages/@original",
-        None,
-    );
+    assert_request_basics(&requests[12], "POST", "/webhooks/123/token", None);
     assert_request_basics(
         &requests[13],
         "GET",
@@ -3506,7 +5844,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_request_basics(
         &requests[14],
-        "PATCH",
+        "GET",
         "/webhooks/123/token/messages/@original",
         None,
     );
@@ -3518,7 +5856,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_request_basics(
         &requests[16],
-        "DELETE",
+        "PATCH",
         "/webhooks/123/token/messages/@original",
         None,
     );
@@ -3530,8 +5868,8 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_request_basics(
         &requests[18],
-        "PATCH",
-        "/webhooks/123/token/messages/55",
+        "DELETE",
+        "/webhooks/123/token/messages/@original",
         None,
     );
     assert_request_basics(
@@ -3542,12 +5880,18 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_request_basics(
         &requests[20],
-        "DELETE",
+        "PATCH",
         "/webhooks/123/token/messages/55",
         None,
     );
     assert_request_basics(
         &requests[21],
+        "DELETE",
+        "/webhooks/123/token/messages/55",
+        None,
+    );
+    assert_request_basics(
+        &requests[22],
         "DELETE",
         "/webhooks/123/token/messages/55",
         None,

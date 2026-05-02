@@ -330,24 +330,43 @@ pub type Intents = BitField<IntentFlags>;
 pub mod gateway_intents {
     use super::{BitField, IntentFlags};
 
+    /// Bit flag constant for `GUILDS`.
     pub const GUILDS: BitField<IntentFlags> = BitField::from_bits(1 << 0);
+    /// Bit flag constant for `GUILD_MEMBERS`.
     pub const GUILD_MEMBERS: BitField<IntentFlags> = BitField::from_bits(1 << 1);
+    /// Bit flag constant for `GUILD_MODERATION`.
     pub const GUILD_MODERATION: BitField<IntentFlags> = BitField::from_bits(1 << 2);
+    /// Bit flag constant for `GUILD_EMOJIS_AND_STICKERS`.
     pub const GUILD_EMOJIS_AND_STICKERS: BitField<IntentFlags> = BitField::from_bits(1 << 3);
+    /// Bit flag constant for `GUILD_INTEGRATIONS`.
     pub const GUILD_INTEGRATIONS: BitField<IntentFlags> = BitField::from_bits(1 << 4);
+    /// Bit flag constant for `GUILD_WEBHOOKS`.
     pub const GUILD_WEBHOOKS: BitField<IntentFlags> = BitField::from_bits(1 << 5);
+    /// Bit flag constant for `GUILD_INVITES`.
     pub const GUILD_INVITES: BitField<IntentFlags> = BitField::from_bits(1 << 6);
+    /// Bit flag constant for `GUILD_VOICE_STATES`.
     pub const GUILD_VOICE_STATES: BitField<IntentFlags> = BitField::from_bits(1 << 7);
+    /// Bit flag constant for `GUILD_PRESENCES`.
     pub const GUILD_PRESENCES: BitField<IntentFlags> = BitField::from_bits(1 << 8);
+    /// Bit flag constant for `GUILD_MESSAGES`.
     pub const GUILD_MESSAGES: BitField<IntentFlags> = BitField::from_bits(1 << 9);
+    /// Bit flag constant for `GUILD_MESSAGE_REACTIONS`.
     pub const GUILD_MESSAGE_REACTIONS: BitField<IntentFlags> = BitField::from_bits(1 << 10);
+    /// Bit flag constant for `GUILD_MESSAGE_TYPING`.
     pub const GUILD_MESSAGE_TYPING: BitField<IntentFlags> = BitField::from_bits(1 << 11);
+    /// Bit flag constant for `DIRECT_MESSAGES`.
     pub const DIRECT_MESSAGES: BitField<IntentFlags> = BitField::from_bits(1 << 12);
+    /// Bit flag constant for `DIRECT_MESSAGE_REACTIONS`.
     pub const DIRECT_MESSAGE_REACTIONS: BitField<IntentFlags> = BitField::from_bits(1 << 13);
+    /// Bit flag constant for `DIRECT_MESSAGE_TYPING`.
     pub const DIRECT_MESSAGE_TYPING: BitField<IntentFlags> = BitField::from_bits(1 << 14);
+    /// Bit flag constant for `MESSAGE_CONTENT`.
     pub const MESSAGE_CONTENT: BitField<IntentFlags> = BitField::from_bits(1 << 15);
+    /// Bit flag constant for `GUILD_SCHEDULED_EVENTS`.
     pub const GUILD_SCHEDULED_EVENTS: BitField<IntentFlags> = BitField::from_bits(1 << 16);
+    /// Bit flag constant for `AUTO_MODERATION_CONFIGURATION`.
     pub const AUTO_MODERATION_CONFIGURATION: BitField<IntentFlags> = BitField::from_bits(1 << 20);
+    /// Bit flag constant for `AUTO_MODERATION_EXECUTION`.
     pub const AUTO_MODERATION_EXECUTION: BitField<IntentFlags> = BitField::from_bits(1 << 21);
 
     /// All non-privileged intents (safe for default use).
@@ -442,47 +461,89 @@ pub type Permissions = BitField<PermissionFlags>;
 pub mod permissions {
     use super::{BitField, PermissionFlags};
 
+    /// Bit flag constant for `CREATE_INSTANT_INVITE`.
     pub const CREATE_INSTANT_INVITE: BitField<PermissionFlags> = BitField::from_bits(1 << 0);
+    /// Bit flag constant for `KICK_MEMBERS`.
     pub const KICK_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 1);
+    /// Bit flag constant for `BAN_MEMBERS`.
     pub const BAN_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 2);
+    /// Bit flag constant for `ADMINISTRATOR`.
     pub const ADMINISTRATOR: BitField<PermissionFlags> = BitField::from_bits(1 << 3);
+    /// Bit flag constant for `MANAGE_CHANNELS`.
     pub const MANAGE_CHANNELS: BitField<PermissionFlags> = BitField::from_bits(1 << 4);
+    /// Bit flag constant for `MANAGE_GUILD`.
     pub const MANAGE_GUILD: BitField<PermissionFlags> = BitField::from_bits(1 << 5);
+    /// Bit flag constant for `ADD_REACTIONS`.
     pub const ADD_REACTIONS: BitField<PermissionFlags> = BitField::from_bits(1 << 6);
+    /// Bit flag constant for `VIEW_AUDIT_LOG`.
     pub const VIEW_AUDIT_LOG: BitField<PermissionFlags> = BitField::from_bits(1 << 7);
+    /// Bit flag constant for `PRIORITY_SPEAKER`.
     pub const PRIORITY_SPEAKER: BitField<PermissionFlags> = BitField::from_bits(1 << 8);
+    /// Bit flag constant for `STREAM`.
     pub const STREAM: BitField<PermissionFlags> = BitField::from_bits(1 << 9);
+    /// Bit flag constant for `VIEW_CHANNEL`.
     pub const VIEW_CHANNEL: BitField<PermissionFlags> = BitField::from_bits(1 << 10);
+    /// Bit flag constant for `SEND_MESSAGES`.
     pub const SEND_MESSAGES: BitField<PermissionFlags> = BitField::from_bits(1 << 11);
+    /// Bit flag constant for `SEND_TTS_MESSAGES`.
     pub const SEND_TTS_MESSAGES: BitField<PermissionFlags> = BitField::from_bits(1 << 12);
+    /// Bit flag constant for `MANAGE_MESSAGES`.
     pub const MANAGE_MESSAGES: BitField<PermissionFlags> = BitField::from_bits(1 << 13);
+    /// Bit flag constant for `EMBED_LINKS`.
     pub const EMBED_LINKS: BitField<PermissionFlags> = BitField::from_bits(1 << 14);
+    /// Bit flag constant for `ATTACH_FILES`.
     pub const ATTACH_FILES: BitField<PermissionFlags> = BitField::from_bits(1 << 15);
+    /// Bit flag constant for `READ_MESSAGE_HISTORY`.
     pub const READ_MESSAGE_HISTORY: BitField<PermissionFlags> = BitField::from_bits(1 << 16);
+    /// Bit flag constant for `MENTION_EVERYONE`.
     pub const MENTION_EVERYONE: BitField<PermissionFlags> = BitField::from_bits(1 << 17);
+    /// Bit flag constant for `USE_EXTERNAL_EMOJIS`.
     pub const USE_EXTERNAL_EMOJIS: BitField<PermissionFlags> = BitField::from_bits(1 << 18);
+    /// Bit flag constant for `VIEW_GUILD_INSIGHTS`.
     pub const VIEW_GUILD_INSIGHTS: BitField<PermissionFlags> = BitField::from_bits(1 << 19);
+    /// Bit flag constant for `CONNECT`.
     pub const CONNECT: BitField<PermissionFlags> = BitField::from_bits(1 << 20);
+    /// Bit flag constant for `SPEAK`.
     pub const SPEAK: BitField<PermissionFlags> = BitField::from_bits(1 << 21);
+    /// Bit flag constant for `MUTE_MEMBERS`.
     pub const MUTE_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 22);
+    /// Bit flag constant for `DEAFEN_MEMBERS`.
     pub const DEAFEN_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 23);
+    /// Bit flag constant for `MOVE_MEMBERS`.
     pub const MOVE_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 24);
+    /// Bit flag constant for `USE_VAD`.
     pub const USE_VAD: BitField<PermissionFlags> = BitField::from_bits(1 << 25);
+    /// Bit flag constant for `CHANGE_NICKNAME`.
     pub const CHANGE_NICKNAME: BitField<PermissionFlags> = BitField::from_bits(1 << 26);
+    /// Bit flag constant for `MANAGE_NICKNAMES`.
     pub const MANAGE_NICKNAMES: BitField<PermissionFlags> = BitField::from_bits(1 << 27);
+    /// Bit flag constant for `MANAGE_ROLES`.
     pub const MANAGE_ROLES: BitField<PermissionFlags> = BitField::from_bits(1 << 28);
+    /// Bit flag constant for `MANAGE_WEBHOOKS`.
     pub const MANAGE_WEBHOOKS: BitField<PermissionFlags> = BitField::from_bits(1 << 29);
+    /// Bit flag constant for `MANAGE_EMOJIS_AND_STICKERS`.
     pub const MANAGE_EMOJIS_AND_STICKERS: BitField<PermissionFlags> = BitField::from_bits(1 << 30);
+    /// Bit flag constant for `USE_APPLICATION_COMMANDS`.
     pub const USE_APPLICATION_COMMANDS: BitField<PermissionFlags> = BitField::from_bits(1 << 31);
+    /// Bit flag constant for `REQUEST_TO_SPEAK`.
     pub const REQUEST_TO_SPEAK: BitField<PermissionFlags> = BitField::from_bits(1 << 32);
+    /// Bit flag constant for `MANAGE_EVENTS`.
     pub const MANAGE_EVENTS: BitField<PermissionFlags> = BitField::from_bits(1 << 33);
+    /// Bit flag constant for `MANAGE_THREADS`.
     pub const MANAGE_THREADS: BitField<PermissionFlags> = BitField::from_bits(1 << 34);
+    /// Bit flag constant for `CREATE_PUBLIC_THREADS`.
     pub const CREATE_PUBLIC_THREADS: BitField<PermissionFlags> = BitField::from_bits(1 << 35);
+    /// Bit flag constant for `CREATE_PRIVATE_THREADS`.
     pub const CREATE_PRIVATE_THREADS: BitField<PermissionFlags> = BitField::from_bits(1 << 36);
+    /// Bit flag constant for `USE_EXTERNAL_STICKERS`.
     pub const USE_EXTERNAL_STICKERS: BitField<PermissionFlags> = BitField::from_bits(1 << 37);
+    /// Bit flag constant for `SEND_MESSAGES_IN_THREADS`.
     pub const SEND_MESSAGES_IN_THREADS: BitField<PermissionFlags> = BitField::from_bits(1 << 38);
+    /// Bit flag constant for `USE_EMBEDDED_ACTIVITIES`.
     pub const USE_EMBEDDED_ACTIVITIES: BitField<PermissionFlags> = BitField::from_bits(1 << 39);
+    /// Bit flag constant for `MODERATE_MEMBERS`.
     pub const MODERATE_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 40);
+    /// Bit flag constant for `SEND_POLLS`.
     pub const SEND_POLLS: BitField<PermissionFlags> = BitField::from_bits(1 << 50);
 }
 
@@ -514,31 +575,52 @@ pub type MessageFlags = BitField<MessageFlagBits>;
 pub mod message_flags {
     use super::{BitField, MessageFlagBits};
 
+    /// Bit flag constant for `CROSSPOSTED`.
     pub const CROSSPOSTED: BitField<MessageFlagBits> = BitField::from_bits(1 << 0);
+    /// Bit flag constant for `IS_CROSSPOST`.
     pub const IS_CROSSPOST: BitField<MessageFlagBits> = BitField::from_bits(1 << 1);
+    /// Bit flag constant for `SUPPRESS_EMBEDS`.
     pub const SUPPRESS_EMBEDS: BitField<MessageFlagBits> = BitField::from_bits(1 << 2);
+    /// Bit flag constant for `SOURCE_MESSAGE_DELETED`.
     pub const SOURCE_MESSAGE_DELETED: BitField<MessageFlagBits> = BitField::from_bits(1 << 3);
+    /// Bit flag constant for `URGENT`.
     pub const URGENT: BitField<MessageFlagBits> = BitField::from_bits(1 << 4);
+    /// Bit flag constant for `HAS_THREAD`.
     pub const HAS_THREAD: BitField<MessageFlagBits> = BitField::from_bits(1 << 5);
+    /// Bit flag constant for `EPHEMERAL`.
     pub const EPHEMERAL: BitField<MessageFlagBits> = BitField::from_bits(1 << 6);
+    /// Bit flag constant for `LOADING`.
     pub const LOADING: BitField<MessageFlagBits> = BitField::from_bits(1 << 7);
+    /// Bit flag constant for `FAILED_TO_MENTION_SOME_ROLES_IN_THREAD`.
     pub const FAILED_TO_MENTION_SOME_ROLES_IN_THREAD: BitField<MessageFlagBits> =
         BitField::from_bits(1 << 8);
+    /// Bit flag constant for `SUPPRESS_NOTIFICATIONS`.
     pub const SUPPRESS_NOTIFICATIONS: BitField<MessageFlagBits> = BitField::from_bits(1 << 10);
+    /// Bit flag constant for `IS_VOICE_MESSAGE`.
     pub const IS_VOICE_MESSAGE: BitField<MessageFlagBits> = BitField::from_bits(1 << 12);
+    /// Bit flag constant for `IS_COMPONENTS_V2`.
     pub const IS_COMPONENTS_V2: BitField<MessageFlagBits> = BitField::from_bits(1 << 15);
 }
 
 /// Interaction callback type constants.
 pub mod interaction_callback_type {
+    /// Bit flag constant for `PONG`.
     pub const PONG: u8 = 1;
+    /// Bit flag constant for `CHANNEL_MESSAGE`.
     pub const CHANNEL_MESSAGE: u8 = 4;
+    /// Bit flag constant for `DEFERRED_CHANNEL_MESSAGE`.
     pub const DEFERRED_CHANNEL_MESSAGE: u8 = 5;
+    /// Bit flag constant for `DEFERRED_UPDATE_MESSAGE`.
     pub const DEFERRED_UPDATE_MESSAGE: u8 = 6;
+    /// Bit flag constant for `UPDATE_MESSAGE`.
     pub const UPDATE_MESSAGE: u8 = 7;
+    /// Bit flag constant for `AUTOCOMPLETE_RESULT`.
     pub const AUTOCOMPLETE_RESULT: u8 = 8;
+    /// Bit flag constant for `MODAL`.
     pub const MODAL: u8 = 9;
+    /// Bit flag constant for `PREMIUM_REQUIRED`.
     pub const PREMIUM_REQUIRED: u8 = 10;
+    /// Bit flag constant for `LAUNCH_ACTIVITY`.
     pub const LAUNCH_ACTIVITY: u8 = 12;
 }
 

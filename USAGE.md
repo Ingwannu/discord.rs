@@ -1,6 +1,6 @@
 # discord.rs Usage
 
-`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, and voice runtime foundations.
+`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, an HTTP application framework, and voice runtime foundations.
 
 Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "1.2.2"
+discordrs = "2.0.0"
 
 # Gateway runtime
-discordrs = { version = "1.2.2", features = ["gateway"] }
+discordrs = { version = "2.0.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "1.2.2", features = ["interactions"] }
+discordrs = { version = "2.0.0", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "1.2.2", default-features = false }
+discordrs = { version = "2.0.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.2.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "1.2.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "1.2.2", features = ["voice"] }
+discordrs = { version = "2.0.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.0", features = ["voice", "voice-encode"] }
 
-# Experimental DAVE/MLS receive and outbound media hooks
-discordrs = { version = "1.2.2", features = ["voice", "dave"] }
+# DAVE/MLS receive and outbound media hooks
+discordrs = { version = "2.0.0", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "1.2.2", features = ["gateway", "voice"] }
+discordrs = { version = "2.0.0", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "1.2.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.0", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -204,6 +204,273 @@ async fn oauth_flow() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
+## 4.6 Guild REST Helpers
+
+Guild channel reordering and OAuth2 guild joins have typed request bodies:
+
+```rust
+use discordrs::{
+    AddGroupDmRecipient, AddGuildMember, AuditLogQuery, BeginGuildPruneRequest, CreateGuildBan,
+    CreateGuildChannel, CreateGuildRole, CreateStageInstance, DiscordHttpClient, GetGuildQuery,
+    GuildBansQuery, GuildWidgetImageStyle, ModifyCurrentMember, ModifyGuild,
+    ModifyGuildChannelPosition, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
+    ModifyGuildRolePosition, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
+    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, Snowflake, WelcomeScreenChannel,
+};
+
+async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    let guild_id = Snowflake::from("123");
+    let channel_id = Snowflake::from("456");
+    let user_id = Snowflake::from("789");
+
+    let guild = http
+        .get_guild_with_query(
+            guild_id.clone(),
+            &GetGuildQuery {
+                with_counts: Some(true),
+            },
+        )
+        .await?;
+    println!("guild: {}", guild.name);
+
+    let bans = http
+        .get_guild_bans_with_query(
+            guild_id.clone(),
+            &GuildBansQuery {
+                limit: Some(100),
+                after: Some(Snowflake::from("100")),
+                ..Default::default()
+            },
+        )
+        .await?;
+    println!("bans: {}", bans.len());
+
+    let matching_members = http
+        .search_guild_members_with_query(
+            guild_id.clone(),
+            &SearchGuildMembersQuery {
+                query: "alice & bob".to_string(),
+                limit: Some(5),
+            },
+        )
+        .await?;
+    println!("matching members: {}", matching_members.len());
+
+    http.modify_guild(
+        guild_id.clone(),
+        &ModifyGuild {
+            name: Some("renamed".to_string()),
+            description: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    http.create_guild_channel_from_request(
+        guild_id.clone(),
+        &CreateGuildChannel {
+            name: "rules".to_string(),
+            kind: Some(0),
+            parent_id: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    http.modify_guild_channel_positions(
+        guild_id.clone(),
+        &[ModifyGuildChannelPosition {
+            id: channel_id,
+            position: Some(Some(2)),
+            lock_permissions: None,
+            parent_id: None,
+        }],
+    )
+    .await?;
+
+    http.modify_guild_role_positions_typed(
+        guild_id.clone(),
+        &[ModifyGuildRolePosition {
+            id: Snowflake::from("321"),
+            position: Some(Some(1)),
+        }],
+    )
+    .await?;
+
+    http.create_guild_ban_typed(
+        guild_id.clone(),
+        user_id.clone(),
+        &CreateGuildBan {
+            delete_message_seconds: Some(60),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let role = http
+        .create_guild_role(
+            guild_id.clone(),
+            &CreateGuildRole {
+                name: Some("Gradient".to_string()),
+                colors: Some(RoleColors {
+                    primary_color: 11127295,
+                    secondary_color: Some(16759788),
+                    tertiary_color: Some(16761760),
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    http.modify_guild_role(
+        guild_id.clone(),
+        role.id.clone(),
+        &ModifyGuildRole {
+            mentionable: Some(Some(true)),
+            unicode_emoji: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    http.modify_guild_member_typed(
+        guild_id.clone(),
+        user_id.clone(),
+        &ModifyGuildMember {
+            nick: Some(None),
+            channel_id: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let current_member = http
+        .modify_current_member(
+            guild_id.clone(),
+            &ModifyCurrentMember {
+                nick: Some(Some("bot".to_string())),
+                avatar: Some(None),
+                ..Default::default()
+            },
+        )
+        .await?;
+    println!("current member: {:?}", current_member.user);
+
+    http.modify_guild_widget(
+        guild_id.clone(),
+        &ModifyGuildWidgetSettings {
+            enabled: Some(true),
+            channel_id: Some(None),
+        },
+    )
+    .await?;
+
+    http.modify_guild_welcome_screen_config(
+        guild_id.clone(),
+        &ModifyGuildWelcomeScreen {
+            enabled: Some(Some(true)),
+            welcome_channels: Some(Some(vec![WelcomeScreenChannel {
+                channel_id: Snowflake::from("456"),
+                description: "Start here".to_string(),
+                emoji_id: None,
+                emoji_name: Some("wave".to_string()),
+            }])),
+            description: Some(None),
+        },
+    )
+    .await?;
+
+    http.modify_guild_onboarding_config(
+        guild_id.clone(),
+        &ModifyGuildOnboarding {
+            default_channel_ids: Some(vec![Snowflake::from("456")]),
+            enabled: Some(true),
+            mode: Some(0),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let prune = http
+        .begin_guild_prune_with_request(
+            guild_id.clone(),
+            &BeginGuildPruneRequest {
+                days: Some(7),
+                compute_prune_count: Some(false),
+                include_roles: Some(vec![Snowflake::from("321")]),
+                ..Default::default()
+            },
+        )
+        .await?;
+    println!("pruned: {:?}", prune.pruned);
+
+    let stage = http
+        .create_stage_instance_from_request(&CreateStageInstance {
+            channel_id: channel_id.clone(),
+            topic: "Town hall".to_string(),
+            privacy_level: Some(2),
+            send_start_notification: Some(true),
+            guild_scheduled_event_id: None,
+        })
+        .await?;
+
+    http.modify_stage_instance_from_request(
+        stage.channel_id,
+        &ModifyStageInstance {
+            privacy_level: Some(2),
+        },
+    )
+    .await?;
+
+    let member = http
+        .add_guild_member(
+            guild_id.clone(),
+            user_id.clone(),
+            &AddGuildMember {
+                access_token: "oauth2-guilds.join-token".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    if member.is_none() {
+        println!("User was already in the guild");
+    }
+
+    let role_counts = http.get_guild_role_member_counts(guild_id.clone()).await?;
+    println!("{role_counts:?}");
+
+    let audit_log = http
+        .get_guild_audit_log_typed(
+            guild_id.clone(),
+            &AuditLogQuery {
+                after: Some(Snowflake::from("100")),
+                limit: Some(25),
+                ..Default::default()
+            },
+        )
+        .await?;
+    println!("audit entries: {}", audit_log.audit_log_entries.len());
+
+    let widget_png = http
+        .get_guild_widget_image(guild_id, Some(GuildWidgetImageStyle::Banner2))
+        .await?;
+    println!("widget bytes: {}", widget_png.len());
+
+    http.add_group_dm_recipient(
+        Snowflake::from("555"),
+        user_id,
+        &AddGroupDmRecipient {
+            access_token: "oauth2-gdm.join-token".to_string(),
+            nick: "friend".to_string(),
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+```
+
 ## 5. Send Messages with Typed Helpers
 
 If you want a typed message body instead of hand-written JSON, use `MessageBuilder` and `send_message`.
@@ -257,6 +524,196 @@ async fn send_support_panel(
     );
 
     send_container_message(http, channel_id, container).await?;
+    Ok(())
+}
+```
+
+Auto-populated select menus preserve Discord's current `default_values`, component `id`, and modal `required` fields:
+
+```rust
+use discordrs::{ActionRowBuilder, SelectDefaultValue, SelectMenuBuilder};
+
+let row = ActionRowBuilder::new().add_select_menu(
+    SelectMenuBuilder::mentionable("notify_targets")
+        .id(12)
+        .default_value(SelectDefaultValue::role("701"))
+        .min_values(0)
+        .max_values(2)
+        .required(false),
+);
+```
+
+## 5.4 Sticker Resource Helpers
+
+Sticker packs and guild sticker writes are typed:
+
+```rust
+use discordrs::{CreateGuildSticker, DiscordHttpClient, FileAttachment, ModifyGuildSticker};
+
+async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    let pack = http.get_sticker_pack(123456789012345678).await?;
+    println!("pack: {}", pack.name);
+
+    let sticker = http
+        .create_guild_sticker_from_request(
+            123456789012345678,
+            &CreateGuildSticker {
+                name: "wave".to_string(),
+                description: "Waves hello".to_string(),
+                tags: "wave,hello".to_string(),
+            },
+            FileAttachment::new("wave.png", Vec::<u8>::new()),
+        )
+        .await?;
+
+    http.modify_guild_sticker_from_request(
+        123456789012345678,
+        sticker.id,
+        &ModifyGuildSticker {
+            name: Some("wave2".to_string()),
+            description: Some(None),
+            tags: Some("wave".to_string()),
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+```
+
+## 5.5 Application Resource Helpers
+
+Current application reads and edits are typed through `Application`, `ModifyCurrentApplication`, `ApplicationInstallParams`, and `ApplicationIntegrationTypeConfig`. The existing generic `edit_current_application(...)` helper is still available for newly released Discord fields.
+
+```rust
+use discordrs::{ApplicationInstallParams, DiscordHttpClient, ModifyCurrentApplication, PermissionsBitField};
+
+async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    let app = http.get_current_application().await?;
+    println!("editing {}", app.name);
+
+    http.edit_current_application_from_request(&ModifyCurrentApplication {
+        description: Some("Support utilities".to_string()),
+        install_params: Some(ApplicationInstallParams {
+            scopes: vec!["bot".to_string(), "applications.commands".to_string()],
+            permissions: PermissionsBitField(2048),
+        }),
+        tags: Some(vec!["utility".to_string()]),
+        ..ModifyCurrentApplication::default()
+    })
+    .await?;
+
+    Ok(())
+}
+```
+
+## 5.6 Search Messages and List Current Pins
+
+Discord's Message Resource search and current-pin routes are exposed as typed `RestClient` methods:
+
+```rust
+use discordrs::{ChannelPinsQuery, DiscordHttpClient, SearchGuildMessagesQuery};
+
+async fn inspect_messages(
+    http: &DiscordHttpClient,
+    guild_id: u64,
+    channel_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    let search = http
+        .search_guild_messages(
+            guild_id,
+            &SearchGuildMessagesQuery {
+                content: Some("release notes".to_string()),
+                limit: Some(25),
+                include_nsfw: Some(false),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    println!("matches: {}", search.total_results);
+
+    let pins = http
+        .get_channel_pins(
+            channel_id,
+            &ChannelPinsQuery {
+                limit: Some(50),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    println!("current pins: {}", pins.items.len());
+
+    http.pin_message(channel_id, 123456789012345678).await?;
+    http.unpin_message(channel_id, 123456789012345678).await?;
+    Ok(())
+}
+```
+
+Incoming `Message` values also keep current Message Resource fields such as forwarded `MessageSnapshot` data, `MessageCall` metadata, `SharedClientTheme`, role subscription data, mention-role IDs, and `referenced_message`.
+
+Channel Resource gaps are typed too:
+
+```rust
+use discordrs::{
+    CreateChannelInvite, EditChannelPermission, FileAttachment, PermissionsBitField,
+    SetVoiceChannelStatus,
+};
+
+async fn channel_admin(
+    http: &discordrs::DiscordHttpClient,
+    channel_id: u64,
+    role_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    let invites = http.get_channel_invites(channel_id).await?;
+    println!("active invites: {}", invites.len());
+
+    http.create_channel_invite_typed(
+        channel_id,
+        &CreateChannelInvite {
+            max_age: Some(600),
+            max_uses: Some(1),
+            unique: Some(true),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    http.create_channel_invite_with_target_users_file(
+        channel_id,
+        &CreateChannelInvite {
+            role_ids: Some(vec![role_id.into()]),
+            ..Default::default()
+        },
+        &FileAttachment::new("target_users.csv", b"user_id\n777\n"),
+    )
+    .await?;
+
+    let target_users_csv = http.get_invite_target_users_csv("abc123").await?;
+    println!("target user csv bytes: {}", target_users_csv.len());
+    let job = http.get_invite_target_users_job_status("abc123").await?;
+    println!("target user job status: {}", job.status);
+
+    http.set_voice_channel_status(
+        channel_id,
+        &SetVoiceChannelStatus {
+            status: Some("Office hours".to_string()),
+        },
+    )
+    .await?;
+
+    http.edit_channel_permissions_typed(
+        channel_id,
+        role_id,
+        &EditChannelPermission {
+            kind: 0,
+            allow: Some(PermissionsBitField(1024)),
+            deny: None,
+        },
+    )
+    .await?;
+
     Ok(())
 }
 ```
@@ -341,6 +798,31 @@ Use `try_interactions_endpoint(...)` instead when you intentionally want the raw
 
 Typed slash/autocomplete input now keeps real user-entered option data. `interaction.data.options` uses `CommandInteractionOption`, which preserves nested options plus `value` and `focused` for autocomplete flows.
 
+## 7.5 Route Interactions with `AppFramework`
+
+When the `interactions` feature is enabled, `AppFramework` provides a small high-level routing layer on top of `TypedInteractionHandler`. It routes slash/user/message commands by command name, components by `custom_id`, and modal submissions by `custom_id`.
+
+```rust
+use discordrs::{AppFramework, InteractionResponse, RouteKey};
+
+let app = AppFramework::builder()
+    .command("hello", |_ctx| async move {
+        InteractionResponse::ChannelMessage(serde_json::json!({
+            "content": "Hello from AppFramework"
+        }))
+    })
+    .component("ticket:close", |_ctx| async move {
+        InteractionResponse::ChannelMessage(serde_json::json!({
+            "content": "Ticket closed",
+            "flags": 64
+        }))
+    })
+    .cooldown(RouteKey::Command("hello".to_string()), std::time::Duration::from_secs(5))
+    .build();
+```
+
+Use this for ordinary command/component/modal dispatch. Keep a custom `TypedInteractionHandler` when a request needs unusual routing, streaming state, or raw payload handling.
+
 ## 8. Use Cache-Aware Managers
 
 On the gateway runtime, `Context` exposes manager shortcuts in all builds:
@@ -383,6 +865,134 @@ Use `CacheConfig::unbounded()` only when retaining all cached gateway data is an
 ## 8.5 REST Safety Notes
 
 `RestClient` validates token-like path segments before authenticated routes are built. This includes invite codes passed to `get_invite`, `get_invite_with_options`, and `delete_invite`, so user-provided invite text cannot inject `/`, `\`, `?`, `#`, or control characters into bot-authorized REST paths.
+
+Application command permission edits are an OAuth2 Bearer-token flow in Discord, not a bot-token flow. Use `get_guild_application_command_permissions(...)` and `get_application_command_permissions(...)` for bot-authenticated reads, then use `edit_application_command_permissions(bearer_token, ...)` with an access token that has Discord's `applications.commands.permissions.update` scope.
+
+```rust
+use discordrs::{ApplicationCommandPermission, EditApplicationCommandPermissions};
+
+let edit = EditApplicationCommandPermissions::new([
+    ApplicationCommandPermission::role("123456789012345678", true),
+]);
+
+let permissions = rest
+    .edit_application_command_permissions(oauth_access_token, guild_id, command_id, &edit)
+    .await?;
+```
+
+Current-user connection and linked-role endpoints are also OAuth2 Bearer-token flows:
+
+```rust
+let connections = rest
+    .get_current_user_connections(oauth_access_token)
+    .await?;
+
+let role_connection = rest
+    .get_current_user_application_role_connection(oauth_access_token)
+    .await?;
+```
+
+Webhook Resource management supports typed request bodies and query-aware execution:
+
+```rust
+use discordrs::{CreateWebhook, ModifyWebhook, WebhookExecuteQuery, WebhookMessageQuery};
+
+let webhook = rest
+    .create_webhook_from_request(
+        channel_id,
+        &CreateWebhook {
+            name: "deployments".to_string(),
+            avatar: None,
+        },
+    )
+    .await?;
+
+let webhook_id = webhook.id.expect("webhook id");
+let webhook_token = webhook.token.expect("webhook token");
+
+rest.modify_webhook_from_request(
+    webhook_id.clone(),
+    &ModifyWebhook {
+        name: Some("ops".to_string()),
+        avatar: Some(None),
+        channel_id: None,
+    },
+)
+.await?;
+
+rest.execute_webhook_with_query(
+    webhook_id.clone(),
+    &webhook_token,
+    &WebhookExecuteQuery {
+        wait: Some(false),
+        thread_id: Some(thread_id),
+        with_components: Some(true),
+    },
+    &serde_json::json!({ "content": "deployment finished" }),
+)
+.await?;
+
+let message_query = WebhookMessageQuery {
+    thread_id: Some(thread_id),
+    with_components: Some(true),
+};
+
+let message = rest
+    .get_webhook_message_with_query(webhook_id.clone(), &webhook_token, message_id, &message_query)
+    .await?;
+
+rest.edit_webhook_message_with_query(
+    webhook_id,
+    &webhook_token,
+    message.id.as_str(),
+    &message_query,
+    &discordrs::CreateMessage {
+        content: Some("deployment edited".to_string()),
+        ..Default::default()
+    },
+)
+.await?;
+```
+
+Webhook Events use the same Ed25519 request-signature rules as interactions. After verifying the incoming HTTP body, parse the JSON body with `parse_webhook_event_payload(...)`:
+
+```rust
+use discordrs::{parse_webhook_event_payload, WebhookEvent, WebhookPayloadType};
+
+let payload = parse_webhook_event_payload(body_json)?;
+
+if payload.kind == WebhookPayloadType::PING {
+    // Return HTTP 204 with an empty body.
+}
+
+if let Some(event) = payload.event {
+    match event.event {
+        WebhookEvent::ApplicationAuthorized(data) => {
+            println!("{} authorized scopes {:?}", data.user.username, data.scopes);
+        }
+        WebhookEvent::EntitlementCreate(entitlement) => {
+            println!("new entitlement {}", entitlement.id);
+        }
+        _ => {}
+    }
+}
+```
+
+Guild incident actions use the normal bot authorization path and return typed `GuildIncidentsData`:
+
+```rust
+use discordrs::ModifyGuildIncidentActions;
+
+let incidents = rest
+    .modify_guild_incident_actions(
+        guild_id,
+        &ModifyGuildIncidentActions {
+            invites_disabled_until: Some("2026-05-01T12:00:00.000000+00:00".to_string()),
+            dms_disabled_until: None,
+        },
+    )
+    .await?;
+```
 
 Generated query strings are percent-encoded. Request body serialization failures return `DiscordError::Json` instead of panicking, and repeated HTTP 429 responses are retried up to a bounded limit before surfacing `DiscordError::RateLimit`.
 
@@ -525,6 +1135,43 @@ async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
+Voice-state REST routes are also typed:
+
+```rust
+use discordrs::{DiscordHttpClient, ModifyCurrentUserVoiceState, ModifyUserVoiceState, Snowflake};
+
+async fn manage_voice_state(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    let guild_id = Snowflake::from("123");
+    let channel_id = Snowflake::from("456");
+    let user_id = Snowflake::from("789");
+
+    let state = http.get_current_user_voice_state(guild_id.clone()).await?;
+    println!("current voice session: {:?}", state.session_id);
+
+    http.modify_current_user_voice_state_from_request(
+        guild_id.clone(),
+        &ModifyCurrentUserVoiceState {
+            channel_id: Some(channel_id.clone()),
+            suppress: Some(false),
+            request_to_speak_timestamp: Some(None),
+        },
+    )
+    .await?;
+
+    http.modify_user_voice_state_from_request(
+        guild_id,
+        user_id,
+        &ModifyUserVoiceState {
+            channel_id: Some(channel_id),
+            suppress: Some(true),
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+```
+
 The current runtime covers:
 
 - voice websocket hello and identify
@@ -549,6 +1196,14 @@ The default `voice` feature can send already-encoded Opus frames, returns transp
 `recv_voice_packet(...)` still rejects active DAVE sessions unless the caller uses
 `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a DAVE decryptor.
 The `dave` feature exposes a `davey`/OpenMLS-backed session wrapper and outbound media insertion point, but live Discord DAVE interoperability still depends on validating the full gateway MLS transition lifecycle for the target voice session.
+Use `examples/live_dave_capture_bot.rs` to join a prepared voice channel and print the `DISCORDRS_LIVE_VOICE_*` environment block needed by `tests/live_voice_dave.rs`:
+
+```powershell
+$env:DISCORD_TOKEN="bot-token"
+$env:DISCORDRS_CAPTURE_GUILD_ID="123456789012345678"
+$env:DISCORDRS_CAPTURE_CHANNEL_ID="345678901234567890"
+cargo run --all-features --example live_dave_capture_bot
+```
 
 ## 12. Modal and Components V2 Helpers
 
@@ -596,9 +1251,28 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `RestClient::new(token, application_id)`
 - `get_poll_answer_voters(...)`
 - `end_poll(...)`
+- `get_skus(...)`
 - `get_sku_subscriptions(...)`
 - `get_sku_subscription(...)`
+- `get_entitlements(...)`
+- `get_entitlement(...)`
+- `get_application_activity_instance(...)`
 - `get_guild_integrations(...)`
+- `get_guild_audit_log_typed(...)`
+- `get_guild_with_query(...)`
+- `get_guild_bans_with_query(...)`
+- `get_guild_members_with_query(...)`
+- `search_guild_members_with_query(...)`
+- `get_current_user_guilds_typed_with_query(...)`
+- `get_current_user_connections(...)`
+- `get_current_user_application_role_connection(...)`
+- `update_current_user_application_role_connection(...)`
+- `create_group_dm_channel_typed(...)`
+- `parse_webhook_event_payload(...)`
+- `modify_guild_incident_actions(...)`
+- `create_lobby(...)`, `get_lobby(...)`, `modify_lobby(...)`, `delete_lobby(...)`
+- `add_lobby_member(...)`, `bulk_update_lobby_members(...)`, `remove_lobby_member(...)`, `leave_lobby(...)`
+- `link_lobby_channel(...)`, `update_lobby_message_moderation_metadata(...)`
 - `list_thread_members(...)`
 - `list_public_archived_threads(...)`
 - `list_private_archived_threads(...)`
@@ -616,6 +1290,7 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `parse_raw_interaction(...)`
 - `try_interactions_endpoint(...)`
 - `try_typed_interactions_endpoint(...)`
+- `AppFramework`, `AppFrameworkBuilder`, `RouteKey`
 - `CacheHandle`, `GuildManager`, `ChannelManager`, `MemberManager`, `MessageManager`, `RoleManager`
 - `ShardMessenger`
 - `ShardSupervisor`
@@ -633,13 +1308,16 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `RestClient` is the preferred REST-facing name. `DiscordHttpClient` remains available.
 - Prefer the typed `RestClient` methods for new code.
 - Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and webhook/callback path segments are validated before requests are built.
+- `edit_application_command_permissions(...)` intentionally sends `Authorization: Bearer ...` because Discord requires OAuth2 authorization for that write route.
+- Current-user connections and application role connection user endpoints also intentionally send `Authorization: Bearer ...` because Discord requires user OAuth2 scopes.
 - `Context::new(...)` exists for tests and helper code that need a standalone context outside the live gateway runtime.
 - Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
 - Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - `spawn_shards(...)` is the right choice when you want status inspection, manual shutdown, or supervisor-driven shard control.
 - `start_shards(...)` is the right choice when you only want the runtime to own the shard lifecycle and block until it exits.
-- `voice` currently provides handshake, state plumbing, raw UDP receive, transport-decrypted Opus frames, Opus send, and PCM decode. `voice-encode` adds PCM-to-Opus playback. Full DAVE/MLS operation is exposed through an experimental feature because it requires live gateway MLS transition handling.
-- Poll vote, subscription, integration, entitlement, soundboard, invite, thread, and forum data now have typed models/events or REST wrappers where Discord documents them.
+- `voice` currently provides handshake, state plumbing, raw UDP receive, transport-decrypted Opus frames, Opus send, and PCM decode. `voice-encode` adds PCM-to-Opus playback. DAVE/MLS operation is exposed through the `dave` feature with live Discord MLS transition validation recorded for 2.0.0.
+- Webhook Resource routes, Webhook Events, lobby, guild incident actions, guild channel-position/member join/role count/widget routes, Group DM recipients, channel invite/permission routes, voice-channel status updates, guild message search, current channel pins, current-application edits, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, poll vote, subscription, integration, entitlement, soundboard, invite, thread, forum, OAuth2 user connection, application command permission, and channel-info data now have typed models/events or REST wrappers where Discord documents them.
+- A 2026-05-02 audit mapped all 223 official Discord REST `<Route>` entries from `discord-api-docs` to route wrappers or tokenized helper paths. This is a REST route-shape claim; object-field drift and live-only behavior still require targeted tests when Discord changes the upstream docs.
 
 ## 15. Testing And Coverage
 

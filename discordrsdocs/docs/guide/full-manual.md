@@ -11,9 +11,9 @@ discord.rs is a standalone Rust framework for building Discord bots. It provides
 - **Builders** for Components V2 payloads (buttons, selects, media galleries, modals), enabling fluent construction of rich messages.
 - **Parsers** for routing and extracting data from raw interaction payloads and V2 modal submissions.
 - **Helpers** and **Interaction Endpoint** support for easily replying to slash commands, component interactions, and modal submissions.
-- **Voice helpers** for voice gateway/UDP setup, Opus-frame RTP send, RTP-size transport decrypt, Opus PCM decode, and experimental DAVE hooks.
+- **Voice helpers** for voice gateway/UDP setup, Opus-frame RTP send, RTP-size transport decrypt, Opus PCM decode, and live-validated DAVE hooks.
 - **OAuth2 backend helpers** for authorization URLs, authorization-code exchange, and refresh-token exchange.
-- **Typed Discord coverage** for polls, subscriptions, entitlements, soundboard, thread details, forum fields, invites, and integrations.
+- **Typed Discord coverage** for all official REST route shapes audited on 2026-05-02, plus Webhook Resource routes, Webhook Events, lobbies, Gateway rate-limit, reaction metadata, presence metadata events, polls, subscriptions, entitlements, soundboard, threads, forum fields, invites including target-user CSV flows, integrations, OAuth2 metadata, current and legacy pin routes, and Social SDK lobby helpers.
 
 This modular design separates concerns into `builders/`, `gateway/`, `parsers/`, and `http/` directories, with core types and utilities at the root.
 

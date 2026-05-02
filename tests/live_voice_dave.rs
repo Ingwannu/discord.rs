@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use discordrs::{connect_voice_runtime, VoiceDaveySession, VoiceRuntimeConfig, VoiceRuntimeState};
 use tokio::sync::watch;
-use tokio::time::timeout;
+use tokio::time::{timeout, Instant};
 
 struct LiveDaveConfig {
     server_id: String,
@@ -18,14 +18,39 @@ struct LiveDaveConfig {
 }
 
 impl LiveDaveConfig {
-    fn from_env() -> Option<Self> {
-        Some(Self {
-            server_id: env_value("DISCORDRS_LIVE_VOICE_SERVER_ID")?,
-            user_id: env_value("DISCORDRS_LIVE_VOICE_USER_ID")?,
-            session_id: env_value("DISCORDRS_LIVE_VOICE_SESSION_ID")?,
-            token: env_value("DISCORDRS_LIVE_VOICE_TOKEN")?,
-            endpoint: env_value("DISCORDRS_LIVE_VOICE_ENDPOINT")?,
-            channel_id: env_value("DISCORDRS_LIVE_VOICE_CHANNEL_ID")?.parse().ok()?,
+    fn from_env() -> Result<Self, String> {
+        let required = [
+            "DISCORDRS_LIVE_VOICE_SERVER_ID",
+            "DISCORDRS_LIVE_VOICE_USER_ID",
+            "DISCORDRS_LIVE_VOICE_SESSION_ID",
+            "DISCORDRS_LIVE_VOICE_TOKEN",
+            "DISCORDRS_LIVE_VOICE_ENDPOINT",
+            "DISCORDRS_LIVE_VOICE_CHANNEL_ID",
+        ];
+        let missing = required
+            .iter()
+            .copied()
+            .filter(|name| env_value(name).is_none())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(format!(
+                "set required live DAVE env vars before running this ignored test: {}",
+                missing.join(", ")
+            ));
+        }
+
+        let channel_id = env_value("DISCORDRS_LIVE_VOICE_CHANNEL_ID")
+            .expect("validated above")
+            .parse()
+            .map_err(|error| format!("DISCORDRS_LIVE_VOICE_CHANNEL_ID must be numeric: {error}"))?;
+
+        Ok(Self {
+            server_id: env_value("DISCORDRS_LIVE_VOICE_SERVER_ID").expect("validated above"),
+            user_id: env_value("DISCORDRS_LIVE_VOICE_USER_ID").expect("validated above"),
+            session_id: env_value("DISCORDRS_LIVE_VOICE_SESSION_ID").expect("validated above"),
+            token: env_value("DISCORDRS_LIVE_VOICE_TOKEN").expect("validated above"),
+            endpoint: env_value("DISCORDRS_LIVE_VOICE_ENDPOINT").expect("validated above"),
+            channel_id,
         })
     }
 }
@@ -36,39 +61,50 @@ fn env_value(name: &str) -> Option<String> {
 
 async fn wait_for_state<F>(
     state_rx: &mut watch::Receiver<VoiceRuntimeState>,
+    stage: &str,
     mut predicate: F,
 ) -> VoiceRuntimeState
 where
     F: FnMut(&VoiceRuntimeState) -> bool,
 {
-    timeout(Duration::from_secs(30), async {
-        loop {
-            let state = state_rx.borrow().clone();
-            if predicate(&state) {
-                return state;
-            }
-            state_rx
-                .changed()
-                .await
-                .expect("voice state channel closed");
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let state = state_rx.borrow().clone();
+        if predicate(&state) {
+            return state;
         }
-    })
-    .await
-    .expect("timed out waiting for live voice DAVE state")
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            panic!(
+                "timed out waiting for live voice DAVE state during {stage}; last state: {:?}",
+                state
+            );
+        }
+
+        match timeout(remaining, state_rx.changed()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => panic!("voice state channel closed"),
+            Err(_) => {
+                let state = state_rx.borrow().clone();
+                if predicate(&state) {
+                    return state;
+                }
+                panic!(
+                    "timed out waiting for live voice DAVE state during {stage}; last state: {:?}",
+                    state
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]
 #[ignore = "requires live Discord voice session env vars; see docs/api/voice.md"]
 async fn live_voice_gateway_dave_mls_transition_smoke() {
-    let Some(config) = LiveDaveConfig::from_env() else {
-        eprintln!(
-            "skipping live DAVE test: set DISCORDRS_LIVE_VOICE_SERVER_ID, \
-             DISCORDRS_LIVE_VOICE_USER_ID, DISCORDRS_LIVE_VOICE_SESSION_ID, \
-             DISCORDRS_LIVE_VOICE_TOKEN, DISCORDRS_LIVE_VOICE_ENDPOINT, and \
-             DISCORDRS_LIVE_VOICE_CHANNEL_ID"
-        );
-        return;
-    };
+    let config = LiveDaveConfig::from_env().expect(
+        "live DAVE validation was explicitly requested with --ignored but is not configured",
+    );
 
     let user_id = config
         .user_id
@@ -95,7 +131,7 @@ async fn live_voice_gateway_dave_mls_transition_smoke() {
     .expect("failed to connect live voice runtime");
 
     let mut state_rx = handle.subscribe();
-    let state = wait_for_state(&mut state_rx, |state| {
+    let state = wait_for_state(&mut state_rx, "initial DAVE negotiation", |state| {
         state.dave.protocol_version.is_some() && state.dave.external_sender.is_some()
     })
     .await;
@@ -114,11 +150,15 @@ async fn live_voice_gateway_dave_mls_transition_smoke() {
         .send_dave_mls_key_package(key_package)
         .expect("failed to send DAVE key package");
 
-    let state = wait_for_state(&mut state_rx, |state| {
-        !state.dave.proposals.is_empty()
-            || state.dave.pending_commit.is_some()
-            || state.dave.pending_welcome.is_some()
-    })
+    let state = wait_for_state(
+        &mut state_rx,
+        "post-key-package MLS proposal or welcome",
+        |state| {
+            !state.dave.proposals.is_empty()
+                || state.dave.pending_commit.is_some()
+                || state.dave.pending_welcome.is_some()
+        },
+    )
     .await;
 
     if let Some(proposals) = state.dave.proposals.last() {
@@ -140,9 +180,11 @@ async fn live_voice_gateway_dave_mls_transition_smoke() {
         }
     }
 
-    let state = wait_for_state(&mut state_rx, |state| {
-        state.dave.pending_commit.is_some() || state.dave.pending_welcome.is_some()
-    })
+    let state = wait_for_state(
+        &mut state_rx,
+        "commit or welcome transition payload",
+        |state| state.dave.pending_commit.is_some() || state.dave.pending_welcome.is_some(),
+    )
     .await;
     let transition_id = state
         .dave

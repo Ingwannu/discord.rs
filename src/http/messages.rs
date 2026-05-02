@@ -2,11 +2,16 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{CreateMessage, Message, Snowflake, User};
+use crate::model::{
+    ChannelPins, ChannelPinsQuery, CreateMessage, Message, SearchGuildMessagesQuery,
+    SearchGuildMessagesResponse, Snowflake, User,
+};
 
+use super::paths::query_string;
 use super::{FileAttachment, RestClient};
 
 impl RestClient {
+    /// Runs the `create_message` operation.
     pub async fn create_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -20,6 +25,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `create_message_with_files` operation.
     pub async fn create_message_with_files(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -35,6 +41,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `update_message` operation.
     pub async fn update_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -53,6 +60,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `update_message_with_files` operation.
     pub async fn update_message_with_files(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -73,6 +81,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `get_message` operation.
     pub async fn get_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -90,6 +99,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `get_channel_messages` operation.
     pub async fn get_channel_messages(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -103,6 +113,22 @@ impl RestClient {
             .await
     }
 
+    /// Runs the `search_guild_messages` operation.
+    pub async fn search_guild_messages(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        query: &SearchGuildMessagesQuery,
+    ) -> Result<SearchGuildMessagesResponse, DiscordError> {
+        let query = search_guild_messages_query(query);
+        self.request_typed(
+            Method::GET,
+            &format!("/guilds/{}/messages/search{query}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    /// Runs the `bulk_delete_messages` operation.
     pub async fn bulk_delete_messages(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -117,6 +143,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `add_reaction` operation.
     pub async fn add_reaction(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -133,6 +160,7 @@ impl RestClient {
             .await
     }
 
+    /// Runs the `remove_reaction` operation.
     pub async fn remove_reaction(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -167,6 +195,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `delete_message` operation.
     pub async fn delete_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -184,6 +213,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `crosspost_message` operation.
     pub async fn crosspost_message(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -201,6 +231,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `get_channel_messages_paginated` operation.
     pub async fn get_channel_messages_paginated(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -235,6 +266,7 @@ impl RestClient {
             .await
     }
 
+    /// Runs the `get_reactions` operation.
     pub async fn get_reactions(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -266,6 +298,22 @@ impl RestClient {
             .await
     }
 
+    /// Runs the `get_channel_pins` operation.
+    pub async fn get_channel_pins(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        query: &ChannelPinsQuery,
+    ) -> Result<ChannelPins, DiscordError> {
+        let query = channel_pins_query(query);
+        self.request_typed(
+            Method::GET,
+            &format!("/channels/{}/messages/pins{query}", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    /// Runs the `remove_user_reaction` operation.
     pub async fn remove_user_reaction(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -284,6 +332,7 @@ impl RestClient {
             .await
     }
 
+    /// Runs the `remove_all_reactions` operation.
     pub async fn remove_all_reactions(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -301,6 +350,7 @@ impl RestClient {
         .await
     }
 
+    /// Runs the `remove_all_reactions_for_emoji` operation.
     pub async fn remove_all_reactions_for_emoji(
         &self,
         channel_id: impl Into<Snowflake>,
@@ -319,4 +369,90 @@ impl RestClient {
         )
         .await
     }
+}
+
+fn channel_pins_query(query: &ChannelPinsQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
+}
+
+fn search_guild_messages_query(query: &SearchGuildMessagesQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(offset) = query.offset {
+        params.push(format!("offset={offset}"));
+    }
+    if let Some(max_id) = &query.max_id {
+        params.push(format!("max_id={max_id}"));
+    }
+    if let Some(min_id) = &query.min_id {
+        params.push(format!("min_id={min_id}"));
+    }
+    if let Some(slop) = query.slop {
+        params.push(format!("slop={slop}"));
+    }
+    if let Some(content) = &query.content {
+        params.push(format!("content={content}"));
+    }
+    push_snowflakes(&mut params, "channel_id", &query.channel_ids);
+    push_strings(&mut params, "author_type", &query.author_types);
+    push_snowflakes(&mut params, "author_id", &query.author_ids);
+    push_snowflakes(&mut params, "mentions", &query.mentions);
+    push_snowflakes(&mut params, "mentions_role_id", &query.mentions_role_ids);
+    if let Some(mention_everyone) = query.mention_everyone {
+        params.push(format!("mention_everyone={mention_everyone}"));
+    }
+    push_snowflakes(
+        &mut params,
+        "replied_to_user_id",
+        &query.replied_to_user_ids,
+    );
+    push_snowflakes(
+        &mut params,
+        "replied_to_message_id",
+        &query.replied_to_message_ids,
+    );
+    if let Some(pinned) = query.pinned {
+        params.push(format!("pinned={pinned}"));
+    }
+    push_strings(&mut params, "has", &query.has);
+    push_strings(&mut params, "embed_type", &query.embed_types);
+    push_strings(&mut params, "embed_provider", &query.embed_providers);
+    push_strings(&mut params, "link_hostname", &query.link_hostnames);
+    push_strings(
+        &mut params,
+        "attachment_filename",
+        &query.attachment_filenames,
+    );
+    push_strings(
+        &mut params,
+        "attachment_extension",
+        &query.attachment_extensions,
+    );
+    if let Some(sort_by) = &query.sort_by {
+        params.push(format!("sort_by={sort_by}"));
+    }
+    if let Some(sort_order) = &query.sort_order {
+        params.push(format!("sort_order={sort_order}"));
+    }
+    if let Some(include_nsfw) = query.include_nsfw {
+        params.push(format!("include_nsfw={include_nsfw}"));
+    }
+    query_string(params)
+}
+
+fn push_snowflakes(params: &mut Vec<String>, name: &str, values: &[Snowflake]) {
+    params.extend(values.iter().map(|value| format!("{name}={value}")));
+}
+
+fn push_strings(params: &mut Vec<String>, name: &str, values: &[String]) {
+    params.extend(values.iter().map(|value| format!("{name}={value}")));
 }

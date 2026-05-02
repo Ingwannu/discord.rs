@@ -9,32 +9,52 @@ use crate::types::invalid_data_error;
 use crate::voice_runtime::VoiceRuntimeConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API enum for `VoiceConnectionStatus`.
 pub enum VoiceConnectionStatus {
+    /// Discord API enum variant `Connecting`.
     Connecting,
+    /// Discord API enum variant `Connected`.
     Connected,
+    /// Discord API enum variant `Disconnected`.
     Disconnected,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
+/// Typed Discord API object for `VoiceGatewayOpcode`.
 pub struct VoiceGatewayOpcode(u8);
 
 impl VoiceGatewayOpcode {
+    /// Public API item `IDENTIFY`.
     pub const IDENTIFY: Self = Self(0);
+    /// Public API item `SELECT_PROTOCOL`.
     pub const SELECT_PROTOCOL: Self = Self(1);
+    /// Public API item `READY`.
     pub const READY: Self = Self(2);
+    /// Public API item `HEARTBEAT`.
     pub const HEARTBEAT: Self = Self(3);
+    /// Public API item `SESSION_DESCRIPTION`.
     pub const SESSION_DESCRIPTION: Self = Self(4);
+    /// Public API item `SPEAKING`.
     pub const SPEAKING: Self = Self(5);
+    /// Public API item `HEARTBEAT_ACK`.
     pub const HEARTBEAT_ACK: Self = Self(6);
+    /// Public API item `RESUME`.
     pub const RESUME: Self = Self(7);
+    /// Public API item `HELLO`.
     pub const HELLO: Self = Self(8);
+    /// Public API item `RESUMED`.
     pub const RESUMED: Self = Self(9);
+    /// Public API item `DAVE_PROTOCOL_TRANSITION_READY`.
     pub const DAVE_PROTOCOL_TRANSITION_READY: Self = Self(23);
+    /// Public API item `DAVE_MLS_KEY_PACKAGE`.
     pub const DAVE_MLS_KEY_PACKAGE: Self = Self(26);
+    /// Public API item `DAVE_MLS_COMMIT_WELCOME`.
     pub const DAVE_MLS_COMMIT_WELCOME: Self = Self(28);
+    /// Public API item `DAVE_MLS_INVALID_COMMIT_WELCOME`.
     pub const DAVE_MLS_INVALID_COMMIT_WELCOME: Self = Self(31);
 
+    /// Runs the `fn` operation.
     pub const fn code(self) -> u8 {
         self.0
     }
@@ -42,13 +62,16 @@ impl VoiceGatewayOpcode {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
+/// Typed Discord API object for `VoiceTransportProtocol`.
 pub struct VoiceTransportProtocol(String);
 
 impl VoiceTransportProtocol {
+    /// Creates or returns `new` data.
     pub fn new(protocol: impl Into<String>) -> Self {
         Self(protocol.into())
     }
 
+    /// Creates or returns `udp` data.
     pub fn udp() -> Self {
         Self::new("udp")
     }
@@ -56,17 +79,21 @@ impl VoiceTransportProtocol {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
+/// Typed Discord API object for `VoiceEncryptionMode`.
 pub struct VoiceEncryptionMode(String);
 
 impl VoiceEncryptionMode {
+    /// Creates or returns `new` data.
     pub fn new(mode: impl Into<String>) -> Self {
         Self(mode.into())
     }
 
+    /// Creates or returns `aead_aes256_gcm_rtpsize` data.
     pub fn aead_aes256_gcm_rtpsize() -> Self {
         Self::new("aead_aes256_gcm_rtpsize")
     }
 
+    /// Creates or returns `aead_xchacha20_poly1305_rtpsize` data.
     pub fn aead_xchacha20_poly1305_rtpsize() -> Self {
         Self::new("aead_xchacha20_poly1305_rtpsize")
     }
@@ -74,30 +101,44 @@ impl VoiceEncryptionMode {
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(transparent)]
+/// Typed Discord API object for `VoiceSpeakingFlags`.
 pub struct VoiceSpeakingFlags(u8);
 
 impl VoiceSpeakingFlags {
+    /// Public API item `MICROPHONE`.
     pub const MICROPHONE: Self = Self(1);
+    /// Public API item `SOUNDSHARE`.
     pub const SOUNDSHARE: Self = Self(1 << 1);
+    /// Public API item `PRIORITY`.
     pub const PRIORITY: Self = Self(1 << 2);
 
+    /// Runs the `fn` operation.
     pub const fn bits(self) -> u8 {
         self.0
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceConnectionConfig`.
 pub struct VoiceConnectionConfig {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
+    /// Discord API payload field `endpoint`.
     pub endpoint: Option<String>,
+    /// Discord API payload field `session_id`.
     pub session_id: Option<String>,
+    /// Discord API payload field `token`.
     pub token: Option<String>,
+    /// Discord API payload field `self_mute`.
     pub self_mute: bool,
+    /// Discord API payload field `self_deaf`.
     pub self_deaf: bool,
 }
 
 impl VoiceConnectionConfig {
+    /// Creates or returns `new` data.
     pub fn new(guild_id: impl Into<Snowflake>, channel_id: impl Into<Snowflake>) -> Self {
         Self {
             guild_id: guild_id.into(),
@@ -110,26 +151,31 @@ impl VoiceConnectionConfig {
         }
     }
 
+    /// Runs the `endpoint` operation.
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
     }
 
+    /// Runs the `session_id` operation.
     pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
     }
 
+    /// Runs the `token` operation.
     pub fn token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
     }
 
+    /// Runs the `self_mute` operation.
     pub fn self_mute(mut self, self_mute: bool) -> Self {
         self.self_mute = self_mute;
         self
     }
 
+    /// Runs the `self_deaf` operation.
     pub fn self_deaf(mut self, self_deaf: bool) -> Self {
         self.self_deaf = self_deaf;
         self
@@ -137,15 +183,22 @@ impl VoiceConnectionConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceTransportState`.
 pub struct VoiceTransportState {
+    /// Discord API payload field `protocol`.
     pub protocol: VoiceTransportProtocol,
+    /// Discord API payload field `ip`.
     pub ip: String,
+    /// Discord API payload field `port`.
     pub port: u16,
+    /// Discord API payload field `mode`.
     pub mode: VoiceEncryptionMode,
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
 }
 
 impl VoiceTransportState {
+    /// Creates or returns `udp` data.
     pub fn udp(ip: impl Into<String>, port: u16, mode: VoiceEncryptionMode, ssrc: u32) -> Self {
         Self {
             protocol: VoiceTransportProtocol::udp(),
@@ -158,34 +211,50 @@ impl VoiceTransportState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSpeakingState`.
 pub struct VoiceSpeakingState {
+    /// Discord API payload field `flags`.
     pub flags: VoiceSpeakingFlags,
+    /// Discord API payload field `delay`.
     pub delay: u32,
 }
 
 impl VoiceSpeakingState {
+    /// Creates or returns `new` data.
     pub fn new(flags: VoiceSpeakingFlags, delay: u32) -> Self {
         Self { flags, delay }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceConnectionState`.
 pub struct VoiceConnectionState {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
+    /// Discord API payload field `endpoint`.
     pub endpoint: Option<String>,
+    /// Discord API payload field `session_id`.
     pub session_id: Option<String>,
+    /// Discord API payload field `token`.
     pub token: Option<String>,
+    /// Discord API payload field `self_mute`.
     pub self_mute: bool,
+    /// Discord API payload field `self_deaf`.
     pub self_deaf: bool,
+    /// Discord API payload field `status`.
     pub status: VoiceConnectionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `transport`.
     pub transport: Option<VoiceTransportState>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `speaking`.
     pub speaking: Option<VoiceSpeakingState>,
 }
 
 impl VoiceConnectionState {
+    /// Creates or returns `from_config` data.
     pub fn from_config(config: VoiceConnectionConfig) -> Self {
         let mut state = Self {
             guild_id: config.guild_id,
@@ -207,14 +276,17 @@ impl VoiceConnectionState {
         state
     }
 
+    /// Runs the `is_ready` operation.
     pub fn is_ready(&self) -> bool {
         self.endpoint.is_some() && self.session_id.is_some() && self.token.is_some()
     }
 
+    /// Runs the `mark_connected` operation.
     pub fn mark_connected(&mut self) {
         self.status = VoiceConnectionStatus::Connected;
     }
 
+    /// Runs the `mark_disconnected` operation.
     pub fn mark_disconnected(&mut self) {
         self.status = VoiceConnectionStatus::Disconnected;
     }
@@ -232,6 +304,7 @@ impl VoiceConnectionState {
         self.mark_disconnected();
     }
 
+    /// Runs the `apply_server_update` operation.
     pub fn apply_server_update(&mut self, update: &VoiceServerUpdate) {
         self.transport = None;
         self.speaking = None;
@@ -250,6 +323,7 @@ impl VoiceConnectionState {
         }
     }
 
+    /// Runs the `apply_voice_state` operation.
     pub fn apply_voice_state(&mut self, state: &VoiceState) {
         if let Some(channel_id) = state.channel_id.clone() {
             self.channel_id = channel_id;
@@ -269,21 +343,26 @@ impl VoiceConnectionState {
         }
     }
 
+    /// Runs the `set_transport` operation.
     pub fn set_transport(&mut self, transport: VoiceTransportState) {
         self.transport = Some(transport);
     }
 
+    /// Runs the `set_speaking` operation.
     pub fn set_speaking(&mut self, speaking: VoiceSpeakingState) {
         self.speaking = Some(speaking);
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceGatewayHello`.
 pub struct VoiceGatewayHello {
+    /// Discord API payload field `heartbeat_interval_ms`.
     pub heartbeat_interval_ms: u64,
 }
 
 impl VoiceGatewayHello {
+    /// Creates or returns `new` data.
     pub fn new(heartbeat_interval_ms: u64) -> Self {
         Self {
             heartbeat_interval_ms,
@@ -292,17 +371,24 @@ impl VoiceGatewayHello {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceGatewayReady`.
 pub struct VoiceGatewayReady {
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
+    /// Discord API payload field `ip`.
     pub ip: String,
+    /// Discord API payload field `port`.
     pub port: u16,
     #[serde(default)]
+    /// Discord API payload field `modes`.
     pub modes: Vec<VoiceEncryptionMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `heartbeat_interval_ms`.
     pub heartbeat_interval_ms: Option<u64>,
 }
 
 impl VoiceGatewayReady {
+    /// Creates or returns `new` data.
     pub fn new(ssrc: u32, ip: impl Into<String>, port: u16) -> Self {
         Self {
             ssrc,
@@ -313,11 +399,13 @@ impl VoiceGatewayReady {
         }
     }
 
+    /// Runs the `mode` operation.
     pub fn mode(mut self, mode: VoiceEncryptionMode) -> Self {
         self.modes.push(mode);
         self
     }
 
+    /// Runs the `heartbeat_interval_ms` operation.
     pub fn heartbeat_interval_ms(mut self, heartbeat_interval_ms: u64) -> Self {
         self.heartbeat_interval_ms = Some(heartbeat_interval_ms);
         self
@@ -325,13 +413,18 @@ impl VoiceGatewayReady {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSelectProtocolData`.
 pub struct VoiceSelectProtocolData {
+    /// Discord API payload field `address`.
     pub address: String,
+    /// Discord API payload field `port`.
     pub port: u16,
+    /// Discord API payload field `mode`.
     pub mode: VoiceEncryptionMode,
 }
 
 impl VoiceSelectProtocolData {
+    /// Creates or returns `new` data.
     pub fn new(address: impl Into<String>, port: u16, mode: VoiceEncryptionMode) -> Self {
         Self {
             address: address.into(),
@@ -342,16 +435,21 @@ impl VoiceSelectProtocolData {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSelectProtocolCommand`.
 pub struct VoiceSelectProtocolCommand {
+    /// Discord API payload field `protocol`.
     pub protocol: VoiceTransportProtocol,
+    /// Discord API payload field `data`.
     pub data: VoiceSelectProtocolData,
 }
 
 impl VoiceSelectProtocolCommand {
+    /// Creates or returns `new` data.
     pub fn new(protocol: VoiceTransportProtocol, data: VoiceSelectProtocolData) -> Self {
         Self { protocol, data }
     }
 
+    /// Creates or returns `udp` data.
     pub fn udp(address: impl Into<String>, port: u16, mode: VoiceEncryptionMode) -> Self {
         Self::new(
             VoiceTransportProtocol::udp(),
@@ -361,13 +459,18 @@ impl VoiceSelectProtocolCommand {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceSpeakingCommand`.
 pub struct VoiceSpeakingCommand {
+    /// Discord API payload field `speaking`.
     pub speaking: VoiceSpeakingFlags,
+    /// Discord API payload field `delay`.
     pub delay: u32,
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
 }
 
 impl VoiceSpeakingCommand {
+    /// Creates or returns `new` data.
     pub fn new(ssrc: u32) -> Self {
         Self {
             speaking: VoiceSpeakingFlags::default(),
@@ -376,11 +479,13 @@ impl VoiceSpeakingCommand {
         }
     }
 
+    /// Runs the `speaking` operation.
     pub fn speaking(mut self, speaking: VoiceSpeakingFlags) -> Self {
         self.speaking = speaking;
         self
     }
 
+    /// Runs the `delay` operation.
     pub fn delay(mut self, delay: u32) -> Self {
         self.delay = delay;
         self
@@ -388,39 +493,63 @@ impl VoiceSpeakingCommand {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API enum for `VoiceGatewayCommand`.
 pub enum VoiceGatewayCommand {
+    /// Discord API enum variant `Identify`.
     Identify {
+        /// Guild or server ID for the voice session.
         server_id: Snowflake,
+        /// Current user ID.
         user_id: Snowflake,
+        /// Voice session ID from Gateway voice state.
         session_id: String,
+        /// Voice server token from Gateway voice server update.
         token: String,
     },
+    /// Discord API enum variant `SelectProtocol`.
     SelectProtocol(VoiceSelectProtocolCommand),
+    /// Discord API enum variant `Speaking`.
     Speaking(VoiceSpeakingCommand),
+    /// Discord API enum variant `Resume`.
     Resume {
+        /// Guild or server ID for the voice session.
         server_id: Snowflake,
+        /// Voice session ID from the previous connection.
         session_id: String,
+        /// Voice server token for resuming the session.
         token: String,
     },
+    /// Discord API enum variant `Heartbeat`.
     Heartbeat {
+        /// Heartbeat nonce sent to the voice gateway.
         nonce: u64,
     },
+    /// Discord API enum variant `DaveProtocolTransitionReady`.
     DaveProtocolTransitionReady {
+        /// DAVE transition ID being acknowledged.
         transition_id: u64,
     },
+    /// Discord API enum variant `DaveMlsKeyPackage`.
     DaveMlsKeyPackage {
+        /// MLS key package bytes.
         key_package: Vec<u8>,
     },
+    /// Discord API enum variant `DaveMlsCommitWelcome`.
     DaveMlsCommitWelcome {
+        /// MLS commit bytes.
         commit: Vec<u8>,
+        /// Optional MLS welcome bytes.
         welcome: Option<Vec<u8>>,
     },
+    /// Discord API enum variant `DaveMlsInvalidCommitWelcome`.
     DaveMlsInvalidCommitWelcome {
+        /// DAVE transition ID rejected by the client.
         transition_id: u64,
     },
 }
 
 impl VoiceGatewayCommand {
+    /// Runs the `opcode` operation.
     pub fn opcode(&self) -> VoiceGatewayOpcode {
         match self {
             VoiceGatewayCommand::Identify { .. } => VoiceGatewayOpcode::IDENTIFY,
@@ -443,6 +572,7 @@ impl VoiceGatewayCommand {
         }
     }
 
+    /// Runs the `payload` operation.
     pub fn payload(&self) -> serde_json::Value {
         let data = match self {
             VoiceGatewayCommand::Identify {
@@ -495,6 +625,7 @@ impl VoiceGatewayCommand {
         })
     }
 
+    /// Runs the `binary_payload` operation.
     pub fn binary_payload(&self) -> Option<Vec<u8>> {
         match self {
             VoiceGatewayCommand::DaveMlsKeyPackage { key_package } => {
@@ -519,18 +650,27 @@ impl VoiceGatewayCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `VoiceUdpDiscoveryPacket`.
 pub struct VoiceUdpDiscoveryPacket {
+    /// Discord API payload field `ssrc`.
     pub ssrc: u32,
+    /// Discord API payload field `address`.
     pub address: String,
+    /// Discord API payload field `port`.
     pub port: u16,
 }
 
 impl VoiceUdpDiscoveryPacket {
+    /// Public API item `LEN`.
     pub const LEN: usize = 74;
+    /// Public API item `REQUEST_TYPE`.
     pub const REQUEST_TYPE: u16 = 1;
+    /// Public API item `RESPONSE_TYPE`.
     pub const RESPONSE_TYPE: u16 = 2;
+    /// Public API item `BODY_LEN`.
     pub const BODY_LEN: u16 = 70;
 
+    /// Creates or returns `request` data.
     pub fn request(ssrc: u32) -> [u8; Self::LEN] {
         let mut packet = [0_u8; Self::LEN];
         packet[..2].copy_from_slice(&Self::REQUEST_TYPE.to_be_bytes());
@@ -539,6 +679,7 @@ impl VoiceUdpDiscoveryPacket {
         packet
     }
 
+    /// Creates or returns `decode` data.
     pub fn decode(packet: &[u8]) -> Result<Self, DiscordError> {
         if packet.len() < Self::LEN {
             return Err(invalid_data_error(format!(
@@ -582,13 +723,18 @@ impl VoiceUdpDiscoveryPacket {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API object for `AudioTrack`.
 pub struct AudioTrack {
+    /// Discord API payload field `id`.
     pub id: String,
+    /// Discord API payload field `source`.
     pub source: String,
+    /// Discord API payload field `title`.
     pub title: Option<String>,
 }
 
 impl AudioTrack {
+    /// Creates or returns `new` data.
     pub fn new(id: impl Into<String>, source: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -597,6 +743,7 @@ impl AudioTrack {
         }
     }
 
+    /// Runs the `title` operation.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
@@ -604,6 +751,7 @@ impl AudioTrack {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Typed Discord API object for `AudioPlayer`.
 pub struct AudioPlayer {
     queue: VecDeque<AudioTrack>,
     current: Option<AudioTrack>,
@@ -618,6 +766,7 @@ impl Default for AudioPlayer {
 }
 
 impl AudioPlayer {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             queue: VecDeque::new(),
@@ -627,63 +776,76 @@ impl AudioPlayer {
         }
     }
 
+    /// Runs the `enqueue` operation.
     pub fn enqueue(&mut self, track: AudioTrack) {
         self.queue.push_back(track);
     }
 
+    /// Runs the `current` operation.
     pub fn current(&self) -> Option<&AudioTrack> {
         self.current.as_ref()
     }
 
+    /// Runs the `queue_len` operation.
     pub fn queue_len(&self) -> usize {
         self.queue.len()
     }
 
+    /// Runs the `volume` operation.
     pub fn volume(&self) -> f32 {
         self.volume
     }
 
+    /// Runs the `set_volume` operation.
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
     }
 
+    /// Runs the `is_paused` operation.
     pub fn is_paused(&self) -> bool {
         self.paused
     }
 
+    /// Runs the `pause` operation.
     pub fn pause(&mut self) {
         if self.current.is_some() {
             self.paused = true;
         }
     }
 
+    /// Runs the `resume` operation.
     pub fn resume(&mut self) {
         self.paused = false;
     }
 
+    /// Runs the `clear_queue` operation.
     pub fn clear_queue(&mut self) -> usize {
         let removed = self.queue.len();
         self.queue.clear();
         removed
     }
 
+    /// Runs the `skip` operation.
     pub fn skip(&mut self) -> Option<&AudioTrack> {
         self.paused = false;
         self.current = self.queue.pop_front();
         self.current.as_ref()
     }
 
+    /// Runs the `play_next` operation.
     pub fn play_next(&mut self) -> Option<&AudioTrack> {
         self.current = self.queue.pop_front();
         self.paused = false;
         self.current.as_ref()
     }
 
+    /// Runs the `stop` operation.
     pub fn stop(&mut self) -> Option<AudioTrack> {
         self.paused = false;
         self.current.take()
     }
 
+    /// Runs the `stop_all` operation.
     pub fn stop_all(&mut self) -> (Option<AudioTrack>, usize) {
         let current = self.stop();
         let queued = self.clear_queue();
@@ -692,52 +854,85 @@ impl AudioPlayer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// Typed Discord API enum for `VoiceEvent`.
 pub enum VoiceEvent {
+    /// Discord API enum variant `Connecting`.
     Connecting {
+        /// Guild ID for the voice connection.
         guild_id: Snowflake,
+        /// Voice channel ID being joined.
         channel_id: Snowflake,
     },
+    /// Discord API enum variant `Connected`.
     Connected(VoiceConnectionState),
+    /// Discord API enum variant `Disconnected`.
     Disconnected {
+        /// Guild ID for the disconnected voice session.
         guild_id: Snowflake,
     },
+    /// Discord API enum variant `ServerUpdated`.
     ServerUpdated {
+        /// Guild ID whose voice server data changed.
         guild_id: Snowflake,
     },
+    /// Discord API enum variant `SessionUpdated`.
     SessionUpdated {
+        /// Guild ID whose voice session data changed.
         guild_id: Snowflake,
     },
+    /// Discord API enum variant `TransportConfigured`.
     TransportConfigured {
+        /// Guild ID for the configured transport.
         guild_id: Snowflake,
+        /// Voice transport details.
         transport: VoiceTransportState,
     },
+    /// Discord API enum variant `SpeakingUpdated`.
     SpeakingUpdated {
+        /// Guild ID for the speaking update.
         guild_id: Snowflake,
+        /// Current speaking state.
         speaking: VoiceSpeakingState,
     },
+    /// Discord API enum variant `PlayerStarted`.
     PlayerStarted {
+        /// Guild ID for the player event.
         guild_id: Snowflake,
+        /// Track that started.
         track: AudioTrack,
     },
+    /// Discord API enum variant `PlayerStopped`.
     PlayerStopped {
+        /// Guild ID for the player event.
         guild_id: Snowflake,
+        /// Track that stopped.
         track: AudioTrack,
     },
+    /// Discord API enum variant `PlayerPaused`.
     PlayerPaused {
+        /// Guild ID for the player event.
         guild_id: Snowflake,
+        /// Track that paused.
         track: AudioTrack,
     },
+    /// Discord API enum variant `PlayerResumed`.
     PlayerResumed {
+        /// Guild ID for the player event.
         guild_id: Snowflake,
+        /// Track that resumed.
         track: AudioTrack,
     },
+    /// Discord API enum variant `PlayerSkipped`.
     PlayerSkipped {
+        /// Guild ID for the player event.
         guild_id: Snowflake,
+        /// Track that was skipped.
         track: AudioTrack,
     },
 }
 
 #[derive(Clone, Debug, Default)]
+/// Typed Discord API object for `VoiceManager`.
 pub struct VoiceManager {
     connections: HashMap<Snowflake, VoiceConnectionState>,
     players: HashMap<Snowflake, AudioPlayer>,
@@ -745,10 +940,12 @@ pub struct VoiceManager {
 }
 
 impl VoiceManager {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Runs the `connect` operation.
     pub fn connect(&mut self, config: VoiceConnectionConfig) -> VoiceConnectionState {
         let guild_id = config.guild_id.clone();
         let channel_id = config.channel_id.clone();
@@ -767,6 +964,7 @@ impl VoiceManager {
         state
     }
 
+    /// Runs the `disconnect` operation.
     pub fn disconnect(&mut self, guild_id: impl Into<Snowflake>) -> Option<VoiceConnectionState> {
         let guild_id = guild_id.into();
         self.players.remove(&guild_id);
@@ -778,6 +976,7 @@ impl VoiceManager {
         Some(state)
     }
 
+    /// Runs the `update_server` operation.
     pub fn update_server(
         &mut self,
         update: impl Into<VoiceServerUpdate>,
@@ -801,6 +1000,7 @@ impl VoiceManager {
         Some(state.clone())
     }
 
+    /// Runs the `update_voice_state` operation.
     pub fn update_voice_state(&mut self, update: &VoiceState) -> Option<VoiceConnectionState> {
         let guild_id = update.guild_id.clone()?;
         let state = match self.connections.get_mut(&guild_id) {
@@ -832,6 +1032,7 @@ impl VoiceManager {
         Some(state.clone())
     }
 
+    /// Runs the `configure_transport` operation.
     pub fn configure_transport(
         &mut self,
         guild_id: impl Into<Snowflake>,
@@ -847,6 +1048,7 @@ impl VoiceManager {
         Some(transport)
     }
 
+    /// Runs the `set_speaking` operation.
     pub fn set_speaking(
         &mut self,
         guild_id: impl Into<Snowflake>,
@@ -862,6 +1064,7 @@ impl VoiceManager {
         Some(speaking)
     }
 
+    /// Runs the `identify_command` operation.
     pub fn identify_command(
         &self,
         guild_id: impl Into<Snowflake>,
@@ -878,6 +1081,7 @@ impl VoiceManager {
         })
     }
 
+    /// Runs the `runtime_config` operation.
     pub fn runtime_config(
         &self,
         guild_id: impl Into<Snowflake>,
@@ -895,6 +1099,7 @@ impl VoiceManager {
         ))
     }
 
+    /// Runs the `resume_command` operation.
     pub fn resume_command(&self, guild_id: impl Into<Snowflake>) -> Option<VoiceGatewayCommand> {
         let guild_id = guild_id.into();
         let connection = self.connections.get(&guild_id)?;
@@ -905,6 +1110,7 @@ impl VoiceManager {
         })
     }
 
+    /// Runs the `select_protocol_command` operation.
     pub fn select_protocol_command(
         &self,
         guild_id: impl Into<Snowflake>,
@@ -919,6 +1125,7 @@ impl VoiceManager {
         ))
     }
 
+    /// Runs the `speaking_command` operation.
     pub fn speaking_command(
         &mut self,
         guild_id: impl Into<Snowflake>,
@@ -935,16 +1142,19 @@ impl VoiceManager {
         ))
     }
 
+    /// Runs the `connection` operation.
     pub fn connection(&self, guild_id: impl Into<Snowflake>) -> Option<&VoiceConnectionState> {
         let guild_id = guild_id.into();
         self.connections.get(&guild_id)
     }
 
+    /// Runs the `player` operation.
     pub fn player(&self, guild_id: impl Into<Snowflake>) -> Option<&AudioPlayer> {
         let guild_id = guild_id.into();
         self.players.get(&guild_id)
     }
 
+    /// Runs the `enqueue` operation.
     pub fn enqueue(&mut self, guild_id: impl Into<Snowflake>, track: AudioTrack) -> Option<usize> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -952,6 +1162,7 @@ impl VoiceManager {
         Some(player.queue_len())
     }
 
+    /// Runs the `start_next` operation.
     pub fn start_next(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -963,6 +1174,7 @@ impl VoiceManager {
         player.current()
     }
 
+    /// Runs the `stop` operation.
     pub fn stop(&mut self, guild_id: impl Into<Snowflake>) -> Option<AudioTrack> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -974,6 +1186,7 @@ impl VoiceManager {
         Some(stopped_track)
     }
 
+    /// Runs the `pause` operation.
     pub fn pause(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -986,6 +1199,7 @@ impl VoiceManager {
         player.current()
     }
 
+    /// Runs the `resume` operation.
     pub fn resume(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -998,6 +1212,7 @@ impl VoiceManager {
         player.current()
     }
 
+    /// Runs the `skip` operation.
     pub fn skip(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -1016,6 +1231,7 @@ impl VoiceManager {
         player.current()
     }
 
+    /// Runs the `clear_queue` operation.
     pub fn clear_queue(&mut self, guild_id: impl Into<Snowflake>) -> Option<usize> {
         let guild_id = guild_id.into();
         self.players
@@ -1023,6 +1239,7 @@ impl VoiceManager {
             .map(AudioPlayer::clear_queue)
     }
 
+    /// Runs the `set_volume` operation.
     pub fn set_volume(&mut self, guild_id: impl Into<Snowflake>, volume: f32) -> Option<f32> {
         let guild_id = guild_id.into();
         let player = self.players.get_mut(&guild_id)?;
@@ -1030,6 +1247,7 @@ impl VoiceManager {
         Some(player.volume())
     }
 
+    /// Runs the `events` operation.
     pub fn events(&self) -> &[VoiceEvent] {
         &self.events
     }

@@ -1,6 +1,6 @@
 ﻿[package]
 name = "discordrs"
-version = "1.2.2"
+version = "2.0.0"
 edition = "2021"
 description = "discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client"
 authors = [
@@ -94,3 +94,7 @@ required-features = ["interactions"]
 [[example]]
 name = "voice_bot"
 required-features = ["voice"]
+
+[[example]]
+name = "live_dave_capture_bot"
+required-features = ["gateway", "voice"]

@@ -3,557 +3,988 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AuditLogEntry, Channel, Entitlement, Guild, Integration, Interaction, Member, Message,
-    Presence, Role, Snowflake, SoundboardSound, StageInstance, Sticker, Subscription, User,
-    VoiceServerUpdate, VoiceState,
+    Activity, AuditLogEntry, Channel, ClientStatus, Entitlement, Guild, Integration, Interaction,
+    Member, Message, Presence, Role, Snowflake, SoundboardSound, StageInstance, Sticker,
+    Subscription, User, VoiceServerUpdate, VoiceState,
 };
 use crate::parsers::parse_interaction;
 use crate::types::Emoji;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `ReadyApplication`.
 pub struct ReadyApplication {
+    /// Discord API payload field `id`.
     pub id: Snowflake,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `ReadyPayload`.
 pub struct ReadyPayload {
+    /// Discord API payload field `user`.
     pub user: User,
+    /// Discord API payload field `session_id`.
     pub session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `application`.
     pub application: Option<ReadyApplication>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `resume_gateway_url`.
     pub resume_gateway_url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ReadyEvent`.
 pub struct ReadyEvent {
+    /// Discord API payload field `data`.
     pub data: ReadyPayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildEvent`.
 pub struct GuildEvent {
+    /// Discord API payload field `guild`.
     pub guild: Guild,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `GuildDeletePayload`.
 pub struct GuildDeletePayload {
+    /// Discord API payload field `id`.
     pub id: Snowflake,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `unavailable`.
     pub unavailable: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildDeleteEvent`.
 pub struct GuildDeleteEvent {
+    /// Discord API payload field `data`.
     pub data: GuildDeletePayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ChannelEvent`.
 pub struct ChannelEvent {
+    /// Discord API payload field `channel`.
     pub channel: Channel,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `MemberEvent`.
 pub struct MemberEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `member`.
     pub member: Member,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `MemberRemovePayload`.
 pub struct MemberRemovePayload {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `user`.
     pub user: User,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `MemberRemoveEvent`.
 pub struct MemberRemoveEvent {
+    /// Discord API payload field `data`.
     pub data: MemberRemovePayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `GuildMembersChunkPayload`.
 pub struct GuildMembersChunkPayload {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
     #[serde(default)]
+    /// Discord API payload field `members`.
     pub members: Vec<Member>,
+    /// Discord API payload field `chunk_index`.
     pub chunk_index: u64,
+    /// Discord API payload field `chunk_count`.
     pub chunk_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Discord API payload field `not_found`.
     pub not_found: Vec<Snowflake>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `presences`.
     pub presences: Option<Vec<Presence>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `nonce`.
     pub nonce: Option<String>,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildMembersChunkEvent`.
 pub struct GuildMembersChunkEvent {
+    /// Discord API payload field `data`.
     pub data: GuildMembersChunkPayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `RoleEvent`.
 pub struct RoleEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `role`.
     pub role: Role,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `RoleDeletePayload`.
 pub struct RoleDeletePayload {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `role_id`.
     pub role_id: Snowflake,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `RoleDeleteEvent`.
 pub struct RoleDeleteEvent {
+    /// Discord API payload field `data`.
     pub data: RoleDeletePayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `MessageEvent`.
 pub struct MessageEvent {
+    /// Discord API payload field `message`.
     pub message: Message,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `MessageDeletePayload`.
 pub struct MessageDeletePayload {
+    /// Discord API payload field `id`.
     pub id: Snowflake,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `MessageDeleteEvent`.
 pub struct MessageDeleteEvent {
+    /// Discord API payload field `data`.
     pub data: MessageDeletePayload,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `InteractionEvent`.
 pub struct InteractionEvent {
+    /// Discord API payload field `interaction`.
     pub interaction: Interaction,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `VoiceStateEvent`.
 pub struct VoiceStateEvent {
+    /// Discord API payload field `state`.
     pub state: VoiceState,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `VoiceServerEvent`.
 pub struct VoiceServerEvent {
+    /// Discord API payload field `data`.
     pub data: VoiceServerUpdate,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ResumedEvent`.
 pub struct ResumedEvent {
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `BulkMessageDeleteEvent`.
 pub struct BulkMessageDeleteEvent {
+    /// Discord API payload field `ids`.
     pub ids: Vec<Snowflake>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ChannelPinsUpdateEvent`.
 pub struct ChannelPinsUpdateEvent {
+    /// Discord API payload field `channel_id`.
     pub channel_id: Snowflake,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `last_pin_timestamp`.
     pub last_pin_timestamp: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildBanEvent`.
 pub struct GuildBanEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `user`.
     pub user: User,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildEmojisUpdateEvent`.
 pub struct GuildEmojisUpdateEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `emojis`.
     pub emojis: Vec<Emoji>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `EntitlementEvent`.
 pub struct EntitlementEvent {
+    /// Discord API payload field `entitlement`.
     pub entitlement: Entitlement,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `SubscriptionEvent`.
 pub struct SubscriptionEvent {
+    /// Discord API payload field `subscription`.
     pub subscription: Subscription,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `IntegrationEvent`.
 pub struct IntegrationEvent {
+    /// Discord API payload field `integration`.
     pub integration: Integration,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `IntegrationDeleteEvent`.
 pub struct IntegrationDeleteEvent {
+    /// Discord API payload field `id`.
     pub id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `application_id`.
     pub application_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `PollVoteEvent`.
 pub struct PollVoteEvent {
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `message_id`.
     pub message_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `answer_id`.
     pub answer_id: Option<u64>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `SoundboardSoundEvent`.
 pub struct SoundboardSoundEvent {
+    /// Discord API payload field `sound`.
     pub sound: SoundboardSound,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `SoundboardSoundDeleteEvent`.
 pub struct SoundboardSoundDeleteEvent {
+    /// Discord API payload field `sound_id`.
     pub sound_id: Snowflake,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `SoundboardSoundsEvent`.
 pub struct SoundboardSoundsEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
+    /// Discord API payload field `soundboard_sounds`.
     pub soundboard_sounds: Vec<SoundboardSound>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `InviteEvent`.
 pub struct InviteEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `code`.
     pub code: Option<String>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReactionEvent {
-    pub user_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub emoji: Option<Emoji>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReactionRemoveAllEvent {
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct TypingStartEvent {
-    pub channel_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub user_id: Option<Snowflake>,
-    pub timestamp: Option<u64>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct PresenceUpdateEvent {
-    pub user_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub status: Option<String>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct UserUpdateEvent {
-    pub user: User,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct WebhooksUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct GuildIntegrationsUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ThreadEvent {
-    pub thread: Channel,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ThreadMemberUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub thread_id: Option<Snowflake>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ThreadMembersUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub thread_id: Option<Snowflake>,
-    pub added_members: Option<Vec<serde_json::Value>>,
-    pub removed_member_ids: Option<Vec<Snowflake>>,
-    pub member_count: Option<u64>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ThreadListSyncEvent {
-    pub guild_id: Option<Snowflake>,
-    pub threads: Vec<Channel>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReactionRemoveEmojiEvent {
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub emoji: Option<Emoji>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct GuildStickersUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub stickers: Vec<Sticker>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ScheduledEvent {
-    pub id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+/// Typed Discord API object for `ReactionEvent`.
+pub struct ReactionEvent {
+    /// Discord API payload field `user_id`.
+    pub user_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `message_id`.
+    pub message_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `member`.
+    pub member: Option<Member>,
+    /// Discord API payload field `message_author_id`.
+    pub message_author_id: Option<Snowflake>,
+    /// Discord API payload field `emoji`.
+    pub emoji: Option<Emoji>,
+    /// Discord API payload field `burst`.
+    pub burst: Option<bool>,
+    /// Discord API payload field `burst_colors`.
+    pub burst_colors: Vec<String>,
+    /// Discord API payload field `reaction_type`.
+    pub reaction_type: Option<u64>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ReactionRemoveAllEvent`.
+pub struct ReactionRemoveAllEvent {
+    /// Discord API payload field `channel_id`.
+    pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `message_id`.
+    pub message_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `TypingStartEvent`.
+pub struct TypingStartEvent {
+    /// Discord API payload field `channel_id`.
+    pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `user_id`.
+    pub user_id: Option<Snowflake>,
+    /// Discord API payload field `timestamp`.
+    pub timestamp: Option<u64>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug, Default)]
+/// Typed Discord API object for `PresenceUpdateEvent`.
+pub struct PresenceUpdateEvent {
+    /// Discord API payload field `user`.
+    pub user: Option<PresenceUpdateUser>,
+    /// Discord API payload field `user_id`.
+    pub user_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `status`.
+    pub status: Option<String>,
+    /// Discord API payload field `activities`.
+    pub activities: Vec<Activity>,
+    /// Discord API payload field `client_status`.
+    pub client_status: Option<ClientStatus>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `PresenceUpdateUser`.
+pub struct PresenceUpdateUser {
+    /// Discord API payload field `id`.
+    pub id: Snowflake,
+    /// Discord API payload field `username`.
+    pub username: Option<String>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `UserUpdateEvent`.
+pub struct UserUpdateEvent {
+    /// Discord API payload field `user`.
+    pub user: User,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `WebhooksUpdateEvent`.
+pub struct WebhooksUpdateEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
+    pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildIntegrationsUpdateEvent`.
+pub struct GuildIntegrationsUpdateEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ThreadEvent`.
+pub struct ThreadEvent {
+    /// Discord API payload field `thread`.
+    pub thread: Channel,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ThreadMemberUpdateEvent`.
+pub struct ThreadMemberUpdateEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `thread_id`.
+    pub thread_id: Option<Snowflake>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ThreadMembersUpdateEvent`.
+pub struct ThreadMembersUpdateEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `thread_id`.
+    pub thread_id: Option<Snowflake>,
+    /// Discord API payload field `added_members`.
+    pub added_members: Option<Vec<serde_json::Value>>,
+    /// Discord API payload field `removed_member_ids`.
+    pub removed_member_ids: Option<Vec<Snowflake>>,
+    /// Discord API payload field `member_count`.
+    pub member_count: Option<u64>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ThreadListSyncEvent`.
+pub struct ThreadListSyncEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `threads`.
+    pub threads: Vec<Channel>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ReactionRemoveEmojiEvent`.
+pub struct ReactionRemoveEmojiEvent {
+    /// Discord API payload field `channel_id`.
+    pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `message_id`.
+    pub message_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `emoji`.
+    pub emoji: Option<Emoji>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `GuildStickersUpdateEvent`.
+pub struct GuildStickersUpdateEvent {
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `stickers`.
+    pub stickers: Vec<Sticker>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug, Default)]
+/// Typed Discord API object for `ScheduledEvent`.
+pub struct ScheduledEvent {
+    /// Discord API payload field `id`.
+    pub id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
+    pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
+    pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `creator_id`.
     pub creator_id: Option<Snowflake>,
+    /// Discord API payload field `name`.
     pub name: Option<String>,
+    /// Discord API payload field `description`.
     pub description: Option<String>,
+    /// Discord API payload field `scheduled_start_time`.
     pub scheduled_start_time: Option<String>,
+    /// Discord API payload field `scheduled_end_time`.
     pub scheduled_end_time: Option<String>,
+    /// Discord API payload field `privacy_level`.
     pub privacy_level: Option<u64>,
+    /// Discord API payload field `status`.
     pub status: Option<u64>,
+    /// Discord API payload field `entity_type`.
     pub entity_type: Option<u64>,
+    /// Discord API payload field `entity_id`.
     pub entity_id: Option<Snowflake>,
+    /// Discord API payload field `entity_metadata`.
     pub entity_metadata: Option<Value>,
+    /// Discord API payload field `user_count`.
     pub user_count: Option<u64>,
+    /// Discord API payload field `image`.
     pub image: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Typed Discord API object for `GuildScheduledEventUserEvent`.
 pub struct GuildScheduledEventUserEvent {
+    /// Discord API payload field `guild_scheduled_event_id`.
     pub guild_scheduled_event_id: Snowflake,
+    /// Discord API payload field `user_id`.
     pub user_id: Snowflake,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Snowflake,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `member`.
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Discord API payload field `user`.
     pub user: Option<User>,
     #[serde(skip)]
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `StageInstanceEvent`.
 pub struct StageInstanceEvent {
+    /// Discord API payload field `stage_instance`.
     pub stage_instance: StageInstance,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ApplicationCommandPermissionsUpdateEvent`.
 pub struct ApplicationCommandPermissionsUpdateEvent {
+    /// Discord API payload field `id`.
     pub id: Option<Snowflake>,
+    /// Discord API payload field `application_id`.
     pub application_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `permissions`.
     pub permissions: Vec<Value>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `VoiceChannelEffectEvent`.
 pub struct VoiceChannelEffectEvent {
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
+    /// Discord API payload field `emoji`.
     pub emoji: Option<Emoji>,
+    /// Discord API payload field `animation_type`.
     pub animation_type: Option<u64>,
+    /// Discord API payload field `animation_id`.
     pub animation_id: Option<u64>,
+    /// Discord API payload field `sound_id`.
     pub sound_id: Option<Snowflake>,
+    /// Discord API payload field `sound_volume`.
     pub sound_volume: Option<f64>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `VoiceChannelStartTimeUpdateEvent`.
 pub struct VoiceChannelStartTimeUpdateEvent {
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `voice_channel_start_time`.
     pub voice_channel_start_time: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `VoiceChannelStatusUpdateEvent`.
 pub struct VoiceChannelStatusUpdateEvent {
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `status`.
     pub status: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `ChannelInfoChannel`.
+pub struct ChannelInfoChannel {
+    /// Channel ID whose metadata was returned.
+    pub id: Snowflake,
+    /// Optional channel status value.
+    pub status: Option<String>,
+    /// Optional voice-channel start time value.
+    pub voice_start_time: Option<String>,
+    /// Raw channel-info object for forward-compatible access.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `ChannelInfoEvent`.
+pub struct ChannelInfoEvent {
+    /// Guild ID for the channel-info dispatch.
+    pub guild_id: Snowflake,
+    /// Channel metadata objects included by Discord.
+    pub channels: Vec<ChannelInfoChannel>,
+    /// Raw event payload for forward-compatible access.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `RateLimitedEvent`.
+pub struct RateLimitedEvent {
+    /// Discord API payload field `opcode`.
+    pub opcode: Option<u64>,
+    /// Discord API payload field `retry_after`.
+    pub retry_after: Option<f64>,
+    /// Discord API payload field `meta`.
+    pub meta: Option<Value>,
+    /// Discord API payload field `raw`.
+    pub raw: Value,
+}
+
+#[derive(Clone, Debug)]
+/// Typed Discord API object for `AutoModerationEvent`.
 pub struct AutoModerationEvent {
+    /// Discord API payload field `id`.
     pub id: Option<Snowflake>,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `name`.
     pub name: Option<String>,
+    /// Discord API payload field `creator_id`.
     pub creator_id: Option<Snowflake>,
+    /// Discord API payload field `event_type`.
     pub event_type: Option<u64>,
+    /// Discord API payload field `trigger_type`.
     pub trigger_type: Option<u64>,
+    /// Discord API payload field `trigger_metadata`.
     pub trigger_metadata: Option<Value>,
+    /// Discord API payload field `actions`.
     pub actions: Vec<Value>,
+    /// Discord API payload field `enabled`.
     pub enabled: Option<bool>,
+    /// Discord API payload field `exempt_roles`.
     pub exempt_roles: Vec<Snowflake>,
+    /// Discord API payload field `exempt_channels`.
     pub exempt_channels: Vec<Snowflake>,
+    /// Discord API payload field `action`.
     pub action: Option<Value>,
+    /// Discord API payload field `rule_id`.
     pub rule_id: Option<Snowflake>,
+    /// Discord API payload field `rule_trigger_type`.
     pub rule_trigger_type: Option<u64>,
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<Snowflake>,
+    /// Discord API payload field `message_id`.
     pub message_id: Option<Snowflake>,
+    /// Discord API payload field `alert_system_message_id`.
     pub alert_system_message_id: Option<Snowflake>,
+    /// Discord API payload field `content`.
     pub content: Option<String>,
+    /// Discord API payload field `matched_keyword`.
     pub matched_keyword: Option<String>,
+    /// Discord API payload field `matched_content`.
     pub matched_content: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `AuditLogEntryEvent`.
 pub struct AuditLogEntryEvent {
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<Snowflake>,
+    /// Discord API payload field `entry`.
     pub entry: Option<AuditLogEntry>,
+    /// Discord API payload field `id`.
     pub id: Option<Snowflake>,
+    /// Discord API payload field `user_id`.
     pub user_id: Option<Snowflake>,
+    /// Discord API payload field `target_id`.
     pub target_id: Option<Snowflake>,
+    /// Discord API payload field `action_type`.
     pub action_type: Option<u64>,
+    /// Discord API payload field `changes`.
     pub changes: Option<Vec<Value>>,
+    /// Discord API payload field `options`.
     pub options: Option<Value>,
+    /// Discord API payload field `reason`.
     pub reason: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Typed Discord API enum for `Event`.
 pub enum Event {
+    /// Discord API enum variant `Ready`.
     Ready(ReadyEvent),
+    /// Discord API enum variant `GuildCreate`.
     GuildCreate(GuildEvent),
+    /// Discord API enum variant `GuildUpdate`.
     GuildUpdate(GuildEvent),
+    /// Discord API enum variant `GuildDelete`.
     GuildDelete(GuildDeleteEvent),
+    /// Discord API enum variant `ChannelCreate`.
     ChannelCreate(ChannelEvent),
+    /// Discord API enum variant `ChannelUpdate`.
     ChannelUpdate(ChannelEvent),
+    /// Discord API enum variant `ChannelDelete`.
     ChannelDelete(ChannelEvent),
+    /// Discord API enum variant `MemberAdd`.
     MemberAdd(MemberEvent),
+    /// Discord API enum variant `MemberUpdate`.
     MemberUpdate(MemberEvent),
+    /// Discord API enum variant `MemberRemove`.
     MemberRemove(MemberRemoveEvent),
+    /// Discord API enum variant `GuildMembersChunk`.
     GuildMembersChunk(GuildMembersChunkEvent),
+    /// Discord API enum variant `RoleCreate`.
     RoleCreate(RoleEvent),
+    /// Discord API enum variant `RoleUpdate`.
     RoleUpdate(RoleEvent),
+    /// Discord API enum variant `RoleDelete`.
     RoleDelete(RoleDeleteEvent),
+    /// Discord API enum variant `MessageCreate`.
     MessageCreate(MessageEvent),
+    /// Discord API enum variant `MessageUpdate`.
     MessageUpdate(MessageEvent),
+    /// Discord API enum variant `MessageDelete`.
     MessageDelete(MessageDeleteEvent),
+    /// Discord API enum variant `MessageDeleteBulk`.
     MessageDeleteBulk(BulkMessageDeleteEvent),
+    /// Discord API enum variant `ChannelPinsUpdate`.
     ChannelPinsUpdate(ChannelPinsUpdateEvent),
+    /// Discord API enum variant `GuildBanAdd`.
     GuildBanAdd(GuildBanEvent),
+    /// Discord API enum variant `GuildBanRemove`.
     GuildBanRemove(GuildBanEvent),
+    /// Discord API enum variant `GuildEmojisUpdate`.
     GuildEmojisUpdate(GuildEmojisUpdateEvent),
+    /// Discord API enum variant `GuildIntegrationsUpdate`.
     GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent),
+    /// Discord API enum variant `EntitlementCreate`.
     EntitlementCreate(EntitlementEvent),
+    /// Discord API enum variant `EntitlementUpdate`.
     EntitlementUpdate(EntitlementEvent),
+    /// Discord API enum variant `EntitlementDelete`.
     EntitlementDelete(EntitlementEvent),
+    /// Discord API enum variant `SubscriptionCreate`.
     SubscriptionCreate(SubscriptionEvent),
+    /// Discord API enum variant `SubscriptionUpdate`.
     SubscriptionUpdate(SubscriptionEvent),
+    /// Discord API enum variant `SubscriptionDelete`.
     SubscriptionDelete(SubscriptionEvent),
+    /// Discord API enum variant `IntegrationCreate`.
     IntegrationCreate(IntegrationEvent),
+    /// Discord API enum variant `IntegrationUpdate`.
     IntegrationUpdate(IntegrationEvent),
+    /// Discord API enum variant `IntegrationDelete`.
     IntegrationDelete(IntegrationDeleteEvent),
+    /// Discord API enum variant `GuildSoundboardSoundCreate`.
     GuildSoundboardSoundCreate(SoundboardSoundEvent),
+    /// Discord API enum variant `GuildSoundboardSoundUpdate`.
     GuildSoundboardSoundUpdate(SoundboardSoundEvent),
+    /// Discord API enum variant `GuildSoundboardSoundDelete`.
     GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent),
+    /// Discord API enum variant `GuildSoundboardSoundsUpdate`.
     GuildSoundboardSoundsUpdate(SoundboardSoundsEvent),
+    /// Discord API enum variant `SoundboardSounds`.
     SoundboardSounds(SoundboardSoundsEvent),
+    /// Discord API enum variant `WebhooksUpdate`.
     WebhooksUpdate(WebhooksUpdateEvent),
+    /// Discord API enum variant `InviteCreate`.
     InviteCreate(InviteEvent),
+    /// Discord API enum variant `InviteDelete`.
     InviteDelete(InviteEvent),
+    /// Discord API enum variant `MessageReactionAdd`.
     MessageReactionAdd(ReactionEvent),
+    /// Discord API enum variant `MessageReactionRemove`.
     MessageReactionRemove(ReactionEvent),
+    /// Discord API enum variant `MessageReactionRemoveAll`.
     MessageReactionRemoveAll(ReactionRemoveAllEvent),
+    /// Discord API enum variant `TypingStart`.
     TypingStart(TypingStartEvent),
+    /// Discord API enum variant `PresenceUpdate`.
     PresenceUpdate(PresenceUpdateEvent),
+    /// Discord API enum variant `UserUpdate`.
     UserUpdate(UserUpdateEvent),
+    /// Discord API enum variant `InteractionCreate`.
     InteractionCreate(InteractionEvent),
+    /// Discord API enum variant `VoiceStateUpdate`.
     VoiceStateUpdate(VoiceStateEvent),
+    /// Discord API enum variant `VoiceServerUpdate`.
     VoiceServerUpdate(VoiceServerEvent),
+    /// Discord API enum variant `Resumed`.
     Resumed(ResumedEvent),
+    /// Discord API enum variant `ThreadCreate`.
     ThreadCreate(ThreadEvent),
+    /// Discord API enum variant `ThreadUpdate`.
     ThreadUpdate(ThreadEvent),
+    /// Discord API enum variant `ThreadDelete`.
     ThreadDelete(ThreadEvent),
+    /// Discord API enum variant `ThreadListSync`.
     ThreadListSync(ThreadListSyncEvent),
+    /// Discord API enum variant `ThreadMemberUpdate`.
     ThreadMemberUpdate(ThreadMemberUpdateEvent),
+    /// Discord API enum variant `ThreadMembersUpdate`.
     ThreadMembersUpdate(ThreadMembersUpdateEvent),
+    /// Discord API enum variant `MessageReactionRemoveEmoji`.
     MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent),
+    /// Discord API enum variant `MessagePollVoteAdd`.
     MessagePollVoteAdd(PollVoteEvent),
+    /// Discord API enum variant `MessagePollVoteRemove`.
     MessagePollVoteRemove(PollVoteEvent),
+    /// Discord API enum variant `GuildStickersUpdate`.
     GuildStickersUpdate(GuildStickersUpdateEvent),
+    /// Discord API enum variant `GuildScheduledEventCreate`.
     GuildScheduledEventCreate(ScheduledEvent),
+    /// Discord API enum variant `GuildScheduledEventUpdate`.
     GuildScheduledEventUpdate(ScheduledEvent),
+    /// Discord API enum variant `GuildScheduledEventDelete`.
     GuildScheduledEventDelete(ScheduledEvent),
+    /// Discord API enum variant `GuildScheduledEventUserAdd`.
     GuildScheduledEventUserAdd(GuildScheduledEventUserEvent),
+    /// Discord API enum variant `GuildScheduledEventUserRemove`.
     GuildScheduledEventUserRemove(GuildScheduledEventUserEvent),
+    /// Discord API enum variant `StageInstanceCreate`.
     StageInstanceCreate(StageInstanceEvent),
+    /// Discord API enum variant `StageInstanceUpdate`.
     StageInstanceUpdate(StageInstanceEvent),
+    /// Discord API enum variant `StageInstanceDelete`.
     StageInstanceDelete(StageInstanceEvent),
+    /// Discord API enum variant `VoiceChannelEffectSend`.
     VoiceChannelEffectSend(VoiceChannelEffectEvent),
+    /// Discord API enum variant `VoiceChannelStartTimeUpdate`.
     VoiceChannelStartTimeUpdate(VoiceChannelStartTimeUpdateEvent),
+    /// Discord API enum variant `VoiceChannelStatusUpdate`.
     VoiceChannelStatusUpdate(VoiceChannelStatusUpdateEvent),
+    /// Discord API enum variant `ChannelInfo`.
+    ChannelInfo(ChannelInfoEvent),
+    /// Discord API enum variant `RateLimited`.
+    RateLimited(RateLimitedEvent),
+    /// Discord API enum variant `ApplicationCommandPermissionsUpdate`.
     ApplicationCommandPermissionsUpdate(ApplicationCommandPermissionsUpdateEvent),
+    /// Discord API enum variant `AutoModerationRuleCreate`.
     AutoModerationRuleCreate(AutoModerationEvent),
+    /// Discord API enum variant `AutoModerationRuleUpdate`.
     AutoModerationRuleUpdate(AutoModerationEvent),
+    /// Discord API enum variant `AutoModerationRuleDelete`.
     AutoModerationRuleDelete(AutoModerationEvent),
+    /// Discord API enum variant `AutoModerationActionExecution`.
     AutoModerationActionExecution(AutoModerationEvent),
+    /// Discord API enum variant `GuildAuditLogEntryCreate`.
     GuildAuditLogEntryCreate(AuditLogEntryEvent),
-    Unknown { kind: String, raw: Value },
+    /// Discord API enum variant `Unknown`.
+    Unknown {
+        /// Raw Discord dispatch type.
+        kind: String,
+        /// Raw dispatch payload for unsupported event types.
+        raw: Value,
+    },
 }
 
 impl Event {
+    /// Runs the `kind` operation.
     pub fn kind(&self) -> &str {
         match self {
             Event::Ready(_) => "READY",
@@ -627,6 +1058,8 @@ impl Event {
             Event::VoiceChannelEffectSend(_) => "VOICE_CHANNEL_EFFECT_SEND",
             Event::VoiceChannelStartTimeUpdate(_) => "VOICE_CHANNEL_START_TIME_UPDATE",
             Event::VoiceChannelStatusUpdate(_) => "VOICE_CHANNEL_STATUS_UPDATE",
+            Event::ChannelInfo(_) => "CHANNEL_INFO",
+            Event::RateLimited(_) => "RATE_LIMITED",
             Event::ApplicationCommandPermissionsUpdate(_) => {
                 "APPLICATION_COMMAND_PERMISSIONS_UPDATE"
             }
@@ -639,6 +1072,7 @@ impl Event {
         }
     }
 
+    /// Runs the `raw` operation.
     pub fn raw(&self) -> &Value {
         match self {
             Event::Ready(event) => &event.raw,
@@ -705,6 +1139,8 @@ impl Event {
             Event::VoiceChannelEffectSend(event) => &event.raw,
             Event::VoiceChannelStartTimeUpdate(event) => &event.raw,
             Event::VoiceChannelStatusUpdate(event) => &event.raw,
+            Event::ChannelInfo(event) => &event.raw,
+            Event::RateLimited(event) => &event.raw,
             Event::ApplicationCommandPermissionsUpdate(event) => &event.raw,
             Event::AutoModerationRuleCreate(event)
             | Event::AutoModerationRuleUpdate(event)
@@ -716,6 +1152,7 @@ impl Event {
     }
 }
 
+/// Runs the `decode_event` helper.
 pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError> {
     let event = match event_name {
         "READY" => Event::Ready(ReadyEvent {
@@ -865,42 +1302,8 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             code: data.get("code").and_then(|v| v.as_str().map(String::from)),
             raw: data,
         }),
-        "MESSAGE_REACTION_ADD" => Event::MessageReactionAdd(ReactionEvent {
-            user_id: data
-                .get("user_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data
-                .get("channel_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            message_id: data
-                .get("message_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data
-                .get("guild_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            emoji: data
-                .get("emoji")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            raw: data,
-        }),
-        "MESSAGE_REACTION_REMOVE" => Event::MessageReactionRemove(ReactionEvent {
-            user_id: data
-                .get("user_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data
-                .get("channel_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            message_id: data
-                .get("message_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            guild_id: data
-                .get("guild_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            emoji: data
-                .get("emoji")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            raw: data,
-        }),
+        "MESSAGE_REACTION_ADD" => Event::MessageReactionAdd(decode_reaction_event(data)),
+        "MESSAGE_REACTION_REMOVE" => Event::MessageReactionRemove(decode_reaction_event(data)),
         "MESSAGE_REACTION_REMOVE_ALL" => Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
             channel_id: data
                 .get("channel_id")
@@ -926,20 +1329,7 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             timestamp: data.get("timestamp").and_then(|v| v.as_u64()),
             raw: data,
         }),
-        "PRESENCE_UPDATE" => Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: data
-                .pointer("/user/id")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .map(Snowflake::new),
-            guild_id: data
-                .get("guild_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            status: data
-                .get("status")
-                .and_then(|v| v.as_str().map(String::from)),
-            raw: data,
-        }),
+        "PRESENCE_UPDATE" => Event::PresenceUpdate(decode_presence_update_event(data)),
         "USER_UPDATE" => Event::UserUpdate(UserUpdateEvent {
             user: serde_json::from_value(data.clone())?,
             raw: data,
@@ -1121,6 +1511,8 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
         "VOICE_CHANNEL_STATUS_UPDATE" => {
             Event::VoiceChannelStatusUpdate(decode_voice_channel_status_update_event(data))
         }
+        "CHANNEL_INFO" => Event::ChannelInfo(decode_channel_info_event(data)?),
+        "RATE_LIMITED" => Event::RateLimited(decode_rate_limited_event(data)),
         "APPLICATION_COMMAND_PERMISSIONS_UPDATE" => Event::ApplicationCommandPermissionsUpdate(
             decode_application_command_permissions_update_event(data),
         ),
@@ -1215,6 +1607,61 @@ fn decode_poll_vote_event(data: Value) -> PollVoteEvent {
     }
 }
 
+fn decode_reaction_event(data: Value) -> ReactionEvent {
+    ReactionEvent {
+        user_id: read_optional_snowflake(&data, "user_id"),
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        message_id: read_optional_snowflake(&data, "message_id"),
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        member: data
+            .get("member")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        message_author_id: read_optional_snowflake(&data, "message_author_id"),
+        emoji: data
+            .get("emoji")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        burst: data.get("burst").and_then(Value::as_bool),
+        burst_colors: data
+            .get("burst_colors")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        reaction_type: read_optional_u64(&data, "type"),
+        raw: data,
+    }
+}
+
+fn decode_presence_update_event(data: Value) -> PresenceUpdateEvent {
+    let user = data.get("user").and_then(decode_presence_update_user);
+    let user_id = user.as_ref().map(|user| user.id.clone()).or_else(|| {
+        data.pointer("/user/id")
+            .and_then(Value::as_str)
+            .map(Snowflake::new)
+    });
+
+    PresenceUpdateEvent {
+        user,
+        user_id,
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        status: read_optional_string(&data, "status"),
+        activities: data
+            .get("activities")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default(),
+        client_status: data
+            .get("client_status")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        raw: data,
+    }
+}
+
+fn decode_presence_update_user(value: &Value) -> Option<PresenceUpdateUser> {
+    Some(PresenceUpdateUser {
+        id: read_required_snowflake(value, "id").ok()?,
+        username: read_optional_string(value, "username"),
+        raw: value.clone(),
+    })
+}
+
 fn decode_scheduled_event_user_event(
     data: Value,
 ) -> Result<GuildScheduledEventUserEvent, DiscordError> {
@@ -1281,6 +1728,43 @@ fn decode_voice_channel_status_update_event(data: Value) -> VoiceChannelStatusUp
     }
 }
 
+fn decode_channel_info_event(data: Value) -> Result<ChannelInfoEvent, DiscordError> {
+    let guild_id = read_required_snowflake(&data, "guild_id")?;
+    let channels = data
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|channels| {
+            channels
+                .iter()
+                .map(|channel| {
+                    Ok(ChannelInfoChannel {
+                        id: read_required_snowflake(channel, "id")?,
+                        status: read_optional_string(channel, "status"),
+                        voice_start_time: read_optional_string(channel, "voice_start_time"),
+                        raw: channel.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, DiscordError>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(ChannelInfoEvent {
+        guild_id,
+        channels,
+        raw: data,
+    })
+}
+
+fn decode_rate_limited_event(data: Value) -> RateLimitedEvent {
+    RateLimitedEvent {
+        opcode: read_optional_u64(&data, "opcode"),
+        retry_after: data.get("retry_after").and_then(Value::as_f64),
+        meta: data.get("meta").cloned(),
+        raw: data,
+    }
+}
+
 fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
     AutoModerationEvent {
         id: read_optional_snowflake(&data, "id"),
@@ -1343,7 +1827,7 @@ mod tests {
     use crate::model::{
         Channel, Entitlement, Guild, Integration, IntegrationAccount, Interaction,
         InteractionContextData, Member, Message, PingInteraction, Role, Snowflake, SoundboardSound,
-        Subscription, User, VoiceServerUpdate, VoiceState,
+        StageInstance, Subscription, User, VoiceServerUpdate, VoiceState,
     };
     use crate::types::Emoji;
 
@@ -1551,7 +2035,7 @@ mod tests {
             json!({
                 "guild_id": {},
                 "status": 1,
-                "user": { "id": 9 }
+                "user": { "id": {} }
             }),
         )
         .unwrap();
@@ -1697,7 +2181,18 @@ mod tests {
             json!({
                 "guild_id": "18",
                 "status": "online",
-                "user": { "id": "19" }
+                "user": {
+                    "id": "19",
+                    "username": "present"
+                },
+                "activities": [{
+                    "name": "Building",
+                    "type": 0
+                }],
+                "client_status": {
+                    "desktop": "online",
+                    "web": "idle"
+                }
             }),
         )
         .unwrap();
@@ -1706,6 +2201,21 @@ mod tests {
                 assert_eq!(event.guild_id, Some(snowflake("18")));
                 assert_eq!(event.user_id, Some(snowflake("19")));
                 assert_eq!(event.status.as_deref(), Some("online"));
+                assert_eq!(
+                    event
+                        .user
+                        .as_ref()
+                        .and_then(|user| user.username.as_deref()),
+                    Some("present")
+                );
+                assert_eq!(event.activities[0].name, "Building");
+                assert_eq!(
+                    event
+                        .client_status
+                        .as_ref()
+                        .and_then(|status| status.desktop.as_deref()),
+                    Some("online")
+                );
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -1956,6 +2466,31 @@ mod tests {
             }
             other => panic!("unexpected user update event: {other:?}"),
         }
+
+        let rate_limited = decode_event(
+            "RATE_LIMITED",
+            json!({
+                "opcode": 8,
+                "retry_after": 12.5,
+                "meta": {
+                    "guild_id": "750",
+                    "nonce": "members-1"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(rate_limited.kind(), "RATE_LIMITED");
+        match rate_limited {
+            Event::RateLimited(event) => {
+                assert_eq!(event.opcode, Some(8));
+                assert_eq!(event.retry_after, Some(12.5));
+                assert_eq!(
+                    event.meta,
+                    Some(json!({ "guild_id": "750", "nonce": "members-1" }))
+                );
+            }
+            other => panic!("unexpected rate limited event: {other:?}"),
+        }
     }
 
     #[test]
@@ -2025,8 +2560,18 @@ mod tests {
                 "channel_id": "10",
                 "message_id": "11",
                 "guild_id": "12",
+                "member": {
+                    "user": {
+                        "id": "9",
+                        "username": "reactor"
+                    }
+                },
+                "message_author_id": "99",
+                "burst": true,
+                "burst_colors": ["#ff0000", "#00ff00"],
+                "type": 1,
                 "emoji": {
-                    "name": "🔥"
+                    "name": "?뵦"
                 }
             }),
         )
@@ -2038,8 +2583,20 @@ mod tests {
                 assert_eq!(event.message_id, Some(snowflake("11")));
                 assert_eq!(event.guild_id, Some(snowflake("12")));
                 assert_eq!(
+                    event
+                        .member
+                        .as_ref()
+                        .and_then(|member| member.user.as_ref())
+                        .map(|user| user.username.as_str()),
+                    Some("reactor")
+                );
+                assert_eq!(event.message_author_id, Some(snowflake("99")));
+                assert_eq!(event.burst, Some(true));
+                assert_eq!(event.burst_colors, vec!["#ff0000", "#00ff00"]);
+                assert_eq!(event.reaction_type, Some(1));
+                assert_eq!(
                     event.emoji.and_then(|emoji| emoji.name),
-                    Some("🔥".to_string())
+                    Some("?뵦".to_string())
                 );
             }
             other => panic!("unexpected reaction event: {other:?}"),
@@ -2550,6 +3107,30 @@ mod tests {
             }
             other => panic!("unexpected voice channel status event: {other:?}"),
         }
+
+        let raw_channel_info = json!({
+            "guild_id": "1",
+            "channels": [{
+                "id": "2",
+                "status": "Live",
+                "voice_start_time": "2026-05-01T00:00:00.000000+00:00"
+            }]
+        });
+        let event = decode_event("CHANNEL_INFO", raw_channel_info.clone()).unwrap();
+        assert_eq!(event.kind(), "CHANNEL_INFO");
+        assert_eq!(event.raw(), &raw_channel_info);
+        match event {
+            Event::ChannelInfo(event) => {
+                assert_eq!(event.guild_id.as_str(), "1");
+                assert_eq!(event.channels[0].id.as_str(), "2");
+                assert_eq!(event.channels[0].status.as_deref(), Some("Live"));
+                assert_eq!(
+                    event.channels[0].voice_start_time.as_deref(),
+                    Some("2026-05-01T00:00:00.000000+00:00")
+                );
+            }
+            other => panic!("unexpected channel info event: {other:?}"),
+        }
     }
 
     #[test]
@@ -2744,8 +3325,9 @@ mod tests {
                     channel_id: Some(snowflake("34")),
                     message_id: Some(snowflake("35")),
                     guild_id: Some(snowflake("36")),
-                    emoji: Some(Emoji::unicode("🔥")),
+                    emoji: Some(Emoji::unicode("?뵦")),
                     raw: raw("MESSAGE_REACTION_ADD"),
+                    ..ReactionEvent::default()
                 }),
             ),
             (
@@ -2755,8 +3337,9 @@ mod tests {
                     channel_id: Some(snowflake("38")),
                     message_id: Some(snowflake("39")),
                     guild_id: Some(snowflake("40")),
-                    emoji: Some(Emoji::unicode("🔥")),
+                    emoji: Some(Emoji::unicode("?뵦")),
                     raw: raw("MESSAGE_REACTION_REMOVE"),
+                    ..ReactionEvent::default()
                 }),
             ),
             (
@@ -2957,6 +3540,101 @@ mod tests {
                 }),
             ),
             (
+                "ENTITLEMENT_UPDATE",
+                Event::EntitlementUpdate(EntitlementEvent {
+                    entitlement: Entitlement {
+                        id: snowflake("939"),
+                        sku_id: snowflake("940"),
+                        application_id: snowflake("941"),
+                        kind: 8,
+                        deleted: false,
+                        ..Entitlement::default()
+                    },
+                    raw: raw("ENTITLEMENT_UPDATE"),
+                }),
+            ),
+            (
+                "ENTITLEMENT_DELETE",
+                Event::EntitlementDelete(EntitlementEvent {
+                    entitlement: Entitlement {
+                        id: snowflake("942"),
+                        sku_id: snowflake("943"),
+                        application_id: snowflake("944"),
+                        kind: 8,
+                        deleted: true,
+                        ..Entitlement::default()
+                    },
+                    raw: raw("ENTITLEMENT_DELETE"),
+                }),
+            ),
+            (
+                "SUBSCRIPTION_UPDATE",
+                Event::SubscriptionUpdate(SubscriptionEvent {
+                    subscription: Subscription {
+                        id: snowflake("945"),
+                        user_id: snowflake("946"),
+                        current_period_start: "2026-04-01T00:00:00Z".to_string(),
+                        current_period_end: "2026-05-01T00:00:00Z".to_string(),
+                        status: 1,
+                        ..Subscription::default()
+                    },
+                    raw: raw("SUBSCRIPTION_UPDATE"),
+                }),
+            ),
+            (
+                "SUBSCRIPTION_DELETE",
+                Event::SubscriptionDelete(SubscriptionEvent {
+                    subscription: Subscription {
+                        id: snowflake("947"),
+                        user_id: snowflake("948"),
+                        current_period_start: "2026-04-01T00:00:00Z".to_string(),
+                        current_period_end: "2026-05-01T00:00:00Z".to_string(),
+                        status: 2,
+                        ..Subscription::default()
+                    },
+                    raw: raw("SUBSCRIPTION_DELETE"),
+                }),
+            ),
+            (
+                "INTEGRATION_UPDATE",
+                Event::IntegrationUpdate(IntegrationEvent {
+                    guild_id: Some(snowflake("949")),
+                    integration: Integration {
+                        id: snowflake("950"),
+                        name: "updated-integration".to_string(),
+                        kind: "discord".to_string(),
+                        account: IntegrationAccount {
+                            id: "account".to_string(),
+                            name: "account".to_string(),
+                        },
+                        ..Integration::default()
+                    },
+                    raw: raw("INTEGRATION_UPDATE"),
+                }),
+            ),
+            (
+                "GUILD_SOUNDBOARD_SOUND_UPDATE",
+                Event::GuildSoundboardSoundUpdate(SoundboardSoundEvent {
+                    sound: SoundboardSound {
+                        name: "updated".to_string(),
+                        sound_id: snowflake("951"),
+                        guild_id: Some(snowflake("952")),
+                        volume: 1.0,
+                        available: true,
+                        ..SoundboardSound::default()
+                    },
+                    raw: raw("GUILD_SOUNDBOARD_SOUND_UPDATE"),
+                }),
+            ),
+            (
+                "GUILD_SOUNDBOARD_SOUNDS_UPDATE",
+                Event::GuildSoundboardSoundsUpdate(SoundboardSoundsEvent {
+                    guild_id: snowflake("953"),
+                    soundboard_sounds: Vec::new(),
+                    raw: raw("GUILD_SOUNDBOARD_SOUNDS_UPDATE"),
+                }),
+            ),
+            (
                 "WEBHOOKS_UPDATE",
                 Event::WebhooksUpdate(WebhooksUpdateEvent {
                     guild_id: Some(snowflake("94")),
@@ -2994,6 +3672,17 @@ mod tests {
                 }),
             ),
             (
+                "MESSAGE_POLL_VOTE_REMOVE",
+                Event::MessagePollVoteRemove(PollVoteEvent {
+                    user_id: Some(snowflake("984")),
+                    channel_id: Some(snowflake("985")),
+                    message_id: Some(snowflake("986")),
+                    guild_id: Some(snowflake("987")),
+                    answer_id: Some(2),
+                    raw: raw("MESSAGE_POLL_VOTE_REMOVE"),
+                }),
+            ),
+            (
                 "TYPING_START",
                 Event::TypingStart(TypingStartEvent {
                     channel_id: Some(snowflake("100")),
@@ -3010,6 +3699,261 @@ mod tests {
                     guild_id: Some(snowflake("104")),
                     status: Some("idle".to_string()),
                     raw: raw("PRESENCE_UPDATE"),
+                    ..PresenceUpdateEvent::default()
+                }),
+            ),
+            (
+                "THREAD_CREATE",
+                Event::ThreadCreate(ThreadEvent {
+                    thread: channel("110"),
+                    raw: raw("THREAD_CREATE"),
+                }),
+            ),
+            (
+                "THREAD_UPDATE",
+                Event::ThreadUpdate(ThreadEvent {
+                    thread: channel("111"),
+                    raw: raw("THREAD_UPDATE"),
+                }),
+            ),
+            (
+                "THREAD_DELETE",
+                Event::ThreadDelete(ThreadEvent {
+                    thread: channel("112"),
+                    raw: raw("THREAD_DELETE"),
+                }),
+            ),
+            (
+                "THREAD_LIST_SYNC",
+                Event::ThreadListSync(ThreadListSyncEvent {
+                    guild_id: Some(snowflake("113")),
+                    threads: vec![channel("114")],
+                    raw: raw("THREAD_LIST_SYNC"),
+                }),
+            ),
+            (
+                "THREAD_MEMBER_UPDATE",
+                Event::ThreadMemberUpdate(ThreadMemberUpdateEvent {
+                    guild_id: Some(snowflake("115")),
+                    thread_id: Some(snowflake("116")),
+                    raw: raw("THREAD_MEMBER_UPDATE"),
+                }),
+            ),
+            (
+                "THREAD_MEMBERS_UPDATE",
+                Event::ThreadMembersUpdate(ThreadMembersUpdateEvent {
+                    guild_id: Some(snowflake("117")),
+                    thread_id: Some(snowflake("118")),
+                    added_members: Some(vec![json!({"id": "119"})]),
+                    removed_member_ids: Some(vec![snowflake("120")]),
+                    member_count: Some(2),
+                    raw: raw("THREAD_MEMBERS_UPDATE"),
+                }),
+            ),
+            (
+                "MESSAGE_REACTION_REMOVE_EMOJI",
+                Event::MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent {
+                    channel_id: Some(snowflake("121")),
+                    message_id: Some(snowflake("122")),
+                    guild_id: Some(snowflake("123")),
+                    emoji: Some(Emoji::unicode("wave")),
+                    raw: raw("MESSAGE_REACTION_REMOVE_EMOJI"),
+                }),
+            ),
+            (
+                "GUILD_STICKERS_UPDATE",
+                Event::GuildStickersUpdate(GuildStickersUpdateEvent {
+                    guild_id: Some(snowflake("124")),
+                    stickers: Vec::new(),
+                    raw: raw("GUILD_STICKERS_UPDATE"),
+                }),
+            ),
+            (
+                "GUILD_SCHEDULED_EVENT_UPDATE",
+                Event::GuildScheduledEventUpdate(ScheduledEvent {
+                    id: Some(snowflake("125")),
+                    guild_id: Some(snowflake("126")),
+                    raw: raw("GUILD_SCHEDULED_EVENT_UPDATE"),
+                    ..ScheduledEvent::default()
+                }),
+            ),
+            (
+                "GUILD_SCHEDULED_EVENT_DELETE",
+                Event::GuildScheduledEventDelete(ScheduledEvent {
+                    id: Some(snowflake("127")),
+                    guild_id: Some(snowflake("128")),
+                    raw: raw("GUILD_SCHEDULED_EVENT_DELETE"),
+                    ..ScheduledEvent::default()
+                }),
+            ),
+            (
+                "GUILD_SCHEDULED_EVENT_USER_ADD",
+                Event::GuildScheduledEventUserAdd(GuildScheduledEventUserEvent {
+                    guild_scheduled_event_id: snowflake("129"),
+                    user_id: snowflake("130"),
+                    guild_id: snowflake("131"),
+                    member: None,
+                    user: None,
+                    raw: raw("GUILD_SCHEDULED_EVENT_USER_ADD"),
+                }),
+            ),
+            (
+                "GUILD_SCHEDULED_EVENT_USER_REMOVE",
+                Event::GuildScheduledEventUserRemove(GuildScheduledEventUserEvent {
+                    guild_scheduled_event_id: snowflake("132"),
+                    user_id: snowflake("133"),
+                    guild_id: snowflake("134"),
+                    member: None,
+                    user: None,
+                    raw: raw("GUILD_SCHEDULED_EVENT_USER_REMOVE"),
+                }),
+            ),
+            (
+                "STAGE_INSTANCE_UPDATE",
+                Event::StageInstanceUpdate(StageInstanceEvent {
+                    stage_instance: StageInstance {
+                        id: snowflake("135"),
+                        guild_id: snowflake("136"),
+                        channel_id: snowflake("137"),
+                        topic: "updated".to_string(),
+                        privacy_level: 2,
+                        ..StageInstance::default()
+                    },
+                    raw: raw("STAGE_INSTANCE_UPDATE"),
+                }),
+            ),
+            (
+                "STAGE_INSTANCE_DELETE",
+                Event::StageInstanceDelete(StageInstanceEvent {
+                    stage_instance: StageInstance {
+                        id: snowflake("138"),
+                        guild_id: snowflake("139"),
+                        channel_id: snowflake("140"),
+                        topic: "deleted".to_string(),
+                        privacy_level: 2,
+                        ..StageInstance::default()
+                    },
+                    raw: raw("STAGE_INSTANCE_DELETE"),
+                }),
+            ),
+            (
+                "VOICE_CHANNEL_EFFECT_SEND",
+                Event::VoiceChannelEffectSend(VoiceChannelEffectEvent {
+                    channel_id: Some(snowflake("141")),
+                    guild_id: Some(snowflake("142")),
+                    user_id: Some(snowflake("143")),
+                    emoji: Some(Emoji::unicode("wave")),
+                    animation_type: Some(1),
+                    animation_id: Some(2),
+                    sound_id: Some(snowflake("144")),
+                    sound_volume: Some(0.5),
+                    raw: raw("VOICE_CHANNEL_EFFECT_SEND"),
+                }),
+            ),
+            (
+                "VOICE_CHANNEL_START_TIME_UPDATE",
+                Event::VoiceChannelStartTimeUpdate(VoiceChannelStartTimeUpdateEvent {
+                    channel_id: Some(snowflake("145")),
+                    guild_id: Some(snowflake("146")),
+                    voice_channel_start_time: Some("2026-05-02T00:00:00Z".to_string()),
+                    raw: raw("VOICE_CHANNEL_START_TIME_UPDATE"),
+                }),
+            ),
+            (
+                "VOICE_CHANNEL_STATUS_UPDATE",
+                Event::VoiceChannelStatusUpdate(VoiceChannelStatusUpdateEvent {
+                    channel_id: Some(snowflake("147")),
+                    guild_id: Some(snowflake("148")),
+                    status: Some("live".to_string()),
+                    raw: raw("VOICE_CHANNEL_STATUS_UPDATE"),
+                }),
+            ),
+            (
+                "CHANNEL_INFO",
+                Event::ChannelInfo(ChannelInfoEvent {
+                    guild_id: snowflake("149"),
+                    channels: vec![ChannelInfoChannel {
+                        id: snowflake("150"),
+                        status: Some("live".to_string()),
+                        voice_start_time: Some("2026-05-02T00:00:00Z".to_string()),
+                        raw: raw("CHANNEL_INFO_CHANNEL"),
+                    }],
+                    raw: raw("CHANNEL_INFO"),
+                }),
+            ),
+            (
+                "RATE_LIMITED",
+                Event::RateLimited(RateLimitedEvent {
+                    opcode: Some(8),
+                    retry_after: Some(1.5),
+                    meta: Some(json!({"nonce": "members"})),
+                    raw: raw("RATE_LIMITED"),
+                }),
+            ),
+            (
+                "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
+                Event::ApplicationCommandPermissionsUpdate(
+                    ApplicationCommandPermissionsUpdateEvent {
+                        id: Some(snowflake("151")),
+                        application_id: Some(snowflake("152")),
+                        guild_id: Some(snowflake("153")),
+                        permissions: vec![json!({"id": "154", "type": 1, "permission": true})],
+                        raw: raw("APPLICATION_COMMAND_PERMISSIONS_UPDATE"),
+                    },
+                ),
+            ),
+            (
+                "AUTO_MODERATION_RULE_UPDATE",
+                Event::AutoModerationRuleUpdate(AutoModerationEvent {
+                    id: Some(snowflake("155")),
+                    guild_id: Some(snowflake("156")),
+                    name: Some("updated".to_string()),
+                    creator_id: None,
+                    event_type: None,
+                    trigger_type: None,
+                    trigger_metadata: None,
+                    actions: Vec::new(),
+                    enabled: None,
+                    exempt_roles: Vec::new(),
+                    exempt_channels: Vec::new(),
+                    action: None,
+                    rule_id: None,
+                    rule_trigger_type: None,
+                    user_id: None,
+                    channel_id: None,
+                    message_id: None,
+                    alert_system_message_id: None,
+                    content: None,
+                    matched_keyword: None,
+                    matched_content: None,
+                    raw: raw("AUTO_MODERATION_RULE_UPDATE"),
+                }),
+            ),
+            (
+                "AUTO_MODERATION_RULE_DELETE",
+                Event::AutoModerationRuleDelete(AutoModerationEvent {
+                    id: Some(snowflake("157")),
+                    guild_id: Some(snowflake("158")),
+                    name: Some("deleted".to_string()),
+                    creator_id: None,
+                    event_type: None,
+                    trigger_type: None,
+                    trigger_metadata: None,
+                    actions: Vec::new(),
+                    enabled: None,
+                    exempt_roles: Vec::new(),
+                    exempt_channels: Vec::new(),
+                    action: None,
+                    rule_id: None,
+                    rule_trigger_type: None,
+                    user_id: None,
+                    channel_id: None,
+                    message_id: None,
+                    alert_system_message_id: None,
+                    content: None,
+                    matched_keyword: None,
+                    matched_content: None,
+                    raw: raw("AUTO_MODERATION_RULE_DELETE"),
                 }),
             ),
             (

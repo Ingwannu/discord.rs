@@ -20,20 +20,32 @@ use crate::parsers::{
 };
 use crate::types::invalid_data_error;
 
+/// Typed Discord API enum for `InteractionResponse`.
 pub enum InteractionResponse {
+    /// Discord API enum variant `Pong`.
     Pong,
+    /// Discord API enum variant `ChannelMessage`.
     ChannelMessage(Value),
+    /// Discord API enum variant `DeferredMessage`.
     DeferredMessage,
+    /// Discord API enum variant `DeferredUpdate`.
     DeferredUpdate,
+    /// Discord API enum variant `AutocompleteResult`.
     AutocompleteResult(Vec<ApplicationCommandOptionChoice>),
+    /// Discord API enum variant `Modal`.
     Modal(ModalBuilder),
+    /// Discord API enum variant `UpdateMessage`.
     UpdateMessage(Value),
+    /// Discord API enum variant `LaunchActivity`.
     LaunchActivity,
+    /// Discord API enum variant `Raw`.
     Raw(Value),
 }
 
+/// Trait for `InteractionHandler` behavior.
 #[async_trait]
 pub trait InteractionHandler: Send + Sync {
+    /// Handles one verified raw Discord interaction.
     async fn handle(
         &self,
         ctx: InteractionContext,
@@ -41,8 +53,10 @@ pub trait InteractionHandler: Send + Sync {
     ) -> InteractionResponse;
 }
 
+/// Trait for `TypedInteractionHandler` behavior.
 #[async_trait]
 pub trait TypedInteractionHandler: Send + Sync {
+    /// Handles one verified typed Discord interaction.
     async fn handle_typed(
         &self,
         ctx: InteractionContextData,
@@ -167,6 +181,7 @@ fn verify_discord_request_signature_at_time(
     .map_err(|_| StatusCode::UNAUTHORIZED)
 }
 
+/// Runs the `verify_discord_signature` helper.
 pub fn verify_discord_signature(
     public_key: &str,
     signature: &str,
@@ -270,6 +285,7 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
+/// Runs the `try_interactions_endpoint` helper.
 pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, DiscordError>
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
@@ -284,6 +300,7 @@ where
         }))
 }
 
+/// Runs the `interactions_endpoint` helper.
 pub fn interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
@@ -349,6 +366,7 @@ where
     (StatusCode::OK, Json(response_payload)).into_response()
 }
 
+/// Runs the `try_typed_interactions_endpoint` helper.
 pub fn try_typed_interactions_endpoint<H>(
     public_key: &str,
     handler: H,
@@ -369,6 +387,7 @@ where
         }))
 }
 
+/// Runs the `typed_interactions_endpoint` helper.
 pub fn typed_interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: TypedInteractionHandler + Clone + Send + Sync + 'static,

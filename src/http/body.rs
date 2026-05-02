@@ -14,6 +14,15 @@ pub(crate) enum RequestBody {
         payload_json: Value,
         files: Vec<FileAttachment>,
     },
+    NamedFileMultipart {
+        field_name: &'static str,
+        file: FileAttachment,
+    },
+    PayloadAndNamedFileMultipart {
+        payload_json: Value,
+        field_name: &'static str,
+        file: FileAttachment,
+    },
     StickerMultipart {
         payload_json: Value,
         file: FileAttachment,
@@ -33,6 +42,28 @@ pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
     Ok(RequestBody::Multipart {
         payload_json: serialize_body(body)?,
         files: files.to_vec(),
+    })
+}
+
+pub(crate) fn named_file_multipart_body(
+    field_name: &'static str,
+    file: &FileAttachment,
+) -> RequestBody {
+    RequestBody::NamedFileMultipart {
+        field_name,
+        file: file.clone(),
+    }
+}
+
+pub(crate) fn payload_named_file_multipart_body<T: serde::Serialize + ?Sized>(
+    body: &T,
+    field_name: &'static str,
+    file: &FileAttachment,
+) -> Result<RequestBody, DiscordError> {
+    Ok(RequestBody::PayloadAndNamedFileMultipart {
+        payload_json: serialize_body(body)?,
+        field_name,
+        file: file.clone(),
     })
 }
 
@@ -56,6 +87,33 @@ pub(crate) fn build_multipart_form(
     }
 
     Ok(form)
+}
+
+pub(crate) fn build_named_file_form(
+    payload_json: Option<&Value>,
+    field_name: &'static str,
+    file: &FileAttachment,
+) -> Result<Form, DiscordError> {
+    if field_name.trim().is_empty() {
+        return Err(invalid_data_error(
+            "multipart file field name must not be empty",
+        ));
+    }
+    if file.filename.trim().is_empty() {
+        return Err(invalid_data_error("file filename must not be empty"));
+    }
+
+    let mut form = Form::new();
+    if let Some(payload_json) = payload_json {
+        form = form.text("payload_json", serde_json::to_string(payload_json)?);
+    }
+
+    let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
+    if let Some(content_type) = &file.content_type {
+        part = part.mime_str(content_type)?;
+    }
+
+    Ok(form.part(field_name, part))
 }
 
 pub(crate) fn build_sticker_form(

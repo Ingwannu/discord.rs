@@ -4,6 +4,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+## 2.0.0 - 2026-05-02
+
+- Added `AppFramework` for typed HTTP interaction routing across commands, components, and modals.
+- Added typed Webhook Events parsing for Discord's HTTP event payloads, including app authorization, entitlement, lobby message, and game DM event families.
+- Added typed application Activity Instance models and REST helper for Discord's Activity session lookup route.
+- Added typed application command permission models and REST helpers, including OAuth2 Bearer-token writes for Discord's command-permission edit route.
+- Added typed current-user OAuth2 connection and application role connection models and REST helpers.
+- Added `CurrentUserGuildsQuery` and current-user guild pagination/count support, including `banner`, `approximate_member_count`, and `approximate_presence_count` fields.
+- Added typed Lobby resource models and REST helpers for lobby CRUD, member updates, channel linking, and moderation metadata.
+- Added typed guild incident-action models and a REST helper for Discord's `PUT /guilds/{guild.id}/incident-actions` safety route.
+- Added typed Audit Log Resource models and `get_guild_audit_log_typed(...)`, including Discord's `after` cursor query.
+- Added `GetGuildQuery` and `get_guild_with_query(...)` for Discord's optional `with_counts` guild fetch.
+- Added `GuildBansQuery` and `get_guild_bans_with_query(...)` for Discord's `before`/`after` guild ban pagination.
+- Added typed guild channel-position and OAuth2 guild-member join helpers for `PATCH /guilds/{guild.id}/channels` and `PUT /guilds/{guild.id}/members/{user.id}`.
+- Added `ModifyGuildRolePosition` and `modify_guild_role_positions_typed(...)` for typed guild role reordering.
+- Added typed Guild Resource request bodies for single-member bans, member/current-member edits, and guild role create/update routes.
+- Added typed Guild Resource request bodies for modifying guilds, creating guild channels, widget settings, welcome screens, and onboarding.
+- Added `BeginGuildPruneRequest` and `begin_guild_prune_with_request(...)` for Discord's current JSON-body prune route.
+- Added `CreateStageInstance`, `ModifyStageInstance`, and typed Stage Instance request wrappers.
+- Added `get_sticker_pack(...)`, `CreateGuildSticker`, `ModifyGuildSticker`, and typed guild sticker write wrappers.
+- Added typed Voice Resource REST helpers for current-user and user voice-state reads/writes.
+- Added `ApplicationInstallParams`, `ApplicationIntegrationTypeConfig`, `ModifyCurrentApplication`, and a typed current-application edit wrapper.
+- Added typed Webhook Resource request bodies, query-aware webhook execution and message helpers, Slack/GitHub-compatible webhook execution helpers, and tokenized webhook path validation.
+- Expanded `Sku` and `Entitlement` to preserve Discord's current monetization response metadata such as SKU feature/release fields and entitlement promotion/gift-code fields.
+- Added Invite target-user CSV helpers and job-status models, plus multipart invite creation for Discord's `target_users_file` flow.
+- Added `SelectDefaultValue` and select-menu builder support for Discord's current auto-populated select defaults, component IDs, and modal `required` flag.
+- Added `GuildMembersQuery` and `get_guild_members_with_query(...)` for Discord's `after` cursor on guild member list pagination.
+- Added `SearchGuildMembersQuery` and `search_guild_members_with_query(...)` with shared percent-encoded query building.
+- Expanded `Member` for current Guild Member fields such as guild banner, avatar decoration data, and collectibles.
+- Added typed guild role member-count reads for `GET /guilds/{guild.id}/roles/member-counts`.
+- Added typed guild widget reads and unauthenticated PNG widget-image downloads for Discord's public widget routes.
+- Added typed Create Group DM support through `CreateGroupDmChannel` and `create_group_dm_channel_typed(...)`.
+- Added typed Group DM recipient add/remove helpers for Discord's `gdm.join` flow.
+- Added typed guild message search and current channel-pin listing helpers for Discord's Message Resource.
+- Updated `pin_message(...)` and `unpin_message(...)` to Discord's current Message Resource pin routes.
+- Added legacy channel pin aliases, `GET /gateway`, OAuth2 authorization/application metadata helpers, guild-template code lookup, and corrected Lobby bulk/moderation routes to close the 2026-05-02 official REST route-shape audit at 223/223 mapped routes.
+- Added typed `AllowedMentions` and `ReactionCountDetails` models for Message Resource object coverage.
+- Added REST wrappers for the legacy batch application-command permissions route and single guild-command fetch route so every official route shape has a concrete client entry point.
+- Expanded the `Message` model for current Message Resource fields such as forwarded snapshots, call metadata, shared client themes, mention role IDs, and referenced messages.
+- Added typed Channel Resource helpers for channel invite listing/creation, voice-channel status updates, and channel permission overwrite edits.
+- Added Gateway opcode 43 channel-info requests and typed `CHANNEL_INFO` event decoding.
+- Added typed Gateway `RATE_LIMITED` event decoding and preserved current reaction dispatch fields such as `member`, `message_author_id`, `burst`, `burst_colors`, and reaction `type`.
+- Expanded `PRESENCE_UPDATE` decoding with partial user, activity, and client-status metadata.
+- Kept all-features line coverage above the 90% release gate with regression coverage for the new REST, Gateway, event, and framework surfaces.
+
 ## 1.2.2
 
 - Fixed default Gateway startup so Identify no longer requests payload compression without a matching receive decoder, preventing compressed binary payloads from being read as UTF-8 JSON.
@@ -30,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a `voice-encode` feature with optional `opus-rs` support, including `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder` for 48 kHz stereo 20 ms PCM-to-Opus playback through the existing voice runtime.
 - Added outbound voice playback plumbing for encoded Opus frames, RTP sequence/timestamp/nonce management, and automatic speaking on/off behavior around playback.
 - Added DAVE outbound media support with `VoiceDaveySession`, `VoiceDaveFrameEncryptor`, `send_opus_frame_with_dave(...)`, and typed DAVE MLS gateway commands for transition-ready, key-package, commit/welcome, and invalid commit/welcome flows.
-- Added an ignored live DAVE MLS transition harness (`tests/live_voice_dave.rs`) so production interoperability can be verified against a real Discord voice session without running live network tests by default.
+- Added an ignored live DAVE MLS transition harness (`tests/live_voice_dave.rs`) and validated it against a real Discord voice session for the 2.0.0 release.
 - Expanded Gateway typed coverage, EventHandler convenience hooks, request-guild-members helpers, interaction payload fields, application command fields, and richer Activity/Presence models.
 - Added OAuth2 backend helpers, typed REST coverage for moderation/application/guild administration gaps, and continued the split of HTTP helper/path/body/rate-limit code away from the monolithic HTTP client.
 - Added cache storage and eviction controls for guild metadata, emojis, stickers, scheduled events, stage instances, voice state, soundboard, and other long-running bot data.

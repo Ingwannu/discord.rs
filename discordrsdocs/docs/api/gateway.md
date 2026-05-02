@@ -1,4 +1,4 @@
-# Gateway API
+﻿# Gateway API
 
 Gateway runtime is provided behind the `gateway` feature.
 
@@ -10,12 +10,13 @@ Gateway runtime is provided behind the `gateway` feature.
 - `GatewayClient`: raw websocket lifecycle management (identify, heartbeat, resume, reconnect)
 - `Context`: shared runtime handles (`http`, cache, typemap, shard info)
 - `EventHandler`: async trait with `handle_event(ctx, event)`
+- `RequestChannelInfo`: typed opcode 43 request for ephemeral voice-channel metadata
 
 ## Setup
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.2", features = ["gateway"] }
+discordrs = { version = "2.0.0", features = ["gateway"] }
 ```
 
 ## Boot Pattern
@@ -30,8 +31,22 @@ Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGE
 ## Event Surface
 
 - Prefer `handle_event` for new code.
-- `Event` currently exposes typed variants for `READY`, message events, interaction events, guild/channel/member/role cache flows, and `Unknown`.
+- `Event` currently exposes typed variants for `READY`, message events, interaction events, guild/channel/member/role cache flows, `CHANNEL_INFO`, `RATE_LIMITED`, and `Unknown`.
+- Reaction dispatches preserve Discord's current metadata fields, including `member`, `message_author_id`, `burst`, `burst_colors`, and `reaction_type`.
+- Presence dispatches expose the documented partial user ID, activities, and `ClientStatus` platform status metadata.
 - Legacy `ready`, `message_create`, `interaction_create`, and `raw_event` hooks still exist for migration.
+
+## Gateway Control Helpers
+
+`Context` and `ShardMessenger` expose typed control paths for common outbound Gateway commands:
+
+- presence updates
+- guild member requests
+- soundboard sound requests
+- voice state updates
+- channel info requests through `request_channel_info(RequestChannelInfo::voice_metadata(guild_id))`
+
+`RequestChannelInfo` serializes to Discord Gateway opcode 43 and currently exposes the documented `status` and `voice_start_time` fields. Incoming `CHANNEL_INFO` dispatches decode to `Event::ChannelInfo`.
 
 ## Operational Notes
 

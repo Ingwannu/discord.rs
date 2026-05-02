@@ -4,38 +4,66 @@
 //! - `gateway` - Gateway WebSocket client, BotClient, EventHandler
 //! - `interactions` - HTTP Interactions Endpoint with Ed25519 verification
 
+/// Bit flag helpers for Discord gateway intents, permissions, and message flags.
 pub mod bitfield;
 pub mod builders;
+/// Gateway cache storage, policies, and typed cache manager helpers.
 pub mod cache;
+/// Collection helpers for Discord model maps and cached entity sets.
 pub mod collection;
 #[cfg(feature = "collectors")]
+/// Event collectors for waiting on messages, components, modals, and interactions.
 pub mod collector;
+/// Application command builders and command option models.
 pub mod command;
+/// Discord API constants used by gateway, REST, and interaction helpers.
 pub mod constants;
+/// Error types returned by Discord REST, Gateway, voice, and parser operations.
 pub mod error;
+/// Typed Discord Gateway event payloads and dispatch decoding.
 pub mod event;
+#[cfg(feature = "interactions")]
+/// High-level typed interaction application framework.
+pub mod framework;
+/// Convenience helpers for interaction responses and webhook followups.
 pub mod helpers;
+/// Typed Discord REST client, request bodies, route helpers, and rate-limit handling.
 pub mod http;
+/// Shared manager traits for cached Discord model access.
 pub mod manager;
+/// Typed Discord API models and request payload shapes.
 pub mod model;
+/// OAuth2 authorization URL and token exchange helpers.
 pub mod oauth2;
+/// Parsers for Discord interaction and modal payloads.
 pub mod parsers;
+/// Commonly used discord.rs types re-exported for application code.
 pub mod prelude;
+/// Interaction response and message response builders.
 pub mod response;
 #[cfg(feature = "sharding")]
+/// Gateway sharding configuration, runtime coordination, and IPC helpers.
 pub mod sharding;
+/// Legacy compatibility types and shared builder aliases.
 pub mod types;
 #[cfg(feature = "voice")]
+/// Voice manager state, gateway commands, DAVE frame types, and playback controls.
 pub mod voice;
 #[cfg(feature = "voice")]
+/// Discord voice runtime transport, RTP, Opus, and encryption helpers.
 pub mod voice_runtime;
+/// Typed parser for Discord application Webhook Events payloads.
+pub mod webhook_events;
 #[cfg(any(feature = "gateway", feature = "sharding"))]
+/// Gateway websocket URL and connection configuration helpers.
 pub mod ws;
 
 #[cfg(feature = "gateway")]
+/// Gateway bot runtime, client, context, event handler, and shard supervision.
 pub mod gateway;
 
 #[cfg(feature = "interactions")]
+/// Signed Discord interactions endpoint helpers and typed handlers.
 pub mod interactions;
 
 pub use cache::{
@@ -49,41 +77,67 @@ pub use command::{
 };
 pub use error::{DiscordError, HttpError};
 pub use event::{
-    decode_event, AuditLogEntryEvent, AutoModerationEvent, ChannelEvent, EntitlementEvent, Event,
-    GuildDeleteEvent, GuildDeletePayload, GuildEvent, GuildMembersChunkEvent,
-    GuildMembersChunkPayload, GuildScheduledEventUserEvent, GuildStickersUpdateEvent,
-    InteractionEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent,
-    MessageDeletePayload, MessageEvent, ReactionRemoveEmojiEvent, ReadyEvent, ReadyPayload,
-    ResumedEvent, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
-    SoundboardSoundDeleteEvent, SoundboardSoundEvent, SoundboardSoundsEvent, StageInstanceEvent,
-    ThreadEvent, ThreadListSyncEvent, ThreadMemberUpdateEvent, ThreadMembersUpdateEvent,
-    UserUpdateEvent, VoiceChannelEffectEvent, VoiceChannelStartTimeUpdateEvent,
-    VoiceChannelStatusUpdateEvent, VoiceServerEvent, VoiceStateEvent,
+    decode_event, AuditLogEntryEvent, AutoModerationEvent, ChannelEvent, ChannelInfoChannel,
+    ChannelInfoEvent, EntitlementEvent, Event, GuildDeleteEvent, GuildDeletePayload, GuildEvent,
+    GuildMembersChunkEvent, GuildMembersChunkPayload, GuildScheduledEventUserEvent,
+    GuildStickersUpdateEvent, InteractionEvent, MemberEvent, MemberRemoveEvent,
+    MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload, MessageEvent,
+    ReactionRemoveEmojiEvent, ReadyEvent, ReadyPayload, ResumedEvent, RoleDeleteEvent,
+    RoleDeletePayload, RoleEvent, ScheduledEvent, SoundboardSoundDeleteEvent, SoundboardSoundEvent,
+    SoundboardSoundsEvent, StageInstanceEvent, ThreadEvent, ThreadListSyncEvent,
+    ThreadMemberUpdateEvent, ThreadMembersUpdateEvent, UserUpdateEvent, VoiceChannelEffectEvent,
+    VoiceChannelStartTimeUpdateEvent, VoiceChannelStatusUpdateEvent, VoiceServerEvent,
+    VoiceStateEvent,
+};
+#[cfg(feature = "interactions")]
+pub use framework::{
+    AppContext, AppFramework, AppFrameworkBuilder, AppGuard, AppRouteHandler, FrameworkFuture,
+    RouteKey,
 };
 pub use manager::CachedManager;
 pub use model::{
-    Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
-    ActivityType, Application, ApplicationCommand, ApplicationCommandHandlerType,
-    ApplicationCommandOption, ApplicationCommandOptionChoice, ApplicationIntegrationType,
-    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, Attachment, AuditLogEntry,
+    Activity, ActivityAssets, ActivityButton, ActivityInstance, ActivityLocation, ActivityParty,
+    ActivitySecrets, ActivityTimestamps, ActivityType, AddGroupDmRecipient, AddGuildMember,
+    AddLobbyMember, AllowedMentions, Application, ApplicationCommand,
+    ApplicationCommandHandlerType, ApplicationCommandOption, ApplicationCommandOptionChoice,
+    ApplicationCommandPermission, ApplicationInstallParams, ApplicationIntegrationType,
+    ApplicationIntegrationTypeConfig, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
+    Attachment, AuditLog, AuditLogEntry, AuditLogQuery, AuthorizationInformation,
     AutoModerationAction, AutoModerationActionMetadata, AutoModerationRule,
-    AutoModerationTriggerMetadata, AutocompleteInteraction, Ban, BulkGuildBanRequest,
-    BulkGuildBanResponse, Channel, ChannelMention, ChatInputCommandInteraction,
-    CommandInteractionData, CommandInteractionOption, ComponentInteraction, CreateDmChannel,
-    CreateMessage, CreatePoll, CreateTestEntitlement, CurrentUserGuild, DefaultReaction,
-    DiscordModel, Embed, Entitlement, EntitlementQuery, FollowedChannel, ForumTag, GatewayBot,
-    Guild, GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult, GuildScheduledEvent,
+    AutoModerationTriggerMetadata, AutocompleteInteraction, Ban, BeginGuildPruneRequest,
+    BulkGuildBanRequest, BulkGuildBanResponse, Channel, ChannelMention, ChannelPins,
+    ChannelPinsQuery, ChatInputCommandInteraction, ClientStatus, CommandInteractionData,
+    CommandInteractionOption, ComponentInteraction, CreateChannelInvite, CreateDmChannel,
+    CreateGroupDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker,
+    CreateLobby, CreateMessage, CreatePoll, CreateStageInstance, CreateTestEntitlement,
+    CreateWebhook, CurrentUserGuild, CurrentUserGuildsQuery, DefaultReaction, DiscordModel,
+    EditApplicationCommandPermissions, EditChannelPermission, Embed, Entitlement, EntitlementQuery,
+    FollowedChannel, ForumTag, Gateway, GatewayBot, GetGuildQuery, Guild,
+    GuildApplicationCommandPermissions, GuildBansQuery, GuildIncidentsData, GuildMembersQuery,
+    GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult, GuildScheduledEvent,
     GuildScheduledEventEntityMetadata, GuildScheduledEventRecurrenceRule,
-    GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser, GuildTemplate,
-    GuildWidgetSettings, Integration, IntegrationAccount, IntegrationApplication, Interaction,
-    InteractionCallbackResponse, InteractionContextData, InteractionContextType, Invite,
-    JoinedArchivedThreadsQuery, Member, Message, MessageContextMenuInteraction, MessageReference,
-    ModalSubmitInteraction, PermissionOverwrite, PermissionsBitField, Poll, PollAnswer,
-    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, RequestGuildMembers, Role, RoleTags,
-    Sku, Snowflake, SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerItem,
-    StickerPack, StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse,
-    ThreadMember, ThreadMemberQuery, UpdatePresence, User, UserContextMenuInteraction, VanityUrl,
-    VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WelcomeScreen, WelcomeScreenChannel,
+    GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser, GuildTemplate, GuildWidget,
+    GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings, Integration,
+    IntegrationAccount, IntegrationApplication, Interaction, InteractionCallbackResponse,
+    InteractionContextData, InteractionContextType, Invite, InviteTargetUsersJobStatus,
+    JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby, LobbyMember, LobbyMemberUpdate, Member,
+    Message, MessageActivity, MessageCall, MessageContextMenuInteraction, MessagePin,
+    MessageReference, MessageSnapshot, MessageSnapshotMessage, ModalSubmitInteraction,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite,
+    PermissionsBitField, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia,
+    PollResults, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, Role, RoleColors,
+    RoleSubscriptionData, RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery,
+    SearchGuildMessagesResponse, SetVoiceChannelStatus, SharedClientTheme, Sku, Snowflake,
+    SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerItem, StickerPack,
+    StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember,
+    ThreadMemberQuery, UpdatePresence, UpdateUserApplicationRoleConnection, User,
+    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserContextMenuInteraction,
+    UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
+    Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
 };
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
@@ -96,6 +150,11 @@ pub use sharding::{
     ShardSupervisorEvent, ShardingManager,
 };
 pub use types::{ButtonConfig, Emoji, MediaGalleryItem, MediaInfo, SelectOption};
+pub use webhook_events::{
+    parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,
+    ApplicationDeauthorizedWebhookEvent, WebhookDeletedMessage, WebhookEvent, WebhookEventBody,
+    WebhookEventPayload, WebhookPayloadType, WebhookSocialMessage,
+};
 /// Backward-compatible alias. Prefer `DiscordError`.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
 pub type Error = DiscordError;
@@ -130,8 +189,8 @@ pub use builders::{
     create_container, create_default_buttons, ActionRowBuilder, ButtonBuilder, CheckboxBuilder,
     CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, EmbedBuilder, FileBuilder,
     FileUploadBuilder, LabelBuilder, MediaGalleryBuilder, ModalBuilder, RadioGroupBuilder,
-    SectionBuilder, SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder,
-    ThumbnailBuilder,
+    SectionBuilder, SelectDefaultValue, SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder,
+    TextInputBuilder, ThumbnailBuilder,
 };
 
 pub use parsers::{
@@ -144,7 +203,7 @@ pub use constants::{
     MESSAGE_FLAG_IS_COMPONENTS_V2,
 };
 
-pub use http::{DiscordHttpClient, RestClient};
+pub use http::{DiscordHttpClient, FileAttachment, FileUpload, RestClient};
 
 pub use helpers::{
     defer_and_followup_container, defer_interaction, defer_update_interaction,

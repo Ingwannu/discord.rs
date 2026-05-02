@@ -10,24 +10,32 @@ use crate::types::invalid_data_error;
 use crate::ws::GatewayConnectionConfig;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `ShardInfo`.
 pub struct ShardInfo {
+    /// Discord API payload field `id`.
     pub id: u32,
+    /// Discord API payload field `total`.
     pub total: u32,
 }
 
 impl ShardInfo {
+    /// Runs the `identify_payload` operation.
     pub fn identify_payload(&self) -> [u32; 2] {
         [self.id, self.total]
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `ShardConfig`.
 pub struct ShardConfig {
+    /// Discord API payload field `total_shards`.
     pub total_shards: u32,
+    /// Discord API payload field `gateway`.
     pub gateway: GatewayConnectionConfig,
 }
 
 impl ShardConfig {
+    /// Creates or returns `new` data.
     pub fn new(total_shards: u32) -> Self {
         Self {
             total_shards: total_shards.max(1),
@@ -35,11 +43,13 @@ impl ShardConfig {
         }
     }
 
+    /// Runs the `gateway` operation.
     pub fn gateway(mut self, gateway: GatewayConnectionConfig) -> Self {
         self.gateway = gateway;
         self
     }
 
+    /// Runs the `shard_info` operation.
     pub fn shard_info(&self, shard_id: u32) -> Option<ShardInfo> {
         (shard_id < self.total_shards).then_some(ShardInfo {
             id: shard_id,
@@ -49,44 +59,71 @@ impl ShardConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API enum for `ShardIpcMessage`.
 pub enum ShardIpcMessage {
+    /// Discord API enum variant `Shutdown`.
     Shutdown,
+    /// Discord API enum variant `Reconnect`.
     Reconnect,
+    /// Discord API enum variant `UpdatePresence`.
     UpdatePresence(String),
+    /// Discord API enum variant `SendPayload`.
     SendPayload(Value),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API enum for `ShardRuntimeState`.
 pub enum ShardRuntimeState {
+    /// Discord API enum variant `Idle`.
     Idle,
+    /// Discord API enum variant `Queued`.
     Queued,
+    /// Discord API enum variant `Starting`.
     Starting,
+    /// Discord API enum variant `Running`.
     Running,
+    /// Discord API enum variant `Reconnecting`.
     Reconnecting,
+    /// Discord API enum variant `Stopped`.
     Stopped,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API enum for `ShardSupervisorEvent`.
 pub enum ShardSupervisorEvent {
+    /// Discord API enum variant `StateChanged`.
     StateChanged {
+        /// Shard ID whose state changed.
         shard_id: u32,
+        /// New runtime state.
         state: ShardRuntimeState,
     },
+    /// Discord API enum variant `SessionEstablished`.
     SessionEstablished {
+        /// Shard ID that established a session.
         shard_id: u32,
+        /// Discord gateway session ID.
         session_id: String,
     },
+    /// Discord API enum variant `GatewayError`.
     GatewayError {
+        /// Shard ID that reported the error.
         shard_id: u32,
+        /// Gateway error message.
         message: String,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `ShardRuntimeStatus`.
 pub struct ShardRuntimeStatus {
+    /// Discord API payload field `info`.
     pub info: ShardInfo,
+    /// Discord API payload field `state`.
     pub state: ShardRuntimeState,
+    /// Discord API payload field `session_id`.
     pub session_id: Option<String>,
+    /// Discord API payload field `last_error`.
     pub last_error: Option<String>,
 }
 
@@ -102,6 +139,7 @@ impl ShardRuntimeStatus {
 }
 
 #[derive(Clone)]
+/// Typed Discord API object for `ShardRuntimeHandle`.
 pub struct ShardRuntimeHandle {
     command_tx: Sender<ShardIpcMessage>,
     event_rx: Arc<Mutex<Receiver<ShardSupervisorEvent>>>,
@@ -110,6 +148,7 @@ pub struct ShardRuntimeHandle {
 }
 
 impl ShardRuntimeHandle {
+    /// Runs the `info` operation.
     pub fn info(&self) -> ShardInfo {
         self.status
             .lock()
@@ -118,6 +157,7 @@ impl ShardRuntimeHandle {
             .clone()
     }
 
+    /// Runs the `status` operation.
     pub fn status(&self) -> ShardRuntimeStatus {
         self.status
             .lock()
@@ -125,28 +165,34 @@ impl ShardRuntimeHandle {
             .clone()
     }
 
+    /// Runs the `state` operation.
     pub fn state(&self) -> ShardRuntimeState {
         self.status().state
     }
 
+    /// Runs the `session_id` operation.
     pub fn session_id(&self) -> Option<String> {
         self.status().session_id
     }
 
+    /// Runs the `last_error` operation.
     pub fn last_error(&self) -> Option<String> {
         self.status().last_error
     }
 
+    /// Runs the `command_sender` operation.
     pub fn command_sender(&self) -> Sender<ShardIpcMessage> {
         self.command_tx.clone()
     }
 
+    /// Runs the `send` operation.
     pub fn send(&self, message: ShardIpcMessage) -> Result<(), DiscordError> {
         self.command_tx.send(message).map_err(|error| {
             invalid_data_error(format!("failed to send shard ipc message: {error}"))
         })
     }
 
+    /// Runs the `try_recv_event` operation.
     pub fn try_recv_event(&self) -> Result<Option<ShardSupervisorEvent>, DiscordError> {
         match self
             .event_rx
@@ -182,21 +228,29 @@ impl ShardRuntimeHandle {
     }
 }
 
+/// Typed Discord API object for `ShardRuntimeChannels`.
 pub struct ShardRuntimeChannels {
+    /// Discord API payload field `info`.
     pub info: ShardInfo,
+    /// Discord API payload field `command_rx`.
     pub command_rx: Receiver<ShardIpcMessage>,
+    /// Discord API payload field `event_tx`.
     pub event_tx: Sender<ShardSupervisorEvent>,
     status: Arc<Mutex<ShardRuntimeStatus>>,
 }
 
 #[derive(Clone)]
+/// Typed Discord API object for `ShardRuntimePublisher`.
 pub struct ShardRuntimePublisher {
+    /// Discord API payload field `info`.
     pub info: ShardInfo,
+    /// Discord API payload field `event_tx`.
     pub event_tx: Sender<ShardSupervisorEvent>,
     status: Arc<Mutex<ShardRuntimeStatus>>,
 }
 
 impl ShardRuntimePublisher {
+    /// Runs the `publish` operation.
     pub fn publish(&self, event: ShardSupervisorEvent) -> Result<(), DiscordError> {
         self.apply_event(&event);
         self.event_tx.send(event).map_err(|error| {
@@ -224,6 +278,7 @@ impl ShardRuntimePublisher {
 }
 
 impl ShardRuntimeChannels {
+    /// Runs the `status` operation.
     pub fn status(&self) -> ShardRuntimeStatus {
         self.status
             .lock()
@@ -231,10 +286,12 @@ impl ShardRuntimeChannels {
             .clone()
     }
 
+    /// Runs the `state` operation.
     pub fn state(&self) -> ShardRuntimeState {
         self.status().state
     }
 
+    /// Runs the `set_state` operation.
     pub fn set_state(&self, state: ShardRuntimeState) {
         self.status
             .lock()
@@ -242,10 +299,12 @@ impl ShardRuntimeChannels {
             .state = state;
     }
 
+    /// Runs the `publish` operation.
     pub fn publish(&self, event: ShardSupervisorEvent) -> Result<(), DiscordError> {
         self.publisher().publish(event)
     }
 
+    /// Runs the `publisher` operation.
     pub fn publisher(&self) -> ShardRuntimePublisher {
         ShardRuntimePublisher {
             info: self.info.clone(),
@@ -254,6 +313,7 @@ impl ShardRuntimeChannels {
         }
     }
 
+    /// Runs the `split` operation.
     pub fn split(self) -> (Receiver<ShardIpcMessage>, ShardRuntimePublisher) {
         let publisher = ShardRuntimePublisher {
             info: self.info,
@@ -264,12 +324,14 @@ impl ShardRuntimeChannels {
     }
 }
 
+/// Typed Discord API object for `ShardingManager`.
 pub struct ShardingManager {
     config: ShardConfig,
     runtimes: HashMap<u32, ShardRuntimeHandle>,
 }
 
 impl ShardingManager {
+    /// Creates or returns `new` data.
     pub fn new(config: ShardConfig) -> Self {
         Self {
             config,
@@ -277,6 +339,7 @@ impl ShardingManager {
         }
     }
 
+    /// Runs the `shard_infos` operation.
     pub fn shard_infos(&self) -> Vec<ShardInfo> {
         (0..self.config.total_shards)
             .map(|id| ShardInfo {
@@ -286,18 +349,21 @@ impl ShardingManager {
             .collect()
     }
 
+    /// Runs the `shard_for_guild` operation.
     pub fn shard_for_guild(&self, guild_id: &Snowflake) -> Option<ShardInfo> {
         let raw_id = guild_id.as_u64()?;
         let shard_id = ((raw_id >> 22) % u64::from(self.config.total_shards)) as u32;
         self.config.shard_info(shard_id)
     }
 
+    /// Runs the `gateway_config` operation.
     pub fn gateway_config(&self, shard_id: u32) -> Option<GatewayConnectionConfig> {
         self.config
             .shard_info(shard_id)
             .map(|info| self.config.gateway.clone().shard(info.id, info.total))
     }
 
+    /// Runs the `attach_runtime` operation.
     pub fn attach_runtime(
         &mut self,
         shard_id: u32,
@@ -316,6 +382,7 @@ impl ShardingManager {
         Ok(handle)
     }
 
+    /// Runs the `prepare_runtime` operation.
     pub fn prepare_runtime(&mut self, shard_id: u32) -> Result<ShardRuntimeChannels, DiscordError> {
         let (command_tx, command_rx) = channel();
         let (event_tx, event_rx) = channel();
@@ -329,18 +396,22 @@ impl ShardingManager {
         })
     }
 
+    /// Runs the `handle` operation.
     pub fn handle(&self, shard_id: u32) -> Option<ShardRuntimeHandle> {
         self.runtimes.get(&shard_id).cloned()
     }
 
+    /// Runs the `state` operation.
     pub fn state(&self, shard_id: u32) -> Option<ShardRuntimeState> {
         self.runtimes.get(&shard_id).map(ShardRuntimeHandle::state)
     }
 
+    /// Runs the `status` operation.
     pub fn status(&self, shard_id: u32) -> Option<ShardRuntimeStatus> {
         self.runtimes.get(&shard_id).map(ShardRuntimeHandle::status)
     }
 
+    /// Runs the `states` operation.
     pub fn states(&self) -> Vec<(ShardInfo, ShardRuntimeState)> {
         self.runtimes
             .values()
@@ -348,6 +419,7 @@ impl ShardingManager {
             .collect()
     }
 
+    /// Runs the `statuses` operation.
     pub fn statuses(&self) -> Vec<ShardRuntimeStatus> {
         self.runtimes
             .values()
@@ -355,14 +427,17 @@ impl ShardingManager {
             .collect()
     }
 
+    /// Runs the `runtime_count` operation.
     pub fn runtime_count(&self) -> usize {
         self.runtimes.len()
     }
 
+    /// Runs the `remove_runtime` operation.
     pub fn remove_runtime(&mut self, shard_id: u32) -> Option<ShardRuntimeHandle> {
         self.runtimes.remove(&shard_id)
     }
 
+    /// Runs the `poll_event` operation.
     pub fn poll_event(&self, shard_id: u32) -> Result<Option<ShardSupervisorEvent>, DiscordError> {
         let Some(handle) = self.runtimes.get(&shard_id) else {
             return Err(invalid_data_error(format!(
@@ -372,6 +447,7 @@ impl ShardingManager {
         handle.try_recv_event()
     }
 
+    /// Runs the `drain_events` operation.
     pub fn drain_events(&self) -> Result<Vec<ShardSupervisorEvent>, DiscordError> {
         let mut events = Vec::new();
         for handle in self.runtimes.values() {
@@ -382,6 +458,7 @@ impl ShardingManager {
         Ok(events)
     }
 
+    /// Runs the `register_ipc` operation.
     pub fn register_ipc(&mut self, shard_id: u32, sender: Sender<ShardIpcMessage>) {
         if let Some(handle) = self.runtimes.get_mut(&shard_id) {
             handle.command_tx = sender;
@@ -402,6 +479,7 @@ impl ShardingManager {
         }
     }
 
+    /// Runs the `send` operation.
     pub fn send(&self, shard_id: u32, message: ShardIpcMessage) -> Result<(), DiscordError> {
         let Some(handle) = self.runtimes.get(&shard_id) else {
             return Err(invalid_data_error(format!(
@@ -412,6 +490,7 @@ impl ShardingManager {
         handle.send(message)
     }
 
+    /// Runs the `broadcast` operation.
     pub fn broadcast(&self, message: ShardIpcMessage) -> Result<(), DiscordError> {
         for handle in self.runtimes.values() {
             handle.send(message.clone())?;

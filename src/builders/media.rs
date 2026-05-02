@@ -8,6 +8,7 @@ use super::components::ButtonBuilder;
 use super::container::TextDisplayBuilder;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `MediaGalleryBuilder`.
 pub struct MediaGalleryBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -17,6 +18,7 @@ pub struct MediaGalleryBuilder {
 }
 
 impl MediaGalleryBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::MEDIA_GALLERY,
@@ -25,27 +27,32 @@ impl MediaGalleryBuilder {
         }
     }
 
+    /// Runs the `add_item` operation.
     pub fn add_item(mut self, item: MediaGalleryItem) -> Self {
         self.items.push(item);
         self
     }
 
+    /// Runs the `add_items` operation.
     pub fn add_items(mut self, items: Vec<MediaGalleryItem>) -> Self {
         self.items.extend(items);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ThumbnailBuilder`.
 pub struct ThumbnailBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -59,6 +66,7 @@ pub struct ThumbnailBuilder {
 }
 
 impl ThumbnailBuilder {
+    /// Creates or returns `new` data.
     pub fn new(url: &str) -> Self {
         Self {
             component_type: component_type::THUMBNAIL,
@@ -71,27 +79,32 @@ impl ThumbnailBuilder {
         }
     }
 
+    /// Runs the `description` operation.
     pub fn description(mut self, desc: &str) -> Self {
         self.description = Some(desc.to_string());
         self
     }
 
+    /// Runs the `spoiler` operation.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
         self.spoiler = Some(spoiler);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `FileBuilder`.
 pub struct FileBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -103,6 +116,7 @@ pub struct FileBuilder {
 }
 
 impl FileBuilder {
+    /// Creates or returns `new` data.
     pub fn new(url: &str) -> Self {
         Self {
             component_type: component_type::FILE,
@@ -114,22 +128,26 @@ impl FileBuilder {
         }
     }
 
+    /// Runs the `spoiler` operation.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
         self.spoiler = Some(spoiler);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `SectionBuilder`.
 pub struct SectionBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -141,6 +159,7 @@ pub struct SectionBuilder {
 }
 
 impl SectionBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::SECTION,
@@ -150,26 +169,31 @@ impl SectionBuilder {
         }
     }
 
+    /// Runs the `add_text_display` operation.
     pub fn add_text_display(mut self, text: TextDisplayBuilder) -> Self {
         self.components.push(text.build());
         self
     }
 
+    /// Runs the `set_thumbnail_accessory` operation.
     pub fn set_thumbnail_accessory(mut self, thumbnail: ThumbnailBuilder) -> Self {
         self.accessory = Some(thumbnail.build());
         self
     }
 
+    /// Runs the `set_button_accessory` operation.
     pub fn set_button_accessory(mut self, button: ButtonBuilder) -> Self {
         self.accessory = Some(button.build());
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }

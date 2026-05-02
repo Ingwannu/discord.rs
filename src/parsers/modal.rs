@@ -99,56 +99,91 @@ fn parse_modal_component_tree(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Typed Discord API enum for `V2ModalComponent`.
 pub enum V2ModalComponent {
+    /// Discord API enum variant `TextInput`.
     TextInput {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted text value.
         value: String,
     },
+    /// Discord API enum variant `StringSelect`.
     StringSelect {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted select values.
         values: Vec<String>,
     },
+    /// Discord API enum variant `UserSelect`.
     UserSelect {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted selected user IDs.
         values: Vec<String>,
     },
+    /// Discord API enum variant `RoleSelect`.
     RoleSelect {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted selected role IDs.
         values: Vec<String>,
     },
+    /// Discord API enum variant `ChannelSelect`.
     ChannelSelect {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted selected channel IDs.
         values: Vec<String>,
     },
+    /// Discord API enum variant `MentionableSelect`.
     MentionableSelect {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted selected mentionable IDs.
         values: Vec<String>,
     },
+    /// Discord API enum variant `RadioGroup`.
     RadioGroup {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted selected option value.
         value: String,
     },
+    /// Discord API enum variant `CheckboxGroup`.
     CheckboxGroup {
+        /// Component custom ID.
         custom_id: String,
+        /// Submitted checkbox values.
         values: Vec<String>,
     },
+    /// Discord API enum variant `FileUpload`.
     FileUpload {
+        /// Component custom ID.
         custom_id: String,
+        /// Uploaded attachment IDs.
         values: Vec<String>,
     },
+    /// Discord API enum variant `Checkbox`.
     Checkbox {
+        /// Component custom ID.
         custom_id: String,
+        /// Whether the checkbox was checked.
         checked: bool,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Typed Discord API object for `V2ModalSubmission`.
 pub struct V2ModalSubmission {
+    /// Discord API payload field `custom_id`.
     pub custom_id: String,
+    /// Discord API payload field `components`.
     pub components: Vec<V2ModalComponent>,
 }
 
 impl V2ModalSubmission {
+    /// Runs the `get_text` operation.
     pub fn get_text(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -161,6 +196,7 @@ impl V2ModalSubmission {
             })
     }
 
+    /// Runs the `get_select_values` operation.
     pub fn get_select_values(&self, custom_id: &str) -> Option<&[String]> {
         self.components
             .iter()
@@ -193,6 +229,7 @@ impl V2ModalSubmission {
             })
     }
 
+    /// Runs the `get_file_values` operation.
     pub fn get_file_values(&self, custom_id: &str) -> Option<&[String]> {
         self.components
             .iter()
@@ -205,6 +242,7 @@ impl V2ModalSubmission {
             })
     }
 
+    /// Runs the `get_radio_value` operation.
     pub fn get_radio_value(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -218,6 +256,7 @@ impl V2ModalSubmission {
     }
 }
 
+/// Runs the `parse_modal_submission` helper.
 pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, DiscordError> {
     let modal_data = if data.get("custom_id").is_some() && data.get("components").is_some() {
         data

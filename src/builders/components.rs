@@ -9,6 +9,7 @@ use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 use super::modal::TextInputBuilder;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ButtonBuilder`.
 pub struct ButtonBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -26,6 +27,7 @@ pub struct ButtonBuilder {
 }
 
 impl ButtonBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::BUTTON,
@@ -38,26 +40,31 @@ impl ButtonBuilder {
         }
     }
 
+    /// Runs the `style` operation.
     pub fn style(mut self, style: u8) -> Self {
         self.style = style;
         self
     }
 
+    /// Runs the `label` operation.
     pub fn label(mut self, label: &str) -> Self {
         self.label = Some(label.to_string());
         self
     }
 
+    /// Runs the `emoji` operation.
     pub fn emoji(mut self, emoji: Emoji) -> Self {
         self.emoji = Some(emoji);
         self
     }
 
+    /// Runs the `emoji_unicode` operation.
     pub fn emoji_unicode(mut self, emoji: &str) -> Self {
         self.emoji = Some(Emoji::unicode(emoji));
         self
     }
 
+    /// Runs the `custom_id` operation.
     pub fn custom_id(mut self, custom_id: &str) -> Self {
         self.custom_id = Some(custom_id.to_string());
         self.url = None;
@@ -67,6 +74,7 @@ impl ButtonBuilder {
         self
     }
 
+    /// Runs the `url` operation.
     pub fn url(mut self, url: &str) -> Self {
         self.url = Some(url.to_string());
         self.custom_id = None;
@@ -74,6 +82,7 @@ impl ButtonBuilder {
         self
     }
 
+    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
@@ -89,20 +98,24 @@ impl ButtonBuilder {
         self
     }
 
+    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self.normalize()
     }
 
+    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ActionRowBuilder`.
 pub struct ActionRowBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -112,6 +125,7 @@ pub struct ActionRowBuilder {
 }
 
 impl ActionRowBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::ACTION_ROW,
@@ -120,51 +134,64 @@ impl ActionRowBuilder {
         }
     }
 
+    /// Runs the `add_button` operation.
     pub fn add_button(mut self, button: ButtonBuilder) -> Self {
         self.components.push(button.build());
         self
     }
 
+    /// Runs the `add_select_menu` operation.
     pub fn add_select_menu(mut self, select_menu: SelectMenuBuilder) -> Self {
         self.components.push(select_menu.build());
         self
     }
 
+    /// Runs the `add_text_input` operation.
     pub fn add_text_input(mut self, input: TextInputBuilder) -> Self {
         self.components.push(input.build());
         self
     }
 
+    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self
     }
 
+    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `SelectMenuBuilder`.
 pub struct SelectMenuBuilder {
     #[serde(rename = "type")]
     component_type: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
     custom_id: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     options: Vec<SelectOption>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    default_values: Vec<SelectDefaultValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel_types: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -174,105 +201,205 @@ pub struct SelectMenuBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_values: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `SelectDefaultValue`.
+pub struct SelectDefaultValue {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+impl SelectDefaultValue {
+    /// Creates or returns `user` data.
+    pub fn user(id: impl Into<String>) -> Self {
+        Self::new(id, "user")
+    }
+
+    /// Creates or returns `role` data.
+    pub fn role(id: impl Into<String>) -> Self {
+        Self::new(id, "role")
+    }
+
+    /// Creates or returns `channel` data.
+    pub fn channel(id: impl Into<String>) -> Self {
+        Self::new(id, "channel")
+    }
+
+    fn new(id: impl Into<String>, kind: &'static str) -> Self {
+        Self {
+            id: id.into(),
+            kind: kind.to_string(),
+        }
+    }
+}
+
 impl SelectMenuBuilder {
+    /// Creates or returns `string` data.
     pub fn string(custom_id: &str) -> Self {
         Self {
             component_type: component_type::STRING_SELECT,
+            id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
+            default_values: Vec::new(),
             channel_types: None,
             placeholder: None,
             min_values: None,
             max_values: None,
+            required: None,
             disabled: None,
         }
     }
 
+    /// Creates or returns `role` data.
     pub fn role(custom_id: &str) -> Self {
         Self {
             component_type: component_type::ROLE_SELECT,
+            id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
+            default_values: Vec::new(),
             channel_types: None,
             placeholder: None,
             min_values: None,
             max_values: None,
+            required: None,
             disabled: None,
         }
     }
 
+    /// Creates or returns `channel` data.
     pub fn channel(custom_id: &str) -> Self {
         Self {
             component_type: component_type::CHANNEL_SELECT,
+            id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
+            default_values: Vec::new(),
             channel_types: None,
             placeholder: None,
             min_values: None,
             max_values: None,
+            required: None,
             disabled: None,
         }
     }
 
+    /// Creates or returns `user` data.
     pub fn user(custom_id: &str) -> Self {
         Self {
             component_type: component_type::USER_SELECT,
+            id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
+            default_values: Vec::new(),
             channel_types: None,
             placeholder: None,
             min_values: None,
             max_values: None,
+            required: None,
             disabled: None,
         }
     }
 
+    /// Creates or returns `mentionable` data.
     pub fn mentionable(custom_id: &str) -> Self {
         Self {
             component_type: component_type::MENTIONABLE_SELECT,
+            id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
+            default_values: Vec::new(),
             channel_types: None,
             placeholder: None,
             min_values: None,
             max_values: None,
+            required: None,
             disabled: None,
         }
     }
 
+    /// Runs the `id` operation.
+    pub fn id(mut self, id: u32) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    /// Runs the `placeholder` operation.
     pub fn placeholder(mut self, placeholder: &str) -> Self {
         self.placeholder = Some(placeholder.to_string());
         self
     }
 
+    /// Runs the `add_option` operation.
     pub fn add_option(mut self, option: SelectOption) -> Self {
         self.options.push(option);
         self
     }
 
+    /// Runs the `add_options` operation.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
         self.options.extend(options);
         self
     }
 
+    /// Runs the `default_value` operation.
+    pub fn default_value(mut self, value: SelectDefaultValue) -> Self {
+        self.default_values.push(value);
+        self
+    }
+
+    /// Runs the `default_values` operation.
+    pub fn default_values(mut self, values: Vec<SelectDefaultValue>) -> Self {
+        self.default_values.extend(values);
+        self
+    }
+
+    /// Runs the `default_user` operation.
+    pub fn default_user(self, id: impl Into<String>) -> Self {
+        self.default_value(SelectDefaultValue::user(id))
+    }
+
+    /// Runs the `default_role` operation.
+    pub fn default_role(self, id: impl Into<String>) -> Self {
+        self.default_value(SelectDefaultValue::role(id))
+    }
+
+    /// Runs the `default_channel` operation.
+    pub fn default_channel(self, id: impl Into<String>) -> Self {
+        self.default_value(SelectDefaultValue::channel(id))
+    }
+
+    /// Runs the `channel_types` operation.
     pub fn channel_types(mut self, channel_types: Vec<u8>) -> Self {
         self.channel_types = Some(channel_types);
         self
     }
 
+    /// Runs the `min_values` operation.
     pub fn min_values(mut self, min: u8) -> Self {
         self.min_values = Some(min);
         self
     }
 
+    /// Runs the `max_values` operation.
     pub fn max_values(mut self, max: u8) -> Self {
         self.max_values = Some(max);
         self
     }
 
+    /// Runs the `required` operation.
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
+    /// Runs the `disabled` operation.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = Some(disabled);
         self
@@ -282,6 +409,7 @@ impl SelectMenuBuilder {
         match self.component_type {
             component_type::STRING_SELECT => {
                 self.channel_types = None;
+                self.default_values.clear();
             }
             component_type::CHANNEL_SELECT => {
                 self.options.clear();
@@ -294,19 +422,23 @@ impl SelectMenuBuilder {
         self
     }
 
+    /// Runs the `build_typed` operation.
     pub fn build_typed(self) -> Self {
         self.normalize()
     }
 
+    /// Runs the `build_value` operation.
     pub fn build_value(self) -> Value {
         to_json_value(self.build_typed())
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         self.build_value()
     }
 }
 
+/// Typed Discord API object for `ComponentsV2Message`.
 pub struct ComponentsV2Message {
     components: Vec<Value>,
 }
@@ -318,52 +450,62 @@ impl Default for ComponentsV2Message {
 }
 
 impl ComponentsV2Message {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             components: Vec::new(),
         }
     }
 
+    /// Runs the `add_container` operation.
     pub fn add_container(mut self, container: ContainerBuilder) -> Self {
         self.components.push(container.build());
         self
     }
 
+    /// Runs the `add_text_display` operation.
     pub fn add_text_display(mut self, text: TextDisplayBuilder) -> Self {
         self.components.push(text.build());
         self
     }
 
+    /// Runs the `add_media_gallery` operation.
     pub fn add_media_gallery(mut self, gallery: MediaGalleryBuilder) -> Self {
         self.components.push(gallery.build());
         self
     }
 
+    /// Runs the `add_separator` operation.
     pub fn add_separator(mut self, separator: SeparatorBuilder) -> Self {
         self.components.push(separator.build());
         self
     }
 
+    /// Runs the `add_section` operation.
     pub fn add_section(mut self, section: SectionBuilder) -> Self {
         self.components.push(section.build());
         self
     }
 
+    /// Runs the `add_file` operation.
     pub fn add_file(mut self, file: FileBuilder) -> Self {
         self.components.push(file.build());
         self
     }
 
+    /// Runs the `add_action_row` operation.
     pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
         self.components.push(row.build());
         self
     }
 
+    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Vec<Value> {
         self.components
     }
@@ -371,7 +513,9 @@ impl ComponentsV2Message {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
+    use super::{
+        ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectDefaultValue, SelectMenuBuilder,
+    };
     use crate::builders::container::TextDisplayBuilder;
     use crate::builders::modal::TextInputBuilder;
     use crate::builders::{
@@ -554,14 +698,14 @@ mod tests {
 
     #[test]
     fn button_emoji_unicode_sets_name_only() {
-        let payload = ButtonBuilder::new().emoji_unicode("🔥").build();
+        let payload = ButtonBuilder::new().emoji_unicode("?뵦").build();
 
         assert_eq!(
             payload
                 .get("emoji")
                 .and_then(|value| value.get("name"))
                 .and_then(|value| value.as_str()),
-            Some("🔥")
+            Some("?뵦")
         );
         assert!(payload
             .get("emoji")
@@ -663,6 +807,9 @@ mod tests {
             .placeholder("Pick a target")
             .add_option(SelectOption::new("One", "one"))
             .channel_types(vec![0, 2])
+            .default_user("42")
+            .default_role("43")
+            .required(false)
             .min_values(1)
             .max_values(3)
             .disabled(true)
@@ -688,18 +835,53 @@ mod tests {
             payload.get("disabled").and_then(|value| value.as_bool()),
             Some(true)
         );
+        assert_eq!(
+            payload.get("required").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            payload
+                .get("default_values")
+                .and_then(|value| value.as_array())
+                .map(|values| values.len()),
+            Some(2)
+        );
         assert!(payload.get("options").is_none());
         assert!(payload.get("channel_types").is_none());
     }
 
     #[test]
     fn user_select_builder_sets_expected_component_type() {
-        let payload = SelectMenuBuilder::user("menu").build();
+        let payload = SelectMenuBuilder::user("menu")
+            .id(22)
+            .default_values(vec![SelectDefaultValue::user("900")])
+            .build();
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
             Some(component_type::USER_SELECT as u64)
         );
+        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(22));
+        assert_eq!(
+            payload
+                .get("default_values")
+                .and_then(|value| value.as_array())
+                .and_then(|values| values.first())
+                .and_then(|value| value.get("type"))
+                .and_then(|value| value.as_str()),
+            Some("user")
+        );
+    }
+
+    #[test]
+    fn string_select_omits_auto_populated_default_values() {
+        let payload = SelectMenuBuilder::string("menu")
+            .default_channel("123")
+            .add_option(SelectOption::new("One", "one"))
+            .build();
+
+        assert!(payload.get("default_values").is_none());
+        assert!(payload.get("options").is_some());
     }
 
     #[test]

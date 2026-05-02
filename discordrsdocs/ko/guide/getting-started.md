@@ -1,32 +1,35 @@
-# ���� ����
+# 시작하기
 
-## �غ�
+## 준비
 
 - Rust stable toolchain
-- Discord ���ø����̼ǰ� �� ��ū
-- ���� ����: Interaction Endpoint ��忡�� ����� ���� HTTP ��������Ʈ
+- Discord 애플리케이션과 봇 토큰
+- HTTP Interactions Endpoint를 사용할 경우 공개 HTTPS endpoint와 Discord Ed25519 public key
 
-## ������ �߰�
+## 의존성 추가
 
 ```toml
 [dependencies]
-discordrs = { version = "1.2.2", features = ["gateway"] }
+discordrs = { version = "2.0.0", features = ["gateway"] }
 ```
 
-�ʿ��� ��Ÿ�ӿ� ���� ����� �߰��մϴ�.
+필요한 런타임 기능만 켜는 것을 권장합니다.
 
 ```toml
-# REST/���/Ÿ�� �𵨸� ����� ��
-discordrs = "1.2.2"
+# REST, 빌더, 타입 모델만 사용할 때
+discordrs = "2.0.0"
 
-# Voice receive�� Opus PCM decode
-discordrs = { version = "1.2.2", features = ["voice"] }
+# Interactions Endpoint와 앱 프레임워크
+discordrs = { version = "2.0.0", features = ["interactions"] }
 
-# ������ DAVE/MLS hook
-discordrs = { version = "1.2.2", features = ["voice", "dave"] }
+# Voice receive와 Opus PCM decode
+discordrs = { version = "2.0.0", features = ["voice"] }
+
+# DAVE/MLS hook
+discordrs = { version = "2.0.0", features = ["voice", "dave"] }
 ```
 
-## �ּ� Typed Gateway Bot
+## 최소 Typed Gateway Bot
 
 ```rust
 use async_trait::async_trait;
@@ -56,21 +59,21 @@ async fn main() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
-## ȯ�� ����
+## 환경 변수
 
 ```bash
 export DISCORD_TOKEN="your-bot-token"
 ```
 
-## ����
+## 실행
 
 ```bash
 cargo run
 ```
 
-## ���� �ܰ�
+## 다음 단계
 
-- [��� ���̵�](usage-guide.md)�� �̵�
-- [��Ű��ó](architecture.md) �б�
-- [Ŀ�ǵ� API](../api/commands.md) ���캸��
-- Poll, Subscription, Soundboard, Thread, Forum, Integration, Voice receive ���� Ȯ�� ǥ���� ���� Ÿ�� API�� Ȯ���� �� raw JSON�� ������ �������� ����ϱ�
+- [사용 가이드](usage-guide.md) 읽기
+- [아키텍처](architecture.md) 검토
+- [명령 API](../../docs/api/commands.md) 살펴보기
+- Webhook Events, Lobby, Poll, Subscription, Soundboard, Thread, Forum, Integration, Voice receive 워크플로에서는 가능한 한 raw JSON보다 타입드 API를 우선 사용하기

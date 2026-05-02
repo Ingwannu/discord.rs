@@ -8,6 +8,7 @@ use super::components::{ActionRowBuilder, ButtonBuilder};
 use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `TextDisplayBuilder`.
 pub struct TextDisplayBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -275,6 +276,7 @@ mod tests {
 }
 
 impl TextDisplayBuilder {
+    /// Creates or returns `new` data.
     pub fn new(content: &str) -> Self {
         Self {
             component_type: component_type::TEXT_DISPLAY,
@@ -283,22 +285,26 @@ impl TextDisplayBuilder {
         }
     }
 
+    /// Runs the `content` operation.
     pub fn content(mut self, content: &str) -> Self {
         self.content = content.to_string();
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `SeparatorBuilder`.
 pub struct SeparatorBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -311,6 +317,7 @@ pub struct SeparatorBuilder {
 }
 
 impl SeparatorBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::SEPARATOR,
@@ -320,27 +327,32 @@ impl SeparatorBuilder {
         }
     }
 
+    /// Runs the `divider` operation.
     pub fn divider(mut self, divider: bool) -> Self {
         self.divider = Some(divider);
         self
     }
 
+    /// Runs the `spacing` operation.
     pub fn spacing(mut self, spacing: u8) -> Self {
         self.spacing = Some(spacing);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ContainerBuilder`.
 pub struct ContainerBuilder {
     #[serde(rename = "type")]
     component_type: u8,
@@ -354,6 +366,7 @@ pub struct ContainerBuilder {
 }
 
 impl ContainerBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self {
             component_type: component_type::CONTAINER,
@@ -364,61 +377,73 @@ impl ContainerBuilder {
         }
     }
 
+    /// Runs the `accent_color` operation.
     pub fn accent_color(mut self, color: u32) -> Self {
         self.accent_color = Some(color);
         self
     }
 
+    /// Runs the `spoiler` operation.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
         self.spoiler = Some(spoiler);
         self
     }
 
+    /// Runs the `id` operation.
     pub fn id(mut self, id: u32) -> Self {
         self.id = Some(id);
         self
     }
 
+    /// Runs the `add_media_gallery` operation.
     pub fn add_media_gallery(mut self, gallery: MediaGalleryBuilder) -> Self {
         self.components.push(gallery.build());
         self
     }
 
+    /// Runs the `add_text_display` operation.
     pub fn add_text_display(mut self, text: TextDisplayBuilder) -> Self {
         self.components.push(text.build());
         self
     }
 
+    /// Runs the `add_separator` operation.
     pub fn add_separator(mut self, separator: SeparatorBuilder) -> Self {
         self.components.push(separator.build());
         self
     }
 
+    /// Runs the `add_action_row` operation.
     pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
         self.components.push(row.build());
         self
     }
 
+    /// Runs the `add_section` operation.
     pub fn add_section(mut self, section: SectionBuilder) -> Self {
         self.components.push(section.build());
         self
     }
 
+    /// Runs the `add_file` operation.
     pub fn add_file(mut self, file: FileBuilder) -> Self {
         self.components.push(file.build());
         self
     }
 
+    /// Runs the `add_component` operation.
     pub fn add_component(mut self, component: Value) -> Self {
         self.components.push(component);
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> Value {
         to_json_value(self)
     }
 }
 
+/// Runs the `create_container` helper.
 pub fn create_container(
     title: &str,
     description: &str,
@@ -477,6 +502,7 @@ pub fn create_container(
     container
 }
 
+/// Runs the `create_default_buttons` helper.
 pub fn create_default_buttons(button_type: &str) -> Vec<ButtonConfig> {
     match button_type {
         "general" => vec![ButtonConfig::new("help_menu", "Help")

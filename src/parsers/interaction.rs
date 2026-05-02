@@ -16,40 +16,67 @@ use super::{
 };
 
 #[derive(Clone, Debug)]
+/// Typed Discord API enum for `RawInteraction`.
 pub enum RawInteraction {
+    /// Discord API enum variant `Ping`.
     Ping,
+    /// Discord API enum variant `Command`.
     Command {
+        /// Interaction ID from the raw command payload.
         id: Option<String>,
+        /// Command name from the raw command payload.
         name: Option<String>,
+        /// Discord command type value.
         command_type: Option<u8>,
+        /// Raw interaction data object.
         data: Value,
     },
+    /// Discord API enum variant `Autocomplete`.
     Autocomplete {
+        /// Interaction ID from the raw autocomplete payload.
         id: Option<String>,
+        /// Command name from the raw autocomplete payload.
         name: Option<String>,
+        /// Discord command type value.
         command_type: Option<u8>,
+        /// Raw interaction data object.
         data: Value,
     },
+    /// Discord API enum variant `Component`.
     Component {
+        /// Component custom ID.
         custom_id: Option<String>,
+        /// Discord component type value.
         component_type: Option<u8>,
+        /// Submitted select values.
         values: Vec<String>,
+        /// Raw interaction data object.
         data: Value,
     },
+    /// Discord API enum variant `ModalSubmit`.
     ModalSubmit(V2ModalSubmission),
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `InteractionContext`.
 pub struct InteractionContext {
+    /// Discord API payload field `id`.
     pub id: String,
+    /// Discord API payload field `token`.
     pub token: String,
+    /// Discord API payload field `application_id`.
     pub application_id: String,
+    /// Discord API payload field `guild_id`.
     pub guild_id: Option<String>,
+    /// Discord API payload field `channel_id`.
     pub channel_id: Option<String>,
+    /// Discord API payload field `user_id`.
     pub user_id: Option<String>,
+    /// Discord API payload field `raw`.
     pub raw: Value,
 }
 
+/// Runs the `parse_interaction_context` helper.
 pub fn parse_interaction_context(raw: &Value) -> Result<InteractionContext, DiscordError> {
     let user_id = raw
         .get("member")
@@ -73,6 +100,7 @@ pub fn parse_interaction_context(raw: &Value) -> Result<InteractionContext, Disc
     })
 }
 
+/// Runs the `parse_raw_interaction` helper.
 pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError> {
     let interaction_type = required_u8_field(raw, "type", "interaction")?;
 
@@ -115,6 +143,7 @@ pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError
     }
 }
 
+/// Runs the `parse_interaction` helper.
 pub fn parse_interaction(raw: &Value) -> Result<Interaction, DiscordError> {
     let interaction_type = required_u8_field(raw, "type", "interaction")?;
     let context = parse_typed_interaction_context(raw)?;

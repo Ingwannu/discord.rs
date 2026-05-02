@@ -4,11 +4,14 @@ const DEFAULT_GATEWAY_URL: &str = "wss://gateway.discord.gg/";
 const DEFAULT_GATEWAY_VERSION: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Typed Discord API enum for `GatewayEncoding`.
 pub enum GatewayEncoding {
+    /// Discord API enum variant `Json`.
     Json,
 }
 
 impl GatewayEncoding {
+    /// Runs the `as_str` operation.
     pub fn as_str(self) -> &'static str {
         match self {
             GatewayEncoding::Json => "json",
@@ -17,13 +20,17 @@ impl GatewayEncoding {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Typed Discord API enum for `GatewayCompression`.
 pub enum GatewayCompression {
+    /// Discord API enum variant `ZlibStream`.
     ZlibStream,
     #[cfg(feature = "zstd-stream")]
+    /// Discord API enum variant `ZstdStream`.
     ZstdStream,
 }
 
 impl GatewayCompression {
+    /// Runs the `as_str` operation.
     pub fn as_str(self) -> &'static str {
         match self {
             GatewayCompression::ZlibStream => "zlib-stream",
@@ -34,6 +41,7 @@ impl GatewayCompression {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Discord API object for `GatewayConnectionConfig`.
 pub struct GatewayConnectionConfig {
     base_url: String,
     version: u8,
@@ -49,6 +57,7 @@ impl Default for GatewayConnectionConfig {
 }
 
 impl GatewayConnectionConfig {
+    /// Creates or returns `new` data.
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -59,16 +68,19 @@ impl GatewayConnectionConfig {
         }
     }
 
+    /// Runs the `version` operation.
     pub fn version(mut self, version: u8) -> Self {
         self.version = version;
         self
     }
 
+    /// Runs the `with_base_url` operation.
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self
     }
 
+    /// Runs the `encoding` operation.
     pub fn encoding(mut self, encoding: GatewayEncoding) -> Self {
         self.encoding = encoding;
         self
@@ -80,15 +92,18 @@ impl GatewayConnectionConfig {
         self
     }
 
+    /// Runs the `compression_kind` operation.
     pub fn compression_kind(&self) -> Option<GatewayCompression> {
         self.compression
     }
 
+    /// Runs the `shard` operation.
     pub fn shard(mut self, shard_id: u32, total_shards: u32) -> Self {
         self.shard = Some((shard_id, total_shards));
         self
     }
 
+    /// Runs the `normalized_url` operation.
     pub fn normalized_url(&self) -> String {
         let mut normalized = if self.base_url.contains("://") {
             self.base_url.clone()

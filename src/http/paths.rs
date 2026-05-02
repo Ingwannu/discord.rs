@@ -3,8 +3,9 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ArchivedThreadsQuery, EntitlementQuery, JoinedArchivedThreadsQuery, Snowflake,
-    SubscriptionQuery, ThreadMemberQuery,
+    ArchivedThreadsQuery, AuditLogQuery, CurrentUserGuildsQuery, EntitlementQuery, GetGuildQuery,
+    GuildBansQuery, GuildMembersQuery, JoinedArchivedThreadsQuery, SearchGuildMembersQuery,
+    Snowflake, SubscriptionQuery, ThreadMemberQuery, WebhookExecuteQuery, WebhookMessageQuery,
 };
 use crate::types::invalid_data_error;
 
@@ -62,8 +63,29 @@ pub(crate) fn execute_webhook_path(
     webhook_id: Snowflake,
     token: &str,
 ) -> Result<String, DiscordError> {
+    execute_webhook_path_with_query(
+        webhook_id,
+        token,
+        &WebhookExecuteQuery {
+            wait: Some(true),
+            ..WebhookExecuteQuery::default()
+        },
+        None,
+    )
+}
+
+pub(crate) fn execute_webhook_path_with_query(
+    webhook_id: Snowflake,
+    token: &str,
+    query: &WebhookExecuteQuery,
+    suffix: Option<&str>,
+) -> Result<String, DiscordError> {
     validate_token_path_segment("webhook_token", token, false)?;
-    Ok(format!("/webhooks/{webhook_id}/{token}?wait=true"))
+    let suffix = suffix.unwrap_or_default();
+    Ok(format!(
+        "/webhooks/{webhook_id}/{token}{suffix}{}",
+        webhook_execute_query(query, suffix.is_empty())
+    ))
 }
 
 pub(crate) fn webhook_message_path(
@@ -71,11 +93,63 @@ pub(crate) fn webhook_message_path(
     token: &str,
     message_id: &str,
 ) -> Result<String, DiscordError> {
+    webhook_message_path_with_query(
+        webhook_id,
+        token,
+        message_id,
+        &WebhookMessageQuery::default(),
+        false,
+    )
+}
+
+pub(crate) fn webhook_message_path_with_query(
+    webhook_id: Snowflake,
+    token: &str,
+    message_id: &str,
+    query: &WebhookMessageQuery,
+    include_components: bool,
+) -> Result<String, DiscordError> {
     validate_token_path_segment("webhook_token", token, false)?;
     validate_token_path_segment("message_id", message_id, true)?;
     Ok(format!(
-        "/webhooks/{webhook_id}/{token}/messages/{message_id}"
+        "/webhooks/{webhook_id}/{token}/messages/{message_id}{}",
+        webhook_message_query(query, include_components)
     ))
+}
+
+pub(crate) fn webhook_message_query(
+    query: &WebhookMessageQuery,
+    include_components: bool,
+) -> String {
+    let mut params = Vec::new();
+    if let Some(thread_id) = &query.thread_id {
+        params.push(format!("thread_id={}", thread_id.as_str()));
+    }
+    if include_components {
+        if let Some(with_components) = query.with_components {
+            params.push(format!("with_components={with_components}"));
+        }
+    }
+    query_string(params)
+}
+
+pub(crate) fn webhook_execute_query(
+    query: &WebhookExecuteQuery,
+    include_components: bool,
+) -> String {
+    let mut params = Vec::new();
+    if let Some(wait) = query.wait {
+        params.push(format!("wait={wait}"));
+    }
+    if let Some(thread_id) = &query.thread_id {
+        params.push(format!("thread_id={}", thread_id.as_str()));
+    }
+    if include_components {
+        if let Some(with_components) = query.with_components {
+            params.push(format!("with_components={with_components}"));
+        }
+    }
+    query_string(params)
 }
 
 pub(crate) fn guild_prune_query(
@@ -121,6 +195,80 @@ pub(crate) fn bool_query(name: &str, value: Option<bool>) -> String {
             .map(|value| vec![format!("{name}={value}")])
             .unwrap_or_default(),
     )
+}
+
+pub(crate) fn audit_log_query(query: &AuditLogQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(user_id) = &query.user_id {
+        params.push(format!("user_id={user_id}"));
+    }
+    if let Some(action_type) = query.action_type {
+        params.push(format!("action_type={action_type}"));
+    }
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
+}
+
+pub(crate) fn current_user_guilds_query(query: &CurrentUserGuildsQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(with_counts) = query.with_counts {
+        params.push(format!("with_counts={with_counts}"));
+    }
+    query_string(params)
+}
+
+pub(crate) fn get_guild_query(query: &GetGuildQuery) -> String {
+    bool_query("with_counts", query.with_counts)
+}
+
+pub(crate) fn guild_bans_query(query: &GuildBansQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(before) = &query.before {
+        params.push(format!("before={before}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    query_string(params)
+}
+
+pub(crate) fn guild_members_query(query: &GuildMembersQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    if let Some(after) = &query.after {
+        params.push(format!("after={after}"));
+    }
+    query_string(params)
+}
+
+pub(crate) fn search_guild_members_query(query: &SearchGuildMembersQuery) -> String {
+    let mut params = vec![format!("query={}", query.query)];
+    if let Some(limit) = query.limit {
+        params.push(format!("limit={limit}"));
+    }
+    query_string(params)
 }
 
 pub(crate) fn thread_member_query(query: &ThreadMemberQuery) -> String {
@@ -274,7 +422,17 @@ pub(crate) fn request_uses_bot_authorization(path: &str) -> bool {
         .next()
         .unwrap_or(path)
         .trim_start_matches('/');
-    !(normalized_path.starts_with("webhooks/") || normalized_path.starts_with("interactions/"))
+    if normalized_path.starts_with("interactions/") {
+        return false;
+    }
+    if normalized_path.starts_with("webhooks/") {
+        let segments = normalized_path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        return segments.len() < 3;
+    }
+    true
 }
 
 pub(crate) fn is_major_parameter_segment(segments: &[&str], index: usize) -> bool {

@@ -86,6 +86,25 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --all-features --locked --lcov --output-path lcov.info --fail-under-lines ${{ env.COVERAGE_MIN_LINES }}
 
+      - name: Validate LCOV scope
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          lcov = Path("lcov.info").read_text()
+          files = {line[3:].replace("\\", "/") for line in lcov.splitlines() if line.startswith("SF:")}
+          src_files = {path for path in files if "/src/" in path}
+          line_records = len(re.findall(r"^DA:", lcov, re.MULTILINE))
+          required = ("src/http.rs", "src/voice_runtime.rs", "src/gateway/bot.rs", "src/event.rs")
+          missing = [suffix for suffix in required if not any(path.endswith(suffix) for path in src_files)]
+          if len(src_files) < 30 or line_records < 20_000 or missing:
+              raise SystemExit(
+                  "LCOV report is too narrow for Coveralls upload: "
+                  f"src_files={len(src_files)} line_records={line_records} missing={missing}"
+              )
+          print(f"LCOV scope OK: {len(src_files)} source files, {line_records} line records")
+          PY
+
       - name: Upload LCOV artifact
         uses: actions/upload-artifact@v4
         with:

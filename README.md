@@ -16,10 +16,11 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
 - Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
-- Experimental `dave` feature with DAVE opcode state tracking and an optional `davey`/OpenMLS-backed decryptor hook; full production MLS interop still requires live Discord transition validation
+- Live-validated `dave` feature with DAVE opcode state tracking, `davey`/OpenMLS-backed MLS lifecycle helpers, receive decryptor hooks, and outbound media encryption hooks
 - Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, and refresh-token exchange
-- Typed Discord coverage for polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/prune/vanity, voice regions, and bulk bans
-- Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu`, and more)
+- Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
+- Application framework routing for slash commands, components, and modals behind the `interactions` feature
+- Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu` with auto-populated defaults, and more)
 - Typed command builders for slash, user, and message commands
 - Modal builders with `RadioGroup`, `CheckboxGroup`, `Checkbox`, and `FileUpload`
 - V2 modal submission parser with preserved `FileUpload`, `RadioGroup`, `CheckboxGroup`, and other V2 component types
@@ -31,43 +32,43 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "1.2.2"
+discordrs = "2.0.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "1.2.2", features = ["gateway"] }
+discordrs = { version = "2.0.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "1.2.2", features = ["interactions"] }
+discordrs = { version = "2.0.0", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "1.2.2", features = ["gateway"] }
+discordrs = { version = "2.0.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "1.2.2", default-features = false }
+discordrs = { version = "2.0.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "1.2.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "1.2.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "1.2.2", features = ["voice"] }
+discordrs = { version = "2.0.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "1.2.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.0", features = ["voice", "voice-encode"] }
 
-# Experimental DAVE receive/outbound media integration
-discordrs = { version = "1.2.2", features = ["voice", "dave"] }
+# DAVE receive/outbound media integration
+discordrs = { version = "2.0.0", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "1.2.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "1.2.2", features = ["gateway", "interactions"] }
+discordrs = { version = "2.0.0", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup
@@ -270,7 +271,7 @@ fn app(public_key: &str) -> Router {
 | `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
 | `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
 | `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
-| `dave` | Experimental DAVE/MLS receive and outbound media hooks backed by `davey`; production interop still requires live Discord transition validation | voice, davey |
+| `dave` | DAVE/MLS receive and outbound media hooks backed by `davey`, with live Discord MLS transition validation coverage | voice, davey |
 
 ## Notes
 
@@ -279,7 +280,7 @@ fn app(public_key: &str) -> Router {
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
 - Prefer the typed `RestClient` methods such as `create_message`, `update_message`, `create_interaction_response_typed`, and `bulk_overwrite_*_typed`.
-- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_auto_moderation_rules_typed`, `get_guild_preview_typed`, `get_guild_vanity_url`, `get_voice_regions_typed`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
+- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log_typed`, `get_auto_moderation_rules_typed`, `get_guild_preview_typed`, `get_guild_vanity_url`, `get_voice_regions_typed`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
 - `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
 - Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.
 - Use `CacheHandle::is_enabled()` when code may be compiled with `default-features = false`; cache storage is enabled in the default feature set.
@@ -291,6 +292,7 @@ fn app(public_key: &str) -> Router {
 - Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.
 - Use `EventHandler::handle_event(...)` when you want one typed entry point for every gateway event. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` still exist, but they now receive typed payloads too.
 - Use `Context::new(...)` when tests or helper crates need a standalone context outside the live gateway runtime.
+- Use `examples/live_dave_capture_bot.rs` to capture matching bot `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` values before running the ignored live DAVE validation test.
 - Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
 - Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.
 - The parser keeps V2 modal component types, including `FileUpload`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.

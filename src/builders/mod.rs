@@ -7,7 +7,9 @@ mod embed;
 mod media;
 mod modal;
 
-pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
+pub use components::{
+    ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectDefaultValue, SelectMenuBuilder,
+};
 pub use container::{
     create_container, create_default_buttons, ContainerBuilder, SeparatorBuilder,
     TextDisplayBuilder,

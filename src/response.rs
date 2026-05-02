@@ -10,36 +10,43 @@ use crate::helpers::{
 use crate::model::{CreateMessage, InteractionCallbackResponse};
 
 #[derive(Clone, Debug, Default)]
+/// Typed Discord API object for `MessageBuilder`.
 pub struct MessageBuilder {
     inner: CreateMessage,
 }
 
 impl MessageBuilder {
+    /// Creates or returns `new` data.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Runs the `content` operation.
     pub fn content(mut self, content: impl Into<String>) -> Self {
         self.inner.content = Some(content.into());
         self
     }
 
+    /// Runs the `components` operation.
     pub fn components(mut self, components: Vec<Value>) -> Self {
         self.inner.components = Some(components);
         self
     }
 
+    /// Runs the `components_v2` operation.
     pub fn components_v2(mut self, message: ComponentsV2Message) -> Self {
         self.inner.components = Some(message.build());
         self.inner.flags = Some(self.inner.flags.unwrap_or(0) | MESSAGE_FLAG_IS_COMPONENTS_V2);
         self
     }
 
+    /// Runs the `flags` operation.
     pub fn flags(mut self, flags: u64) -> Self {
         self.inner.flags = Some(flags);
         self
     }
 
+    /// Runs the `ephemeral` operation.
     pub fn ephemeral(mut self, ephemeral: bool) -> Self {
         if ephemeral {
             self.inner.flags = Some(self.inner.flags.unwrap_or(0) | (1 << 6));
@@ -47,17 +54,20 @@ impl MessageBuilder {
         self
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> CreateMessage {
         self.inner
     }
 }
 
 #[derive(Clone, Debug)]
+/// Typed Discord API object for `InteractionResponseBuilder`.
 pub struct InteractionResponseBuilder {
     inner: InteractionCallbackResponse,
 }
 
 impl InteractionResponseBuilder {
+    /// Creates or returns `channel_message` data.
     pub fn channel_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
@@ -67,6 +77,7 @@ impl InteractionResponseBuilder {
         })
     }
 
+    /// Creates or returns `deferred_channel_message` data.
     pub fn deferred_channel_message(ephemeral: bool) -> Self {
         let mut flags = 0_u64;
         if ephemeral {
@@ -81,6 +92,7 @@ impl InteractionResponseBuilder {
         }
     }
 
+    /// Creates or returns `update_message` data.
     pub fn update_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
@@ -90,6 +102,7 @@ impl InteractionResponseBuilder {
         })
     }
 
+    /// Creates or returns `modal` data.
     pub fn modal(modal: ModalBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
@@ -99,6 +112,7 @@ impl InteractionResponseBuilder {
         })
     }
 
+    /// Runs the `build` operation.
     pub fn build(self) -> InteractionCallbackResponse {
         self.inner
     }
