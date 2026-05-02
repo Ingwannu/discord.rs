@@ -32,43 +32,43 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.0.1"
+discordrs = "2.0.2"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.1", features = ["gateway"] }
+discordrs = { version = "2.0.2", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.1", features = ["interactions"] }
+discordrs = { version = "2.0.2", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "2.0.1", features = ["gateway"] }
+discordrs = { version = "2.0.2", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.1", default-features = false }
+discordrs = { version = "2.0.2", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "2.0.1", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "2.0.1", features = ["voice"] }
+discordrs = { version = "2.0.2", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
 
 # DAVE receive/outbound media integration
-discordrs = { version = "2.0.1", features = ["voice", "dave"] }
+discordrs = { version = "2.0.2", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.1", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.1", features = ["gateway", "interactions"] }
+discordrs = { version = "2.0.2", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup

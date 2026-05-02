@@ -16,7 +16,7 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.1", features = ["gateway"] }
+discordrs = { version = "2.0.2", features = ["gateway"] }
 ```
 
 ## Boot Pattern

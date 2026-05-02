@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "2.0.1"
+discordrs = "2.0.2"
 
 # Gateway runtime
-discordrs = { version = "2.0.1", features = ["gateway"] }
+discordrs = { version = "2.0.2", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.1", features = ["interactions"] }
+discordrs = { version = "2.0.2", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.1", default-features = false }
+discordrs = { version = "2.0.2", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "2.0.1", features = ["gateway", "sharding"] }
+discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "2.0.1", features = ["voice"] }
+discordrs = { version = "2.0.2", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hooks
-discordrs = { version = "2.0.1", features = ["voice", "dave"] }
+discordrs = { version = "2.0.2", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "2.0.1", features = ["gateway", "voice"] }
+discordrs = { version = "2.0.2", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.1", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:

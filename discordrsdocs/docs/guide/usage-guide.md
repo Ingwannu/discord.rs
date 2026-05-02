@@ -9,28 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core default with cache storage
-discordrs = "2.0.1"
+discordrs = "2.0.2"
 
 # Typed gateway runtime
-discordrs = { version = "2.0.1", features = ["gateway"] }
+discordrs = { version = "2.0.2", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.1", default-features = false }
+discordrs = { version = "2.0.2", default-features = false }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "2.0.1", features = ["gateway", "collectors"] }
+discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.1", features = ["interactions"] }
+discordrs = { version = "2.0.2", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "2.0.1", features = ["voice"] }
+discordrs = { version = "2.0.2", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.1", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hook
-discordrs = { version = "2.0.1", features = ["voice", "dave"] }
+discordrs = { version = "2.0.2", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -112,7 +112,7 @@ Pass the framework to `try_typed_interactions_endpoint(...)` when you want route
 
 ## 5. Turn on cache or collectors when the bot needs them
 
-- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default in `2.0.1`
+- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default in `2.0.2`
 - `collectors`: enables async collectors for messages, interactions, components, and modals
 
 Hot member, message, and presence cache lookups have `Arc` variants such as `member_arc(...)`, `message_arc(...)`, `presence_arc(...)`, and manager `cached_arc(...)` helpers. Use them when repeated cache reads should avoid deep cloning larger cached payloads. The existing owned-return methods remain available for compatibility.

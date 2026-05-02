@@ -4,7 +4,7 @@ These layers are optional. They are meant to improve runtime ergonomics without 
 
 ## Cache
 
-The `cache` feature is enabled by default in `2.0.1`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
+The `cache` feature is enabled by default in `2.0.2`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
 
 Main types:
 

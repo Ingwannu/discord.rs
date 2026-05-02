@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2 - 2026-05-02
+
+- Included the post-2.0.1 DAVE runtime clippy cleanup in the published crate so Linux stable CI and local release artifacts match.
+- Added coverage for short malformed DAVE commit/welcome binary payloads, preserving the ignored-state semantics while keeping line coverage above the 2.0.1 release checkpoint.
+- Updated install snippets, Docsify pages, Korean quick-start docs, and API coverage notes for the 2.0.2 patch release.
+
 ## 2.0.1 - 2026-05-02
 
 - Added bounded REST client connect/request timeouts so Discord HTTP calls do not wait indefinitely on stalled network paths.

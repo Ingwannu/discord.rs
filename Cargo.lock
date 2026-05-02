@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "discordrs"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "aes-gcm",
  "async-trait",
