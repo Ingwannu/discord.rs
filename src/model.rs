@@ -1909,6 +1909,111 @@ pub struct InteractionContextData {
     pub context: Option<InteractionContextType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorizing_integration_owners: Option<HashMap<String, Snowflake>>,
+    /// Shared response-state handle. Created once during parsing so every
+    /// clone of the same interaction observes the same acknowledgement state.
+    #[serde(skip)]
+    pub response_state: InteractionResponseState,
+}
+
+impl InteractionContextData {
+    /// Returns true when an initial response (reply, message update, modal,
+    /// or an edit of a deferred reply) has been sent for this interaction.
+    pub fn is_replied(&self) -> bool {
+        self.response_state.is_replied()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.response_state.is_deferred()
+    }
+
+    /// Returns true when the interaction was acknowledged in any way
+    /// (deferred or replied).
+    pub fn is_acknowledged(&self) -> bool {
+        self.response_state.is_acknowledged()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+/// Shared, atomically updated response state for one interaction.
+///
+/// Mirrors discord.js's `deferred`/`replied` flags with a single ladder:
+/// `0` = unacknowledged, `1` = deferred, `2` = replied. The handle is an
+/// `Arc`, so all clones of an interaction share one state and acknowledging
+/// through any clone is visible to the rest.
+pub struct InteractionResponseState(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl InteractionResponseState {
+    pub(crate) const UNACKNOWLEDGED: u8 = 0;
+    pub(crate) const DEFERRED: u8 = 1;
+    pub(crate) const REPLIED: u8 = 2;
+
+    /// Creates a fresh, unacknowledged response state.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.load() == Self::DEFERRED
+    }
+
+    /// Returns true when an initial response (reply, message update, modal,
+    /// or an edit of a deferred reply) has been sent.
+    pub fn is_replied(&self) -> bool {
+        self.load() == Self::REPLIED
+    }
+
+    /// Returns true when the interaction was acknowledged in any way.
+    pub fn is_acknowledged(&self) -> bool {
+        self.load() != Self::UNACKNOWLEDGED
+    }
+
+    fn load(&self) -> u8 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Atomically claims the initial-response slot; exactly one caller wins
+    /// when several race, mirroring discord.js's "already acknowledged" error.
+    pub(crate) fn acknowledge(&self, next: u8) -> Result<(), crate::error::DiscordError> {
+        self.0
+            .compare_exchange(
+                Self::UNACKNOWLEDGED,
+                next,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .map(|_| ())
+            .map_err(|_| crate::error::DiscordError::model("interaction was already acknowledged"))
+    }
+
+    /// Rolls back a claim made by [`Self::acknowledge`] after the HTTP call
+    /// failed, so the caller may retry the initial response.
+    pub(crate) fn revert(&self, from: u8) {
+        let _ = self.0.compare_exchange(
+            from,
+            Self::UNACKNOWLEDGED,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Errors when no initial response has been sent yet.
+    pub(crate) fn require_acknowledged(&self) -> Result<(), crate::error::DiscordError> {
+        if self.is_acknowledged() {
+            Ok(())
+        } else {
+            Err(crate::error::DiscordError::model(
+                "interaction has not been acknowledged",
+            ))
+        }
+    }
+
+    /// Promotes the state to replied (e.g. after editing a deferred reply).
+    pub(crate) fn mark_replied(&self) {
+        self.0
+            .store(Self::REPLIED, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -2058,6 +2163,23 @@ impl Interaction {
 
     pub fn application_id(&self) -> &Snowflake {
         &self.context().application_id
+    }
+
+    /// Returns true when an initial response has been sent for this
+    /// interaction.
+    pub fn is_replied(&self) -> bool {
+        self.context().is_replied()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.context().is_deferred()
+    }
+
+    /// Returns true when the interaction was acknowledged in any way
+    /// (deferred or replied).
+    pub fn is_acknowledged(&self) -> bool {
+        self.context().is_acknowledged()
     }
 }
 
