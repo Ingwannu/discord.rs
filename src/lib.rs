@@ -33,6 +33,9 @@ pub mod http;
 pub mod manager;
 /// Typed Discord API models and request payload shapes.
 pub mod model;
+/// discord.js-style convenience methods on model entities
+/// (`message.reply(...)`, `member.kick(...)`, `guild.create_channel(...)`).
+pub mod model_ext;
 /// OAuth2 authorization URL and token exchange helpers.
 pub mod oauth2;
 /// Parsers for Discord interaction and modal payloads.
