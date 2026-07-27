@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(feature = "collectors")]
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 #[cfg(feature = "collectors")]
 use tokio::time;
 
@@ -15,6 +15,67 @@ use crate::model::{ComponentInteraction, Interaction, Message, ModalSubmitIntera
 
 #[cfg(feature = "collectors")]
 type EventFilter<T> = Arc<dyn Fn(&T) -> bool + Send + Sync>;
+
+#[cfg(feature = "collectors")]
+/// Default reason recorded when a collector is stopped without an explicit
+/// reason, mirroring discord.js's `collector.stop()` default of `"user"`.
+const DEFAULT_STOP_REASON: &str = "user";
+
+#[cfg(feature = "collectors")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a collector ended collection, mirroring discord.js's `Collector#endReason`.
+pub enum CollectorEndReason {
+    /// The configured `max_items` limit was reached (discord.js `"limit"`).
+    Limit,
+    /// The overall `timeout` window elapsed (discord.js `"time"`).
+    Time,
+    /// No matching item arrived within the `idle` window (discord.js `"idle"`).
+    Idle,
+    /// Collection was stopped explicitly via `stop`/`stop_with_reason`,
+    /// carrying the supplied reason (`"user"` by default).
+    User(String),
+    /// The underlying event channel closed because the [`CollectorHub`]
+    /// (and every other sender) was dropped.
+    ChannelDropped,
+}
+
+#[cfg(feature = "collectors")]
+#[derive(Clone)]
+/// Cloneable handle that stops a collector from another task, ending any
+/// in-flight `next()` call with `None`.
+///
+/// Obtain one with the collector's `stop_handle()` method before moving the
+/// collector elsewhere (for example into a spawned task).
+pub struct CollectorStopHandle {
+    stop_tx: Arc<watch::Sender<Option<String>>>,
+}
+
+#[cfg(feature = "collectors")]
+impl CollectorStopHandle {
+    /// Stops the associated collector with the default reason `"user"`.
+    pub fn stop(&self) {
+        self.stop_with_reason(DEFAULT_STOP_REASON);
+    }
+
+    /// Stops the associated collector, recording `reason` as
+    /// [`CollectorEndReason::User`]. The first stop reason wins; later calls
+    /// are ignored.
+    pub fn stop_with_reason(&self, reason: impl Into<String>) {
+        request_stop(&self.stop_tx, reason.into());
+    }
+}
+
+#[cfg(feature = "collectors")]
+fn request_stop(stop_tx: &watch::Sender<Option<String>>, reason: String) {
+    stop_tx.send_if_modified(|current| {
+        if current.is_none() {
+            *current = Some(reason);
+            true
+        } else {
+            false
+        }
+    });
+}
 
 #[cfg(feature = "collectors")]
 #[derive(Clone)]
@@ -65,300 +126,420 @@ impl CollectorHub {
 }
 
 #[cfg(feature = "collectors")]
+/// Outcome of racing the receive loop against the stop signal and timers.
+enum NextOutcome<T> {
+    Item(T),
+    Closed,
+    Stopped(String),
+    TimedOut,
+    Idled,
+}
+
+#[cfg(feature = "collectors")]
+/// Shared implementation behind every collector type.
+struct CollectorCore<T> {
+    receiver: broadcast::Receiver<Event>,
+    extract: fn(Event) -> Option<T>,
+    filter: Option<EventFilter<T>>,
+    timeout: Option<Duration>,
+    idle: Option<Duration>,
+    deadline: Option<time::Instant>,
+    idle_deadline: Option<time::Instant>,
+    max_items: Option<usize>,
+    received: usize,
+    lagged_events: u64,
+    end_reason: Option<CollectorEndReason>,
+    stop_tx: Arc<watch::Sender<Option<String>>>,
+    stop_rx: watch::Receiver<Option<String>>,
+}
+
+#[cfg(feature = "collectors")]
+impl<T> CollectorCore<T> {
+    fn new(receiver: broadcast::Receiver<Event>, extract: fn(Event) -> Option<T>) -> Self {
+        let (stop_tx, stop_rx) = watch::channel(None);
+        Self {
+            receiver,
+            extract,
+            filter: None,
+            timeout: None,
+            idle: None,
+            deadline: None,
+            idle_deadline: None,
+            max_items: None,
+            received: 0,
+            lagged_events: 0,
+            end_reason: None,
+            stop_tx: Arc::new(stop_tx),
+            stop_rx,
+        }
+    }
+
+    fn stop(&self, reason: impl Into<String>) {
+        request_stop(&self.stop_tx, reason.into());
+    }
+
+    fn stop_handle(&self) -> CollectorStopHandle {
+        CollectorStopHandle {
+            stop_tx: Arc::clone(&self.stop_tx),
+        }
+    }
+
+    fn end_reason(&self) -> Option<CollectorEndReason> {
+        if let Some(reason) = &self.end_reason {
+            return Some(reason.clone());
+        }
+        self.stop_rx.borrow().clone().map(CollectorEndReason::User)
+    }
+
+    fn reset_timer(&mut self) {
+        let now = time::Instant::now();
+        if let Some(timeout) = self.timeout {
+            self.deadline = Some(now + timeout);
+        }
+        if let Some(idle) = self.idle {
+            self.idle_deadline = Some(now + idle);
+        }
+    }
+
+    async fn next(&mut self) -> Option<T> {
+        if self.end_reason.is_some() {
+            return None;
+        }
+        if let Some(reason) = self.stop_rx.borrow().clone() {
+            self.end_reason = Some(CollectorEndReason::User(reason));
+            return None;
+        }
+        if let Some(max_items) = self.max_items {
+            if self.received >= max_items {
+                self.end_reason = Some(CollectorEndReason::Limit);
+                return None;
+            }
+        }
+
+        let now = time::Instant::now();
+        if let Some(timeout) = self.timeout {
+            self.deadline.get_or_insert(now + timeout);
+        }
+        if let Some(idle) = self.idle {
+            self.idle_deadline.get_or_insert(now + idle);
+        }
+        let deadline = self.deadline;
+        let idle_deadline = self.idle_deadline;
+
+        let extract = self.extract;
+        let filter = self.filter.clone();
+        let receiver = &mut self.receiver;
+        let lagged_events = &mut self.lagged_events;
+        let stop_rx = &mut self.stop_rx;
+
+        let outcome = tokio::select! {
+            item = recv_matching(receiver, extract, filter, lagged_events) => match item {
+                Some(item) => NextOutcome::Item(item),
+                None => NextOutcome::Closed,
+            },
+            reason = wait_for_stop(stop_rx) => NextOutcome::Stopped(reason),
+            _ = sleep_until_opt(deadline) => NextOutcome::TimedOut,
+            _ = sleep_until_opt(idle_deadline) => NextOutcome::Idled,
+        };
+
+        match outcome {
+            NextOutcome::Item(item) => {
+                self.received = self.received.saturating_add(1);
+                if let Some(max_items) = self.max_items {
+                    if self.received >= max_items {
+                        self.end_reason = Some(CollectorEndReason::Limit);
+                    }
+                }
+                if let Some(idle) = self.idle {
+                    self.idle_deadline = Some(time::Instant::now() + idle);
+                }
+                Some(item)
+            }
+            NextOutcome::Closed => {
+                self.end_reason = Some(CollectorEndReason::ChannelDropped);
+                None
+            }
+            NextOutcome::Stopped(reason) => {
+                self.end_reason = Some(CollectorEndReason::User(reason));
+                None
+            }
+            NextOutcome::TimedOut => {
+                self.end_reason = Some(CollectorEndReason::Time);
+                None
+            }
+            NextOutcome::Idled => {
+                self.end_reason = Some(CollectorEndReason::Idle);
+                None
+            }
+        }
+    }
+
+    async fn collect(&mut self) -> Vec<T> {
+        let mut items = Vec::new();
+        while let Some(item) = self.next().await {
+            items.push(item);
+        }
+        items
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// Receives events until one matches `extract` and `filter`, tracking lag.
+/// Returns `None` when the broadcast channel closes.
+async fn recv_matching<T>(
+    receiver: &mut broadcast::Receiver<Event>,
+    extract: fn(Event) -> Option<T>,
+    filter: Option<EventFilter<T>>,
+    lagged_events: &mut u64,
+) -> Option<T> {
+    loop {
+        match receiver.recv().await {
+            Ok(event) => {
+                if let Some(item) = extract(event) {
+                    let passes = filter.as_ref().map(|filter| filter(&item)).unwrap_or(true);
+                    if passes {
+                        return Some(item);
+                    }
+                }
+            }
+            Err(broadcast::error::RecvError::Closed) => return None,
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                *lagged_events = lagged_events.saturating_add(skipped);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// Resolves with the stop reason once a stop is requested.
+async fn wait_for_stop(stop_rx: &mut watch::Receiver<Option<String>>) -> String {
+    loop {
+        if let Some(reason) = stop_rx.borrow_and_update().clone() {
+            return reason;
+        }
+        if stop_rx.changed().await.is_err() {
+            // The paired sender lives inside the collector itself, so it can
+            // never be dropped while this future is polled. Pend forever so
+            // the other `select!` branches keep making progress regardless.
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// Sleeps until `deadline`, or pends forever when no deadline is configured.
+async fn sleep_until_opt(deadline: Option<time::Instant>) {
+    match deadline {
+        Some(deadline) => time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
+#[cfg(feature = "collectors")]
+macro_rules! impl_collector_methods {
+    ($collector:ident, $item:ty) => {
+        #[cfg(feature = "collectors")]
+        impl $collector {
+            /// Only collects items for which `filter` returns `true`.
+            /// Non-matching items are skipped: they do not count towards
+            /// `max_items` and do not reset the idle window.
+            pub fn filter<F>(mut self, filter: F) -> Self
+            where
+                F: Fn(&$item) -> bool + Send + Sync + 'static,
+            {
+                self.core.filter = Some(Arc::new(filter));
+                self
+            }
+
+            /// Sets the overall collection window. Once `duration` has
+            /// elapsed since the first `next()` call (or the last
+            /// [`reset_timer`](Self::reset_timer)), collection ends with
+            /// [`CollectorEndReason::Time`].
+            pub fn timeout(mut self, duration: Duration) -> Self {
+                self.core.timeout = Some(duration);
+                self
+            }
+
+            /// Sets the idle window. If no matching item arrives for
+            /// `duration`, collection ends with [`CollectorEndReason::Idle`].
+            /// The window restarts every time a matching item is collected,
+            /// unlike [`timeout`](Self::timeout) which is absolute.
+            pub fn idle(mut self, duration: Duration) -> Self {
+                self.core.idle = Some(duration);
+                self
+            }
+
+            /// Stops collecting once this many items have been collected,
+            /// recording [`CollectorEndReason::Limit`].
+            pub fn max_items(mut self, max_items: usize) -> Self {
+                self.core.max_items = Some(max_items);
+                self
+            }
+
+            /// Number of events dropped because this collector lagged behind
+            /// the broadcast channel.
+            pub fn lagged_events(&self) -> u64 {
+                self.core.lagged_events
+            }
+
+            /// Number of matching items this collector has yielded so far.
+            pub fn received_count(&self) -> usize {
+                self.core.received
+            }
+
+            /// Why collection ended, or `None` while the collector is still
+            /// live. Mirrors discord.js's `Collector#endReason`.
+            pub fn end_reason(&self) -> Option<CollectorEndReason> {
+                self.core.end_reason()
+            }
+
+            /// Stops collection with the default reason `"user"`. Subsequent
+            /// `next()` calls return `None` and
+            /// [`end_reason`](Self::end_reason) reports
+            /// [`CollectorEndReason::User`].
+            pub fn stop(&self) {
+                self.core.stop(DEFAULT_STOP_REASON);
+            }
+
+            /// Stops collection with a custom reason, recorded as
+            /// [`CollectorEndReason::User`]. The first stop reason wins.
+            pub fn stop_with_reason(&self, reason: impl Into<String>) {
+                self.core.stop(reason);
+            }
+
+            /// Returns a cloneable [`CollectorStopHandle`] that can stop this
+            /// collector from another task, ending an in-flight `next()`
+            /// call with `None`.
+            pub fn stop_handle(&self) -> CollectorStopHandle {
+                self.core.stop_handle()
+            }
+
+            /// Restarts both the overall timeout and the idle window from
+            /// now, where configured. Equivalent to discord.js's
+            /// `Collector#resetTimer`.
+            pub fn reset_timer(&mut self) {
+                self.core.reset_timer();
+            }
+
+            /// Waits for the next matching item. Returns `None` once
+            /// collection has ended; consult
+            /// [`end_reason`](Self::end_reason) to learn why.
+            pub async fn next(&mut self) -> Option<$item> {
+                self.core.next().await
+            }
+
+            /// Collects items until the collector ends (limit, timeout, idle,
+            /// stop, or channel close) and returns everything gathered.
+            pub async fn collect(mut self) -> Vec<$item> {
+                self.core.collect().await
+            }
+        }
+    };
+}
+
+#[cfg(feature = "collectors")]
+fn extract_message(event: Event) -> Option<Message> {
+    match event {
+        Event::MessageCreate(event) | Event::MessageUpdate(event) => Some(event.message),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "collectors")]
+fn extract_interaction(event: Event) -> Option<Interaction> {
+    match event {
+        Event::InteractionCreate(event) => Some(event.interaction),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "collectors")]
+fn extract_component(event: Event) -> Option<ComponentInteraction> {
+    match extract_interaction(event)? {
+        Interaction::Component(component) => Some(component),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "collectors")]
+fn extract_modal(event: Event) -> Option<ModalSubmitInteraction> {
+    match extract_interaction(event)? {
+        Interaction::ModalSubmit(modal) => Some(modal),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "collectors")]
 /// Typed Discord API object for `MessageCollector`.
 pub struct MessageCollector {
-    receiver: broadcast::Receiver<Event>,
-    filter: Option<EventFilter<Message>>,
-    timeout: Option<Duration>,
-    deadline: Option<time::Instant>,
-    max_items: Option<usize>,
-    lagged_events: u64,
+    core: CollectorCore<Message>,
 }
 
 #[cfg(feature = "collectors")]
 impl MessageCollector {
     fn new(receiver: broadcast::Receiver<Event>) -> Self {
         Self {
-            receiver,
-            filter: None,
-            timeout: None,
-            deadline: None,
-            max_items: None,
-            lagged_events: 0,
+            core: CollectorCore::new(receiver, extract_message),
         }
-    }
-
-    pub fn filter<F>(mut self, filter: F) -> Self
-    where
-        F: Fn(&Message) -> bool + Send + Sync + 'static,
-    {
-        self.filter = Some(Arc::new(filter));
-        self
-    }
-
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.timeout = Some(duration);
-        self
-    }
-
-    pub fn max_items(mut self, max_items: usize) -> Self {
-        self.max_items = Some(max_items);
-        self
-    }
-
-    pub fn lagged_events(&self) -> u64 {
-        self.lagged_events
-    }
-
-    pub async fn next(&mut self) -> Option<Message> {
-        let timeout = remaining_timeout(self.timeout, &mut self.deadline);
-        recv_with_timeout(timeout, async {
-            loop {
-                match self.receiver.recv().await {
-                    Ok(Event::MessageCreate(event)) | Ok(Event::MessageUpdate(event)) => {
-                        let passes = self
-                            .filter
-                            .as_ref()
-                            .map(|filter| filter(&event.message))
-                            .unwrap_or(true);
-                        if passes {
-                            return Some(event.message);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        self.lagged_events = self.lagged_events.saturating_add(skipped);
-                    }
-                }
-            }
-        })
-        .await
-    }
-
-    pub async fn collect(mut self) -> Vec<Message> {
-        let mut messages = Vec::new();
-        while let Some(message) = self.next().await {
-            messages.push(message);
-            if let Some(max_items) = self.max_items {
-                if messages.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        messages
     }
 }
 
 #[cfg(feature = "collectors")]
+impl_collector_methods!(MessageCollector, Message);
+
+#[cfg(feature = "collectors")]
 /// Typed Discord API object for `InteractionCollector`.
 pub struct InteractionCollector {
-    receiver: broadcast::Receiver<Event>,
-    filter: Option<EventFilter<Interaction>>,
-    timeout: Option<Duration>,
-    deadline: Option<time::Instant>,
-    max_items: Option<usize>,
-    lagged_events: u64,
+    core: CollectorCore<Interaction>,
 }
 
 #[cfg(feature = "collectors")]
 impl InteractionCollector {
     fn new(receiver: broadcast::Receiver<Event>) -> Self {
         Self {
-            receiver,
-            filter: None,
-            timeout: None,
-            deadline: None,
-            max_items: None,
-            lagged_events: 0,
+            core: CollectorCore::new(receiver, extract_interaction),
         }
-    }
-
-    pub fn filter<F>(mut self, filter: F) -> Self
-    where
-        F: Fn(&Interaction) -> bool + Send + Sync + 'static,
-    {
-        self.filter = Some(Arc::new(filter));
-        self
-    }
-
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.timeout = Some(duration);
-        self
-    }
-
-    pub fn max_items(mut self, max_items: usize) -> Self {
-        self.max_items = Some(max_items);
-        self
-    }
-
-    pub fn lagged_events(&self) -> u64 {
-        self.lagged_events
-    }
-
-    pub async fn next(&mut self) -> Option<Interaction> {
-        let timeout = remaining_timeout(self.timeout, &mut self.deadline);
-        recv_with_timeout(timeout, async {
-            loop {
-                match self.receiver.recv().await {
-                    Ok(Event::InteractionCreate(event)) => {
-                        let passes = self
-                            .filter
-                            .as_ref()
-                            .map(|filter| filter(&event.interaction))
-                            .unwrap_or(true);
-                        if passes {
-                            return Some(event.interaction);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Closed) => return None,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        self.lagged_events = self.lagged_events.saturating_add(skipped);
-                    }
-                }
-            }
-        })
-        .await
-    }
-
-    pub async fn collect(mut self) -> Vec<Interaction> {
-        let mut interactions = Vec::new();
-        while let Some(interaction) = self.next().await {
-            interactions.push(interaction);
-            if let Some(max_items) = self.max_items {
-                if interactions.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        interactions
     }
 }
 
 #[cfg(feature = "collectors")]
+impl_collector_methods!(InteractionCollector, Interaction);
+
+#[cfg(feature = "collectors")]
 /// Typed Discord API object for `ComponentCollector`.
 pub struct ComponentCollector {
-    inner: InteractionCollector,
+    core: CollectorCore<ComponentInteraction>,
 }
 
 #[cfg(feature = "collectors")]
 impl ComponentCollector {
     fn new(receiver: broadcast::Receiver<Event>) -> Self {
         Self {
-            inner: InteractionCollector::new(receiver),
+            core: CollectorCore::new(receiver, extract_component),
         }
-    }
-
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.inner = self.inner.timeout(duration);
-        self
-    }
-
-    pub fn lagged_events(&self) -> u64 {
-        self.inner.lagged_events()
-    }
-
-    pub fn max_items(mut self, max_items: usize) -> Self {
-        self.inner = self.inner.max_items(max_items);
-        self
-    }
-
-    pub async fn next(&mut self) -> Option<ComponentInteraction> {
-        while let Some(interaction) = self.inner.next().await {
-            if let Interaction::Component(component) = interaction {
-                return Some(component);
-            }
-        }
-        None
-    }
-
-    pub async fn collect(mut self) -> Vec<ComponentInteraction> {
-        let mut components = Vec::new();
-        while let Some(component) = self.next().await {
-            components.push(component);
-            if let Some(max_items) = self.inner.max_items {
-                if components.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        components
     }
 }
 
 #[cfg(feature = "collectors")]
+impl_collector_methods!(ComponentCollector, ComponentInteraction);
+
+#[cfg(feature = "collectors")]
 /// Typed Discord API object for `ModalCollector`.
 pub struct ModalCollector {
-    inner: InteractionCollector,
+    core: CollectorCore<ModalSubmitInteraction>,
 }
 
 #[cfg(feature = "collectors")]
 impl ModalCollector {
     fn new(receiver: broadcast::Receiver<Event>) -> Self {
         Self {
-            inner: InteractionCollector::new(receiver),
+            core: CollectorCore::new(receiver, extract_modal),
         }
-    }
-
-    pub fn timeout(mut self, duration: Duration) -> Self {
-        self.inner = self.inner.timeout(duration);
-        self
-    }
-
-    pub fn lagged_events(&self) -> u64 {
-        self.inner.lagged_events()
-    }
-
-    pub fn max_items(mut self, max_items: usize) -> Self {
-        self.inner = self.inner.max_items(max_items);
-        self
-    }
-
-    pub async fn next(&mut self) -> Option<ModalSubmitInteraction> {
-        while let Some(interaction) = self.inner.next().await {
-            if let Interaction::ModalSubmit(modal) = interaction {
-                return Some(modal);
-            }
-        }
-        None
-    }
-
-    pub async fn collect(mut self) -> Vec<ModalSubmitInteraction> {
-        let mut modals = Vec::new();
-        while let Some(modal) = self.next().await {
-            modals.push(modal);
-            if let Some(max_items) = self.inner.max_items {
-                if modals.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        modals
     }
 }
 
 #[cfg(feature = "collectors")]
-fn remaining_timeout(
-    timeout_duration: Option<Duration>,
-    deadline: &mut Option<time::Instant>,
-) -> Option<Duration> {
-    let duration = timeout_duration?;
-    let now = time::Instant::now();
-    let deadline = *deadline.get_or_insert(now + duration);
-    Some(deadline.saturating_duration_since(now))
-}
-
-#[cfg(feature = "collectors")]
-async fn recv_with_timeout<T>(
-    timeout_duration: Option<Duration>,
-    future: impl std::future::Future<Output = Option<T>>,
-) -> Option<T> {
-    match timeout_duration {
-        Some(duration) => time::timeout(duration, future).await.ok().flatten(),
-        None => future.await,
-    }
-}
+impl_collector_methods!(ModalCollector, ModalSubmitInteraction);
 
 #[cfg(all(test, feature = "collectors"))]
 mod tests {
@@ -371,7 +552,7 @@ mod tests {
     use crate::event::decode_event;
     use crate::model::Interaction;
 
-    use super::{recv_with_timeout, CollectorHub};
+    use super::{CollectorEndReason, CollectorHub};
 
     fn interaction_event(payload: Value) -> crate::event::Event {
         decode_event("INTERACTION_CREATE", payload).expect("valid interaction event")
@@ -411,6 +592,20 @@ mod tests {
                 "components": []
             }
         }))
+    }
+
+    fn message_create(id: &str, content: &str) -> crate::event::Event {
+        decode_event(
+            "MESSAGE_CREATE",
+            json!({
+                "id": id,
+                "channel_id": "1",
+                "content": content,
+                "mentions": [],
+                "attachments": []
+            }),
+        )
+        .expect("valid message event")
     }
 
     #[tokio::test]
@@ -681,6 +876,7 @@ mod tests {
             .await
             .expect("collector timeout should not reset for every non-component interaction");
         assert!(result.is_none());
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Time));
     }
 
     #[tokio::test]
@@ -716,6 +912,10 @@ mod tests {
         drop(hub);
 
         assert!(collector.next().await.is_none());
+        assert_eq!(
+            collector.end_reason(),
+            Some(CollectorEndReason::ChannelDropped)
+        );
     }
 
     #[tokio::test]
@@ -753,15 +953,190 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn recv_with_timeout_returns_none_when_future_exceeds_deadline() {
-        let timed_out = recv_with_timeout(
-            Some(Duration::from_millis(5)),
-            std::future::pending::<Option<u8>>(),
-        )
-        .await;
-        assert_eq!(timed_out, None);
+    async fn idle_timeout_ends_collection_before_slower_overall_timeout() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .message_collector()
+            .timeout(Duration::from_secs(5))
+            .idle(Duration::from_millis(40));
 
-        let completed = recv_with_timeout(None, async { Some(2_u8) }).await;
-        assert_eq!(completed, Some(2));
+        let started = time::Instant::now();
+        assert!(collector.next().await.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "idle should end collection long before the overall timeout"
+        );
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Idle));
+    }
+
+    #[tokio::test]
+    async fn idle_window_resets_on_each_collected_item() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.message_collector().idle(Duration::from_millis(100));
+        let publisher = hub.clone();
+
+        tokio::spawn(async move {
+            for id in 10..13 {
+                time::sleep(Duration::from_millis(30)).await;
+                publisher.publish(message_create(&id.to_string(), "tick"));
+            }
+        });
+
+        let mut count = 0;
+        while collector.next().await.is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 3);
+        assert_eq!(collector.received_count(), 3);
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Idle));
+    }
+
+    #[tokio::test]
+    async fn overall_timeout_records_time_end_reason() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .interaction_collector()
+            .timeout(Duration::from_millis(30));
+
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Time));
+    }
+
+    #[tokio::test]
+    async fn stop_with_reason_ends_in_flight_next_and_records_reason() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.component_collector();
+        let handle = collector.stop_handle();
+
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(20)).await;
+            handle.stop_with_reason("done");
+        });
+
+        let result = time::timeout(Duration::from_millis(500), collector.next())
+            .await
+            .expect("stop_with_reason should end the in-flight next()");
+        assert!(result.is_none());
+        assert_eq!(
+            collector.end_reason(),
+            Some(CollectorEndReason::User("done".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_makes_subsequent_next_return_none_with_default_reason() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.message_collector();
+
+        hub.publish(message_create("2", "ignored after stop"));
+        collector.stop();
+
+        assert!(collector.next().await.is_none());
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.received_count(), 0);
+        assert_eq!(
+            collector.end_reason(),
+            Some(CollectorEndReason::User("user".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn first_stop_reason_wins() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.modal_collector();
+
+        collector.stop_with_reason("first");
+        collector.stop_with_reason("second");
+        collector.stop();
+
+        assert!(collector.next().await.is_none());
+        assert_eq!(
+            collector.end_reason(),
+            Some(CollectorEndReason::User("first".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn component_collector_filter_only_passes_matching_custom_ids() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .component_collector()
+            .filter(|component| component.data.custom_id == "keep")
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(component_interaction("1", "drop"));
+        hub.publish(ping_interaction("2"));
+        hub.publish(component_interaction("3", "keep"));
+
+        let component = collector.next().await.expect("matching component");
+        assert_eq!(component.context.id.as_str(), "3");
+        assert_eq!(component.data.custom_id, "keep");
+        assert_eq!(collector.received_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn modal_collector_filter_only_passes_matching_custom_ids() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .modal_collector()
+            .filter(|modal| modal.submission.custom_id == "wanted")
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(modal_interaction("1", "other"));
+        hub.publish(modal_interaction("2", "wanted"));
+
+        let modal = collector.next().await.expect("matching modal");
+        assert_eq!(modal.context.id.as_str(), "2");
+        assert_eq!(modal.submission.custom_id, "wanted");
+        assert_eq!(collector.received_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reset_timer_extends_idle_deadline() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.message_collector().idle(Duration::from_millis(100));
+
+        collector.reset_timer();
+        time::sleep(Duration::from_millis(60)).await;
+        collector.reset_timer();
+
+        let started = time::Instant::now();
+        assert!(collector.next().await.is_none());
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(80),
+            "reset_timer should have restarted the idle window, elapsed {elapsed:?}"
+        );
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Idle));
+    }
+
+    #[tokio::test]
+    async fn max_items_records_limit_end_reason_and_ends_next() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .message_collector()
+            .max_items(1)
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(message_create("2", "hello"));
+        hub.publish(message_create("3", "beyond the limit"));
+
+        assert!(collector.next().await.is_some());
+        assert_eq!(collector.received_count(), 1);
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Limit));
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.received_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn end_reason_is_none_while_collector_is_live() {
+        let hub = CollectorHub::new();
+        let mut collector = hub.message_collector().timeout(Duration::from_secs(1));
+
+        hub.publish(message_create("2", "hello"));
+
+        assert!(collector.next().await.is_some());
+        assert_eq!(collector.end_reason(), None);
+        assert_eq!(collector.received_count(), 1);
     }
 }
