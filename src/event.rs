@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{
-    Activity, AuditLogEntry, Channel, ClientStatus, Entitlement, Guild, Integration, Interaction,
-    Member, Message, Presence, Role, Snowflake, SoundboardSound, StageInstance, Sticker,
-    Subscription, User, VoiceServerUpdate, VoiceState,
+    Activity, AuditLogEntry, AutoModerationAction, AutoModerationTriggerMetadata, Channel,
+    ClientStatus, Entitlement, Guild, Integration, Interaction, Member, Message, Presence, Role,
+    Snowflake, SoundboardSound, StageInstance, Sticker, Subscription, ThreadMember, User,
+    VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -283,6 +284,19 @@ pub struct InviteEvent {
     pub guild_id: Option<Snowflake>,
     pub channel_id: Option<Snowflake>,
     pub code: Option<String>,
+    /// User who created the invite (INVITE_CREATE only).
+    pub inviter: Option<User>,
+    /// How many times the invite has been used (always 0 on creation).
+    pub uses: Option<u64>,
+    pub max_uses: Option<u64>,
+    /// Invite lifetime in seconds; 0 means never expires.
+    pub max_age: Option<u64>,
+    pub temporary: Option<bool>,
+    pub created_at: Option<String>,
+    pub expires_at: Option<String>,
+    /// Target type for voice-channel invites (1 = stream, 2 = embedded app).
+    pub target_type: Option<u64>,
+    pub target_user: Option<User>,
     pub raw: Value,
 }
 
@@ -367,6 +381,9 @@ pub struct GuildIntegrationsUpdateEvent {
 /// Typed Discord API object for `ThreadEvent`.
 pub struct ThreadEvent {
     pub thread: Channel,
+    /// Set on THREAD_CREATE when the gateway marks the thread as newly
+    /// created (as opposed to one the current user was just added to).
+    pub newly_created: Option<bool>,
     pub raw: Value,
 }
 
@@ -375,6 +392,9 @@ pub struct ThreadEvent {
 pub struct ThreadMemberUpdateEvent {
     pub guild_id: Option<Snowflake>,
     pub thread_id: Option<Snowflake>,
+    pub user_id: Option<Snowflake>,
+    pub join_timestamp: Option<String>,
+    pub flags: Option<u64>,
     pub raw: Value,
 }
 
@@ -383,7 +403,7 @@ pub struct ThreadMemberUpdateEvent {
 pub struct ThreadMembersUpdateEvent {
     pub guild_id: Option<Snowflake>,
     pub thread_id: Option<Snowflake>,
-    pub added_members: Option<Vec<serde_json::Value>>,
+    pub added_members: Option<Vec<ThreadMember>>,
     pub removed_member_ids: Option<Vec<Snowflake>>,
     pub member_count: Option<u64>,
     pub raw: Value,
@@ -393,7 +413,12 @@ pub struct ThreadMembersUpdateEvent {
 /// Typed Discord API object for `ThreadListSyncEvent`.
 pub struct ThreadListSyncEvent {
     pub guild_id: Option<Snowflake>,
+    /// Parent channel ids whose threads are being synced; empty means the
+    /// entire guild was synced.
+    pub channel_ids: Vec<Snowflake>,
     pub threads: Vec<Channel>,
+    /// Thread member objects for the threads the current user has joined.
+    pub members: Vec<ThreadMember>,
     pub raw: Value,
 }
 
@@ -541,12 +566,13 @@ pub struct AutoModerationEvent {
     pub creator_id: Option<Snowflake>,
     pub event_type: Option<u64>,
     pub trigger_type: Option<u64>,
-    pub trigger_metadata: Option<Value>,
-    pub actions: Vec<Value>,
+    pub trigger_metadata: Option<AutoModerationTriggerMetadata>,
+    pub actions: Vec<AutoModerationAction>,
     pub enabled: Option<bool>,
     pub exempt_roles: Vec<Snowflake>,
     pub exempt_channels: Vec<Snowflake>,
-    pub action: Option<Value>,
+    /// The action that was executed (AUTO_MODERATION_ACTION_EXECUTION only).
+    pub action: Option<AutoModerationAction>,
     pub rule_id: Option<Snowflake>,
     pub rule_trigger_type: Option<u64>,
     pub user_id: Option<Snowflake>,

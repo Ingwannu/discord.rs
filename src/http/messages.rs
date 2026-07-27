@@ -24,6 +24,25 @@ impl RestClient {
         .await
     }
 
+    /// Forwards a message into another channel using a
+    /// `MessageReferenceType::FORWARD` reference — the equivalent of
+    /// discord.js's `message.forward(channel)`.
+    pub async fn forward_message(
+        &self,
+        from_channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        to_channel_id: impl Into<Snowflake>,
+    ) -> Result<Message, DiscordError> {
+        let body = CreateMessage {
+            message_reference: Some(crate::model::MessageReference::forward(
+                from_channel_id,
+                message_id,
+            )),
+            ..CreateMessage::default()
+        };
+        self.create_message(to_channel_id, &body).await
+    }
+
     pub async fn create_message_with_files(
         &self,
         channel_id: impl Into<Snowflake>,

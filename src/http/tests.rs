@@ -6745,3 +6745,209 @@ async fn request_retries_repeated_rate_limits_until_success() {
         assert_request_basics(request, "GET", "/channels/9", Some("Bot retry-token"));
     }
 }
+
+#[test]
+fn audit_log_reason_encoding_matches_encode_uri_component() {
+    assert_eq!(super::encode_audit_log_reason("simple"), "simple");
+    assert_eq!(super::encode_audit_log_reason("a b"), "a%20b");
+    assert_eq!(super::encode_audit_log_reason("50%"), "50%25");
+    assert_eq!(
+        super::encode_audit_log_reason("스팸"),
+        "%EC%8A%A4%ED%8C%B8"
+    );
+    assert_eq!(super::encode_audit_log_reason("ok!~*'()"), "ok!~*'()");
+}
+
+#[test]
+fn server_error_backoff_doubles_and_is_bounded() {
+    assert!((super::server_error_backoff(1) - 0.5).abs() < f64::EPSILON);
+    assert!((super::server_error_backoff(2) - 1.0).abs() < f64::EPSILON);
+    assert!((super::server_error_backoff(3) - 2.0).abs() < f64::EPSILON);
+    assert!(super::server_error_backoff(100) <= 200.0);
+}
+
+#[tokio::test]
+async fn with_reason_sends_encoded_audit_log_header_on_mutations_only() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("reason-token", 123, base_url);
+    let scoped = client.with_reason("spam 스팸");
+    scoped
+        .remove_guild_member("1", "2")
+        .await
+        .expect("kick with reason");
+    scoped.get_channel("9").await.expect("get channel");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].header("x-audit-log-reason"),
+        Some("spam%20%EC%8A%A4%ED%8C%B8")
+    );
+    assert_eq!(
+        requests[1].header("x-audit-log-reason"),
+        None,
+        "GET requests must not carry the audit-log header"
+    );
+}
+
+#[tokio::test]
+async fn server_errors_are_retried_and_then_succeed() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::BAD_GATEWAY, "bad gateway"),
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("retry-5xx-token", 123, base_url);
+    let channel = client.get_channel("9").await.expect("retried channel get");
+    assert_eq!(channel.id, crate::model::Snowflake::from("9"));
+    task.await.expect("server task");
+
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn rate_limit_retry_uses_retry_after_header_for_non_json_bodies() {
+    let mut limited = PlannedResponse::text(StatusCode::TOO_MANY_REQUESTS, "<html>limited</html>");
+    limited
+        .headers
+        .push(("Retry-After".to_string(), "0".to_string()));
+
+    let (base_url, captured, task) = spawn_test_server(vec![
+        limited,
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("retry-header-token", 123, base_url);
+    client.get_channel("9").await.expect("channel after 429");
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn new_guild_lifecycle_routes_have_expected_shapes() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::CREATED, guild_payload("1", "created")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::CREATED, guild_payload("2", "from-template")),
+        PlannedResponse::json(StatusCode::OK, json!({ "level": 1 })),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("guild-token", 123, base_url);
+    client
+        .create_guild(&crate::model::CreateGuild {
+            name: "created".to_string(),
+            ..crate::model::CreateGuild::default()
+        })
+        .await
+        .expect("create guild");
+    client.delete_guild("1").await.expect("delete guild");
+    client
+        .create_guild_from_template(
+            "abcDEF123",
+            &crate::model::CreateGuildFromTemplate {
+                name: "from-template".to_string(),
+                icon: None,
+            },
+        )
+        .await
+        .expect("create guild from template");
+    let mfa = client
+        .modify_guild_mfa_level("2", 1)
+        .await
+        .expect("modify mfa");
+    assert_eq!(mfa.level, 1);
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/guilds");
+    assert_eq!(requests[1].method, "DELETE");
+    assert_eq!(requests[1].path, "/guilds/1");
+    assert_eq!(requests[2].method, "POST");
+    assert_eq!(requests[2].path, "/guilds/templates/abcDEF123");
+    assert_eq!(requests[3].method, "POST");
+    assert_eq!(requests[3].path, "/guilds/2/mfa");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).expect("mfa body"),
+        json!({ "level": 1 })
+    );
+}
+
+#[tokio::test]
+async fn interaction_response_with_result_requests_callback_resource() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::OK,
+        json!({
+            "interaction": { "id": "10", "type": 2, "response_message_id": "11" },
+            "resource": {
+                "type": 4,
+                "message": message_payload("11", "12", "hello")
+            }
+        }),
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("callback-token", 123, base_url);
+    let result = client
+        .create_interaction_response_with_result(
+            "10",
+            "interactiontoken",
+            &crate::model::InteractionCallbackResponse {
+                kind: 4,
+                data: Some(json!({ "content": "hello" })),
+            },
+        )
+        .await
+        .expect("callback result");
+    task.await.expect("server task");
+
+    assert_eq!(
+        result.interaction.response_message_id,
+        Some(crate::model::Snowflake::from("11"))
+    );
+    let message = result
+        .resource
+        .expect("resource present")
+        .message
+        .expect("message present");
+    assert_eq!(message.content, "hello");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(
+        requests[0].path,
+        "/interactions/10/interactiontoken/callback?with_response=true"
+    );
+}
+
+#[tokio::test]
+async fn forward_message_sends_forward_reference_type() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::OK,
+        message_payload("31", "30", ""),
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("forward-token", 123, base_url);
+    client
+        .forward_message("20", "21", "30")
+        .await
+        .expect("forward message");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests[0].path, "/channels/30/messages");
+    let body: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("forward body json");
+    assert_eq!(body["message_reference"]["type"], json!(1));
+    assert_eq!(body["message_reference"]["channel_id"], json!("20"));
+    assert_eq!(body["message_reference"]["message_id"], json!("21"));
+}

@@ -65,6 +65,8 @@ use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
+const MAX_SERVER_ERROR_RETRIES: usize = 3;
+const ROUTE_GATE_GC_THRESHOLD: usize = 512;
 
 #[derive(Clone, Copy)]
 enum RequestAuthorization<'a> {
@@ -73,13 +75,17 @@ enum RequestAuthorization<'a> {
     None,
 }
 
-/// Typed Discord API object for `RestClient`.
+/// Typed Discord REST client with shared per-route and global rate-limit
+/// state. Cloning is cheap: clones share the same rate-limit bookkeeping,
+/// connection pool, and application id.
+#[derive(Clone)]
 pub struct RestClient {
     client: Client,
     token: String,
-    application_id: AtomicU64,
+    application_id: Arc<AtomicU64>,
     rate_limits: Arc<RateLimitState>,
     route_gates: Arc<RateLimitRouteGates>,
+    audit_log_reason: Option<String>,
     #[cfg(test)]
     base_url: String,
 }
@@ -98,6 +104,12 @@ impl RateLimitRouteGates {
             .routes
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        if routes.len() >= ROUTE_GATE_GC_THRESHOLD {
+            // Gates whose only strong reference is the map itself have no
+            // in-flight request; dropping them bounds the map without ever
+            // discarding a gate that is currently serializing requests.
+            routes.retain(|key, gate| key == route_key || Arc::strong_count(gate) > 1);
+        }
         Arc::clone(
             routes
                 .entry(route_key.to_string())
@@ -112,9 +124,10 @@ impl RestClient {
         Self {
             client: client_config::default_http_client(),
             token: token.into(),
-            application_id: AtomicU64::new(application_id),
+            application_id: Arc::new(AtomicU64::new(application_id)),
             rate_limits: Arc::new(RateLimitState::default()),
             route_gates: Arc::new(RateLimitRouteGates::default()),
+            audit_log_reason: None,
             #[cfg(test)]
             base_url: API_BASE.to_string(),
         }
@@ -129,11 +142,27 @@ impl RestClient {
         Self {
             client: client_config::default_http_client(),
             token: token.into(),
-            application_id: AtomicU64::new(application_id),
+            application_id: Arc::new(AtomicU64::new(application_id)),
             rate_limits: Arc::new(RateLimitState::default()),
             route_gates: Arc::new(RateLimitRouteGates::default()),
+            audit_log_reason: None,
             base_url: base_url.into(),
         }
+    }
+
+    /// Returns a client that sends `X-Audit-Log-Reason` with every mutating
+    /// request it makes, so the reason appears in the guild audit log.
+    ///
+    /// The returned client shares rate-limit state and the connection pool
+    /// with `self`; creating one is cheap and intended per call site:
+    ///
+    /// ```ignore
+    /// client.with_reason("spam").remove_guild_member(guild_id, user_id).await?;
+    /// ```
+    pub fn with_reason(&self, reason: impl Into<String>) -> Self {
+        let mut scoped = self.clone();
+        scoped.audit_log_reason = Some(reason.into());
+        scoped
     }
 
     #[cfg(test)]
@@ -2602,54 +2631,19 @@ impl RestClient {
         path: &str,
         body: Option<RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
-        let route_key = rate_limit_route_key(&method, path);
-        let mut rate_limit_retries = 0;
-
-        loop {
-            while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
-                debug!(
-                    "waiting for rate limit on {route_key} for {:?}",
-                    wait_duration
-                );
-                sleep_for_retry_after(wait_duration.as_secs_f64()).await;
-            }
-
-            let response = self
-                .request_once(authorization, method.clone(), path, body.as_ref())
-                .await?;
-            self.rate_limits.observe(
-                &route_key,
-                &response.headers,
-                response.status,
-                &response.body,
-            );
-
-            if response.status == StatusCode::TOO_MANY_REQUESTS {
-                if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
-                    return Err(discord_rate_limit_error(&route_key, &response.body));
-                }
-
-                rate_limit_retries += 1;
-                warn!(
-                    "received rate limit for {route_key}, retrying ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})"
-                );
-                let payload = parse_body_value(response.body.clone());
-                let retry_after = payload
-                    .get("retry_after")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(1.0);
-                sleep_for_retry_after(retry_after).await;
-                continue;
-            }
-
-            if !response.status.is_success() {
-                return Err(discord_api_error(response.status, &response.body));
-            }
-
-            return Ok(response);
-        }
+        let response = self
+            .request_bytes_with_headers_authorized(authorization, method, path, body)
+            .await?;
+        Ok(RawResponse {
+            status: response.status,
+            headers: response.headers,
+            body: String::from_utf8_lossy(&response.body).into_owned(),
+        })
     }
 
+    /// Single transport entry point: serializes same-bucket requests behind
+    /// a per-route gate, waits out known rate-limit windows, and retries
+    /// 429s, 5xx responses, and transient transport failures.
     async fn request_bytes_with_headers_authorized(
         &self,
         authorization: RequestAuthorization<'_>,
@@ -2661,6 +2655,7 @@ impl RestClient {
         let route_gate = self.route_gates.gate_for(&route_key);
         let _route_permit = route_gate.lock().await;
         let mut rate_limit_retries = 0;
+        let mut server_error_retries = 0;
 
         loop {
             while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
@@ -2671,9 +2666,24 @@ impl RestClient {
                 sleep_for_retry_after(wait_duration.as_secs_f64()).await;
             }
 
-            let response = self
+            let response = match self
                 .request_once_bytes(authorization, method.clone(), path, body.as_ref())
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(error)
+                    if error.is_retryable_transport()
+                        && server_error_retries < MAX_SERVER_ERROR_RETRIES =>
+                {
+                    server_error_retries += 1;
+                    warn!(
+                        "transport error on {route_key}: {error}, retrying ({server_error_retries}/{MAX_SERVER_ERROR_RETRIES})"
+                    );
+                    sleep_for_retry_after(server_error_backoff(server_error_retries)).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let response_text = String::from_utf8_lossy(&response.body);
             self.rate_limits.observe(
                 &route_key,
@@ -2691,12 +2701,22 @@ impl RestClient {
                 warn!(
                     "received rate limit for {route_key}, retrying ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})"
                 );
-                let payload = parse_body_value(response_text.into_owned());
-                let retry_after = payload
-                    .get("retry_after")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(1.0);
+                let retry_after =
+                    rate_limit::retry_after_seconds(&response.headers, &response_text);
                 sleep_for_retry_after(retry_after).await;
+                continue;
+            }
+
+            if response.status.is_server_error() {
+                if server_error_retries >= MAX_SERVER_ERROR_RETRIES {
+                    return Err(discord_api_error(response.status, &response_text));
+                }
+                server_error_retries += 1;
+                warn!(
+                    "received {} for {route_key}, retrying ({server_error_retries}/{MAX_SERVER_ERROR_RETRIES})",
+                    response.status
+                );
+                sleep_for_retry_after(server_error_backoff(server_error_retries)).await;
                 continue;
             }
 
@@ -2706,86 +2726,6 @@ impl RestClient {
 
             return Ok(response);
         }
-    }
-
-    async fn request_once(
-        &self,
-        authorization: RequestAuthorization<'_>,
-        method: Method,
-        path: &str,
-        body: Option<&RequestBody>,
-    ) -> Result<RawResponse, DiscordError> {
-        let normalized_path = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        };
-        let url = format!("{}{}", self.api_base(), normalized_path);
-
-        let mut request_builder = self.client.request(method, url).header(
-            "User-Agent",
-            concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")"),
-        );
-
-        if !matches!(
-            body,
-            Some(
-                RequestBody::Multipart { .. }
-                    | RequestBody::NamedFileMultipart { .. }
-                    | RequestBody::PayloadAndNamedFileMultipart { .. }
-                    | RequestBody::StickerMultipart { .. }
-            )
-        ) {
-            request_builder = request_builder.header("Content-Type", "application/json");
-        }
-
-        match authorization {
-            RequestAuthorization::Auto if request_uses_bot_authorization(&normalized_path) => {
-                request_builder =
-                    request_builder.header("Authorization", format!("Bot {}", self.token));
-            }
-            RequestAuthorization::Bearer(token) => {
-                request_builder =
-                    request_builder.header("Authorization", format!("Bearer {token}"));
-            }
-            RequestAuthorization::Auto | RequestAuthorization::None => {}
-        }
-
-        if let Some(body) = body {
-            request_builder = match body {
-                RequestBody::Json(value) => request_builder.json(value),
-                RequestBody::Multipart {
-                    payload_json,
-                    files,
-                } => request_builder.multipart(build_multipart_form(payload_json, files)?),
-                RequestBody::NamedFileMultipart { field_name, file } => {
-                    request_builder.multipart(build_named_file_form(None, field_name, file)?)
-                }
-                RequestBody::PayloadAndNamedFileMultipart {
-                    payload_json,
-                    field_name,
-                    file,
-                } => request_builder.multipart(build_named_file_form(
-                    Some(payload_json),
-                    field_name,
-                    file,
-                )?),
-                RequestBody::StickerMultipart { payload_json, file } => {
-                    request_builder.multipart(build_sticker_form(payload_json, file)?)
-                }
-            };
-        }
-
-        let response = request_builder.send().await?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let response_text = response.text().await?;
-
-        Ok(RawResponse {
-            status,
-            headers,
-            body: response_text,
-        })
     }
 
     async fn request_once_bytes(
@@ -2802,7 +2742,7 @@ impl RestClient {
         };
         let url = format!("{}{}", self.api_base(), normalized_path);
 
-        let mut request_builder = self.client.request(method, url).header(
+        let mut request_builder = self.client.request(method.clone(), url).header(
             "User-Agent",
             concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")"),
         );
@@ -2817,6 +2757,13 @@ impl RestClient {
             )
         ) {
             request_builder = request_builder.header("Content-Type", "application/json");
+        }
+
+        if method != Method::GET {
+            if let Some(reason) = &self.audit_log_reason {
+                request_builder =
+                    request_builder.header("X-Audit-Log-Reason", encode_audit_log_reason(reason));
+            }
         }
 
         match authorization {
@@ -2869,6 +2816,113 @@ impl RestClient {
     }
 }
 
+impl RestClient {
+    /// Creates a guild via `POST /guilds`. Only usable by bots in fewer
+    /// than 10 guilds.
+    pub async fn create_guild(
+        &self,
+        body: &crate::model::CreateGuild,
+    ) -> Result<Guild, DiscordError> {
+        self.request_typed(Method::POST, "/guilds", Some(body))
+            .await
+    }
+
+    /// Deletes a guild via `DELETE /guilds/{id}`. The bot must own the
+    /// guild.
+    pub async fn delete_guild(&self, guild_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/guilds/{}", guild_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    /// Creates a guild from a guild template via
+    /// `POST /guilds/templates/{code}`.
+    pub async fn create_guild_from_template(
+        &self,
+        template_code: &str,
+        body: &crate::model::CreateGuildFromTemplate,
+    ) -> Result<Guild, DiscordError> {
+        let template_code = template_code.trim();
+        paths::validate_template_code(template_code)?;
+        self.request_typed(
+            Method::POST,
+            &format!("/guilds/templates/{template_code}"),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Sets the guild's required MFA level for moderation actions via
+    /// `POST /guilds/{id}/mfa` and returns the updated level.
+    pub async fn modify_guild_mfa_level(
+        &self,
+        guild_id: impl Into<Snowflake>,
+        level: u64,
+    ) -> Result<crate::model::GuildMfaLevel, DiscordError> {
+        self.request_typed(
+            Method::POST,
+            &format!("/guilds/{}/mfa", guild_id.into()),
+            Some(&crate::model::GuildMfaLevel { level }),
+        )
+        .await
+    }
+
+    /// Sends an interaction response with `with_response=true` and returns
+    /// the typed interaction callback resource, mirroring discord.js's
+    /// `withResponse: true`.
+    pub async fn create_interaction_response_with_result(
+        &self,
+        interaction_id: impl Into<Snowflake>,
+        interaction_token: &str,
+        response: &InteractionCallbackResponse,
+    ) -> Result<crate::model::InteractionCallbackResult, DiscordError> {
+        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        self.request_typed(
+            Method::POST,
+            &format!("{path}?with_response=true"),
+            Some(response),
+        )
+        .await
+    }
+}
+
+/// Backoff schedule for 5xx and transport retries: 0.5s, 1s, 2s.
+fn server_error_backoff(attempt: usize) -> f64 {
+    0.5 * f64::from(1u32 << attempt.saturating_sub(1).min(8) as u32)
+}
+
+/// Percent-encodes an audit-log reason the way discord.js does
+/// (`encodeURIComponent`): unreserved characters pass through, everything
+/// else — including spaces and any non-ASCII UTF-8 byte — is `%XX`-encoded
+/// so the value is always a valid HTTP header.
+fn encode_audit_log_reason(reason: &str) -> String {
+    let mut encoded = String::with_capacity(reason.len());
+    for byte in reason.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => encoded.push(byte as char),
+            _ => {
+                encoded.push('%');
+                encoded.push_str(&format!("{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
 fn validate_authorization_token<'a>(name: &str, value: &'a str) -> Result<&'a str, DiscordError> {
     let value = value.trim();
     if value.is_empty() {
@@ -2884,6 +2938,7 @@ fn validate_authorization_token<'a>(name: &str, value: &'a str) -> Result<&'a st
 
 struct RawResponse {
     status: StatusCode,
+    #[allow(dead_code)]
     headers: HeaderMap,
     body: String,
 }

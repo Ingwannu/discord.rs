@@ -9,28 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core default with cache storage
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 
 # Typed gateway runtime
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.2", default-features = false }
+discordrs = { version = "2.1.0", default-features = false }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hook
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -85,6 +85,8 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 - Use `get_guild_application_command_permissions(...)`, `get_application_command_permissions(...)`, and `edit_application_command_permissions(...)` for command permission flows. Permission writes require an OAuth2 Bearer token with Discord's `applications.commands.permissions.update` scope.
 - Use `get_current_user_connections(...)` and the current-user application role connection helpers for OAuth2 linked-role flows.
 - Use `GetGuildQuery` with `get_guild_with_query(...)` for approximate guild counts, `ModifyGuildChannelPosition` with `modify_guild_channel_positions(...)` for guild channel reordering, `CreateStageInstance` and `ModifyStageInstance` for Stage Instance writes, `AddGuildMember` with `add_guild_member(...)` for OAuth2 `guilds.join` member adds, `AuditLogQuery` with `get_guild_audit_log_typed(...)` for Audit Log reads, `get_guild_role_member_counts(...)` for role membership counts, `get_guild_widget_image(...)` for public PNG widgets, and `AddGroupDmRecipient` for `gdm.join` group DM recipient flows.
+- Use `RestClient::with_reason("...")` when a mutating call should record an `X-Audit-Log-Reason` in the guild audit log, `forward_message(...)` for one-call message forwarding, `create_interaction_response_with_result(...)` for `with_response=true` interaction callbacks, and `create_guild(...)` / `delete_guild(...)` / `create_guild_from_template(...)` / `modify_guild_mfa_level(...)` for guild lifecycle routes.
+- Use `Context::fetch_members(...)` on the gateway runtime to collect `GUILD_MEMBERS_CHUNK` payloads (the discord.js `guild.members.fetch()` equivalent), and `ClientBuilder::presence(...)` / `event_dispatch(EventDispatchMode::Concurrent)` for initial IDENTIFY presence and concurrent handler dispatch.
 - Prefer typed legacy replacements: `list_public_archived_threads(...)` instead of `get_public_archived_threads(...)`, and `get_guild_audit_log_typed(...)` instead of `get_guild_audit_log(...)`.
 - `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
 
@@ -112,14 +114,14 @@ Pass the framework to `try_typed_interactions_endpoint(...)` when you want route
 
 ## 5. Turn on cache or collectors when the bot needs them
 
-- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default in `2.0.2`
+- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default in `2.1.0`
 - `collectors`: enables async collectors for messages, interactions, components, and modals
 
 Hot member, message, and presence cache lookups have `Arc` variants such as `member_arc(...)`, `message_arc(...)`, `presence_arc(...)`, and manager `cached_arc(...)` helpers. Use them when repeated cache reads should avoid deep cloning larger cached payloads. The existing owned-return methods remain available for compatibility.
 
 ## 6. Use typed Discord coverage before raw JSON
 
-- Polls: `CreatePoll`, `Poll`, `get_poll_answer_voters(...)`, `end_poll(...)`, `MESSAGE_POLL_VOTE_ADD`, `MESSAGE_POLL_VOTE_REMOVE`
+- Polls: `CreatePoll`, `Poll`, `get_poll_answer_voters(...)`, `end_poll(...)`, `MESSAGE_POLL_VOTE_ADD`, `MESSAGE_POLL_VOTE_REMOVE`, and the `gateway_intents::GUILD_MESSAGE_POLLS` / `DIRECT_MESSAGE_POLLS` intents
 - Monetization: `Sku`, `Entitlement`, `Subscription`, current SKU/entitlement response metadata, entitlement helpers, SKU subscription helpers, `ENTITLEMENT_*`, `SUBSCRIPTION_*`
 - Soundboard: default/guild soundboard REST helpers plus `GUILD_SOUNDBOARD_*` and `SOUNDBOARD_SOUNDS`
 - Stickers: `StickerPack`, `get_sticker_pack(...)`, `CreateGuildSticker`, `ModifyGuildSticker`, and typed guild sticker write wrappers

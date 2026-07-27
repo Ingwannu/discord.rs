@@ -17,7 +17,7 @@ pub use crate::event::Event;
 #[cfg(all(feature = "gateway", feature = "sharding"))]
 pub use crate::gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
-pub use crate::gateway::{Client, Context, EventHandler, ShardMessenger};
+pub use crate::gateway::{Client, Context, EventDispatchMode, EventHandler, ShardMessenger};
 pub use crate::helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
     delete_original_response, edit_followup_response, edit_original_response, followup_message,

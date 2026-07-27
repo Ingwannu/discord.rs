@@ -4,7 +4,7 @@ These layers are optional. They are meant to improve runtime ergonomics without 
 
 ## Cache
 
-The `cache` feature is enabled by default in `2.0.2`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
+The `cache` feature is enabled by default in `2.1.0`, so normal installs keep in-memory state for common lookups. `CacheHandle::new()` uses bounded defaults; builds using `default-features = false` keep the cache API available but use empty no-op storage.
 
 Main types:
 
@@ -18,6 +18,19 @@ Main types:
 - `RoleManager`
 
 The managers prefer cache hits and fall back to `RestClient` fetches.
+
+### GUILD_CREATE Population
+
+Since `2.1.0`, GUILD_CREATE populates the channel, thread, member, user, voice-state, presence, emoji, sticker, and stage-instance caches under a single write lock; the cached `Guild` is stored with the bulk collections stripped (`Guild::without_create_collections()`) to avoid double storage. GUILD_MEMBERS_CHUNK payloads (including those collected by `Context::fetch_members(...)`) and THREAD_* events are cached too, so cache-aware managers are warm right after a guild becomes available.
+
+### Performance Characteristics
+
+The `2.1.0` cache hot paths were rewritten:
+
+- LRU order tracking uses an ordered-map structure (O(log n) per insert) instead of `VecDeque` scans (O(n))
+- per-guild member and per-channel message caps use incremental counters instead of full-map scans
+- TTL sweeps are throttled to once per 5s
+- list reads filter expired entries per-entry under a read lock instead of upgrading to a write lock
 
 `ClientBuilder::cache_config(...)` and `CacheHandle::with_config(...)` let long-running bots tune message, presence, and member storage by size and TTL. Size limits are enforced on insert, and TTL limits are purged on insert, explicit `purge_expired()`, and cache reads for the affected entity type. Use `CacheConfig::unbounded()` only when retaining all cached gateway data is intentional.
 

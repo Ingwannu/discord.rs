@@ -33,6 +33,11 @@ const OP_INVALID_SESSION: u64 = 9;
 const OP_HELLO: u64 = 10;
 const OP_HEARTBEAT_ACK: u64 = 11;
 pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
+/// Discord allows at most one IDENTIFY per shard per 5 seconds.
+const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
+/// A connection that dies faster than this is treated as unhealthy and
+/// re-dialed with escalating backoff instead of immediately.
+const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
 static JITTER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct GatewayClient {
@@ -42,12 +47,19 @@ pub(crate) struct GatewayClient {
     resume_gateway_url: Option<String>,
     gateway_config: GatewayConnectionConfig,
     shard_info: Option<[u32; 2]>,
+    initial_presence: Option<UpdatePresence>,
     command_rx: Option<mpsc::Receiver<GatewayCommand>>,
     deferred_commands: VecDeque<GatewayCommand>,
     #[cfg(feature = "sharding")]
     supervisor_callback: Option<SupervisorCallback>,
     sequence: Arc<AtomicU64>,
     heartbeat_ack_received: Arc<AtomicBool>,
+    last_identify: Option<Instant>,
+    /// Set when the server explicitly asked for a reconnect (op 7 RECONNECT
+    /// or op 9 INVALID_SESSION). Those paths re-dial immediately — op 9
+    /// already sleeps before disconnecting, and IDENTIFY pacing bounds the
+    /// identify rate — while unsolicited short-lived disconnects back off.
+    server_directed_reconnect: bool,
 }
 
 // Callback type for dispatching events
@@ -75,13 +87,23 @@ impl GatewayClient {
             resume_gateway_url: None,
             gateway_config: GatewayConnectionConfig::default(),
             shard_info: None,
+            initial_presence: None,
             command_rx: None,
             deferred_commands: VecDeque::new(),
             #[cfg(feature = "sharding")]
             supervisor_callback: None,
             sequence: Arc::new(AtomicU64::new(0)),
             heartbeat_ack_received: Arc::new(AtomicBool::new(true)),
+            last_identify: None,
+            server_directed_reconnect: false,
         }
+    }
+
+    /// Sets the presence included in IDENTIFY so the bot appears with the
+    /// desired status from the first moment it connects.
+    pub fn initial_presence(mut self, presence: Option<UpdatePresence>) -> Self {
+        self.initial_presence = presence;
+        self
     }
 
     pub fn gateway_config(mut self, gateway_config: GatewayConnectionConfig) -> Self {
@@ -122,29 +144,53 @@ impl GatewayClient {
                 .unwrap_or_else(|| self.gateway_config.normalized_url());
             info!("Connecting to gateway: {url}");
 
+            let connection_started = Instant::now();
             match self.connect_and_run(&url, on_event.clone()).await {
-                Ok(action) => match action {
-                    ReconnectAction::Resume => {
-                        #[cfg(feature = "sharding")]
-                        self.publish_state(ShardRuntimeState::Reconnecting);
-                        info!("Resuming gateway session");
+                Ok(action) => {
+                    match action {
+                        ReconnectAction::Resume => {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Reconnecting);
+                            info!("Resuming gateway session");
+                        }
+                        ReconnectAction::Reconnect => {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Reconnecting);
+                            info!("Reconnecting with fresh session");
+                            self.session_id = None;
+                            self.resume_gateway_url = None;
+                            self.sequence.store(0, Ordering::Relaxed);
+                        }
+                        ReconnectAction::Shutdown => {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Stopped);
+                            return Ok(());
+                        }
+                    }
+                    // A healthy long-lived session or a server-directed
+                    // reconnect re-dials immediately so resumes don't miss
+                    // events; an unsolicited connection death within seconds
+                    // is re-dialed with escalating backoff to avoid a tight
+                    // connect/close loop against the gateway.
+                    let server_directed = std::mem::take(&mut self.server_directed_reconnect);
+                    if server_directed || connection_started.elapsed() >= SHORT_SESSION_THRESHOLD {
                         backoff = 1;
+                    } else {
+                        warn!(
+                            "Gateway session ended after {:?}, backing off {backoff}s before reconnecting",
+                            connection_started.elapsed()
+                        );
+                        if self
+                            .wait_for_backoff_command(Duration::from_secs(backoff))
+                            .await?
+                        {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Stopped);
+                            return Ok(());
+                        }
+                        backoff = (backoff * 2).min(300);
                     }
-                    ReconnectAction::Reconnect => {
-                        #[cfg(feature = "sharding")]
-                        self.publish_state(ShardRuntimeState::Reconnecting);
-                        info!("Reconnecting with fresh session");
-                        self.session_id = None;
-                        self.resume_gateway_url = None;
-                        self.sequence.store(0, Ordering::Relaxed);
-                        backoff = 1;
-                    }
-                    ReconnectAction::Shutdown => {
-                        #[cfg(feature = "sharding")]
-                        self.publish_state(ShardRuntimeState::Stopped);
-                        return Ok(());
-                    }
-                },
+                }
                 Err(e) => {
                     #[cfg(feature = "sharding")]
                     self.publish_error(e.to_string());
@@ -170,30 +216,43 @@ impl GatewayClient {
     ) -> Result<ReconnectAction, crate::error::DiscordError> {
         let (ws_stream, _) = connect_async(url).await?;
         let (mut write, mut read) = ws_stream.split();
-        let mut compression_decoder = GatewayCompressionDecoder::new(
-            self.gateway_config.compression_kind(),
-        )
-        .map_err(|error| format!("failed to initialize gateway compression decoder: {error}"))?;
+        let mut compression_decoder =
+            GatewayCompressionDecoder::new(self.gateway_config.compression_kind()).map_err(
+                |error| {
+                    crate::error::DiscordError::gateway(format!(
+                        "failed to initialize gateway compression decoder: {error}"
+                    ))
+                },
+            )?;
 
         // Wait for Hello
         let hello_text = loop {
-            let hello = read.next().await.ok_or("gateway closed before Hello")??;
+            let hello = read
+                .next()
+                .await
+                .ok_or_else(|| crate::error::DiscordError::gateway("gateway closed before Hello"))??;
             match decode_gateway_message(hello, &mut compression_decoder) {
                 Ok(Some(text)) => break text,
                 Ok(None) => continue,
                 Err(error) => {
-                    return Err(format!("failed to decode gateway Hello payload: {error}").into());
+                    return Err(crate::error::DiscordError::gateway(format!(
+                        "failed to decode gateway Hello payload: {error}"
+                    )));
                 }
             }
         };
         let hello_payload: Value = serde_json::from_str(&hello_text)?;
         let hello_op = hello_payload["op"].as_u64().unwrap_or(u64::MAX);
         if hello_op != OP_HELLO {
-            return Err(format!("expected Hello opcode {OP_HELLO}, got {hello_op}").into());
+            return Err(crate::error::DiscordError::gateway(format!(
+                "expected Hello opcode {OP_HELLO}, got {hello_op}"
+            )));
         }
         let heartbeat_interval_ms = hello_payload["d"]["heartbeat_interval"]
             .as_u64()
-            .ok_or("missing heartbeat_interval in Hello")?;
+            .ok_or_else(|| {
+                crate::error::DiscordError::gateway("missing heartbeat_interval in Hello")
+            })?;
 
         debug!("Received Hello, heartbeat_interval={heartbeat_interval_ms}ms");
 
@@ -206,10 +265,25 @@ impl GatewayClient {
                 .await?;
             debug!("Sent Resume");
         } else {
-            let identify = identify_payload(&self.token, self.intents, self.shard_info, false);
+            if let Some(last_identify) = self.last_identify {
+                let since_last = last_identify.elapsed();
+                if since_last < IDENTIFY_MIN_INTERVAL {
+                    let wait = IDENTIFY_MIN_INTERVAL - since_last;
+                    debug!("Pacing IDENTIFY, waiting {wait:?} to respect the 5s/shard limit");
+                    sleep(wait).await;
+                }
+            }
+            let identify = identify_payload(
+                &self.token,
+                self.intents,
+                self.shard_info,
+                self.initial_presence.as_ref(),
+                false,
+            );
             write
                 .send(WsMessage::Text(identify.to_string().into()))
                 .await?;
+            self.last_identify = Some(Instant::now());
             debug!("Sent Identify");
         }
 
@@ -266,7 +340,9 @@ impl GatewayClient {
                             self.publish_error(terminal_close_error(frame.clone()));
                             warn!("Gateway closed: {frame:?}");
                             if is_terminal_close_frame(frame.as_ref()) {
-                                return Err(terminal_close_error(frame).into());
+                                return Err(crate::error::DiscordError::gateway(
+                                    terminal_close_error(frame),
+                                ));
                             }
                             break ReconnectAction::Resume;
                         }
@@ -356,6 +432,7 @@ impl GatewayClient {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             info!("Received Reconnect opcode");
+                            self.server_directed_reconnect = true;
                             break ReconnectAction::Resume;
                         }
                         OP_INVALID_SESSION => {
@@ -364,6 +441,7 @@ impl GatewayClient {
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             warn!("Invalid session, resumable={resumable}");
                             sleep(Duration::from_secs(2)).await;
+                            self.server_directed_reconnect = true;
                             if resumable {
                                 break ReconnectAction::Resume;
                             } else {
@@ -540,6 +618,7 @@ fn identify_payload(
     token: &str,
     intents: u64,
     shard_info: Option<[u32; 2]>,
+    presence: Option<&UpdatePresence>,
     payload_compression: bool,
 ) -> Value {
     let mut identify = serde_json::json!({
@@ -559,6 +638,9 @@ fn identify_payload(
     }
     if let Some(shard_info) = shard_info {
         identify["d"]["shard"] = serde_json::json!(shard_info);
+    }
+    if let Some(presence) = presence {
+        identify["d"]["presence"] = serde_json::json!(presence);
     }
     identify
 }
@@ -654,7 +736,9 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use super::super::compression::{GatewayCompressionDecoder, GatewayZlibStream, ZLIB_SUFFIX};
+    #[cfg(feature = "zstd-stream")]
+    use super::super::compression::GatewayCompressionDecoder;
+    use super::super::compression::{GatewayZlibStream, ZLIB_SUFFIX};
     use super::super::outbound::{
         classify_gateway_command, run_gateway_outbound_worker, GatewayCommandClass,
         GatewayOutboundLimiter, GatewayOutboundMessage, GATEWAY_COMMAND_MIN_SPACING,
@@ -998,7 +1082,7 @@ mod tests {
 
     #[test]
     fn identify_and_resume_payloads_use_raw_gateway_token() {
-        let identify = identify_payload("secret-token", 513, Some([2, 4]), true);
+        let identify = identify_payload("secret-token", 513, Some([2, 4]), None, true);
         let resume = resume_payload("secret-token", "session", 42);
 
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
@@ -1007,7 +1091,7 @@ mod tests {
 
     #[test]
     fn identify_without_shard_and_resume_without_sequence_keep_expected_shape() {
-        let identify = identify_payload("secret-token", 513, None, true);
+        let identify = identify_payload("secret-token", 513, None, None, true);
         let resume = resume_payload("secret-token", "session", 0);
 
         assert!(identify["d"].get("shard").is_none());
@@ -1019,9 +1103,21 @@ mod tests {
 
     #[test]
     fn identify_payload_omits_payload_compression_for_transport_compression() {
-        let identify = identify_payload("secret-token", 513, None, false);
+        let identify = identify_payload("secret-token", 513, None, None, false);
 
         assert!(identify["d"].get("compress").is_none());
+    }
+
+    #[test]
+    fn identify_payload_includes_initial_presence_when_provided() {
+        let presence = crate::model::UpdatePresence::online_with_activity("hello");
+        let identify = identify_payload("secret-token", 513, None, Some(&presence), false);
+
+        assert_eq!(identify["d"]["presence"]["status"], serde_json::json!("online"));
+        assert_eq!(
+            identify["d"]["presence"]["activities"][0]["name"],
+            serde_json::json!("hello")
+        );
     }
 
     #[test]

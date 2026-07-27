@@ -2,7 +2,7 @@
 
 ## `RestClient`
 
-`RestClient` is the primary Discord REST v10 surface. It keeps shared route/global rate-limit state and also keeps `DiscordHttpClient` as a compatibility alias.
+`RestClient` is the primary Discord REST v10 surface. It keeps shared route/global rate-limit state and also keeps `DiscordHttpClient` as a compatibility alias. Since `2.1.0` the client is `Clone`; clones share rate-limit state, the connection pool, and the application id.
 
 Common operations include:
 
@@ -14,7 +14,7 @@ Common operations include:
 - typed guild channel-position updates, OAuth2 guild-member joins, role member-count reads, and public widget image downloads
 - typed Stage Instance create/modify request bodies
 - typed emoji helpers for guild and application emoji reads/writes
-- typed scheduled-event recurrence/entity metadata, plus typed create/modify request helpers
+- typed scheduled-event recurrence/entity metadata, typed create/modify request helpers, and query options through `get_guild_scheduled_events_with_query(...)` (`with_user_count`) and `get_guild_scheduled_event_users_with_query(...)` (`limit`, `with_member`, `before`, `after`)
 - typed current-application reads/edits and application role-connection metadata helpers
 - typed application Activity Instance lookup helper
 - typed Gateway URL, OAuth2 current bot application, and OAuth2 current authorization metadata helpers
@@ -37,6 +37,106 @@ Raw `serde_json::Value` methods remain available for routes where Discord adds f
 - generated query strings are percent-encoded
 - request body serialization failures return `DiscordError::Json` instead of panicking
 - repeated HTTP 429 responses are retried up to a bounded limit before `DiscordError::RateLimit`
+
+`2.1.0` unifies the transport into one retry loop:
+
+- the per-route serialization gate now covers all requests (previously JSON requests bypassed it, allowing same-bucket 429 races), and the route-gate map is garbage-collected
+- 5xx responses and transient transport errors retry with backoff (0.5s/1s/2s)
+- 429 handling reads the `Retry-After` header and the `x-ratelimit-scope`/`x-ratelimit-global` headers, so Cloudflare-level bans with HTML bodies back off correctly
+- `HttpError` exposes `is_timeout()`, `is_connect()`, `is_body()`, and `is_retryable()`, and `DiscordError::is_retryable_transport()` classifies retry-worthy failures
+
+## Audit-Log Reasons
+
+`RestClient::with_reason(...)` returns a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request it makes, so bans, kicks, and edits show a reason in the guild audit log. The clone shares rate-limit state and the connection pool; create one per call site:
+
+```rust
+rest.with_reason("spam")
+    .remove_guild_member(guild_id, user_id)
+    .await?;
+```
+
+## Guild Lifecycle Routes
+
+`2.1.0` adds typed helpers for guild creation and deletion:
+
+```rust
+use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+
+// POST /guilds — only usable by bots in fewer than 10 guilds.
+let guild = rest
+    .create_guild(&CreateGuild {
+        name: "Support HQ".to_string(),
+        ..Default::default()
+    })
+    .await?;
+
+// POST /guilds/templates/{code}
+let from_template = rest
+    .create_guild_from_template(
+        "template-code",
+        &CreateGuildFromTemplate {
+            name: "Support HQ 2".to_string(),
+            icon: None,
+        },
+    )
+    .await?;
+
+// POST /guilds/{id}/mfa — returns the updated GuildMfaLevel.
+let level = rest.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+
+// DELETE /guilds/{id} — the bot must own the guild.
+rest.delete_guild(from_template.id).await?;
+```
+
+## Message Forwarding
+
+`MessageReference::reply(...)` and `MessageReference::forward(...)` build typed references (`MessageReferenceType::DEFAULT` / `FORWARD`), and `forward_message(...)` forwards in one call — the equivalent of discord.js's `message.forward(channel)`:
+
+```rust
+use discordrs::{CreateMessage, MessageReference};
+
+// Reply in the same channel.
+rest.create_message(
+    channel_id,
+    &CreateMessage {
+        content: Some("On it!".to_string()),
+        message_reference: Some(MessageReference::reply(message_id)),
+        ..Default::default()
+    },
+)
+.await?;
+
+// Forward into another channel; Discord attaches the source message
+// as a `message_snapshots` entry.
+let forwarded = rest
+    .forward_message(channel_id, message_id, announce_channel_id)
+    .await?;
+```
+
+## Interaction Callbacks with `with_response=true`
+
+`create_interaction_response_with_result(...)` sends the interaction callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource — mirroring discord.js's `withResponse: true` — so the created message (or activity instance) is available immediately:
+
+```rust
+use discordrs::InteractionCallbackResponse;
+
+let result = rest
+    .create_interaction_response_with_result(
+        interaction_id,
+        interaction_token,
+        &InteractionCallbackResponse {
+            kind: 4,
+            data: Some(serde_json::json!({ "content": "Done" })),
+        },
+    )
+    .await?;
+
+if let Some(message) = result.resource.and_then(|resource| resource.message) {
+    println!("created message: {}", message.id);
+}
+```
+
+`create_interaction_response_typed(...)` remains the fire-and-forget variant.
 
 ## Application Resource Helpers
 
@@ -760,6 +860,11 @@ let url = oauth.authorization_url(
 
 let token = oauth
     .exchange_code(OAuth2CodeExchange::new("code", "https://app.example/callback"))
+    .await?;
+
+// POST /oauth2/token/revoke — invalidates the user's grant.
+oauth
+    .revoke_token(token.access_token.clone(), Some("access_token"))
     .await?;
 ```
 

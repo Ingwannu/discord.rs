@@ -21,30 +21,31 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - OAuth2 backend helpers for authorization URLs, code exchange, and refresh-token exchange
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
 - `AppFramework` routing for command, component, and modal interactions
+- `2.1.0` additions: `RestClient::with_reason(...)` audit-log reasons, guild create/delete/template/MFA routes, `with_response=true` interaction callbacks returning `InteractionCallbackResult`, `MessageReference::reply(...)`/`forward(...)` plus `forward_message(...)`, `GUILD_MESSAGE_POLLS`/`DIRECT_MESSAGE_POLLS` intents, `ClientBuilder::presence(...)` and `event_dispatch(...)`, `Context::fetch_members(...)`, GUILD_CREATE cache population, IDENTIFY pacing, and a retry-hardened `Clone` REST transport
 - Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, and `dave`; `cache` is included in the default feature set
 
 ## Install
 
 ```toml
 [dependencies]
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.2", features = ["gateway", "interactions"] }
+discordrs = { version = "2.1.0", features = ["gateway", "interactions"] }
 
 # Voice playback/receive and DAVE hook
-discordrs = { version = "2.0.2", features = ["voice"] }
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 ```
 
 ## Quick Example
