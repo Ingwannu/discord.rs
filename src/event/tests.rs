@@ -2640,7 +2640,10 @@ fn thread_events_decode_new_typed_fields() {
         Event::ThreadMemberUpdate(update) => {
             assert_eq!(update.thread_id, Some(snowflake("316")));
             assert_eq!(update.user_id, Some(snowflake("318")));
-            assert_eq!(update.join_timestamp.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(
+                update.join_timestamp.as_deref(),
+                Some("2026-01-01T00:00:00Z")
+            );
             assert_eq!(update.flags, Some(4));
         }
         other => panic!("unexpected event: {other:?}"),

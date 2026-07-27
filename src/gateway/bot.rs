@@ -40,9 +40,9 @@ use crate::voice_runtime::{
 use crate::ws::GatewayConnectionConfig;
 
 #[cfg(feature = "sharding")]
-use super::client::SupervisorCallback;
-#[cfg(feature = "sharding")]
 use super::client::GatewayCommand;
+#[cfg(feature = "sharding")]
+use super::client::SupervisorCallback;
 use super::client::{EventCallback, GatewayClient, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use super::messenger::ShardMessenger;
 #[cfg(feature = "sharding")]
@@ -1420,8 +1420,7 @@ fn spawn_gateway_event_processor(
         while let Some(dispatch) = event_rx.recv().await {
             let backlog = event_rx.len();
             if backlog > EVENT_BACKLOG_WARN_THRESHOLD
-                && last_backlog_warning
-                    .is_none_or(|last| last.elapsed() > Duration::from_secs(30))
+                && last_backlog_warning.is_none_or(|last| last.elapsed() > Duration::from_secs(30))
             {
                 warn!(
                     "gateway event backlog is {backlog} events; the event handler is not keeping up                      (consider EventDispatchMode::Concurrent or faster handlers)"

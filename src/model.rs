@@ -1286,10 +1286,7 @@ impl MessageReference {
 
     /// Builds a forward reference; Discord attaches the referenced message
     /// to the new message as a `message_snapshots` entry.
-    pub fn forward(
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> Self {
+    pub fn forward(channel_id: impl Into<Snowflake>, message_id: impl Into<Snowflake>) -> Self {
         Self {
             kind: Some(MessageReferenceType::FORWARD.0),
             channel_id: Some(channel_id.into()),

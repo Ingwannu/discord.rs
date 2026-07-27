@@ -2311,8 +2311,7 @@ mod tests {
 
     #[tokio::test]
     async fn member_cap_counters_evict_per_guild_without_touching_other_guilds() {
-        let cache =
-            CacheHandle::with_config(CacheConfig::unbounded().max_members_per_guild(2));
+        let cache = CacheHandle::with_config(CacheConfig::unbounded().max_members_per_guild(2));
         let guild_a = Snowflake::from("1");
         let guild_b = Snowflake::from("2");
 
@@ -2344,9 +2343,18 @@ mod tests {
 
         // Guild B is over its cap: its oldest member is evicted; guild A is
         // untouched even though the global member map holds more entries.
-        assert!(cache.member(&guild_b, &Snowflake::from("20")).await.is_none());
-        assert!(cache.member(&guild_b, &Snowflake::from("21")).await.is_some());
-        assert!(cache.member(&guild_b, &Snowflake::from("22")).await.is_some());
+        assert!(cache
+            .member(&guild_b, &Snowflake::from("20"))
+            .await
+            .is_none());
+        assert!(cache
+            .member(&guild_b, &Snowflake::from("21"))
+            .await
+            .is_some());
+        assert!(cache
+            .member(&guild_b, &Snowflake::from("22"))
+            .await
+            .is_some());
         assert_eq!(cache.members(&guild_a).await.len(), 2);
         assert_eq!(cache.members(&guild_b).await.len(), 2);
 
@@ -2368,9 +2376,18 @@ mod tests {
         // A new member for guild A now evicts "11" (oldest after the touch),
         // not the re-upserted "10".
         upsert(guild_a.clone(), "12").await;
-        assert!(cache.member(&guild_a, &Snowflake::from("11")).await.is_none());
-        assert!(cache.member(&guild_a, &Snowflake::from("10")).await.is_some());
-        assert!(cache.member(&guild_a, &Snowflake::from("12")).await.is_some());
+        assert!(cache
+            .member(&guild_a, &Snowflake::from("11"))
+            .await
+            .is_none());
+        assert!(cache
+            .member(&guild_a, &Snowflake::from("10"))
+            .await
+            .is_some());
+        assert!(cache
+            .member(&guild_a, &Snowflake::from("12"))
+            .await
+            .is_some());
 
         // Removing a guild's entries drops its counter entirely.
         cache.remove_guild(&guild_b).await;
@@ -2383,8 +2400,7 @@ mod tests {
 
     #[tokio::test]
     async fn message_upsert_replacing_existing_key_does_not_corrupt_counts() {
-        let cache =
-            CacheHandle::with_config(CacheConfig::unbounded().max_messages_per_channel(2));
+        let cache = CacheHandle::with_config(CacheConfig::unbounded().max_messages_per_channel(2));
         let channel_id = Snowflake::from("10");
 
         let upsert = |id: &str| {

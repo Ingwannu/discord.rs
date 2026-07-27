@@ -6751,10 +6751,7 @@ fn audit_log_reason_encoding_matches_encode_uri_component() {
     assert_eq!(super::encode_audit_log_reason("simple"), "simple");
     assert_eq!(super::encode_audit_log_reason("a b"), "a%20b");
     assert_eq!(super::encode_audit_log_reason("50%"), "50%25");
-    assert_eq!(
-        super::encode_audit_log_reason("스팸"),
-        "%EC%8A%A4%ED%8C%B8"
-    );
+    assert_eq!(super::encode_audit_log_reason("스팸"), "%EC%8A%A4%ED%8C%B8");
     assert_eq!(super::encode_audit_log_reason("ok!~*'()"), "ok!~*'()");
 }
 
