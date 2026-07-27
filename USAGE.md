@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 
 # Gateway runtime
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.2", default-features = false }
+discordrs = { version = "2.1.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.1.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hooks
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "2.0.2", features = ["gateway", "voice"] }
+discordrs = { version = "2.1.0", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.1.0", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -116,6 +116,35 @@ async fn main() -> Result<(), discordrs::DiscordError> {
     Ok(())
 }
 ```
+
+## 2.5 Initial Presence, Dispatch Mode, and Poll Intents
+
+`ClientBuilder` can deliver an initial presence inside IDENTIFY, so the bot connects with the desired status instead of updating it after READY, and can switch event dispatch from the default serial mode to concurrent per-event tasks:
+
+```rust
+use discordrs::{gateway_intents, Client, EventDispatchMode, EventHandler, UpdatePresence};
+
+async fn start_bot(token: &str, handler: impl EventHandler) -> Result<(), discordrs::DiscordError> {
+    Client::builder(
+        token,
+        gateway_intents::GUILDS
+            | gateway_intents::GUILD_MESSAGES
+            | gateway_intents::GUILD_MESSAGE_POLLS
+            | gateway_intents::DIRECT_MESSAGE_POLLS,
+    )
+    .event_handler(handler)
+    .presence(UpdatePresence::online_with_activity("Handling tickets"))
+    .event_dispatch(EventDispatchMode::Concurrent)
+    .start()
+    .await?;
+
+    Ok(())
+}
+```
+
+- `EventDispatchMode::Serial` (default) handles events on a shard one at a time, in gateway order.
+- `EventDispatchMode::Concurrent` runs each handler call in its own task. Cache and collector updates still happen in gateway order before dispatch, but one slow handler no longer stalls the shard.
+- `gateway_intents::GUILD_MESSAGE_POLLS` (`1 << 24`) and `gateway_intents::DIRECT_MESSAGE_POLLS` (`1 << 25`) enable `MESSAGE_POLL_VOTE_*` events and are included in `gateway_intents::NON_PRIVILEGED`. `gateway_intents::GUILD_EXPRESSIONS` is the current Discord name for bit 3.
 
 ## 3. Create a `Context` Outside the Runtime
 
@@ -720,6 +749,41 @@ async fn channel_admin(
 }
 ```
 
+## 5.7 Reply and Forward Message References
+
+`MessageReference` has typed constructors for the two reference kinds (`MessageReferenceType::DEFAULT` and `MessageReferenceType::FORWARD`), and `forward_message(...)` forwards in one call — the equivalent of discord.js's `message.forward(channel)`:
+
+```rust
+use discordrs::{CreateMessage, DiscordHttpClient, MessageReference};
+
+async fn reply_and_forward(
+    http: &DiscordHttpClient,
+    channel_id: u64,
+    message_id: u64,
+    announce_channel_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    // Reply to a message in the same channel.
+    http.create_message(
+        channel_id,
+        &CreateMessage {
+            content: Some("On it!".to_string()),
+            message_reference: Some(MessageReference::reply(message_id)),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    // Forward the message into another channel; Discord attaches it as a
+    // `message_snapshots` entry on the new message.
+    let forwarded = http
+        .forward_message(channel_id, message_id, announce_channel_id)
+        .await?;
+    println!("forwarded as {}", forwarded.id);
+
+    Ok(())
+}
+```
+
 ## 6. Reply to Gateway Interactions Without Raw JSON
 
 `Context` now exposes direct gateway control helpers, and the helpers module exposes typed response helpers.
@@ -754,6 +818,40 @@ Other typed helper entry points:
 - `respond_with_message(...)`
 - `update_interaction_message(...)`
 - `respond_with_modal_typed(...)`
+
+## 6.5 Interaction Callbacks with `with_response=true`
+
+`create_interaction_response_with_result(...)` sends the callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource, mirroring discord.js's `withResponse: true`. Use it when you need the created message (or activity instance) immediately instead of fetching it afterwards:
+
+```rust
+use discordrs::{DiscordHttpClient, InteractionCallbackResponse};
+
+async fn respond_and_inspect(
+    http: &DiscordHttpClient,
+    interaction_id: u64,
+    interaction_token: &str,
+) -> Result<(), discordrs::DiscordError> {
+    let result = http
+        .create_interaction_response_with_result(
+            interaction_id,
+            interaction_token,
+            &InteractionCallbackResponse {
+                kind: 4,
+                data: Some(serde_json::json!({ "content": "Ticket created" })),
+            },
+        )
+        .await?;
+
+    println!("callback interaction: {}", result.interaction.id);
+    if let Some(message) = result.resource.and_then(|resource| resource.message) {
+        println!("created message: {}", message.id);
+    }
+
+    Ok(())
+}
+```
+
+`create_interaction_response_typed(...)` remains the fire-and-forget variant when you do not need the callback resource.
 
 ## 7. Build a Typed Interactions Endpoint
 
@@ -1010,6 +1108,62 @@ let incidents = rest
 
 Generated query strings are percent-encoded. Request body serialization failures return `DiscordError::Json` instead of panicking, and repeated HTTP 429 responses are retried up to a bounded limit before surfacing `DiscordError::RateLimit`.
 
+## 8.6 Audit-Log Reasons with `with_reason`
+
+`RestClient` is `Clone`, and `with_reason(...)` returns a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request it makes. The clone shares rate-limit state and the connection pool with the original client, so creating one per call site is the intended pattern:
+
+```rust
+async fn moderate(
+    rest: &discordrs::RestClient,
+    guild_id: u64,
+    user_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    rest.with_reason("spam")
+        .remove_guild_member(guild_id, user_id)
+        .await?;
+    Ok(())
+}
+```
+
+The reason applies to any mutating route called on the scoped clone — bans, kicks, channel edits, role edits, guild edits — and shows up in the guild audit log.
+
+Guild lifecycle routes are typed too:
+
+```rust
+use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::DiscordHttpClient;
+
+async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    // POST /guilds — only usable by bots in fewer than 10 guilds.
+    let guild = http
+        .create_guild(&CreateGuild {
+            name: "Support HQ".to_string(),
+            ..Default::default()
+        })
+        .await?;
+
+    // POST /guilds/templates/{code}
+    let from_template = http
+        .create_guild_from_template(
+            "template-code",
+            &CreateGuildFromTemplate {
+                name: "Support HQ 2".to_string(),
+                icon: None,
+            },
+        )
+        .await?;
+
+    // POST /guilds/{id}/mfa — returns the updated level.
+    let level = http.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+    println!("mfa level: {}", level.level);
+
+    // DELETE /guilds/{id} — the bot must own the guild.
+    http.delete_guild(from_template.id).await?;
+
+    Ok(())
+}
+```
+
 ## 9. Control the Active Shard from `Context`
 
 When you are inside a gateway handler, `Context` can drive shard-local gateway actions directly.
@@ -1032,6 +1186,28 @@ Available `Context` control methods:
 - `leave_voice(...).await`
 
 If you want the underlying shard-local sender, call `ctx.shard_messenger().await` and use `ShardMessenger` directly.
+
+## 9.5 Fetch Guild Members over the Gateway
+
+`Context::fetch_members(...)` requests guild members over the gateway and awaits the correlated `GUILD_MEMBERS_CHUNK` payloads — the discord.js `guild.members.fetch()` equivalent. Fetched members and presences also fill the cache.
+
+```rust
+async fn load_members(ctx: &discordrs::Context, guild_id: u64) -> Result<(), discordrs::DiscordError> {
+    // All members (requires the GUILD_MEMBERS privileged intent).
+    let members = ctx.fetch_members(guild_id, None, None).await?;
+    println!("fetched {} members", members.len());
+
+    // Username prefix search with a limit.
+    let admins = ctx
+        .fetch_members(guild_id, Some("admin".to_string()), Some(10))
+        .await?;
+    println!("matched {} members", admins.len());
+
+    Ok(())
+}
+```
+
+Use `fetch_members_with_timeout(guild_id, query, limit, timeout)` to override the default 60-second overall deadline. The lower-level `ctx.request_guild_members(...)` remains available when you want raw `GUILD_MEMBERS_CHUNK` events without awaiting collection.
 
 ## 10. Spawn and Supervise Multiple Shards
 
@@ -1263,6 +1439,14 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 - `Context::new(http, data)`
 - `Context::rest()`
 - `RestClient::new(token, application_id)`
+- `RestClient::with_reason(...)`
+- `Context::fetch_members(...)` / `Context::fetch_members_with_timeout(...)`
+- `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, `modify_guild_mfa_level(...)`
+- `create_interaction_response_with_result(...)`
+- `forward_message(...)`
+- `OAuth2Client::revoke_token(...)`
+- `get_guild_scheduled_events_with_query(...)`
+- `get_guild_scheduled_event_users_with_query(...)`
 - `get_poll_answer_voters(...)`
 - `end_poll(...)`
 - `get_skus(...)`

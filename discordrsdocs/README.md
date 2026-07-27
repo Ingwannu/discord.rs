@@ -25,27 +25,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - `connect_voice_runtime(...)`, `VoiceOpusDecoder`, and live-validated DAVE hooks behind `voice` / `dave`
 - typed REST/event coverage for all 223 official Discord REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, Activity instances, Gateway rate-limit, reaction metadata, presence metadata dispatches, polls, subscriptions, entitlements, soundboard, thread details, forum fields, invite target-user flows, integrations, OAuth2 metadata/user connections, application command permissions, and channel-info dispatches
 - `AppFramework` routing for HTTP interactions
+- `2.1.0` additions: audit-log reasons via `RestClient::with_reason(...)`, guild create/delete/template/MFA routes, `with_response=true` interaction callbacks, message forwarding helpers, poll intents, initial IDENTIFY presence, `Context::fetch_members(...)` chunk collection, concurrent event dispatch mode, GUILD_CREATE cache population, and a retry-hardened REST transport
 
 ## Feature Flags
 
 ```toml
 [dependencies]
 # core only
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 
 # typed gateway runtime
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # typed gateway runtime with cache storage or collectors
-discordrs = { version = "2.0.2", features = ["gateway", "cache"] }
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # voice receive, Opus decode, and DAVE hook
-discordrs = { version = "2.0.2", features = ["voice"] }
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 ```
 
 ## Runtime Extensions

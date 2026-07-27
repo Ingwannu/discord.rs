@@ -1,6 +1,6 @@
 # discord.rs 한국어 문서
 
-이 문서는 discord.rs 2.0.2 기준으로 갱신되었습니다. 현재 공개 API는 타입드 Gateway 런타임, 타입드 REST 클라이언트, HTTP Interactions Endpoint, Components V2 빌더, 캐시/컬렉터 계층, 샤딩 헬퍼, 고수준 앱 프레임워크, Webhook Events, Lobby 헬퍼, Voice 런타임 기반을 포함합니다.
+이 문서는 discord.rs 2.1.0 기준으로 갱신되었습니다. 현재 공개 API는 타입드 Gateway 런타임, 타입드 REST 클라이언트, HTTP Interactions Endpoint, Components V2 빌더, 캐시/컬렉터 계층, 샤딩 헬퍼, 고수준 앱 프레임워크, Webhook Events, Lobby 헬퍼, Voice 런타임 기반을 포함합니다.
 
 브랜드 표기는 `discord.rs`를 사용하고, crates.io 패키지 이름과 Rust import 경로는 `discordrs`를 유지합니다.
 
@@ -22,32 +22,33 @@
 - 명령 빌더, Components V2 빌더, 캐시 매니저, 컬렉터, 샤딩 supervisor
 - `connect_voice_runtime(...)`, `VoiceOpusDecoder`, `voice-encode`, live 검증된 DAVE/MLS hook
 - 2026-05-02 기준 공식 Discord REST route shape 223개 전체 매핑 audit, 그리고 Webhook Events, Lobby, Poll, Subscription, Entitlement, Soundboard, Thread, Forum, Invite, Integration 등 Discord API 표면의 타입드 모델과 래퍼
+- 2.1.0 추가 사항: `RestClient::with_reason(...)` 감사 로그 사유, 길드 생성/삭제/템플릿/MFA 라우트, `with_response=true` 인터랙션 콜백, 메시지 전달(`forward_message`) 헬퍼, Poll 인텐트, IDENTIFY 초기 presence, `Context::fetch_members(...)` 멤버 청크 수집, 동시(Concurrent) 이벤트 디스패치 모드, GUILD_CREATE 캐시 반영, 재시도 강화된 REST 전송 계층
 
 ## 설치 예시
 
 ```toml
 [dependencies]
 # 기본 REST, 모델, 빌더
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 
 # 타입드 Gateway 봇 런타임
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # Interactions Endpoint와 앱 프레임워크
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # Gateway 캐시와 컬렉터
-discordrs = { version = "2.0.2", features = ["gateway", "cache"] }
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
 
 # Voice receive / Opus decode
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
 
 # PCM to Opus encode
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS hook
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 ```
 
 ## DAVE 상태

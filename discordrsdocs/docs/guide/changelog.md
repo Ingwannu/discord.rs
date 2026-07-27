@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.0 - 2026-07-27
+
+Feature-parity and hardening release closing the remaining gaps against discord.js v14.27.
+
+- Added `GUILD_MESSAGE_POLLS` (`1 << 24`) and `DIRECT_MESSAGE_POLLS` (`1 << 25`) gateway intents (both in `NON_PRIVILEGED`, enabling `MESSAGE_POLL_VOTE_*` events), plus a `GUILD_EXPRESSIONS` alias for bit 3.
+- Added `RestClient::with_reason(...)`, a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request; `RestClient` is now `Clone`.
+- Added `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` REST helpers with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies.
+- Added `create_interaction_response_with_result(...)` — interaction callback with `with_response=true`, returning the typed `InteractionCallbackResult` resource (mirrors discord.js `withResponse: true`).
+- Added `MessageReferenceType` (`DEFAULT`/`FORWARD`), `MessageReference::reply(...)`/`forward(...)` constructors, and `RestClient::forward_message(...)` for one-call message forwarding.
+- Added `OAuth2Client::revoke_token(...)` for `POST /oauth2/token/revoke`.
+- Added scheduled-event query options: `get_guild_scheduled_events_with_query(...)` (`with_user_count`) and `get_guild_scheduled_event_users_with_query(...)` (`limit`, `with_member`, `before`, `after`).
+- Added `ClientBuilder::presence(...)` for an initial presence delivered inside IDENTIFY, and `EventDispatchMode` (`Serial` default / `Concurrent`) via `ClientBuilder::event_dispatch(...)`.
+- Added `Context::fetch_members(...)` / `fetch_members_with_timeout(...)`, which request guild members over the gateway and await the correlated `GUILD_MEMBERS_CHUNK` payloads (the discord.js `guild.members.fetch()` equivalent); fetched members and presences fill the cache.
+- Added GUILD_CREATE collections on `Guild` (`channels`, `threads`, `members`, `voice_states`, `presences`, `emojis`, `stickers`, `stage_instances`, `soundboard_sounds`, `guild_scheduled_events`, `joined_at`, `large`) and typed event-field completion for `InviteEvent`, `ThreadEvent::newly_created`, `ThreadListSyncEvent`, `ThreadMemberUpdateEvent`, typed `ThreadMember`, and typed auto-moderation actions/trigger metadata.
+- Changed GUILD_CREATE, GUILD_MEMBERS_CHUNK, and THREAD_* processing to populate the caches; cache hot paths rewritten with O(log n) LRU order tracking, incremental cap counters, throttled TTL sweeps, and read-lock-only list reads.
+- Changed the REST transport into one retry loop: per-route gating for all requests, `Retry-After` and `x-ratelimit-scope`/`x-ratelimit-global` handling, and 5xx/transport retries with backoff; added `HttpError::is_timeout()`/`is_connect()`/`is_body()`/`is_retryable()` and `DiscordError::is_retryable_transport()`.
+- Changed the gateway to pace IDENTIFY to 1-per-5s-per-shard with short-session reconnect backoff, and `spawn_shards(...)` now uses the account's real `max_concurrency` from `/gateway/bot`; gateway protocol failures surface as `DiscordError::Gateway`.
+
 ## 2.0.2 - 2026-05-02
 
 - Included the post-2.0.1 DAVE runtime clippy cleanup in the published crate so Linux stable CI and local release artifacts match.

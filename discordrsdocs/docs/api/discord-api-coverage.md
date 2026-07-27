@@ -1,6 +1,6 @@
 # Discord API Coverage Audit
 
-This page records the current coverage claim for discord.rs 2.0.2 against the official Discord API documentation.
+This page records the current coverage claim for discord.rs 2.1.0 against the official Discord API documentation.
 
 Audit source:
 
@@ -25,7 +25,7 @@ Audit source:
 
 `223 / 223` is a REST route-shape result, not a blanket claim that every Discord object field, gateway event edge case, Social SDK behavior, or undocumented rollout behavior has live integration coverage.
 
-The broader API coverage claim for 2.0.2 is:
+The broader API coverage claim for 2.1.0 is:
 
 - Official REST routes are represented.
 - Official Gateway send and receive event names are represented by typed payload helpers, runtime command helpers, event decoder branches, or opcode handling.
@@ -33,7 +33,19 @@ The broader API coverage claim for 2.0.2 is:
 - Major interactions, webhook, voice, DAVE, cache, collectors, components, OAuth2, lobbies, monetization, soundboard, stickers, stage, invites, polls, subscriptions, entitlements, templates, and admin surfaces have typed wrappers or models where Discord documents them.
 - Remaining risk is mainly semantic drift in Discord docs, object-field changes, and live-only behavior that cannot be proven by hermetic tests.
 
-## Latest REST Gaps Closed
+## Routes and Options Added in 2.1.0
+
+- `POST /guilds` via `create_guild(...)` with typed `CreateGuild`
+- `DELETE /guilds/{guild.id}` via `delete_guild(...)`
+- `POST /guilds/templates/{template.code}` via `create_guild_from_template(...)` with typed `CreateGuildFromTemplate`
+- `POST /guilds/{guild.id}/mfa` via `modify_guild_mfa_level(...)` with typed `GuildMfaLevel`
+- `POST /oauth2/token/revoke` via `OAuth2Client::revoke_token(...)`
+- `with_response=true` interaction callback via `create_interaction_response_with_result(...)`, returning the typed `InteractionCallbackResult` resource
+- Scheduled-event query parameters: `with_user_count` through `get_guild_scheduled_events_with_query(...)`, and `limit` / `with_member` / `before` / `after` through `get_guild_scheduled_event_users_with_query(...)`
+- `X-Audit-Log-Reason` on all mutating requests via `RestClient::with_reason(...)` (percent-encoded like discord.js's `encodeURIComponent`)
+- Message forwarding: `MessageReferenceType`, `MessageReference::forward(...)`, and `forward_message(...)`
+
+## Latest REST Gaps Closed (2.0.x)
 
 - `GET /gateway`
 - `GET /oauth2/applications/@me`

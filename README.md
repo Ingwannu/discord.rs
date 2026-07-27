@@ -9,15 +9,23 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ## Features
 
 - Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
-- Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
+- Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias; the client is `Clone`, and the retry-hardened transport applies per-route request gating to all requests, honors `Retry-After` and global-scope rate-limit headers, and retries 5xx responses and transient transport errors with backoff
+- `RestClient::with_reason(...)` scoped clones that send `X-Audit-Log-Reason` on every mutating request so bans, kicks, and edits show up with a reason in the guild audit log
+- Guild lifecycle routes: `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies
+- `create_interaction_response_with_result(...)` for `with_response=true` interaction callbacks returning the typed `InteractionCallbackResult` resource
+- Message forwarding helpers: `MessageReferenceType`, `MessageReference::reply(...)`/`forward(...)`, and one-call `RestClient::forward_message(...)`
+- Poll gateway intents `GUILD_MESSAGE_POLLS` and `DIRECT_MESSAGE_POLLS` (both in `NON_PRIVILEGED`), plus a `GUILD_EXPRESSIONS` alias for bit 3
+- Initial presence inside IDENTIFY via `ClientBuilder::presence(...)` and serial or concurrent handler scheduling via `ClientBuilder::event_dispatch(EventDispatchMode::...)`
+- `Context::fetch_members(...)` gateway member fetching that awaits the correlated `GUILD_MEMBERS_CHUNK` payloads and fills the cache — the discord.js `guild.members.fetch()` equivalent
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
 - Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults, cheap `Arc` read APIs for hot member/message/presence paths, and explicit `CacheConfig` overrides
+- GUILD_CREATE cache population for channels, threads, members, voice states, presences, emojis, stickers, and stage instances (plus GUILD_MEMBERS_CHUNK and THREAD_* events), with O(log n) LRU order tracking, incremental per-guild/per-channel cap counters, and throttled TTL sweeps
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
-- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections
-- Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
+- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections; IDENTIFY is paced to Discord's 1-per-5s-per-shard limit and short-lived sessions reconnect with escalating backoff
+- Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates; `spawn_shards(...)` uses the account's real `max_concurrency` from `/gateway/bot` for identify wave sizing
 - Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
 - Live-validated `dave` feature with DAVE opcode state tracking, `davey`/OpenMLS-backed MLS lifecycle helpers, receive decryptor hooks, and outbound media encryption hooks
-- Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, and refresh-token exchange
+- Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, refresh-token exchange, and token revocation via `OAuth2Client::revoke_token(...)`
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
 - Application framework routing for slash commands, components, and modals behind the `interactions` feature
 - Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu` with auto-populated defaults, and more)
@@ -32,43 +40,43 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.0.2"
+discordrs = "2.1.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.1.0", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.1.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.2", default-features = false }
+discordrs = { version = "2.1.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.1.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.1.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
 
 # DAVE receive/outbound media integration
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.1.0", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.1.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.2", features = ["gateway", "interactions"] }
+discordrs = { version = "2.1.0", features = ["gateway", "interactions"] }
 ```
 
 ## API Cleanup
