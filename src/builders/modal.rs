@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::command::validation;
 use crate::constants::{component_type, text_input_style};
+use crate::error::DiscordError;
 use crate::types::{to_json_value, SelectOption};
 
 use super::components::{ActionRowBuilder, SelectMenuBuilder};
@@ -79,6 +81,48 @@ impl TextInputBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the text input against Discord's limits without consuming
+    /// the builder.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("text input custom_id", &self.custom_id, 1, 100)?;
+        validation::ensure_len("text input label", &self.label, 1, 45)?;
+        if let Some(placeholder) = &self.placeholder {
+            validation::ensure_max_len("text input placeholder", placeholder, 100)?;
+        }
+        if let Some(value) = &self.value {
+            validation::ensure_max_len("text input value", value, 4000)?;
+        }
+        if let Some(min) = self.min_length {
+            if min > 4000 {
+                return Err(DiscordError::model(format!(
+                    "text input min_length must be 0-4000, got {min}"
+                )));
+            }
+        }
+        if let Some(max) = self.max_length {
+            if !(1..=4000).contains(&max) {
+                return Err(DiscordError::model(format!(
+                    "text input max_length must be 1-4000, got {max}"
+                )));
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min_length, self.max_length) {
+            if min > max {
+                return Err(DiscordError::model(format!(
+                    "text input min_length ({min}) must not exceed max_length ({max})"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
@@ -536,6 +580,22 @@ impl ModalBuilder {
     pub fn build(self) -> Value {
         to_json_value(self)
     }
+
+    /// Validates the modal against Discord's limits without consuming the
+    /// builder: custom_id 1-100 characters, title 1-45 characters, and 1-5
+    /// top-level components.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("modal custom_id", &self.custom_id, 1, 100)?;
+        validation::ensure_len("modal title", &self.title, 1, 45)?;
+        validation::ensure_count("modal components", self.components.len(), 1, 5)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
+    }
 }
 
 #[cfg(test)]
@@ -747,6 +807,110 @@ mod tests {
                 assert!(payload.get("id").is_none());
             }
         }
+    }
+
+    fn expect_model_error<T: std::fmt::Debug>(
+        result: Result<T, crate::error::DiscordError>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("expected validation failure").to_string();
+        assert!(
+            err.contains(needle),
+            "error message {err:?} should contain {needle:?}"
+        );
+    }
+
+    #[test]
+    fn text_input_try_build_matches_build_for_valid_input() {
+        let make = || {
+            TextInputBuilder::short("topic", "Topic")
+                .placeholder("Tell me")
+                .min_length(1)
+                .max_length(100)
+                .required(true)
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid input"));
+    }
+
+    #[test]
+    fn text_input_try_build_rejects_invalid_fields() {
+        expect_model_error(
+            TextInputBuilder::short(&"i".repeat(101), "Topic").try_build(),
+            "text input custom_id must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "").try_build(),
+            "text input label must be 1-45 characters, got 0",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", &"l".repeat(46)).try_build(),
+            "text input label must be 1-45 characters, got 46",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "Topic")
+                .placeholder(&"p".repeat(101))
+                .try_build(),
+            "text input placeholder must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "Topic")
+                .value(&"v".repeat(4001))
+                .try_build(),
+            "text input value must be at most 4000 characters, got 4001",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "Topic")
+                .min_length(4001)
+                .try_build(),
+            "text input min_length must be 0-4000, got 4001",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "Topic").max_length(0).try_build(),
+            "text input max_length must be 1-4000, got 0",
+        );
+        expect_model_error(
+            TextInputBuilder::short("topic", "Topic")
+                .min_length(10)
+                .max_length(5)
+                .try_build(),
+            "text input min_length (10) must not exceed max_length (5)",
+        );
+    }
+
+    #[test]
+    fn modal_try_build_matches_build_and_rejects_invalid_modals() {
+        let make = || {
+            ModalBuilder::new("modal-id", "Modal Title")
+                .add_text_input(TextInputBuilder::short("name", "Name"))
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid modal"));
+
+        expect_model_error(
+            ModalBuilder::new(&"i".repeat(101), "Title")
+                .add_text_input(TextInputBuilder::short("name", "Name"))
+                .try_build(),
+            "modal custom_id must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            ModalBuilder::new("modal-id", &"t".repeat(46))
+                .add_text_input(TextInputBuilder::short("name", "Name"))
+                .try_build(),
+            "modal title must be 1-45 characters, got 46",
+        );
+        expect_model_error(
+            ModalBuilder::new("modal-id", "Title").try_build(),
+            "modal components must contain 1-5 items, got 0",
+        );
+
+        let mut overfull = ModalBuilder::new("modal-id", "Title");
+        for index in 0..6 {
+            overfull = overfull
+                .add_text_input(TextInputBuilder::short(&format!("input{index}"), "Label"));
+        }
+        expect_model_error(
+            overfull.try_build(),
+            "modal components must contain 1-5 items, got 6",
+        );
     }
 
     #[test]

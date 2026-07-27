@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::command::validation;
 use crate::constants::component_type;
+use crate::error::DiscordError;
 use crate::types::{to_json_value, MediaGalleryItem, MediaInfo};
 
 use super::components::ButtonBuilder;
@@ -44,6 +46,29 @@ impl MediaGalleryBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the gallery against Discord's limits without consuming the
+    /// builder: 1-10 items, item descriptions at most 1024 characters.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_count("media gallery items", self.items.len(), 1, 10)?;
+        for (index, item) in self.items.iter().enumerate() {
+            if let Some(description) = &item.description {
+                validation::ensure_max_len(
+                    &format!("media gallery item {index} description"),
+                    description,
+                    1024,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
@@ -92,6 +117,22 @@ impl ThumbnailBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the thumbnail against Discord's limits without consuming
+    /// the builder: description at most 1024 characters.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        if let Some(description) = &self.description {
+            validation::ensure_max_len("thumbnail description", description, 1024)?;
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
@@ -180,6 +221,25 @@ impl SectionBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the section against Discord's limits without consuming the
+    /// builder: 1-3 child components and a required accessory.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_count("section components", self.components.len(), 1, 3)?;
+        if self.accessory.is_none() {
+            return Err(DiscordError::model(
+                "section accessory is required (set a thumbnail or button accessory)",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
@@ -277,6 +337,95 @@ mod tests {
                 "spoiler": true,
                 "id": 11,
             })
+        );
+    }
+
+    fn expect_model_error<T: std::fmt::Debug>(
+        result: Result<T, crate::error::DiscordError>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("expected validation failure").to_string();
+        assert!(
+            err.contains(needle),
+            "error message {err:?} should contain {needle:?}"
+        );
+    }
+
+    #[test]
+    fn media_gallery_try_build_matches_build_and_rejects_invalid_galleries() {
+        let make = || {
+            MediaGalleryBuilder::new().add_item(MediaGalleryItem::new("https://example.com/a.png"))
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid gallery"));
+
+        expect_model_error(
+            MediaGalleryBuilder::new().try_build(),
+            "media gallery items must contain 1-10 items, got 0",
+        );
+
+        let mut overfull = MediaGalleryBuilder::new();
+        for _ in 0..11 {
+            overfull = overfull.add_item(MediaGalleryItem::new("https://example.com/a.png"));
+        }
+        expect_model_error(
+            overfull.try_build(),
+            "media gallery items must contain 1-10 items, got 11",
+        );
+
+        expect_model_error(
+            MediaGalleryBuilder::new()
+                .add_item(
+                    MediaGalleryItem::new("https://example.com/a.png")
+                        .description(&"d".repeat(1025)),
+                )
+                .try_build(),
+            "media gallery item 0 description must be at most 1024 characters, got 1025",
+        );
+    }
+
+    #[test]
+    fn thumbnail_try_build_matches_build_and_rejects_long_description() {
+        let make = || ThumbnailBuilder::new("https://example.com/thumb.png").description("ok");
+        assert_eq!(make().build(), make().try_build().expect("valid thumbnail"));
+
+        expect_model_error(
+            ThumbnailBuilder::new("https://example.com/thumb.png")
+                .description(&"d".repeat(1025))
+                .try_build(),
+            "thumbnail description must be at most 1024 characters, got 1025",
+        );
+    }
+
+    #[test]
+    fn section_try_build_matches_build_and_rejects_invalid_sections() {
+        let make = || {
+            SectionBuilder::new()
+                .add_text_display(TextDisplayBuilder::new("body"))
+                .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/t.png"))
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid section"));
+
+        expect_model_error(
+            SectionBuilder::new()
+                .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/t.png"))
+                .try_build(),
+            "section components must contain 1-3 items, got 0",
+        );
+        expect_model_error(
+            SectionBuilder::new()
+                .add_text_display(TextDisplayBuilder::new("one"))
+                .add_text_display(TextDisplayBuilder::new("two"))
+                .add_text_display(TextDisplayBuilder::new("three"))
+                .add_text_display(TextDisplayBuilder::new("four"))
+                .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/t.png"))
+                .try_build(),
+            "section components must contain 1-3 items, got 4",
+        );
+        expect_model_error(
+            SectionBuilder::new()
+                .add_text_display(TextDisplayBuilder::new("body"))
+                .try_build(),
+            "section accessory is required",
         );
     }
 
