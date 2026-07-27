@@ -2830,15 +2830,25 @@ pub struct Presence {
     pub user_id: Option<Snowflake>,
     /// Partial user object carried by gateway presence payloads
     /// (GUILD_CREATE `presences[]` and GUILD_MEMBERS_CHUNK `presences[]`
-    /// identify the user this way instead of `user_id`).
+    /// identify the user this way instead of `user_id`). Only `id` is
+    /// guaranteed by Discord.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<User>,
+    pub user: Option<PresenceUser>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activities: Option<Vec<Activity>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_status: Option<ClientStatus>,
+}
+
+/// Partial user object inside gateway presence payloads; Discord only
+/// guarantees `id` here.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PresenceUser {
+    pub id: Snowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]

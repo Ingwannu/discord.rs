@@ -55,6 +55,11 @@ pub(crate) struct GatewayClient {
     sequence: Arc<AtomicU64>,
     heartbeat_ack_received: Arc<AtomicBool>,
     last_identify: Option<Instant>,
+    /// Set when the server explicitly asked for a reconnect (op 7 RECONNECT
+    /// or op 9 INVALID_SESSION). Those paths re-dial immediately — op 9
+    /// already sleeps before disconnecting, and IDENTIFY pacing bounds the
+    /// identify rate — while unsolicited short-lived disconnects back off.
+    server_directed_reconnect: bool,
 }
 
 // Callback type for dispatching events
@@ -90,6 +95,7 @@ impl GatewayClient {
             sequence: Arc::new(AtomicU64::new(0)),
             heartbeat_ack_received: Arc::new(AtomicBool::new(true)),
             last_identify: None,
+            server_directed_reconnect: false,
         }
     }
 
@@ -161,11 +167,13 @@ impl GatewayClient {
                             return Ok(());
                         }
                     }
-                    // A healthy long-lived session reconnects immediately so
-                    // resumes don't miss events; a connection that died within
-                    // seconds is re-dialed with escalating backoff to avoid a
-                    // tight connect/close loop against the gateway.
-                    if connection_started.elapsed() >= SHORT_SESSION_THRESHOLD {
+                    // A healthy long-lived session or a server-directed
+                    // reconnect re-dials immediately so resumes don't miss
+                    // events; an unsolicited connection death within seconds
+                    // is re-dialed with escalating backoff to avoid a tight
+                    // connect/close loop against the gateway.
+                    let server_directed = std::mem::take(&mut self.server_directed_reconnect);
+                    if server_directed || connection_started.elapsed() >= SHORT_SESSION_THRESHOLD {
                         backoff = 1;
                     } else {
                         warn!(
@@ -424,6 +432,7 @@ impl GatewayClient {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             info!("Received Reconnect opcode");
+                            self.server_directed_reconnect = true;
                             break ReconnectAction::Resume;
                         }
                         OP_INVALID_SESSION => {
@@ -432,6 +441,7 @@ impl GatewayClient {
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             warn!("Invalid session, resumable={resumable}");
                             sleep(Duration::from_secs(2)).await;
+                            self.server_directed_reconnect = true;
                             if resumable {
                                 break ReconnectAction::Resume;
                             } else {
@@ -726,7 +736,9 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
-    use super::super::compression::{GatewayCompressionDecoder, GatewayZlibStream, ZLIB_SUFFIX};
+    #[cfg(feature = "zstd-stream")]
+    use super::super::compression::GatewayCompressionDecoder;
+    use super::super::compression::{GatewayZlibStream, ZLIB_SUFFIX};
     use super::super::outbound::{
         classify_gateway_command, run_gateway_outbound_worker, GatewayCommandClass,
         GatewayOutboundLimiter, GatewayOutboundMessage, GATEWAY_COMMAND_MIN_SPACING,

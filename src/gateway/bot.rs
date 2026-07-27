@@ -41,7 +41,9 @@ use crate::ws::GatewayConnectionConfig;
 
 #[cfg(feature = "sharding")]
 use super::client::SupervisorCallback;
-use super::client::{EventCallback, GatewayClient, GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
+#[cfg(feature = "sharding")]
+use super::client::GatewayCommand;
+use super::client::{EventCallback, GatewayClient, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use super::messenger::ShardMessenger;
 #[cfg(feature = "sharding")]
 use super::supervisor::{lock_sharding_manager, ShardSupervisor};
@@ -1291,6 +1293,7 @@ async fn spawn_shard_supervisor(
     Ok(ShardSupervisor { manager, tasks })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_gateway_shard(
     token: String,
     intents: u64,
@@ -1401,6 +1404,7 @@ struct GatewayDispatch {
     data: Value,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_gateway_event_processor(
     handler: Arc<dyn EventHandler>,
     ctx: Context,
@@ -1441,6 +1445,7 @@ fn spawn_gateway_event_processor(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_gateway_dispatch(
     handler: &Arc<dyn EventHandler>,
     ctx: &Context,

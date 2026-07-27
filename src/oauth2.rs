@@ -169,7 +169,7 @@ impl OAuth2Client {
             .body(encode_owned_form_pairs(&form))
             .send()
             .await
-            .map_err(|error| DiscordError::from(error))?;
+            .map_err(DiscordError::from)?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
