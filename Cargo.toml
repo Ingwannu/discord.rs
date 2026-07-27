@@ -102,3 +102,7 @@ required-features = ["voice"]
 [[example]]
 name = "live_dave_capture_bot"
 required-features = ["gateway", "voice"]
+
+[[example]]
+name = "music_bot"
+required-features = ["gateway", "voice", "voice-encode"]

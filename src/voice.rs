@@ -2,6 +2,12 @@ use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "voice")]
+#[path = "voice/player.rs"]
+/// discord.js-style audio playback pipeline: `AudioInput`, `AudioResource`,
+/// the event-driven `AudioPlayer` state machine, and connection subscriptions.
+pub mod player;
+
 use crate::error::DiscordError;
 use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
 use crate::types::invalid_data_error;
@@ -686,6 +692,12 @@ impl AudioTrack {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 /// Typed Discord API object for `AudioPlayer`.
+///
+/// This is the legacy queue/bookkeeping player kept for compatibility. For an
+/// actual playback pipeline (FFmpeg input, Opus encoding, 20 ms pacing, and
+/// connection subscriptions) use [`player::AudioPlayer`] from the
+/// [`player`] module; [`AudioTrack::to_ffmpeg_resource`] bridges tracks from
+/// this API into the new one.
 pub struct AudioPlayer {
     queue: VecDeque<AudioTrack>,
     current: Option<AudioTrack>,
