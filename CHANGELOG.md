@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.0 - 2026-07-27
+
+Feature-parity and hardening release closing the remaining gaps against discord.js v14.27.
+
+### Added
+- `GUILD_MESSAGE_POLLS` (`1 << 24`) and `DIRECT_MESSAGE_POLLS` (`1 << 25`) gateway intents, plus a `GUILD_EXPRESSIONS` alias for bit 3; both poll intents are included in `NON_PRIVILEGED`, so `MESSAGE_POLL_VOTE_*` events can now be received with named constants.
+- `RestClient::with_reason(...)` — a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request, so bans, kicks, and edits show a reason in the guild audit log.
+- `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` REST helpers with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies.
+- `create_interaction_response_with_result(...)` — interaction callback with `with_response=true`, returning the typed `InteractionCallbackResult` resource (mirrors discord.js `withResponse: true`).
+- `MessageReferenceType` (`DEFAULT`/`FORWARD`), `MessageReference::reply(...)`/`forward(...)` constructors, and `RestClient::forward_message(...)` for one-call message forwarding.
+- `OAuth2Client::revoke_token(...)` for `POST /oauth2/token/revoke`.
+- Scheduled-event query options: `get_guild_scheduled_events_with_query(...)` (`with_user_count`) and `get_guild_scheduled_event_users_with_query(...)` (`limit`, `with_member`, `before`, `after`).
+- `ClientBuilder::presence(...)` — initial presence delivered inside IDENTIFY, so bots connect with the desired status instead of updating it after READY.
+- `Context::fetch_members(...)` / `fetch_members_with_timeout(...)` — requests guild members over the gateway and awaits the correlated `GUILD_MEMBERS_CHUNK` payloads (the discord.js `guild.members.fetch()` equivalent); fetched members and presences also fill the cache.
+- `EventDispatchMode` (`Serial` default / `Concurrent`) via `ClientBuilder::event_dispatch(...)`, letting each handler call run in its own task so one slow handler no longer stalls a shard, plus an event-backlog warning when the dispatch queue exceeds 5,000 events.
+- `Guild` now models the GUILD_CREATE collections (`channels`, `threads`, `members`, `voice_states`, `presences`, `emojis`, `stickers`, `stage_instances`, `soundboard_sounds`, `guild_scheduled_events`, `joined_at`, `large`) and `Guild::without_create_collections()`.
+- Typed event-field completion: `InviteEvent` (inviter, uses, max_uses, max_age, temporary, created_at, expires_at, target type/user), `ThreadEvent::newly_created`, `ThreadListSyncEvent` (`channel_ids`, `members`), `ThreadMemberUpdateEvent` (`user_id`, `join_timestamp`, `flags`), typed `ThreadMember` in `ThreadMembersUpdateEvent`, and typed `AutoModerationTriggerMetadata`/`AutoModerationAction` in auto-moderation events.
+- `HttpError` now exposes `is_timeout()`/`is_connect()`/`is_body()`/`is_retryable()`, and `DiscordError::is_retryable_transport()`.
+
+### Changed
+- GUILD_CREATE now populates the channel, thread, member, user, voice-state, presence, emoji, sticker, and stage-instance caches under a single write lock; the cached `Guild` is stored with bulk collections stripped to avoid double storage. GUILD_MEMBERS_CHUNK and THREAD_* events are cached too.
+- The REST transport is unified into one retry loop: the per-route serialization gate now covers **all** requests (previously JSON requests bypassed it, allowing same-bucket 429 races), 5xx responses and transient transport errors retry with backoff (0.5s/1s/2s), 429 handling reads the `Retry-After` header and `x-ratelimit-scope`/`x-ratelimit-global` headers (Cloudflare-level bans with HTML bodies now back off correctly), and the route-gate map is garbage-collected.
+- The gateway now paces IDENTIFY to Discord's 1-per-5s-per-shard limit, and short-lived sessions (< 30s) reconnect with escalating backoff instead of immediately, preventing tight reconnect/re-IDENTIFY loops on repeated INVALID_SESSION.
+- `ClientBuilder::spawn_shards(...)` fetches `/gateway/bot` to use the account's real `max_concurrency` for identify wave sizing (previously hardcoded to 1).
+- Cache hot paths rewritten: LRU order tracking moved from `VecDeque` scans (O(n) per insert) to an ordered-map structure (O(log n)), per-guild member and per-channel message caps use incremental counters instead of full-map scans, TTL sweeps are throttled to once per 5s, and list reads filter expired entries per-entry under a read lock instead of upgrading to a write lock.
+- The voice manager write lock is now taken only for voice events instead of on every dispatch.
+- Gateway protocol failures (missing Hello, decode errors, terminal close codes, command-queue overflow) now surface as `DiscordError::Gateway` instead of `DiscordError::Model`.
+- `RestClient` is now `Clone` (clones share rate-limit state, the connection pool, and the application id).
+- Component-interaction channel stubs no longer overwrite fully-cached channels (insert-if-absent).
+
 ## 2.0.2 - 2026-05-02
 
 - Included the post-2.0.1 DAVE runtime clippy cleanup in the published crate so Linux stable CI and local release artifacts match.

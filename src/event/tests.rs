@@ -541,11 +541,13 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
             assert_eq!(event.creator_id, Some(snowflake("712")));
             assert_eq!(event.event_type, Some(1));
             assert_eq!(event.trigger_type, Some(1));
-            assert_eq!(
-                event.trigger_metadata,
-                Some(json!({ "keyword_filter": ["bad"] }))
-            );
-            assert_eq!(event.actions, vec![json!({ "type": 1 })]);
+            let trigger_metadata = event
+                .trigger_metadata
+                .as_ref()
+                .expect("trigger metadata should decode");
+            assert_eq!(trigger_metadata.keyword_filter, vec!["bad".to_string()]);
+            assert_eq!(event.actions.len(), 1);
+            assert_eq!(event.actions[0].kind, 1);
             assert_eq!(event.enabled, Some(true));
             assert_eq!(event.exempt_roles, vec![snowflake("713")]);
             assert_eq!(event.exempt_channels, vec![snowflake("714")]);
@@ -573,9 +575,11 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
     {
         Event::AutoModerationActionExecution(event) => {
             assert_eq!(event.guild_id, Some(snowflake("720")));
+            let action = event.action.as_ref().expect("action should decode");
+            assert_eq!(action.kind, 2);
             assert_eq!(
-                event.action,
-                Some(json!({ "type": 2, "metadata": { "channel_id": "721" } }))
+                action.metadata.as_ref().and_then(|m| m.channel_id.clone()),
+                Some(snowflake("721"))
             );
             assert_eq!(event.rule_id, Some(snowflake("722")));
             assert_eq!(event.rule_trigger_type, Some(1));
@@ -1826,6 +1830,15 @@ fn event_kind_and_raw_cover_missing_variants() {
                 guild_id: Some(snowflake("96")),
                 channel_id: Some(snowflake("97")),
                 code: Some("invite-create".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
                 raw: raw("INVITE_CREATE"),
             }),
         ),
@@ -1835,6 +1848,15 @@ fn event_kind_and_raw_cover_missing_variants() {
                 guild_id: Some(snowflake("98")),
                 channel_id: Some(snowflake("99")),
                 code: Some("invite-delete".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
                 raw: raw("INVITE_DELETE"),
             }),
         ),
@@ -1884,6 +1906,7 @@ fn event_kind_and_raw_cover_missing_variants() {
             "THREAD_CREATE",
             Event::ThreadCreate(ThreadEvent {
                 thread: channel("110"),
+                newly_created: None,
                 raw: raw("THREAD_CREATE"),
             }),
         ),
@@ -1891,6 +1914,7 @@ fn event_kind_and_raw_cover_missing_variants() {
             "THREAD_UPDATE",
             Event::ThreadUpdate(ThreadEvent {
                 thread: channel("111"),
+                newly_created: None,
                 raw: raw("THREAD_UPDATE"),
             }),
         ),
@@ -1898,6 +1922,7 @@ fn event_kind_and_raw_cover_missing_variants() {
             "THREAD_DELETE",
             Event::ThreadDelete(ThreadEvent {
                 thread: channel("112"),
+                newly_created: None,
                 raw: raw("THREAD_DELETE"),
             }),
         ),
@@ -1905,7 +1930,9 @@ fn event_kind_and_raw_cover_missing_variants() {
             "THREAD_LIST_SYNC",
             Event::ThreadListSync(ThreadListSyncEvent {
                 guild_id: Some(snowflake("113")),
+                channel_ids: Vec::new(),
                 threads: vec![channel("114")],
+                members: Vec::new(),
                 raw: raw("THREAD_LIST_SYNC"),
             }),
         ),
@@ -1914,6 +1941,9 @@ fn event_kind_and_raw_cover_missing_variants() {
             Event::ThreadMemberUpdate(ThreadMemberUpdateEvent {
                 guild_id: Some(snowflake("115")),
                 thread_id: Some(snowflake("116")),
+                user_id: None,
+                join_timestamp: None,
+                flags: None,
                 raw: raw("THREAD_MEMBER_UPDATE"),
             }),
         ),
@@ -1922,7 +1952,10 @@ fn event_kind_and_raw_cover_missing_variants() {
             Event::ThreadMembersUpdate(ThreadMembersUpdateEvent {
                 guild_id: Some(snowflake("117")),
                 thread_id: Some(snowflake("118")),
-                added_members: Some(vec![json!({"id": "119"})]),
+                added_members: Some(vec![crate::model::ThreadMember {
+                    id: Some(snowflake("119")),
+                    ..crate::model::ThreadMember::default()
+                }]),
                 removed_member_ids: Some(vec![snowflake("120")]),
                 member_count: Some(2),
                 raw: raw("THREAD_MEMBERS_UPDATE"),
@@ -2514,4 +2547,122 @@ fn decode_event_covers_structural_decoder_branches() {
             "reason": "review"
         }),
     );
+}
+
+#[test]
+fn invite_create_decodes_full_typed_fields() {
+    let event = decode_event(
+        "INVITE_CREATE",
+        json!({
+            "guild_id": "300",
+            "channel_id": "301",
+            "code": "abc123",
+            "inviter": { "id": "302", "username": "inviter" },
+            "uses": 0,
+            "max_uses": 5,
+            "max_age": 3600,
+            "temporary": true,
+            "created_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T01:00:00Z",
+            "target_type": 1,
+            "target_user": { "id": "303", "username": "streamer" }
+        }),
+    )
+    .unwrap();
+
+    match event {
+        Event::InviteCreate(invite) => {
+            assert_eq!(invite.code.as_deref(), Some("abc123"));
+            assert_eq!(
+                invite.inviter.as_ref().map(|user| user.id.clone()),
+                Some(snowflake("302"))
+            );
+            assert_eq!(invite.uses, Some(0));
+            assert_eq!(invite.max_uses, Some(5));
+            assert_eq!(invite.max_age, Some(3600));
+            assert_eq!(invite.temporary, Some(true));
+            assert_eq!(invite.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(invite.expires_at.as_deref(), Some("2026-01-01T01:00:00Z"));
+            assert_eq!(invite.target_type, Some(1));
+            assert_eq!(
+                invite.target_user.as_ref().map(|user| user.id.clone()),
+                Some(snowflake("303"))
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn thread_events_decode_new_typed_fields() {
+    let created = decode_event(
+        "THREAD_CREATE",
+        json!({ "id": "310", "type": 11, "newly_created": true }),
+    )
+    .unwrap();
+    match created {
+        Event::ThreadCreate(thread) => assert_eq!(thread.newly_created, Some(true)),
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let list_sync = decode_event(
+        "THREAD_LIST_SYNC",
+        json!({
+            "guild_id": "311",
+            "channel_ids": ["312", "313"],
+            "threads": [{ "id": "314", "type": 11 }],
+            "members": [{ "id": "314", "user_id": "315", "flags": 0 }]
+        }),
+    )
+    .unwrap();
+    match list_sync {
+        Event::ThreadListSync(sync) => {
+            assert_eq!(sync.channel_ids, vec![snowflake("312"), snowflake("313")]);
+            assert_eq!(sync.threads.len(), 1);
+            assert_eq!(sync.members.len(), 1);
+            assert_eq!(sync.members[0].user_id, Some(snowflake("315")));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let member_update = decode_event(
+        "THREAD_MEMBER_UPDATE",
+        json!({
+            "id": "316",
+            "guild_id": "317",
+            "user_id": "318",
+            "join_timestamp": "2026-01-01T00:00:00Z",
+            "flags": 4
+        }),
+    )
+    .unwrap();
+    match member_update {
+        Event::ThreadMemberUpdate(update) => {
+            assert_eq!(update.thread_id, Some(snowflake("316")));
+            assert_eq!(update.user_id, Some(snowflake("318")));
+            assert_eq!(update.join_timestamp.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(update.flags, Some(4));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let members_update = decode_event(
+        "THREAD_MEMBERS_UPDATE",
+        json!({
+            "id": "319",
+            "guild_id": "320",
+            "member_count": 3,
+            "added_members": [{ "id": "319", "user_id": "321", "flags": 0 }],
+            "removed_member_ids": ["322"]
+        }),
+    )
+    .unwrap();
+    match members_update {
+        Event::ThreadMembersUpdate(update) => {
+            let added = update.added_members.expect("added members should decode");
+            assert_eq!(added.len(), 1);
+            assert_eq!(added[0].user_id, Some(snowflake("321")));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
 }

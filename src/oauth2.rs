@@ -144,6 +144,40 @@ impl OAuth2Client {
         self.send_token_request(&form).await
     }
 
+    /// Revokes an access or refresh token via `POST /oauth2/token/revoke`,
+    /// invalidating the user's grant.
+    pub async fn revoke_token(
+        &self,
+        token: impl Into<String>,
+        token_type_hint: Option<&str>,
+    ) -> Result<(), DiscordError> {
+        let token = token.into();
+        if token.trim().is_empty() {
+            return Err(DiscordError::model("token must not be empty"));
+        }
+        let mut form = vec![("token", token), ("client_id", self.client_id.clone())];
+        if let Some(hint) = token_type_hint {
+            form.push(("token_type_hint", hint.to_string()));
+        }
+        if let Some(client_secret) = &self.client_secret {
+            form.push(("client_secret", client_secret.clone()));
+        }
+        let response = self
+            .client
+            .post(format!("{}/oauth2/token/revoke", self.api_base()))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(encode_owned_form_pairs(&form))
+            .send()
+            .await
+            .map_err(|error| DiscordError::from(error))?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(DiscordError::api(status.as_u16(), None, body));
+        }
+        Ok(())
+    }
+
     async fn send_token_request(
         &self,
         form: &[(&str, String)],

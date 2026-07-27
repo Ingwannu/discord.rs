@@ -722,6 +722,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
         #[cfg(feature = "collectors")]
         crate::collector::CollectorHub::new(),
         event_rx,
+        super::EventDispatchMode::Serial,
     );
 
     event_tx
@@ -1098,6 +1099,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                 }
             }),
         },
+        super::EventDispatchMode::Serial,
     )
     .await;
     super::process_gateway_dispatch(
@@ -1120,6 +1122,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                 }
             }),
         },
+        super::EventDispatchMode::Serial,
     )
     .await;
 
@@ -1406,12 +1409,30 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
             guild_id: Some(guild_id.clone()),
             channel_id: Some(channel_id.clone()),
             code: Some("invite".to_string()),
+            inviter: None,
+            uses: None,
+            max_uses: None,
+            max_age: None,
+            temporary: None,
+            created_at: None,
+            expires_at: None,
+            target_type: None,
+            target_user: None,
             raw: json!({}),
         }),
         Event::InviteDelete(InviteEvent {
             guild_id: Some(guild_id.clone()),
             channel_id: Some(channel_id.clone()),
             code: Some("invite".to_string()),
+            inviter: None,
+            uses: None,
+            max_uses: None,
+            max_age: None,
+            temporary: None,
+            created_at: None,
+            expires_at: None,
+            target_type: None,
+            target_user: None,
             raw: json!({}),
         }),
         Event::MessageReactionAdd(ReactionEvent {
@@ -1855,12 +1876,30 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             guild_id: Some(guild_id.clone()),
             channel_id: Some(channel_id.clone()),
             code: Some("invite-create".to_string()),
+            inviter: None,
+            uses: None,
+            max_uses: None,
+            max_age: None,
+            temporary: None,
+            created_at: None,
+            expires_at: None,
+            target_type: None,
+            target_user: None,
             raw: json!({}),
         }),
         Event::InviteDelete(InviteEvent {
             guild_id: Some(guild_id.clone()),
             channel_id: Some(channel_id.clone()),
             code: Some("invite-delete".to_string()),
+            inviter: None,
+            uses: None,
+            max_uses: None,
+            max_age: None,
+            temporary: None,
+            created_at: None,
+            expires_at: None,
+            target_type: None,
+            target_user: None,
             raw: json!({}),
         }),
         Event::VoiceStateUpdate(VoiceStateEvent {
@@ -2421,6 +2460,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                 "attachments": []
             }),
         },
+        super::EventDispatchMode::Serial,
     )
     .await;
     super::process_gateway_dispatch(
@@ -2447,6 +2487,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                 }
             }),
         },
+        super::EventDispatchMode::Serial,
     )
     .await;
 
@@ -2820,6 +2861,8 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         runtime,
         crate::ws::GatewayConnectionConfig::default(),
         (0, 1),
+        None,
+        super::EventDispatchMode::Serial,
         super::ShardStartControl {
             supervisor_channels: Some(supervisor_channels),
             boot_gate: Some(boot_rx),
@@ -2959,4 +3002,146 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
             .unwrap(),
         crate::sharding::ShardIpcMessage::Shutdown
     );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn apply_cache_updates_populates_entities_from_guild_create() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild_id = Snowflake::from("9000");
+
+    let guild: crate::model::Guild = serde_json::from_value(json!({
+        "id": "9000",
+        "name": "populated",
+        "roles": [{ "id": "9001", "name": "role" }],
+        "channels": [{ "id": "9002", "type": 0, "name": "general" }],
+        "threads": [{ "id": "9003", "type": 11, "name": "thread" }],
+        "members": [{
+            "user": { "id": "9004", "username": "member" },
+            "roles": []
+        }],
+        "voice_states": [{ "user_id": "9004", "channel_id": "9002" }],
+        "presences": [{ "user": { "id": "9004", "username": "member" }, "status": "online" }]
+    }))
+    .expect("guild create payload should deserialize");
+
+    super::apply_cache_updates(
+        &cache,
+        &Event::GuildCreate(crate::event::GuildEvent {
+            guild,
+            raw: json!({}),
+        }),
+    )
+    .await;
+
+    let cached_guild = cache.guild(&guild_id).await.expect("guild cached");
+    assert!(
+        cached_guild.channels.is_empty(),
+        "cached guild should be stripped of bulk collections"
+    );
+    let channel = cache
+        .channel(&Snowflake::from("9002"))
+        .await
+        .expect("channel cached from GUILD_CREATE");
+    assert_eq!(channel.guild_id, Some(guild_id.clone()));
+    assert!(cache.channel(&Snowflake::from("9003")).await.is_some());
+    assert!(cache
+        .member(&guild_id, &Snowflake::from("9004"))
+        .await
+        .is_some());
+    assert!(cache.user(&Snowflake::from("9004")).await.is_some());
+    assert!(cache
+        .voice_state(&guild_id, &Snowflake::from("9004"))
+        .await
+        .is_some());
+    assert!(cache
+        .presence(&guild_id, &Snowflake::from("9004"))
+        .await
+        .is_some());
+    assert!(cache
+        .role(&guild_id, &Snowflake::from("9001"))
+        .await
+        .is_some());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild_id = Snowflake::from("9100");
+
+    let chunk = decode_event(
+        "GUILD_MEMBERS_CHUNK",
+        json!({
+            "guild_id": "9100",
+            "chunk_index": 0,
+            "chunk_count": 1,
+            "members": [{
+                "user": { "id": "9101", "username": "chunked" },
+                "roles": []
+            }],
+            "presences": [{ "user": { "id": "9101" }, "status": "idle" }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, &chunk).await;
+
+    assert!(cache
+        .member(&guild_id, &Snowflake::from("9101"))
+        .await
+        .is_some());
+    assert!(cache
+        .presence(&guild_id, &Snowflake::from("9101"))
+        .await
+        .is_some());
+
+    let thread_create = decode_event(
+        "THREAD_CREATE",
+        json!({ "id": "9102", "type": 11, "guild_id": "9100", "newly_created": true }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, &thread_create).await;
+    assert!(cache.channel(&Snowflake::from("9102")).await.is_some());
+
+    let thread_delete = decode_event(
+        "THREAD_DELETE",
+        json!({ "id": "9102", "type": 11, "guild_id": "9100" }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, &thread_delete).await;
+    assert!(cache.channel(&Snowflake::from("9102")).await.is_none());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn component_interaction_stub_does_not_overwrite_cached_channel() {
+    let cache = crate::cache::CacheHandle::new();
+    let channel_id = Snowflake::from("9200");
+
+    cache
+        .upsert_channel(crate::model::Channel {
+            id: channel_id.clone(),
+            kind: 5,
+            name: Some("announcements".to_string()),
+            ..crate::model::Channel::default()
+        })
+        .await;
+
+    let interaction = decode_event(
+        "INTERACTION_CREATE",
+        json!({
+            "id": "9201",
+            "application_id": "9202",
+            "type": 3,
+            "token": "tok",
+            "channel_id": "9200",
+            "data": { "custom_id": "btn", "component_type": 2 }
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, &interaction).await;
+
+    let channel = cache.channel(&channel_id).await.expect("channel kept");
+    assert_eq!(channel.kind, 5, "stub must not overwrite the cached type");
+    assert_eq!(channel.name.as_deref(), Some("announcements"));
 }

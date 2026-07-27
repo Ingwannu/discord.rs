@@ -221,8 +221,8 @@ pub use helpers::{
 pub use gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
 pub use gateway::{
-    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventHandler, ShardMessenger,
-    TypeMap,
+    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventDispatchMode, EventHandler,
+    ShardMessenger, TypeMap,
 };
 
 #[cfg(feature = "interactions")]

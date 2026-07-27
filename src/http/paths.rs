@@ -67,6 +67,11 @@ pub(crate) fn global_commands_path(application_id: u64) -> Result<String, Discor
     Ok(format!("/applications/{application_id}/commands"))
 }
 
+/// Validates a guild template code before it is placed in a URL path.
+pub(crate) fn validate_template_code(code: &str) -> Result<(), DiscordError> {
+    validate_token_path_segment("template_code", code, false)
+}
+
 pub(crate) fn interaction_callback_path(
     interaction_id: Snowflake,
     interaction_token: &str,
