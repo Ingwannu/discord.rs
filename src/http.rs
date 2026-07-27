@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -29,7 +30,8 @@ mod webhook;
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
-    ActivityInstance, AddGroupDmRecipient, AddGuildMember, Application, ApplicationCommand,
+    ActivityInstance, AddGroupDmRecipient, AddGuildMember, AllowedMentions, Application,
+    ApplicationCommand,
     ApplicationRoleConnectionMetadata, AuditLog, AuditLogQuery, Ban, BeginGuildPruneRequest,
     BulkGuildBanRequest, BulkGuildBanResponse, Channel, CreateChannelInvite, CreateDmChannel,
     CreateGroupDmChannel, CreateGuildChannel, CreateGuildRole, CreateMessage, CreateStageInstance,
@@ -46,6 +48,7 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
+pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use body::{
     build_multipart_form, build_named_file_form, build_sticker_form, clone_json_body,
     multipart_body, named_file_multipart_body, parse_body_value, payload_named_file_multipart_body,
@@ -64,6 +67,8 @@ use rate_limit::RateLimitState;
 use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
 
 const API_BASE: &str = "https://discord.com/api/v10";
+const DEFAULT_USER_AGENT: &str =
+    concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")");
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_SERVER_ERROR_RETRIES: usize = 3;
 const ROUTE_GATE_GC_THRESHOLD: usize = 512;
@@ -86,8 +91,10 @@ pub struct RestClient {
     rate_limits: Arc<RateLimitState>,
     route_gates: Arc<RateLimitRouteGates>,
     audit_log_reason: Option<String>,
-    #[cfg(test)]
     base_url: String,
+    user_agent: String,
+    default_allowed_mentions: Option<AllowedMentions>,
+    rate_limit_callback: Option<RateLimitCallback>,
 }
 
 /// Type alias for `DiscordHttpClient`.
@@ -128,9 +135,18 @@ impl RestClient {
             rate_limits: Arc::new(RateLimitState::default()),
             route_gates: Arc::new(RateLimitRouteGates::default()),
             audit_log_reason: None,
-            #[cfg(test)]
             base_url: API_BASE.to_string(),
+            user_agent: DEFAULT_USER_AGENT.to_string(),
+            default_allowed_mentions: None,
+            rate_limit_callback: None,
         }
+    }
+
+    /// Returns a [`RestClientBuilder`] for a client with a custom API base,
+    /// timeouts, user agent, proxy, rate-limit callback, or default
+    /// allowed-mentions — the equivalent of discord.js's `RESTOptions`.
+    pub fn builder(token: impl Into<String>, application_id: u64) -> RestClientBuilder {
+        RestClientBuilder::new(token, application_id)
     }
 
     #[cfg(test)]
@@ -139,15 +155,9 @@ impl RestClient {
         application_id: u64,
         base_url: impl Into<String>,
     ) -> Self {
-        Self {
-            client: client_config::default_http_client(),
-            token: token.into(),
-            application_id: Arc::new(AtomicU64::new(application_id)),
-            rate_limits: Arc::new(RateLimitState::default()),
-            route_gates: Arc::new(RateLimitRouteGates::default()),
-            audit_log_reason: None,
-            base_url: base_url.into(),
-        }
+        let mut client = Self::new(token, application_id);
+        client.base_url = base_url.into();
+        client
     }
 
     /// Returns a client that sends `X-Audit-Log-Reason` with every mutating
@@ -165,14 +175,24 @@ impl RestClient {
         scoped
     }
 
-    #[cfg(test)]
-    fn api_base(&self) -> &str {
-        &self.base_url
+    /// Returns a client that injects the given allowed-mentions into message
+    /// payloads that do not set `allowed_mentions` themselves. Like
+    /// [`Self::with_reason`], the returned client shares rate-limit state and
+    /// the connection pool with `self`.
+    pub fn with_default_allowed_mentions(&self, allowed_mentions: AllowedMentions) -> Self {
+        let mut scoped = self.clone();
+        scoped.default_allowed_mentions = Some(allowed_mentions);
+        scoped
     }
 
-    #[cfg(not(test))]
+    /// Allowed-mentions injected into outgoing message payloads that do not
+    /// set `allowed_mentions` themselves, if configured.
+    pub fn default_allowed_mentions(&self) -> Option<&AllowedMentions> {
+        self.default_allowed_mentions.as_ref()
+    }
+
     fn api_base(&self) -> &str {
-        API_BASE
+        &self.base_url
     }
 
     pub fn application_id(&self) -> u64 {
@@ -587,7 +607,8 @@ impl RestClient {
         body: &InteractionCallbackResponse,
     ) -> Result<(), DiscordError> {
         let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
-        self.request_no_content(Method::POST, &path, Some(body))
+        let body = self.interaction_response_with_default_allowed_mentions(body);
+        self.request_no_content(Method::POST, &path, Some(body.as_ref()))
             .await
     }
 
@@ -2693,6 +2714,19 @@ impl RestClient {
             );
 
             if response.status == StatusCode::TOO_MANY_REQUESTS {
+                let retry_after =
+                    rate_limit::retry_after_seconds(&response.headers, &response_text);
+                if let Some(callback) = &self.rate_limit_callback {
+                    callback(RateLimitInfo {
+                        route: route_key.clone(),
+                        retry_after,
+                        global: rate_limit::is_global_rate_limit(
+                            &response.headers,
+                            &response_text,
+                        ),
+                    });
+                }
+
                 if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
                     return Err(discord_rate_limit_error(&route_key, &response_text));
                 }
@@ -2701,8 +2735,6 @@ impl RestClient {
                 warn!(
                     "received rate limit for {route_key}, retrying ({rate_limit_retries}/{MAX_RATE_LIMIT_RETRIES})"
                 );
-                let retry_after =
-                    rate_limit::retry_after_seconds(&response.headers, &response_text);
                 sleep_for_retry_after(retry_after).await;
                 continue;
             }
@@ -2742,10 +2774,10 @@ impl RestClient {
         };
         let url = format!("{}{}", self.api_base(), normalized_path);
 
-        let mut request_builder = self.client.request(method.clone(), url).header(
-            "User-Agent",
-            concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")"),
-        );
+        let mut request_builder = self
+            .client
+            .request(method.clone(), url)
+            .header("User-Agent", &self.user_agent);
 
         if !matches!(
             body,
@@ -2817,6 +2849,72 @@ impl RestClient {
 }
 
 impl RestClient {
+    /// Fills `allowed_mentions` from the configured default when the typed
+    /// message body leaves it unset. Borrow-through when nothing changes.
+    pub(super) fn message_with_default_allowed_mentions<'a>(
+        &self,
+        body: &'a CreateMessage,
+    ) -> Cow<'a, CreateMessage> {
+        match (&self.default_allowed_mentions, &body.allowed_mentions) {
+            (Some(default), None) => {
+                let mut body = body.clone();
+                body.allowed_mentions = Some(default.clone());
+                Cow::Owned(body)
+            }
+            _ => Cow::Borrowed(body),
+        }
+    }
+
+    /// Inserts the configured default `allowed_mentions` into a raw JSON
+    /// object payload that does not already contain the key.
+    pub(super) fn json_with_default_allowed_mentions<'a>(
+        &self,
+        body: &'a Value,
+    ) -> Cow<'a, Value> {
+        let Some(default) = &self.default_allowed_mentions else {
+            return Cow::Borrowed(body);
+        };
+        let Some(object) = body.as_object() else {
+            return Cow::Borrowed(body);
+        };
+        if object.contains_key("allowed_mentions") {
+            return Cow::Borrowed(body);
+        }
+        let Ok(default_value) = serde_json::to_value(default) else {
+            return Cow::Borrowed(body);
+        };
+        let mut object = object.clone();
+        object.insert("allowed_mentions".to_string(), default_value);
+        Cow::Owned(Value::Object(object))
+    }
+
+    /// Applies the default `allowed_mentions` to message-bearing interaction
+    /// callbacks (`CHANNEL_MESSAGE_WITH_SOURCE`, `UPDATE_MESSAGE`) whose data
+    /// object leaves it unset.
+    fn interaction_response_with_default_allowed_mentions<'a>(
+        &self,
+        body: &'a InteractionCallbackResponse,
+    ) -> Cow<'a, InteractionCallbackResponse> {
+        const CHANNEL_MESSAGE_WITH_SOURCE: u8 = 4;
+        const UPDATE_MESSAGE: u8 = 7;
+        if self.default_allowed_mentions.is_none()
+            || !matches!(body.kind, CHANNEL_MESSAGE_WITH_SOURCE | UPDATE_MESSAGE)
+        {
+            return Cow::Borrowed(body);
+        }
+        let Some(data) = body.data.as_ref() else {
+            return Cow::Borrowed(body);
+        };
+        match self.json_with_default_allowed_mentions(data) {
+            Cow::Borrowed(_) => Cow::Borrowed(body),
+            Cow::Owned(data) => {
+                let mut body = body.clone();
+                body.data = Some(data);
+                Cow::Owned(body)
+            }
+        }
+    }
+
     /// Creates a guild via `POST /guilds`. Only usable by bots in fewer
     /// than 10 guilds.
     pub async fn create_guild(

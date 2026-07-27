@@ -101,7 +101,8 @@ impl RestClient {
         body: &Value,
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path(webhook_id.into(), token)?;
-        self.request(Method::POST, &path, Some(body)).await
+        let body = self.json_with_default_allowed_mentions(body);
+        self.request(Method::POST, &path, Some(body.as_ref())).await
     }
 
     pub async fn execute_webhook_with_query(

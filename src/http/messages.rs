@@ -16,10 +16,11 @@ impl RestClient {
         channel_id: impl Into<Snowflake>,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::POST,
             &format!("/channels/{}/messages", channel_id.into()),
-            Some(body),
+            Some(body.as_ref()),
         )
         .await
     }
@@ -49,10 +50,11 @@ impl RestClient {
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::POST,
             &format!("/channels/{}/messages", channel_id.into()),
-            body,
+            body.as_ref(),
             files,
         )
         .await
@@ -64,6 +66,7 @@ impl RestClient {
         message_id: impl Into<Snowflake>,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::PATCH,
             &format!(
@@ -71,7 +74,7 @@ impl RestClient {
                 channel_id.into(),
                 message_id.into()
             ),
-            Some(body),
+            Some(body.as_ref()),
         )
         .await
     }
@@ -83,6 +86,7 @@ impl RestClient {
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::PATCH,
             &format!(
@@ -90,7 +94,7 @@ impl RestClient {
                 channel_id.into(),
                 message_id.into()
             ),
-            body,
+            body.as_ref(),
             files,
         )
         .await

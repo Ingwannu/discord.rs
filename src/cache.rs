@@ -3270,3 +3270,69 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "cache"))]
+mod sweep_interval_tests {
+    use std::time::Duration;
+
+    use super::{CacheConfig, CacheHandle};
+    use crate::model::{Message, Snowflake};
+
+    #[test]
+    fn cache_config_sweep_interval_defaults_and_overrides() {
+        assert_eq!(
+            CacheConfig::bounded().sweep_interval,
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            CacheConfig::unbounded().sweep_interval,
+            Duration::from_secs(5)
+        );
+        let config = CacheConfig::default().sweep_interval(Duration::from_millis(50));
+        assert_eq!(config.sweep_interval, Duration::from_millis(50));
+    }
+
+    /// Upserts one message, waits past its TTL, upserts another, and
+    /// reports whether the first message entry is still physically stored
+    /// (per-entry read expiry aside).
+    async fn expired_entry_survives_second_upsert(sweep_interval: Duration) -> bool {
+        let cache = CacheHandle::with_config(
+            CacheConfig::default()
+                .message_ttl(Duration::from_millis(1))
+                .sweep_interval(sweep_interval),
+        );
+        let channel_id = Snowflake::from("10");
+
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from("1"),
+                channel_id: channel_id.clone(),
+                content: "first".to_string(),
+                ..Message::default()
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from("2"),
+                channel_id: channel_id.clone(),
+                content: "second".to_string(),
+                ..Message::default()
+            })
+            .await;
+
+        let store = cache.store.read().await;
+        store
+            .messages
+            .contains_key(&(channel_id, Snowflake::from("1")))
+    }
+
+    #[tokio::test]
+    async fn sweep_interval_controls_ttl_sweeps_from_hot_upsert_paths() {
+        // A zero interval sweeps on every upsert, evicting the expired entry.
+        assert!(!expired_entry_survives_second_upsert(Duration::ZERO).await);
+        // A long interval keeps the throttle closed, so the expired entry is
+        // still physically present after the second upsert.
+        assert!(expired_entry_survives_second_upsert(Duration::from_secs(3600)).await);
+    }
+}

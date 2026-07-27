@@ -12,8 +12,6 @@ use crate::types::Emoji;
 
 use super::CacheConfig;
 
-/// Minimum interval between full TTL sweeps triggered from hot upsert paths.
-const PRUNE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Insertion/recency order tracker with O(log n) touch/remove/pop operations.
 ///
@@ -330,7 +328,8 @@ pub(super) fn remove_presence_key(store: &mut CacheStore, key: &(Snowflake, Snow
     store.presence_order.remove(key);
 }
 
-/// Runs the full TTL sweep only if one has not run within [`PRUNE_INTERVAL`].
+/// Runs the full TTL sweep only if one has not run within
+/// [`CacheConfig::sweep_interval`] (default 5s).
 ///
 /// Hot upsert paths call this instead of [`prune_expired`]; correctness for
 /// reads is preserved by per-entry expiry checks on every read path, so the
@@ -338,7 +337,7 @@ pub(super) fn remove_presence_key(store: &mut CacheStore, key: &(Snowflake, Snow
 pub(super) fn maybe_prune_expired(store: &mut CacheStore, config: &CacheConfig, now: Instant) {
     if store
         .last_prune
-        .is_some_and(|last| now.duration_since(last) < PRUNE_INTERVAL)
+        .is_some_and(|last| now.duration_since(last) < config.sweep_interval)
     {
         return;
     }

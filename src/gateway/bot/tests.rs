@@ -717,6 +717,8 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
         context,
         Arc::clone(&http),
         cache,
+        #[cfg(feature = "cache")]
+        None,
         #[cfg(feature = "voice")]
         Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
         #[cfg(feature = "collectors")]
@@ -990,7 +992,7 @@ async fn client_builder_start_variants_require_event_handler() {
 async fn shared_runtime_context_reuses_shared_state() {
     let mut data = super::TypeMap::new();
     data.insert::<String>("runtime".to_string());
-    let runtime = super::SharedRuntime::new("token", 77, data, CacheConfig::default());
+    let runtime = super::SharedRuntime::new("token", 77, data, CacheConfig::default(), None);
     let (command_tx, _command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
 
     runtime.gateway_commands.write().await.insert(
@@ -1024,7 +1026,7 @@ async fn shared_runtime_context_reuses_shared_state() {
 #[tokio::test]
 async fn shared_runtime_context_reuses_collectors_hub() {
     let runtime =
-        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default());
+        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default(), None);
     let context = runtime.context((0, 1));
     let mut collector = context
         .collectors()
@@ -1082,6 +1084,8 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         &context,
         &http,
         &cache,
+        #[cfg(feature = "cache")]
+        None,
         #[cfg(feature = "voice")]
         &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
         #[cfg(feature = "collectors")]
@@ -1107,6 +1111,8 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         &context,
         &http,
         &cache,
+        #[cfg(feature = "cache")]
+        None,
         #[cfg(feature = "voice")]
         &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
         #[cfg(feature = "collectors")]
@@ -2447,6 +2453,8 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         &context,
         &http,
         &cache,
+        #[cfg(feature = "cache")]
+        None,
         #[cfg(feature = "voice")]
         &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
         &collectors,
@@ -2468,6 +2476,8 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         &context,
         &http,
         &cache,
+        #[cfg(feature = "cache")]
+        None,
         #[cfg(feature = "voice")]
         &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
         &collectors,
@@ -2850,7 +2860,7 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         .prepare_runtime(0)
         .unwrap();
     let runtime =
-        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default());
+        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default(), None);
     let (boot_tx, boot_rx) = watch::channel(false);
     drop(boot_tx);
 
@@ -3144,4 +3154,349 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
     let channel = cache.channel(&channel_id).await.expect("channel kept");
     assert_eq!(channel.kind, 5, "stub must not overwrite the cached type");
     assert_eq!(channel.name.as_deref(), Some("announcements"));
+}
+
+#[cfg(feature = "cache")]
+#[derive(Default)]
+struct RecordingBackend {
+    calls: std::sync::Mutex<Vec<String>>,
+}
+
+#[cfg(feature = "cache")]
+impl RecordingBackend {
+    fn record(&self, call: String) {
+        self.calls.lock().expect("recorder mutex").push(call);
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("recorder mutex").clone()
+    }
+}
+
+#[cfg(feature = "cache")]
+#[async_trait]
+impl crate::cache::CacheBackend for RecordingBackend {
+    async fn clear_cache(&self) -> Result<(), crate::error::DiscordError> {
+        self.record("clear_cache".to_string());
+        Ok(())
+    }
+
+    async fn purge_expired_entries(&self) -> Result<(), crate::error::DiscordError> {
+        self.record("purge_expired_entries".to_string());
+        Ok(())
+    }
+
+    async fn put_member(
+        &self,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        _member: Member,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("put_member:{guild_id}:{user_id}"));
+        Ok(())
+    }
+
+    async fn get_member(
+        &self,
+        _guild_id: &Snowflake,
+        _user_id: &Snowflake,
+    ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
+        Ok(None)
+    }
+
+    async fn list_members(
+        &self,
+        _guild_id: &Snowflake,
+    ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_member(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("delete_member:{guild_id}:{user_id}"));
+        Ok(())
+    }
+
+    async fn put_message(&self, message: Message) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("put_message:{}:{}", message.channel_id, message.id));
+        Ok(())
+    }
+
+    async fn get_message(
+        &self,
+        _channel_id: &Snowflake,
+        _message_id: &Snowflake,
+    ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
+        Ok(None)
+    }
+
+    async fn list_messages(
+        &self,
+        _channel_id: &Snowflake,
+    ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_message(
+        &self,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("delete_message:{channel_id}:{message_id}"));
+        Ok(())
+    }
+
+    async fn put_presence(
+        &self,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: crate::model::Presence,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!(
+            "put_presence:{guild_id}:{user_id}:{}",
+            presence.status.as_deref().unwrap_or("none")
+        ));
+        Ok(())
+    }
+
+    async fn get_presence(
+        &self,
+        _guild_id: &Snowflake,
+        _user_id: &Snowflake,
+    ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
+        Ok(None)
+    }
+
+    async fn list_presences(
+        &self,
+        _guild_id: &Snowflake,
+    ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
+        Ok(Vec::new())
+    }
+
+    async fn delete_presence(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("delete_presence:{guild_id}:{user_id}"));
+        Ok(())
+    }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cache_backend_receives_member_message_and_presence_writes() {
+    let recorder = Arc::new(RecordingBackend::default());
+    let backend: Arc<dyn crate::cache::CacheBackend> = recorder.clone();
+    let cache = crate::cache::CacheHandle::new();
+
+    let member_event = Event::MemberAdd(MemberEvent {
+        guild_id: Snowflake::from("1"),
+        member: Member {
+            user: Some(User {
+                id: Snowflake::from("2"),
+                username: "wumpus".to_string(),
+                ..User::default()
+            }),
+            ..Member::default()
+        },
+        raw: json!({}),
+    });
+    let message_event = Event::MessageCreate(MessageEvent {
+        message: Message {
+            id: Snowflake::from("11"),
+            channel_id: Snowflake::from("10"),
+            content: "hello".to_string(),
+            ..Message::default()
+        },
+        raw: json!({}),
+    });
+    let presence_event = Event::PresenceUpdate(PresenceUpdateEvent {
+        guild_id: Some(Snowflake::from("1")),
+        user_id: Some(Snowflake::from("2")),
+        status: Some("online".to_string()),
+        ..PresenceUpdateEvent::default()
+    });
+    let message_delete_event = Event::MessageDelete(MessageDeleteEvent {
+        data: MessageDeletePayload {
+            id: Snowflake::from("11"),
+            channel_id: Snowflake::from("10"),
+            guild_id: None,
+        },
+        raw: json!({}),
+    });
+    let member_remove_event = Event::MemberRemove(MemberRemoveEvent {
+        data: MemberRemovePayload {
+            guild_id: Snowflake::from("1"),
+            user: User {
+                id: Snowflake::from("2"),
+                username: "wumpus".to_string(),
+                ..User::default()
+            },
+        },
+        raw: json!({}),
+    });
+
+    for event in [
+        &member_event,
+        &message_event,
+        &presence_event,
+        &message_delete_event,
+        &member_remove_event,
+    ] {
+        super::apply_cache_updates(&cache, event).await;
+        super::forward_cache_backend_updates(&backend, event)
+            .expect("event forwards a backend write")
+            .await
+            .expect("backend write task");
+    }
+
+    // Events without member/message/presence writes are not forwarded.
+    assert!(super::forward_cache_backend_updates(
+        &backend,
+        &Event::RoleCreate(RoleEvent {
+            guild_id: Snowflake::from("1"),
+            role: Role::default(),
+            raw: json!({}),
+        }),
+    )
+    .is_none());
+
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "put_member:1:2".to_string(),
+            "put_message:10:11".to_string(),
+            "put_presence:1:2:online".to_string(),
+            "delete_message:10:11".to_string(),
+            "delete_member:1:2".to_string(),
+        ]
+    );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
+    let recorder = Arc::new(RecordingBackend::default());
+    let backend: Arc<dyn crate::cache::CacheBackend> = recorder.clone();
+
+    let ready_event = Event::Ready(ReadyEvent {
+        data: ReadyPayload {
+            user: User {
+                id: Snowflake::from("2"),
+                username: "bot".to_string(),
+                ..User::default()
+            },
+            session_id: "session".to_string(),
+            application: None,
+            resume_gateway_url: None,
+        },
+        raw: json!({ "session_id": "session" }),
+    });
+    let chunk_event = Event::GuildMembersChunk(crate::event::GuildMembersChunkEvent {
+        data: crate::event::GuildMembersChunkPayload {
+            guild_id: Snowflake::from("1"),
+            members: vec![
+                Member {
+                    user: Some(User {
+                        id: Snowflake::from("2"),
+                        username: "first".to_string(),
+                        ..User::default()
+                    }),
+                    ..Member::default()
+                },
+                Member {
+                    user: Some(User {
+                        id: Snowflake::from("3"),
+                        username: "second".to_string(),
+                        ..User::default()
+                    }),
+                    ..Member::default()
+                },
+            ],
+            chunk_index: 0,
+            chunk_count: 1,
+            not_found: Vec::new(),
+            presences: Some(vec![crate::model::Presence {
+                user_id: Some(Snowflake::from("2")),
+                user: None,
+                status: Some("idle".to_string()),
+                activities: None,
+                client_status: None,
+            }]),
+            nonce: None,
+        },
+        raw: json!({}),
+    });
+
+    for event in [&ready_event, &chunk_event] {
+        super::forward_cache_backend_updates(&backend, event)
+            .expect("event forwards a backend write")
+            .await
+            .expect("backend write task");
+    }
+
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "clear_cache".to_string(),
+            "put_member:1:2".to_string(),
+            "put_member:1:3".to_string(),
+            "put_presence:1:2:idle".to_string(),
+        ]
+    );
+}
+
+#[cfg(feature = "cache")]
+#[test]
+fn client_builder_stores_cache_backend() {
+    let backend: Arc<dyn crate::cache::CacheBackend> = Arc::new(RecordingBackend::default());
+    let builder =
+        super::Client::builder("token", Intents::from_bits(0)).cache_backend(Arc::clone(&backend));
+    assert!(builder.cache_backend.is_some());
+}
+
+#[test]
+fn client_builder_stores_default_allowed_mentions() {
+    let mentions = crate::model::AllowedMentions {
+        replied_user: Some(false),
+        ..crate::model::AllowedMentions::default()
+    };
+    let builder = super::Client::builder("token", Intents::from_bits(0))
+        .default_allowed_mentions(mentions.clone());
+    assert_eq!(builder.default_allowed_mentions, Some(mentions));
+}
+
+#[tokio::test]
+async fn shared_runtime_propagates_default_allowed_mentions_to_context_and_rest() {
+    let mentions = crate::model::AllowedMentions {
+        users: vec![Snowflake::from("7")],
+        replied_user: Some(false),
+        ..crate::model::AllowedMentions::default()
+    };
+    let runtime = super::SharedRuntime::new(
+        "token",
+        1,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        Some(mentions.clone()),
+    );
+    let context = runtime.context((0, 1));
+    assert_eq!(context.default_allowed_mentions(), Some(&mentions));
+    assert_eq!(context.http.default_allowed_mentions(), Some(&mentions));
+
+    let bare_runtime = super::SharedRuntime::new(
+        "token",
+        1,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
+    let bare_context = bare_runtime.context((0, 1));
+    assert!(bare_context.default_allowed_mentions().is_none());
+    assert!(bare_context.http.default_allowed_mentions().is_none());
 }
