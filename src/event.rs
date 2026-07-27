@@ -2,8 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{
-    Activity, AuditLogEntry, AutoModerationAction, AutoModerationTriggerMetadata, Channel,
-    ClientStatus, Entitlement, Guild, Integration, Interaction, Member, Message, Presence, Role,
+    Activity, ApplicationCommandPermission, AuditLogEntry, AutoModerationAction,
+    AutoModerationTriggerMetadata, Channel, ClientStatus, Entitlement, Guild,
+    GuildScheduledEventEntityMetadata, Integration, Interaction, Member, Message, Presence, Role,
     Snowflake, SoundboardSound, StageInstance, Sticker, Subscription, ThreadMember, User,
     VoiceServerUpdate, VoiceState,
 };
@@ -455,7 +456,7 @@ pub struct ScheduledEvent {
     pub status: Option<u64>,
     pub entity_type: Option<u64>,
     pub entity_id: Option<Snowflake>,
-    pub entity_metadata: Option<Value>,
+    pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     pub user_count: Option<u64>,
     pub image: Option<String>,
     pub raw: Value,
@@ -488,7 +489,7 @@ pub struct ApplicationCommandPermissionsUpdateEvent {
     pub id: Option<Snowflake>,
     pub application_id: Option<Snowflake>,
     pub guild_id: Option<Snowflake>,
-    pub permissions: Vec<Value>,
+    pub permissions: Vec<ApplicationCommandPermission>,
     pub raw: Value,
 }
 

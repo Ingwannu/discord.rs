@@ -509,7 +509,13 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
             assert_eq!(event.status, Some(1));
             assert_eq!(event.entity_type, Some(2));
             assert_eq!(event.entity_id, Some(snowflake("704")));
-            assert_eq!(event.entity_metadata, Some(json!({ "location": "voice" })));
+            assert_eq!(
+                event
+                    .entity_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.location.as_deref()),
+                Some("voice")
+            );
             assert_eq!(event.user_count, Some(42));
             assert_eq!(event.image.as_deref(), Some("cover"));
         }
@@ -2107,7 +2113,10 @@ fn event_kind_and_raw_cover_missing_variants() {
                 id: Some(snowflake("151")),
                 application_id: Some(snowflake("152")),
                 guild_id: Some(snowflake("153")),
-                permissions: vec![json!({"id": "154", "type": 1, "permission": true})],
+                permissions: vec![crate::model::ApplicationCommandPermission::role(
+                    Snowflake::new("154"),
+                    true,
+                )],
                 raw: raw("APPLICATION_COMMAND_PERMISSIONS_UPDATE"),
             }),
         ),
@@ -2640,7 +2649,10 @@ fn thread_events_decode_new_typed_fields() {
         Event::ThreadMemberUpdate(update) => {
             assert_eq!(update.thread_id, Some(snowflake("316")));
             assert_eq!(update.user_id, Some(snowflake("318")));
-            assert_eq!(update.join_timestamp.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(
+                update.join_timestamp.as_deref(),
+                Some("2026-01-01T00:00:00Z")
+            );
             assert_eq!(update.flags, Some(4));
         }
         other => panic!("unexpected event: {other:?}"),
@@ -2662,6 +2674,104 @@ fn thread_events_decode_new_typed_fields() {
             let added = update.added_members.expect("added members should decode");
             assert_eq!(added.len(), 1);
             assert_eq!(added[0].user_id, Some(snowflake("321")));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+}
+
+#[test]
+fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
+    match decode_event(
+        "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
+        json!({
+            "id": "300",
+            "application_id": "301",
+            "guild_id": "302",
+            "permissions": [
+                { "id": "303", "type": 1, "permission": true },
+                { "id": "304", "type": 2, "permission": false },
+                { "id": "305", "type": 3, "permission": true }
+            ]
+        }),
+    )
+    .unwrap()
+    {
+        Event::ApplicationCommandPermissionsUpdate(event) => {
+            assert_eq!(event.permissions.len(), 3);
+            assert_eq!(event.permissions[0].id.as_str(), "303");
+            assert_eq!(
+                event.permissions[0].kind,
+                crate::model::ApplicationCommandPermission::ROLE
+            );
+            assert!(event.permissions[0].permission);
+            assert_eq!(
+                event.permissions[1].kind,
+                crate::model::ApplicationCommandPermission::USER
+            );
+            assert!(!event.permissions[1].permission);
+            assert_eq!(
+                event.permissions[2].kind,
+                crate::model::ApplicationCommandPermission::CHANNEL
+            );
+            // The raw payload stays available alongside the typed view.
+            assert_eq!(event.raw["permissions"][0]["id"], json!("303"));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    // Malformed permission entries fall back to an empty list instead of
+    // failing the whole event decode.
+    match decode_event(
+        "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
+        json!({
+            "id": "300",
+            "permissions": [{ "id": 12.5 }]
+        }),
+    )
+    .unwrap()
+    {
+        Event::ApplicationCommandPermissionsUpdate(event) => {
+            assert!(event.permissions.is_empty());
+            assert_eq!(event.raw["permissions"][0]["id"], json!(12.5));
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    match decode_event(
+        "GUILD_SCHEDULED_EVENT_UPDATE",
+        json!({
+            "id": "310",
+            "guild_id": "311",
+            "entity_type": 3,
+            "entity_metadata": { "location": "Berlin HQ" }
+        }),
+    )
+    .unwrap()
+    {
+        Event::GuildScheduledEventUpdate(event) => {
+            assert_eq!(
+                event
+                    .entity_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.location.as_deref()),
+                Some("Berlin HQ")
+            );
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    // A null or shape-shifted entity_metadata decodes to None.
+    match decode_event(
+        "GUILD_SCHEDULED_EVENT_UPDATE",
+        json!({
+            "id": "310",
+            "entity_metadata": null
+        }),
+    )
+    .unwrap()
+    {
+        Event::GuildScheduledEventUpdate(event) => {
+            assert!(event.entity_metadata.is_none());
         }
         other => panic!("unexpected event: {other:?}"),
     }

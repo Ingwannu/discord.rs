@@ -248,7 +248,11 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
         name: optional_string_field(&data, "name"),
         kind: data.get("type").and_then(value_to_u8),
         options,
-        resolved: data.get("resolved").cloned(),
+        resolved: data
+            .get("resolved")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
         target_id: optional_string_field(&data, "target_id").map(Snowflake::from),
     })
 }
@@ -652,8 +656,13 @@ mod tests {
                 assert_eq!(command.data.kind, Some(1));
                 assert!(command.data.options.is_empty());
                 assert_eq!(
-                    command.data.resolved.unwrap()["users"]["42"]["username"],
-                    json!("resolved-user")
+                    command
+                        .data
+                        .resolved
+                        .unwrap()
+                        .user(42u64)
+                        .map(|user| user.username.as_str()),
+                    Some("resolved-user")
                 );
             }
             other => panic!("unexpected chat input interaction: {other:?}"),

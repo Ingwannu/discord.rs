@@ -11,16 +11,16 @@ use super::{
     CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
     Embed, EmbedField, Entitlement, ForumTag, GatewayBot, Guild, GuildScheduledEvent, Integration,
     Interaction, InteractionCallbackResponse, InteractionContextData, Invite,
-    InviteTargetUsersJobStatus, Member, Message, MessageContextMenuInteraction,
+    InviteTargetUsersJobStatus, Member, Message, MessageComponent, MessageContextMenuInteraction,
     ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
     ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
     ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
     ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
     ModifyWebhookWithToken, PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer,
-    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, Role,
-    RoleColors, SessionStartLimit, Sku, Snowflake, StickerItem, Subscription, ThreadListResponse,
-    ThreadMember, ThreadMetadata, User, UserContextMenuInteraction, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreenChannel,
+    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData,
+    Role, RoleColors, SessionStartLimit, Sku, Snowflake, StickerItem, Subscription,
+    ThreadListResponse, ThreadMember, ThreadMetadata, User, UserContextMenuInteraction,
+    WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
@@ -781,6 +781,39 @@ fn message_resource_extended_fields_decode() {
 
     assert_eq!(message.mention_roles[0].as_str(), "3000");
     assert_eq!(message.application_id.unwrap().as_str(), "4000");
+    assert_eq!(
+        message
+            .application
+            .as_ref()
+            .and_then(|application| application.name.as_deref()),
+        Some("Activity App")
+    );
+    assert_eq!(
+        message
+            .interaction_metadata
+            .as_ref()
+            .map(|metadata| metadata.kind),
+        Some(2)
+    );
+    assert_eq!(
+        message
+            .interaction
+            .as_ref()
+            .map(|interaction| interaction.name.as_str()),
+        Some("old")
+    );
+    assert!(message
+        .resolved
+        .as_ref()
+        .is_some_and(ResolvedData::is_empty));
+    assert_eq!(
+        message.message_snapshots[0]
+            .message
+            .components
+            .as_ref()
+            .and_then(|components| components[0].content.as_deref()),
+        Some("snapshot text")
+    );
     assert_eq!(message.activity.unwrap().party_id.as_deref(), Some("party"));
     assert!(message
         .role_subscription_data
@@ -1405,4 +1438,395 @@ fn embed_presence_and_permissions_cover_optional_and_numeric_serde_paths() {
     assert_eq!(presence_json, json!({ "user_id": "777" }));
     assert_eq!(numeric_permissions.bits(), 16);
     assert_eq!(invalid_timestamp.timestamp(), None);
+}
+
+#[test]
+fn message_components_v2_tree_decodes_typed() {
+    let message: Message = serde_json::from_value(json!({
+        "id": "1",
+        "channel_id": "2",
+        "flags": 32768,
+        "components": [{
+            "type": 17,
+            "id": 1,
+            "accent_color": 5793266,
+            "spoiler": false,
+            "components": [
+                {
+                    "type": 9,
+                    "components": [
+                        { "type": 10, "content": "# Release 2.2.0" },
+                        { "type": 10, "content": "Typed message components" }
+                    ],
+                    "accessory": {
+                        "type": 11,
+                        "media": {
+                            "url": "https://cdn.example/thumb.png",
+                            "proxy_url": "https://proxy.example/thumb.png",
+                            "width": 128,
+                            "height": 128,
+                            "content_type": "image/png"
+                        },
+                        "description": "cover art"
+                    }
+                },
+                { "type": 14, "divider": true, "spacing": 1 },
+                {
+                    "type": 12,
+                    "items": [{
+                        "media": { "url": "https://cdn.example/shot.png" },
+                        "description": "screenshot",
+                        "spoiler": true
+                    }]
+                },
+                {
+                    "type": 13,
+                    "file": { "url": "attachment://notes.txt" },
+                    "name": "notes.txt",
+                    "size": 512
+                },
+                {
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 1,
+                            "label": "Deploy",
+                            "custom_id": "deploy",
+                            "emoji": { "name": "🚀" }
+                        },
+                        {
+                            "type": 2,
+                            "style": 5,
+                            "label": "Docs",
+                            "url": "https://docs.example",
+                            "disabled": false
+                        }
+                    ]
+                },
+                {
+                    "type": 1,
+                    "components": [{
+                        "type": 3,
+                        "custom_id": "env",
+                        "placeholder": "Pick an environment",
+                        "min_values": 1,
+                        "max_values": 1,
+                        "options": [
+                            {
+                                "label": "Production",
+                                "value": "prod",
+                                "description": "live traffic",
+                                "default": true
+                            },
+                            { "label": "Staging", "value": "stage" }
+                        ]
+                    }]
+                },
+                {
+                    "type": 1,
+                    "components": [{
+                        "type": 8,
+                        "custom_id": "log-channel",
+                        "channel_types": [0, 5],
+                        "default_values": [{ "id": "42", "type": "channel" }]
+                    }]
+                }
+            ]
+        }]
+    }))
+    .unwrap();
+
+    let components = message.components.as_deref().unwrap();
+    let container = &components[0];
+    assert_eq!(container.kind, MessageComponent::CONTAINER);
+    assert_eq!(container.id, Some(1));
+    assert_eq!(container.accent_color, Some(5_793_266));
+    assert_eq!(container.spoiler, Some(false));
+
+    let section = &container.components[0];
+    assert_eq!(section.kind, MessageComponent::SECTION);
+    assert_eq!(
+        section.components[0].content.as_deref(),
+        Some("# Release 2.2.0")
+    );
+    let accessory = section.accessory.as_deref().unwrap();
+    assert_eq!(accessory.kind, MessageComponent::THUMBNAIL);
+    let media = accessory.media.as_ref().unwrap();
+    assert_eq!(media.url, "https://cdn.example/thumb.png");
+    assert_eq!(
+        media.proxy_url.as_deref(),
+        Some("https://proxy.example/thumb.png")
+    );
+    assert_eq!(media.width, Some(128));
+    assert_eq!(accessory.description.as_deref(), Some("cover art"));
+
+    let separator = &container.components[1];
+    assert_eq!(separator.kind, MessageComponent::SEPARATOR);
+    assert_eq!(separator.divider, Some(true));
+    assert_eq!(separator.spacing, Some(1));
+
+    let gallery = &container.components[2];
+    assert_eq!(gallery.kind, MessageComponent::MEDIA_GALLERY);
+    assert_eq!(gallery.items[0].media.url, "https://cdn.example/shot.png");
+    assert_eq!(gallery.items[0].spoiler, Some(true));
+
+    let file = &container.components[3];
+    assert_eq!(file.kind, MessageComponent::FILE);
+    assert_eq!(file.file.as_ref().unwrap().url, "attachment://notes.txt");
+    assert_eq!(file.name.as_deref(), Some("notes.txt"));
+    assert_eq!(file.size, Some(512));
+
+    let button_row = &container.components[4];
+    assert_eq!(button_row.kind, MessageComponent::ACTION_ROW);
+    assert_eq!(
+        button_row.components[0].custom_id.as_deref(),
+        Some("deploy")
+    );
+    assert_eq!(button_row.components[0].style, Some(1));
+    assert_eq!(
+        button_row.components[0]
+            .emoji
+            .as_ref()
+            .and_then(|emoji| emoji.name.as_deref()),
+        Some("🚀")
+    );
+    assert_eq!(
+        button_row.components[1].url.as_deref(),
+        Some("https://docs.example")
+    );
+
+    let select = &container.components[5].components[0];
+    assert_eq!(select.kind, MessageComponent::STRING_SELECT);
+    assert_eq!(select.placeholder.as_deref(), Some("Pick an environment"));
+    assert_eq!(select.min_values, Some(1));
+    assert_eq!(select.options.len(), 2);
+    assert_eq!(select.options[0].value, "prod");
+    assert_eq!(select.options[0].default, Some(true));
+    assert_eq!(select.options[1].label, "Staging");
+
+    let channel_select = &container.components[6].components[0];
+    assert_eq!(channel_select.kind, MessageComponent::CHANNEL_SELECT);
+    assert_eq!(channel_select.channel_types, vec![0, 5]);
+    assert_eq!(channel_select.default_values[0].id.as_str(), "42");
+    assert_eq!(channel_select.default_values[0].kind, "channel");
+
+    // Depth-first iteration visits the whole tree, including the accessory.
+    let all: Vec<_> = container.iter().collect();
+    assert_eq!(all.len(), 15);
+    assert_eq!(
+        all.iter()
+            .filter(|component| component.kind == MessageComponent::BUTTON)
+            .count(),
+        2
+    );
+    assert!(all
+        .iter()
+        .any(|component| component.kind == MessageComponent::THUMBNAIL));
+}
+
+#[test]
+fn message_component_tolerates_unknown_kinds_and_round_trips() {
+    // Unknown future component types and fields must never fail decoding.
+    let tolerant: MessageComponent = serde_json::from_value(json!({
+        "type": 99,
+        "brand_new_field": { "nested": true }
+    }))
+    .unwrap();
+    assert_eq!(tolerant.kind, 99);
+    assert!(tolerant.custom_id.is_none());
+    assert!(tolerant.components.is_empty());
+
+    // Even an empty object decodes (kind defaults to 0).
+    let empty: MessageComponent = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(empty.kind, 0);
+
+    // Known fields round-trip byte-for-byte through serialization.
+    let fixture = json!({
+        "type": 1,
+        "components": [{
+            "type": 2,
+            "custom_id": "confirm",
+            "style": 3,
+            "label": "Confirm",
+            "disabled": false
+        }, {
+            "type": 4,
+            "custom_id": "reason",
+            "style": 2,
+            "min_length": 10,
+            "max_length": 200,
+            "required": true,
+            "value": "because",
+            "placeholder": "Why?"
+        }]
+    });
+    let component: MessageComponent = serde_json::from_value(fixture.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&component).unwrap(), fixture);
+
+    // A label wrapping a text input exposes the child via `component`.
+    let label: MessageComponent = serde_json::from_value(json!({
+        "type": 18,
+        "label": "Feedback",
+        "description": "Tell us more",
+        "component": { "type": 4, "custom_id": "feedback", "style": 2 }
+    }))
+    .unwrap();
+    assert_eq!(label.kind, MessageComponent::LABEL);
+    assert_eq!(
+        label.component.as_deref().map(|child| child.kind),
+        Some(MessageComponent::TEXT_INPUT)
+    );
+    assert_eq!(label.iter().count(), 2);
+}
+
+#[test]
+fn resolved_data_decodes_all_six_maps_with_lookups() {
+    let resolved: ResolvedData = serde_json::from_value(json!({
+        "users": {
+            "42": { "id": "42", "username": "someone", "global_name": "Someone" }
+        },
+        "members": {
+            "42": { "nick": "friend", "roles": ["77"], "joined_at": "2026-01-01T00:00:00Z" }
+        },
+        "roles": {
+            "77": { "id": "77", "name": "Admins", "permissions": "8" }
+        },
+        "channels": {
+            "88": { "id": "88", "type": 11, "name": "release-thread", "parent_id": "89" }
+        },
+        "messages": {
+            "99": { "id": "99", "channel_id": "88", "content": "hello" }
+        },
+        "attachments": {
+            "100": { "id": "100", "filename": "log.txt", "size": 12 }
+        }
+    }))
+    .unwrap();
+
+    assert!(!resolved.is_empty());
+    assert_eq!(resolved.user(42u64).unwrap().username, "someone");
+    assert_eq!(
+        resolved.member("42").unwrap().nick.as_deref(),
+        Some("friend")
+    );
+    assert_eq!(resolved.role(77u64).unwrap().name, "Admins");
+    let channel = resolved.channel("88").unwrap();
+    assert_eq!(channel.kind, 11);
+    assert_eq!(channel.name.as_deref(), Some("release-thread"));
+    assert_eq!(resolved.message(99u64).unwrap().content, "hello");
+    assert_eq!(resolved.attachment(100u64).unwrap().filename, "log.txt");
+    assert!(resolved.user(1u64).is_none());
+
+    // Every map defaults to empty when Discord omits it.
+    let empty: ResolvedData = serde_json::from_value(json!({})).unwrap();
+    assert!(empty.is_empty());
+}
+
+#[test]
+fn message_interaction_metadata_decodes_with_nested_trigger() {
+    let message: Message = serde_json::from_value(json!({
+        "id": "1",
+        "channel_id": "2",
+        "interaction_metadata": {
+            "id": "900",
+            "type": 5,
+            "user": { "id": "42", "username": "someone" },
+            "authorizing_integration_owners": { "0": "500", "1": "42" },
+            "original_response_message_id": "901",
+            "target_user": { "id": "43", "username": "target" },
+            "target_message_id": "902",
+            "interacted_message_id": "903",
+            "triggering_interaction_metadata": {
+                "id": "890",
+                "type": 3,
+                "user": { "id": "42", "username": "someone" },
+                "authorizing_integration_owners": {},
+                "interacted_message_id": "880"
+            }
+        },
+        "interaction": {
+            "id": "900",
+            "type": 2,
+            "name": "deploy",
+            "user": { "id": "42", "username": "someone" }
+        }
+    }))
+    .unwrap();
+
+    let metadata = message.interaction_metadata.unwrap();
+    assert_eq!(metadata.id.as_str(), "900");
+    assert_eq!(metadata.kind, 5);
+    assert_eq!(metadata.user.as_ref().unwrap().username, "someone");
+    assert_eq!(
+        metadata
+            .authorizing_integration_owners
+            .get("0")
+            .map(Snowflake::as_str),
+        Some("500")
+    );
+    assert_eq!(
+        metadata
+            .original_response_message_id
+            .as_ref()
+            .map(Snowflake::as_str),
+        Some("901")
+    );
+    assert_eq!(metadata.target_user.as_ref().unwrap().id.as_str(), "43");
+    assert_eq!(
+        metadata.target_message_id.as_ref().map(Snowflake::as_str),
+        Some("902")
+    );
+    assert_eq!(
+        metadata
+            .interacted_message_id
+            .as_ref()
+            .map(Snowflake::as_str),
+        Some("903")
+    );
+
+    let trigger = metadata.triggering_interaction_metadata.unwrap();
+    assert_eq!(trigger.id.as_str(), "890");
+    assert_eq!(trigger.kind, 3);
+    assert!(trigger.authorizing_integration_owners.is_empty());
+    assert_eq!(
+        trigger
+            .interacted_message_id
+            .as_ref()
+            .map(Snowflake::as_str),
+        Some("880")
+    );
+    assert!(trigger.triggering_interaction_metadata.is_none());
+
+    let legacy = message.interaction.unwrap();
+    assert_eq!(legacy.id.as_str(), "900");
+    assert_eq!(legacy.kind, 2);
+    assert_eq!(legacy.name, "deploy");
+    assert_eq!(legacy.user.as_ref().unwrap().id.as_str(), "42");
+}
+
+#[test]
+fn command_interaction_resolved_data_is_typed() {
+    let data: CommandInteractionData = serde_json::from_value(json!({
+        "id": "3",
+        "name": "inspect",
+        "type": 2,
+        "target_id": "42",
+        "resolved": {
+            "users": { "42": { "id": "42", "username": "target-user" } },
+            "members": { "42": { "roles": [] } }
+        }
+    }))
+    .unwrap();
+
+    let resolved = data.resolved.unwrap();
+    let target_id = data.target_id.unwrap();
+    assert_eq!(
+        resolved
+            .user(target_id.clone())
+            .map(|user| user.username.as_str()),
+        Some("target-user")
+    );
+    assert!(resolved.member(target_id).is_some());
+    assert!(resolved.role(1u64).is_none());
 }

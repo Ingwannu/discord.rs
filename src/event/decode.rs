@@ -432,7 +432,9 @@ fn decode_scheduled_event(data: Value) -> Result<ScheduledEvent, DiscordError> {
         status: read_optional_u64(&data, "status"),
         entity_type: read_optional_u64(&data, "entity_type"),
         entity_id: read_optional_snowflake(&data, "entity_id"),
-        entity_metadata: data.get("entity_metadata").cloned(),
+        entity_metadata: data
+            .get("entity_metadata")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         user_count: read_optional_u64(&data, "user_count"),
         image: read_optional_string(&data, "image"),
         raw: data,
@@ -540,8 +542,7 @@ fn decode_application_command_permissions_update_event(
         guild_id: read_optional_snowflake(&data, "guild_id"),
         permissions: data
             .get("permissions")
-            .and_then(Value::as_array)
-            .cloned()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default(),
         raw: data,
     }
