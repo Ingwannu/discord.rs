@@ -232,6 +232,63 @@ pub struct GetGuildQuery {
     pub with_counts: Option<bool>,
 }
 
+/// Request body for `POST /guilds` (create guild; bot must be in fewer
+/// than 10 guilds).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CreateGuild {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_level: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_message_notifications: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explicit_content_filter: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roles: Option<Vec<Role>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<Vec<Channel>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub afk_channel_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub afk_timeout: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_channel_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_channel_flags: Option<u64>,
+}
+
+/// Request body for creating a guild from a guild template
+/// (`POST /guilds/templates/{code}`).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct CreateGuildFromTemplate {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+/// Request body and response shape for `POST /guilds/{id}/mfa`.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GuildMfaLevel {
+    pub level: u64,
+}
+
+/// Query options for `GET /guilds/{id}/scheduled-events`.
+#[derive(Clone, Debug, Default)]
+pub struct GuildScheduledEventsQuery {
+    pub with_user_count: Option<bool>,
+}
+
+/// Query options for `GET /guilds/{id}/scheduled-events/{id}/users`.
+#[derive(Clone, Debug, Default)]
+pub struct GuildScheduledEventUsersQuery {
+    pub limit: Option<u64>,
+    pub with_member: Option<bool>,
+    pub before: Option<Snowflake>,
+    pub after: Option<Snowflake>,
+}
+
 /// Request body for adding an OAuth2-authorized user to a guild.
 ///
 /// `access_token` must be a user OAuth2 token granted with the `guilds.join`
@@ -518,6 +575,59 @@ pub struct Guild {
     pub approximate_presence_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub incidents_data: Option<GuildIncidentsData>,
+    // GUILD_CREATE-only fields. Discord sends these once per session on the
+    // initial guild payload; REST guild fetches leave them empty. The
+    // runtime distributes them into the per-entity caches and strips them
+    // from the cached Guild copy to avoid double storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub joined_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<Channel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<Channel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<Member>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voice_states: Vec<VoiceState>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presences: Vec<Presence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub emojis: Vec<crate::types::Emoji>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stickers: Vec<Sticker>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stage_instances: Vec<StageInstance>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub soundboard_sounds: Vec<SoundboardSound>,
+    /// Scheduled events active in the guild, as raw objects; the typed
+    /// [`crate::event::ScheduledEvent`] shape lives in the event layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guild_scheduled_events: Vec<serde_json::Value>,
+}
+
+impl Guild {
+    /// Returns a copy without the bulk GUILD_CREATE collections
+    /// (channels, threads, members, voice states, presences, emojis,
+    /// stickers, stage instances, soundboard sounds, scheduled events).
+    /// The cache stores this stripped form once the collections have been
+    /// distributed into their per-entity stores.
+    pub fn without_create_collections(&self) -> Guild {
+        Guild {
+            channels: Vec::new(),
+            threads: Vec::new(),
+            members: Vec::new(),
+            voice_states: Vec::new(),
+            presences: Vec::new(),
+            emojis: Vec::new(),
+            stickers: Vec::new(),
+            stage_instances: Vec::new(),
+            soundboard_sounds: Vec::new(),
+            guild_scheduled_events: Vec::new(),
+            ..self.clone()
+        }
+    }
 }
 
 /// Active safety incident actions configured for a guild.
@@ -825,7 +935,7 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application_id: Option<Snowflake>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application: Option<serde_json::Value>,
+    pub application: Option<PartialApplication>,
     #[serde(default)]
     pub embeds: Vec<Embed>,
     #[serde(default)]
@@ -851,13 +961,13 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub referenced_message: Option<Box<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interaction_metadata: Option<serde_json::Value>,
+    pub interaction_metadata: Option<MessageInteractionMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interaction: Option<serde_json::Value>,
+    pub interaction: Option<MessageInteraction>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved: Option<serde_json::Value>,
+    pub resolved: Option<ResolvedData>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub components: Option<Vec<serde_json::Value>>,
+    pub components: Option<Vec<MessageComponent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poll: Option<Poll>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -916,7 +1026,7 @@ pub struct MessageSnapshotMessage {
     #[serde(default)]
     pub sticker_items: Vec<StickerItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub components: Option<Vec<serde_json::Value>>,
+    pub components: Option<Vec<MessageComponent>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -937,6 +1047,377 @@ pub struct SharedClientTheme {
     pub base_mix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_theme: Option<u8>,
+}
+
+/// A single component attached to a received message, modal, or snapshot.
+///
+/// Discord components form a tree (action rows, sections, containers, and
+/// labels nest child components). Rather than one struct per component
+/// type, this is deliberately a *wide* struct: [`Self::kind`] carries the
+/// raw component `type` and every known field across all component kinds
+/// is optional (or defaults to empty). The tradeoff: the compiler cannot
+/// guarantee which fields are populated for a given `kind`, but decoding
+/// never fails when Discord ships new component types or fields, and one
+/// type covers the whole tree recursively.
+///
+/// Component `type` values are exposed as associated constants, e.g.
+/// [`MessageComponent::BUTTON`].
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MessageComponent {
+    /// Raw Discord component type (see the associated constants).
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    /// Optional 32-bit identifier for the component within the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<u64>,
+    /// Developer-defined identifier (buttons, selects, text inputs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_id: Option<String>,
+    /// Button or text-input style value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<u64>,
+    /// Button label or label-component text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Description for label and thumbnail components.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Emoji shown on a button.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<Emoji>,
+    /// URL for link-style buttons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// SKU targeted by premium-style buttons.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sku_id: Option<Snowflake>,
+    /// Whether the interactive component is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    /// Whether the component must be filled in a modal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Choices of a string select menu.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<MessageSelectOption>,
+    /// Channel types a channel select menu is limited to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_types: Vec<u8>,
+    /// Placeholder text for selects and text inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// Pre-selected values of auto-populated select menus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_values: Vec<MessageSelectDefaultValue>,
+    /// Minimum number of select values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_values: Option<u64>,
+    /// Maximum number of select values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_values: Option<u64>,
+    /// Minimum text-input length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u64>,
+    /// Maximum text-input length.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u64>,
+    /// Submitted or pre-filled text-input value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// Child components (action rows, sections, containers).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<MessageComponent>,
+    /// Single child component of a label component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component: Option<Box<MessageComponent>>,
+    /// Accessory (thumbnail or button) of a section component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessory: Option<Box<MessageComponent>>,
+    /// Markdown content of a text display component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// Media of a thumbnail component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<UnfurledMediaItem>,
+    /// Media of a file component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<UnfurledMediaItem>,
+    /// File name reported for a file component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// File size in bytes reported for a file component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Items of a media gallery component.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<MessageMediaGalleryItem>,
+    /// Whether the media or container is a spoiler.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spoiler: Option<bool>,
+    /// Whether a separator renders a visual divider.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub divider: Option<bool>,
+    /// Separator spacing size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<u64>,
+    /// Container accent color (RGB integer).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent_color: Option<u64>,
+}
+
+impl MessageComponent {
+    /// Component type for action rows.
+    pub const ACTION_ROW: u8 = 1;
+    /// Component type for buttons.
+    pub const BUTTON: u8 = 2;
+    /// Component type for string select menus.
+    pub const STRING_SELECT: u8 = 3;
+    /// Component type for text inputs.
+    pub const TEXT_INPUT: u8 = 4;
+    /// Component type for user select menus.
+    pub const USER_SELECT: u8 = 5;
+    /// Component type for role select menus.
+    pub const ROLE_SELECT: u8 = 6;
+    /// Component type for mentionable select menus.
+    pub const MENTIONABLE_SELECT: u8 = 7;
+    /// Component type for channel select menus.
+    pub const CHANNEL_SELECT: u8 = 8;
+    /// Component type for sections.
+    pub const SECTION: u8 = 9;
+    /// Component type for text displays.
+    pub const TEXT_DISPLAY: u8 = 10;
+    /// Component type for thumbnails.
+    pub const THUMBNAIL: u8 = 11;
+    /// Component type for media galleries.
+    pub const MEDIA_GALLERY: u8 = 12;
+    /// Component type for file attachments.
+    pub const FILE: u8 = 13;
+    /// Component type for separators.
+    pub const SEPARATOR: u8 = 14;
+    /// Component type for containers.
+    pub const CONTAINER: u8 = 17;
+    /// Component type for labels.
+    pub const LABEL: u8 = 18;
+
+    /// Depth-first iterator over this component and every nested child
+    /// (child `components`, label `component`, and section `accessory`).
+    pub fn iter(&self) -> MessageComponentIter<'_> {
+        MessageComponentIter { stack: vec![self] }
+    }
+}
+
+/// Depth-first iterator returned by [`MessageComponent::iter`].
+pub struct MessageComponentIter<'a> {
+    stack: Vec<&'a MessageComponent>,
+}
+
+impl<'a> Iterator for MessageComponentIter<'a> {
+    type Item = &'a MessageComponent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let component = self.stack.pop()?;
+        if let Some(accessory) = component.accessory.as_deref() {
+            self.stack.push(accessory);
+        }
+        if let Some(child) = component.component.as_deref() {
+            self.stack.push(child);
+        }
+        for child in component.components.iter().rev() {
+            self.stack.push(child);
+        }
+        Some(component)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Option of a string select menu on a received message component.
+pub struct MessageSelectOption {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji: Option<Emoji>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Default value of an auto-populated select menu component.
+pub struct MessageSelectDefaultValue {
+    #[serde(default)]
+    pub id: Snowflake,
+    /// Target type: `"user"`, `"role"`, or `"channel"`.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Media reference attached to a Components V2 component.
+pub struct UnfurledMediaItem {
+    #[serde(default)]
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment_id: Option<Snowflake>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Single item of a media gallery component on a received message.
+pub struct MessageMediaGalleryItem {
+    #[serde(default)]
+    pub media: UnfurledMediaItem,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spoiler: Option<bool>,
+}
+
+/// Partial application object attached to messages sent by an app
+/// (e.g. Rich Presence or activity invites).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PartialApplication {
+    #[serde(default)]
+    pub id: Snowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<User>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_sku_id: Option<Snowflake>,
+}
+
+/// Metadata about the interaction that caused a message
+/// (`Message::interaction_metadata`).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MessageInteractionMetadata {
+    /// ID of the triggering interaction.
+    #[serde(default)]
+    pub id: Snowflake,
+    /// Raw Discord interaction type of the triggering interaction.
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    /// User who triggered the interaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<User>,
+    /// IDs of the installation contexts that authorized the interaction,
+    /// keyed by raw integration type (`"0"` guild install, `"1"` user
+    /// install).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub authorizing_integration_owners: HashMap<String, Snowflake>,
+    /// ID of the original response message (follow-up messages only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_response_message_id: Option<Snowflake>,
+    /// User targeted by a user context-menu command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_user: Option<User>,
+    /// Message targeted by a message context-menu command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_message_id: Option<Snowflake>,
+    /// Message containing the component that was interacted with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interacted_message_id: Option<Snowflake>,
+    /// Metadata of the interaction that spawned the modal, for modal
+    /// submit interactions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triggering_interaction_metadata: Option<Box<MessageInteractionMetadata>>,
+}
+
+/// Deprecated Discord `MessageInteraction` object still delivered on some
+/// payloads (`Message::interaction`). Prefer
+/// [`Message::interaction_metadata`].
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct MessageInteraction {
+    #[serde(default)]
+    pub id: Snowflake,
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<User>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member: Option<Member>,
+}
+
+/// Resolved objects referenced by interaction options, components, or a
+/// forwarded message, keyed by snowflake ID. Every map defaults to empty
+/// when Discord omits it.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ResolvedData {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub users: HashMap<Snowflake, User>,
+    /// Partial members (no `user`, `deaf`, or `mute` fields).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub members: HashMap<Snowflake, Member>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub roles: HashMap<Snowflake, Role>,
+    /// Partial channels (id, name, type, permissions, and thread fields).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub channels: HashMap<Snowflake, Channel>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub messages: HashMap<Snowflake, Message>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub attachments: HashMap<Snowflake, Attachment>,
+}
+
+impl ResolvedData {
+    /// Returns true when every resolved map is empty.
+    pub fn is_empty(&self) -> bool {
+        self.users.is_empty()
+            && self.members.is_empty()
+            && self.roles.is_empty()
+            && self.channels.is_empty()
+            && self.messages.is_empty()
+            && self.attachments.is_empty()
+    }
+
+    /// Looks up a resolved user by ID.
+    pub fn user(&self, id: impl Into<Snowflake>) -> Option<&User> {
+        self.users.get(&id.into())
+    }
+
+    /// Looks up a resolved partial member by user ID.
+    pub fn member(&self, id: impl Into<Snowflake>) -> Option<&Member> {
+        self.members.get(&id.into())
+    }
+
+    /// Looks up a resolved role by ID.
+    pub fn role(&self, id: impl Into<Snowflake>) -> Option<&Role> {
+        self.roles.get(&id.into())
+    }
+
+    /// Looks up a resolved partial channel by ID.
+    pub fn channel(&self, id: impl Into<Snowflake>) -> Option<&Channel> {
+        self.channels.get(&id.into())
+    }
+
+    /// Looks up a resolved message by ID.
+    pub fn message(&self, id: impl Into<Snowflake>) -> Option<&Message> {
+        self.messages.get(&id.into())
+    }
+
+    /// Looks up a resolved attachment by ID.
+    pub fn attachment(&self, id: impl Into<Snowflake>) -> Option<&Attachment> {
+        self.attachments.get(&id.into())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1137,6 +1618,18 @@ pub struct ChannelMention {
     pub name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+/// Message reference type: distinguishes replies from forwards.
+pub struct MessageReferenceType(pub u8);
+
+impl MessageReferenceType {
+    /// A standard reply or crosspost reference.
+    pub const DEFAULT: Self = Self(0);
+    /// A forwarded message; the target message is copied as a snapshot.
+    pub const FORWARD: Self = Self(1);
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MessageReference`.
 pub struct MessageReference {
@@ -1150,6 +1643,28 @@ pub struct MessageReference {
     pub guild_id: Option<Snowflake>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_if_not_exists: Option<bool>,
+}
+
+impl MessageReference {
+    /// Builds a reply reference to a message in the same channel.
+    pub fn reply(message_id: impl Into<Snowflake>) -> Self {
+        Self {
+            kind: Some(MessageReferenceType::DEFAULT.0),
+            message_id: Some(message_id.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Builds a forward reference; Discord attaches the referenced message
+    /// to the new message as a `message_snapshots` entry.
+    pub fn forward(channel_id: impl Into<Snowflake>, message_id: impl Into<Snowflake>) -> Self {
+        Self {
+            kind: Some(MessageReferenceType::FORWARD.0),
+            channel_id: Some(channel_id.into()),
+            message_id: Some(message_id.into()),
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1762,6 +2277,111 @@ pub struct InteractionContextData {
     pub context: Option<InteractionContextType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorizing_integration_owners: Option<HashMap<String, Snowflake>>,
+    /// Shared response-state handle. Created once during parsing so every
+    /// clone of the same interaction observes the same acknowledgement state.
+    #[serde(skip)]
+    pub response_state: InteractionResponseState,
+}
+
+impl InteractionContextData {
+    /// Returns true when an initial response (reply, message update, modal,
+    /// or an edit of a deferred reply) has been sent for this interaction.
+    pub fn is_replied(&self) -> bool {
+        self.response_state.is_replied()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.response_state.is_deferred()
+    }
+
+    /// Returns true when the interaction was acknowledged in any way
+    /// (deferred or replied).
+    pub fn is_acknowledged(&self) -> bool {
+        self.response_state.is_acknowledged()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+/// Shared, atomically updated response state for one interaction.
+///
+/// Mirrors discord.js's `deferred`/`replied` flags with a single ladder:
+/// `0` = unacknowledged, `1` = deferred, `2` = replied. The handle is an
+/// `Arc`, so all clones of an interaction share one state and acknowledging
+/// through any clone is visible to the rest.
+pub struct InteractionResponseState(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl InteractionResponseState {
+    pub(crate) const UNACKNOWLEDGED: u8 = 0;
+    pub(crate) const DEFERRED: u8 = 1;
+    pub(crate) const REPLIED: u8 = 2;
+
+    /// Creates a fresh, unacknowledged response state.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.load() == Self::DEFERRED
+    }
+
+    /// Returns true when an initial response (reply, message update, modal,
+    /// or an edit of a deferred reply) has been sent.
+    pub fn is_replied(&self) -> bool {
+        self.load() == Self::REPLIED
+    }
+
+    /// Returns true when the interaction was acknowledged in any way.
+    pub fn is_acknowledged(&self) -> bool {
+        self.load() != Self::UNACKNOWLEDGED
+    }
+
+    fn load(&self) -> u8 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Atomically claims the initial-response slot; exactly one caller wins
+    /// when several race, mirroring discord.js's "already acknowledged" error.
+    pub(crate) fn acknowledge(&self, next: u8) -> Result<(), crate::error::DiscordError> {
+        self.0
+            .compare_exchange(
+                Self::UNACKNOWLEDGED,
+                next,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .map(|_| ())
+            .map_err(|_| crate::error::DiscordError::model("interaction was already acknowledged"))
+    }
+
+    /// Rolls back a claim made by [`Self::acknowledge`] after the HTTP call
+    /// failed, so the caller may retry the initial response.
+    pub(crate) fn revert(&self, from: u8) {
+        let _ = self.0.compare_exchange(
+            from,
+            Self::UNACKNOWLEDGED,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Errors when no initial response has been sent yet.
+    pub(crate) fn require_acknowledged(&self) -> Result<(), crate::error::DiscordError> {
+        if self.is_acknowledged() {
+            Ok(())
+        } else {
+            Err(crate::error::DiscordError::model(
+                "interaction has not been acknowledged",
+            ))
+        }
+    }
+
+    /// Promotes the state to replied (e.g. after editing a deferred reply).
+    pub(crate) fn mark_replied(&self) {
+        self.0
+            .store(Self::REPLIED, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1796,7 +2416,7 @@ pub struct CommandInteractionData {
     #[serde(default)]
     pub options: Vec<CommandInteractionOption>,
     #[serde(default)]
-    pub resolved: Option<serde_json::Value>,
+    pub resolved: Option<ResolvedData>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<Snowflake>,
 }
@@ -1912,6 +2532,23 @@ impl Interaction {
     pub fn application_id(&self) -> &Snowflake {
         &self.context().application_id
     }
+
+    /// Returns true when an initial response has been sent for this
+    /// interaction.
+    pub fn is_replied(&self) -> bool {
+        self.context().is_replied()
+    }
+
+    /// Returns true when the interaction was deferred and not yet replied to.
+    pub fn is_deferred(&self) -> bool {
+        self.context().is_deferred()
+    }
+
+    /// Returns true when the interaction was acknowledged in any way
+    /// (deferred or replied).
+    pub fn is_acknowledged(&self) -> bool {
+        self.context().is_acknowledged()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1921,6 +2558,43 @@ pub struct InteractionCallbackResponse {
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
+}
+
+/// Interaction object returned inside an interaction callback result
+/// (`POST /interactions/{id}/{token}/callback?with_response=true`).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct InteractionCallbackInteraction {
+    pub id: Snowflake,
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_message_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_message_loading: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_message_ephemeral: Option<bool>,
+}
+
+/// Resource created by an interaction response, returned when
+/// `with_response=true` is passed to the callback endpoint.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct InteractionCallbackResource {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_instance: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<Message>,
+}
+
+/// Full interaction callback result (`with_response=true`).
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct InteractionCallbackResult {
+    pub interaction: InteractionCallbackInteraction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<InteractionCallbackResource>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -2644,12 +3318,27 @@ pub struct ModifyGuildOnboarding {
 pub struct Presence {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<Snowflake>,
+    /// Partial user object carried by gateway presence payloads
+    /// (GUILD_CREATE `presences[]` and GUILD_MEMBERS_CHUNK `presences[]`
+    /// identify the user this way instead of `user_id`). Only `id` is
+    /// guaranteed by Discord.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<PresenceUser>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activities: Option<Vec<Activity>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_status: Option<ClientStatus>,
+}
+
+/// Partial user object inside gateway presence payloads; Discord only
+/// guarantees `id` here.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PresenceUser {
+    pub id: Snowflake,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]

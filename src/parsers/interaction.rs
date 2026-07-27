@@ -4,8 +4,8 @@ use crate::error::DiscordError;
 use crate::model::{
     AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
     ComponentInteraction, ComponentInteractionData, Interaction, InteractionContextData,
-    MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction, Snowflake,
-    UserContextMenuInteraction,
+    InteractionResponseState, MessageContextMenuInteraction, ModalSubmitInteraction,
+    PingInteraction, Snowflake, UserContextMenuInteraction,
 };
 use crate::types::invalid_data_error;
 
@@ -231,6 +231,7 @@ fn parse_typed_interaction_context(raw: &Value) -> Result<InteractionContextData
             .cloned()
             .map(serde_json::from_value)
             .transpose()?,
+        response_state: InteractionResponseState::new(),
     })
 }
 
@@ -247,7 +248,11 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
         name: optional_string_field(&data, "name"),
         kind: data.get("type").and_then(value_to_u8),
         options,
-        resolved: data.get("resolved").cloned(),
+        resolved: data
+            .get("resolved")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?,
         target_id: optional_string_field(&data, "target_id").map(Snowflake::from),
     })
 }
@@ -651,8 +656,13 @@ mod tests {
                 assert_eq!(command.data.kind, Some(1));
                 assert!(command.data.options.is_empty());
                 assert_eq!(
-                    command.data.resolved.unwrap()["users"]["42"]["username"],
-                    json!("resolved-user")
+                    command
+                        .data
+                        .resolved
+                        .unwrap()
+                        .user(42u64)
+                        .map(|user| user.username.as_str()),
+                    Some("resolved-user")
                 );
             }
             other => panic!("unexpected chat input interaction: {other:?}"),
@@ -731,6 +741,42 @@ mod tests {
             }
             other => panic!("unexpected unknown interaction: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_interaction_creates_a_shared_unacknowledged_response_state() {
+        let interaction = parse_interaction(&json!({
+            "id": "1",
+            "application_id": "2",
+            "token": "token",
+            "type": 2,
+            "data": {
+                "id": "3",
+                "name": "deploy",
+                "type": 1
+            }
+        }))
+        .unwrap();
+
+        assert!(!interaction.is_acknowledged());
+        assert!(!interaction.is_deferred());
+        assert!(!interaction.is_replied());
+
+        // Clones (e.g. one handed to a handler, one kept by a collector)
+        // must observe the same acknowledgement state.
+        let clone = interaction.clone();
+        interaction
+            .context()
+            .response_state
+            .acknowledge(crate::model::InteractionResponseState::DEFERRED)
+            .unwrap();
+        assert!(clone.is_acknowledged());
+        assert!(clone.is_deferred());
+        assert!(clone
+            .context()
+            .response_state
+            .acknowledge(crate::model::InteractionResponseState::REPLIED)
+            .is_err());
     }
 
     #[test]

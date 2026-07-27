@@ -10,23 +10,23 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 ```
 
 필요한 런타임 기능만 켜는 것을 권장합니다.
 
 ```toml
 # REST, 빌더, 타입 모델만 사용할 때
-discordrs = "2.0.2"
+discordrs = "2.2.0"
 
 # Interactions Endpoint와 앱 프레임워크
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.2.0", features = ["interactions"] }
 
 # Voice receive와 Opus PCM decode
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # DAVE/MLS hook
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ```
 
 ## 최소 Typed Gateway Bot
@@ -77,3 +77,4 @@ cargo run
 - [아키텍처](architecture.md) 검토
 - [명령 API](../../docs/api/commands.md) 살펴보기
 - Webhook Events, Lobby, Poll, Subscription, Soundboard, Thread, Forum, Integration, Voice receive 워크플로에서는 가능한 한 raw JSON보다 타입드 API를 우선 사용하기
+- 2.2.0 신규: `use discordrs::response::InteractionResponder;` 임포트 후 `interaction.reply(&ctx.http, "안녕하세요")`로 응답하고, `message.reply(...)`, `channel.send(...)`, `user.dm(...)`을 타입드 모델에서 바로 호출하기 — 자세한 내용은 [사용 가이드](usage-guide.md) 참고

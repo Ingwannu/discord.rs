@@ -1,6 +1,9 @@
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::command::validation;
+use crate::error::DiscordError;
+
 /// Builder for Discord rich embeds, paralleling discord.js's `EmbedBuilder`.
 ///
 /// # Example
@@ -148,6 +151,65 @@ impl EmbedBuilder {
     pub fn timestamp_iso(mut self, iso: impl Into<String>) -> Self {
         self.timestamp = Some(iso.into());
         self
+    }
+
+    /// Validates the embed against Discord's limits without consuming the
+    /// builder: title <= 256, description <= 4096, up to 25 fields (name
+    /// <= 256, value <= 1024), footer text <= 2048, author name <= 256, and
+    /// a combined total of at most 6000 characters.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        let mut total = 0usize;
+
+        if let Some(title) = &self.title {
+            validation::ensure_max_len("embed title", title, 256)?;
+            total += validation::char_count(title);
+        }
+        if let Some(description) = &self.description {
+            validation::ensure_max_len("embed description", description, 4096)?;
+            total += validation::char_count(description);
+        }
+        validation::ensure_max_count("embed fields", self.fields.len(), 25)?;
+        for (index, field) in self.fields.iter().enumerate() {
+            validation::ensure_len(&format!("embed field {index} name"), &field.name, 1, 256)?;
+            validation::ensure_len(
+                &format!("embed field {index} value"),
+                &field.value,
+                1,
+                1024,
+            )?;
+            total += validation::char_count(&field.name) + validation::char_count(&field.value);
+        }
+        if let Some(text) = self
+            .footer
+            .as_ref()
+            .and_then(|footer| footer.get("text"))
+            .and_then(Value::as_str)
+        {
+            validation::ensure_max_len("embed footer text", text, 2048)?;
+            total += validation::char_count(text);
+        }
+        if let Some(name) = self
+            .author
+            .as_ref()
+            .and_then(|author| author.get("name"))
+            .and_then(Value::as_str)
+        {
+            validation::ensure_max_len("embed author name", name, 256)?;
+            total += validation::char_count(name);
+        }
+        if total > 6000 {
+            return Err(DiscordError::model(format!(
+                "embed total length must be at most 6000 characters, got {total}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 
     /// Build the embed into a serde_json::Value for use in API requests.
@@ -460,6 +522,100 @@ mod tests {
                 .and_then(|value| value.get("name"))
                 .and_then(|value| value.as_str()),
             Some("discordrs")
+        );
+    }
+
+    fn expect_model_error<T: std::fmt::Debug>(
+        result: Result<T, crate::error::DiscordError>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("expected validation failure").to_string();
+        assert!(
+            err.contains(needle),
+            "error message {err:?} should contain {needle:?}"
+        );
+    }
+
+    #[test]
+    fn embed_try_build_matches_build_for_valid_embed() {
+        let make = || {
+            EmbedBuilder::new()
+                .title("Release")
+                .description("Shipped")
+                .field("Status", "Green", true)
+                .author("discordrs", None, None)
+                .footer("Footer", None)
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid embed"));
+    }
+
+    #[test]
+    fn embed_validate_counts_codepoints_not_bytes() {
+        // 256 codepoints but 512 UTF-8 bytes: must pass.
+        EmbedBuilder::new()
+            .title("é".repeat(256))
+            .validate()
+            .expect("codepoint-length title should be valid");
+    }
+
+    #[test]
+    fn embed_try_build_rejects_oversized_parts() {
+        expect_model_error(
+            EmbedBuilder::new().title("t".repeat(257)).try_build(),
+            "embed title must be at most 256 characters, got 257",
+        );
+        expect_model_error(
+            EmbedBuilder::new().description("d".repeat(4097)).try_build(),
+            "embed description must be at most 4096 characters, got 4097",
+        );
+        expect_model_error(
+            EmbedBuilder::new()
+                .field("n".repeat(257), "value", false)
+                .try_build(),
+            "embed field 0 name must be 1-256 characters, got 257",
+        );
+        expect_model_error(
+            EmbedBuilder::new().field("name", "", false).try_build(),
+            "embed field 0 value must be 1-1024 characters, got 0",
+        );
+        expect_model_error(
+            EmbedBuilder::new()
+                .field("name", "v".repeat(1025), false)
+                .try_build(),
+            "embed field 0 value must be 1-1024 characters, got 1025",
+        );
+        expect_model_error(
+            EmbedBuilder::new().footer("f".repeat(2049), None).try_build(),
+            "embed footer text must be at most 2048 characters, got 2049",
+        );
+        expect_model_error(
+            EmbedBuilder::new()
+                .author("a".repeat(257), None, None)
+                .try_build(),
+            "embed author name must be at most 256 characters, got 257",
+        );
+
+        let mut overfull = EmbedBuilder::new();
+        for index in 0..26 {
+            overfull = overfull.field(format!("f{index}"), "v", false);
+        }
+        expect_model_error(
+            overfull.try_build(),
+            "embed fields must contain at most 25 items, got 26",
+        );
+    }
+
+    #[test]
+    fn embed_try_build_rejects_total_length_over_6000() {
+        // Each part is individually valid, but the sum exceeds 6000.
+        let embed = EmbedBuilder::new()
+            .description("d".repeat(4000))
+            .field("a", "v".repeat(1024), false)
+            .field("b", "v".repeat(1024), false)
+            .field("c", "v".repeat(1024), false);
+        expect_model_error(
+            embed.try_build(),
+            "embed total length must be at most 6000 characters, got 7075",
         );
     }
 

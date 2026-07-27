@@ -320,6 +320,8 @@ impl BitFieldFlags for IntentFlags {
         (1 << 16, "GUILD_SCHEDULED_EVENTS"),
         (1 << 20, "AUTO_MODERATION_CONFIGURATION"),
         (1 << 21, "AUTO_MODERATION_EXECUTION"),
+        (1 << 24, "GUILD_MESSAGE_POLLS"),
+        (1 << 25, "DIRECT_MESSAGE_POLLS"),
     ];
 }
 
@@ -338,6 +340,9 @@ pub mod gateway_intents {
     pub const GUILD_MODERATION: BitField<IntentFlags> = BitField::from_bits(1 << 2);
     /// Bit flag constant for `GUILD_EMOJIS_AND_STICKERS`.
     pub const GUILD_EMOJIS_AND_STICKERS: BitField<IntentFlags> = BitField::from_bits(1 << 3);
+    /// Bit flag constant for `GUILD_EXPRESSIONS` (current Discord name for
+    /// bit 3, covering emojis, stickers, and soundboard sounds).
+    pub const GUILD_EXPRESSIONS: BitField<IntentFlags> = BitField::from_bits(1 << 3);
     /// Bit flag constant for `GUILD_INTEGRATIONS`.
     pub const GUILD_INTEGRATIONS: BitField<IntentFlags> = BitField::from_bits(1 << 4);
     /// Bit flag constant for `GUILD_WEBHOOKS`.
@@ -368,6 +373,10 @@ pub mod gateway_intents {
     pub const AUTO_MODERATION_CONFIGURATION: BitField<IntentFlags> = BitField::from_bits(1 << 20);
     /// Bit flag constant for `AUTO_MODERATION_EXECUTION`.
     pub const AUTO_MODERATION_EXECUTION: BitField<IntentFlags> = BitField::from_bits(1 << 21);
+    /// Bit flag constant for `GUILD_MESSAGE_POLLS`.
+    pub const GUILD_MESSAGE_POLLS: BitField<IntentFlags> = BitField::from_bits(1 << 24);
+    /// Bit flag constant for `DIRECT_MESSAGE_POLLS`.
+    pub const DIRECT_MESSAGE_POLLS: BitField<IntentFlags> = BitField::from_bits(1 << 25);
 
     /// All non-privileged intents (safe for default use).
     pub const NON_PRIVILEGED: BitField<IntentFlags> = BitField::from_bits(
@@ -386,7 +395,9 @@ pub mod gateway_intents {
             | (1 << 14)
             | (1 << 16)
             | (1 << 20)
-            | (1 << 21),
+            | (1 << 21)
+            | (1 << 24)
+            | (1 << 25),
     );
 
     /// All privileged intents (requires enabling in Developer Portal).
@@ -639,6 +650,27 @@ mod tests {
     }
 
     type TestBitField = BitField<TestFlags>;
+
+    #[test]
+    fn poll_and_expression_intents_are_defined_with_documented_bits() {
+        use super::gateway_intents;
+
+        assert_eq!(gateway_intents::GUILD_MESSAGE_POLLS.bits(), 1 << 24);
+        assert_eq!(gateway_intents::DIRECT_MESSAGE_POLLS.bits(), 1 << 25);
+        assert_eq!(
+            gateway_intents::GUILD_EXPRESSIONS.bits(),
+            gateway_intents::GUILD_EMOJIS_AND_STICKERS.bits()
+        );
+        assert!(gateway_intents::NON_PRIVILEGED.contains(1 << 24));
+        assert!(gateway_intents::NON_PRIVILEGED.contains(1 << 25));
+        assert!(!gateway_intents::PRIVILEGED.contains(1 << 24));
+
+        let named = super::Intents::from_bits((1 << 24) | (1 << 25));
+        assert_eq!(
+            named.flag_names(),
+            vec!["GUILD_MESSAGE_POLLS", "DIRECT_MESSAGE_POLLS"]
+        );
+    }
 
     #[test]
     fn constructors_and_basic_queries_preserve_bits() {

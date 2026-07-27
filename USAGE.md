@@ -1,6 +1,6 @@
 # discord.rs Usage
 
-`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, an HTTP application framework, and voice runtime foundations.
+`discord.rs` is a standalone Rust Discord framework with typed models, typed gateway events, command builders, Components V2 builders, REST helpers, cache managers, collectors, sharding control, an HTTP application framework, and voice runtime foundations. `2.2.0` adds the discord.js-style ergonomics layer: `interaction.reply(...)` responders, entity convenience methods, multi-process sharding, and an audio playback pipeline.
 
 Brand name: discord.rs. The crates.io package name and Rust import path remain `discordrs`.
 
@@ -11,37 +11,37 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "2.0.2"
+discordrs = "2.2.0"
 
 # Gateway runtime
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.2.0", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.2", default-features = false }
+discordrs = { version = "2.2.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.2.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.2.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hooks
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "2.0.2", features = ["gateway", "voice"] }
+discordrs = { version = "2.2.0", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.2.0", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
@@ -116,6 +116,35 @@ async fn main() -> Result<(), discordrs::DiscordError> {
     Ok(())
 }
 ```
+
+## 2.5 Initial Presence, Dispatch Mode, and Poll Intents
+
+`ClientBuilder` can deliver an initial presence inside IDENTIFY, so the bot connects with the desired status instead of updating it after READY, and can switch event dispatch from the default serial mode to concurrent per-event tasks:
+
+```rust
+use discordrs::{gateway_intents, Client, EventDispatchMode, EventHandler, UpdatePresence};
+
+async fn start_bot(token: &str, handler: impl EventHandler) -> Result<(), discordrs::DiscordError> {
+    Client::builder(
+        token,
+        gateway_intents::GUILDS
+            | gateway_intents::GUILD_MESSAGES
+            | gateway_intents::GUILD_MESSAGE_POLLS
+            | gateway_intents::DIRECT_MESSAGE_POLLS,
+    )
+    .event_handler(handler)
+    .presence(UpdatePresence::online_with_activity("Handling tickets"))
+    .event_dispatch(EventDispatchMode::Concurrent)
+    .start()
+    .await?;
+
+    Ok(())
+}
+```
+
+- `EventDispatchMode::Serial` (default) handles events on a shard one at a time, in gateway order.
+- `EventDispatchMode::Concurrent` runs each handler call in its own task. Cache and collector updates still happen in gateway order before dispatch, but one slow handler no longer stalls the shard.
+- `gateway_intents::GUILD_MESSAGE_POLLS` (`1 << 24`) and `gateway_intents::DIRECT_MESSAGE_POLLS` (`1 << 25`) enable `MESSAGE_POLL_VOTE_*` events and are included in `gateway_intents::NON_PRIVILEGED`. `gateway_intents::GUILD_EXPRESSIONS` is the current Discord name for bit 3.
 
 ## 3. Create a `Context` Outside the Runtime
 
@@ -720,6 +749,107 @@ async fn channel_admin(
 }
 ```
 
+## 5.7 Reply and Forward Message References
+
+`MessageReference` has typed constructors for the two reference kinds (`MessageReferenceType::DEFAULT` and `MessageReferenceType::FORWARD`), and `forward_message(...)` forwards in one call — the equivalent of discord.js's `message.forward(channel)`:
+
+```rust
+use discordrs::{CreateMessage, DiscordHttpClient, MessageReference};
+
+async fn reply_and_forward(
+    http: &DiscordHttpClient,
+    channel_id: u64,
+    message_id: u64,
+    announce_channel_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    // Reply to a message in the same channel.
+    http.create_message(
+        channel_id,
+        &CreateMessage {
+            content: Some("On it!".to_string()),
+            message_reference: Some(MessageReference::reply(message_id)),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    // Forward the message into another channel; Discord attaches it as a
+    // `message_snapshots` entry on the new message.
+    let forwarded = http
+        .forward_message(channel_id, message_id, announce_channel_id)
+        .await?;
+    println!("forwarded as {}", forwarded.id);
+
+    Ok(())
+}
+```
+
+## 5.8 Entity Convenience Methods (`model_ext`)
+
+`discordrs::model_ext` adds discord.js-style methods directly to the typed models (`Message`, `Member`, `Guild`, `Channel`, `Role`, `User`). They are inherent impls, so no extra trait import is needed — just call them on the model values you already have:
+
+```rust
+use discordrs::{CreateGuildChannel, Guild, Member, Message, RestClient};
+
+async fn entity_tour(
+    http: &RestClient,
+    message: &Message,
+    member: &Member,
+    guild: &Guild,
+) -> Result<(), discordrs::DiscordError> {
+    // Message: reply, react, pin, thread, forward, jump link
+    let reply = message.reply(http, "On it!").await?;
+    reply.react(http, "✅").await?;
+    reply.pin(http).await?;
+    let thread = message.start_thread(http, "follow-up").await?;
+    println!("thread {} — jump link {}", thread.id, message.link());
+    message.forward_to(http, 123456789012345678u64).await?;
+
+    // Member: moderation with an explicit guild id
+    member
+        .timeout(http, guild.id.clone(), "2026-08-01T00:00:00+00:00")
+        .await?;
+    member
+        .add_role(http, guild.id.clone(), 987654321098765432u64)
+        .await?;
+    member
+        .kick_with_reason(http, guild.id.clone(), "spam")
+        .await?;
+    println!("moderated {}", member.display_name());
+
+    // Guild: channels, members, bans, CDN URLs
+    let channel = guild
+        .create_channel(
+            http,
+            &CreateGuildChannel {
+                name: "rules".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
+    channel.send(http, "Welcome!").await?;
+    println!(
+        "{} is text-based: {} — guild icon {:?}",
+        channel.mention(),
+        channel.is_text_based(),
+        guild.icon_url(Some(256)),
+    );
+    let fetched = guild.fetch_member(http, 42u64).await?;
+    guild.ban(http, 42u64, Some(3600)).await?;
+    println!("banned {}", fetched.display_name());
+
+    // User: DMs, tags, avatars
+    if let Some(author) = &message.author {
+        author.dm(http, "thanks for the report").await?;
+        println!("{} — {}", author.tag(), author.display_avatar_url(Some(128)));
+    }
+
+    Ok(())
+}
+```
+
+Other helpers: `message.edit/edit_with/delete/unreact/unpin/crosspost`, `member.ban/ban_with_reason/remove_timeout/remove_role/edit`, `guild.edit/delete/leave/fetch_channels/fetch_roles/create_role/unban/kick/set_mfa_level/banner_url`, `channel.send_message/edit/delete/create_invite/is_voice_based/is_thread`, `role.edit/delete/mention`, `user.create_dm/mention/avatar_url/default_avatar_url`. Pass an `http.with_reason(...)` clone when a call should record an audit-log reason.
+
 ## 6. Reply to Gateway Interactions Without Raw JSON
 
 `Context` now exposes direct gateway control helpers, and the helpers module exposes typed response helpers.
@@ -754,6 +884,119 @@ Other typed helper entry points:
 - `respond_with_message(...)`
 - `update_interaction_message(...)`
 - `respond_with_modal_typed(...)`
+
+## 6.1 discord.js-Style Interaction Responses (`InteractionResponder`)
+
+The `discordrs::response::InteractionResponder` trait puts `reply`, `defer`, `edit_reply`, `follow_up`, and friends directly on every responding-capable interaction variant (`ChatInputCommandInteraction`, `UserContextMenuInteraction`, `MessageContextMenuInteraction`, `ComponentInteraction`, `ModalSubmitInteraction`). Import the trait so the methods resolve:
+
+```rust
+use discordrs::response::{AutocompleteChoice, InteractionResponder};
+use discordrs::{
+    text_input_style, Context, Event, Interaction, ModalBuilder, TextInputBuilder,
+};
+
+async fn handle(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
+    let Event::InteractionCreate(event) = event else {
+        return Ok(());
+    };
+
+    match event.interaction {
+        Interaction::ChatInputCommand(command) => match command.data.name.as_deref() {
+            // Initial reply (type 4). &str, String, MessageBuilder, and
+            // CreateMessage all convert into the reply data.
+            Some("hello") => command.reply(&ctx.http, "hi").await?,
+
+            // Ephemeral initial reply.
+            Some("secret") => {
+                command
+                    .reply_ephemeral(&ctx.http, "only you can see this")
+                    .await?
+            }
+
+            // Defer (type 5), then edit; a deferred interaction promotes to
+            // replied on edit_reply, and follow_up returns the new message.
+            Some("slow") => {
+                command.defer(&ctx.http).await?;
+                // ... long-running work ...
+                command.edit_reply(&ctx.http, "done!").await?;
+                let followup = command.follow_up(&ctx.http, "extra detail").await?;
+                println!("follow-up message {}", followup.id);
+            }
+
+            // Open a modal (type 9).
+            Some("form") => {
+                let modal = ModalBuilder::new("feedback", "Feedback").add_text_input(
+                    TextInputBuilder::new(
+                        "feedback_text",
+                        "Your feedback",
+                        text_input_style::PARAGRAPH,
+                    ),
+                );
+                command.show_modal(&ctx.http, modal).await?;
+            }
+            _ => {}
+        },
+
+        // Components get the type 6/7 callbacks too.
+        Interaction::Component(component) => {
+            component.defer_update(&ctx.http).await?;
+            // or: component.update_message(&ctx.http, "updated!").await?;
+        }
+
+        // Autocomplete responds with typed choices (type 8).
+        Interaction::Autocomplete(autocomplete) => {
+            autocomplete
+                .respond_autocomplete(&ctx.http, vec![AutocompleteChoice::new("First", "first")])
+                .await?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+The acknowledgement state is shared atomically across clones of one interaction (it is created at parse time). That enforces the discord.js contract locally, without an HTTP round trip:
+
+- a second `reply(...)` on an already-acknowledged interaction fails with an "already acknowledged" `DiscordError::Model`
+- `follow_up(...)` before any acknowledgement fails locally
+- the state slot is claimed atomically before the HTTP call and rolled back if the transport fails, so a failed reply can be retried
+- `is_replied()`, `is_deferred()`, and `is_acknowledged()` report the current state
+
+`reply_with_result(...)` returns the typed `InteractionCallbackResult` (the `with_response=true` flow), `fetch_reply`/`delete_reply` manage the original response, `defer_ephemeral` defers with an ephemeral "thinking" state, and `discordrs::response::InteractionReplyData` supports `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `ephemeral()` for structured replies.
+
+## 6.5 Interaction Callbacks with `with_response=true`
+
+`create_interaction_response_with_result(...)` sends the callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource, mirroring discord.js's `withResponse: true`. Use it when you need the created message (or activity instance) immediately instead of fetching it afterwards:
+
+```rust
+use discordrs::{DiscordHttpClient, InteractionCallbackResponse};
+
+async fn respond_and_inspect(
+    http: &DiscordHttpClient,
+    interaction_id: u64,
+    interaction_token: &str,
+) -> Result<(), discordrs::DiscordError> {
+    let result = http
+        .create_interaction_response_with_result(
+            interaction_id,
+            interaction_token,
+            &InteractionCallbackResponse {
+                kind: 4,
+                data: Some(serde_json::json!({ "content": "Ticket created" })),
+            },
+        )
+        .await?;
+
+    println!("callback interaction: {}", result.interaction.id);
+    if let Some(message) = result.resource.and_then(|resource| resource.message) {
+        println!("created message: {}", message.id);
+    }
+
+    Ok(())
+}
+```
+
+`create_interaction_response_typed(...)` remains the fire-and-forget variant when you do not need the callback resource.
 
 ## 7. Build a Typed Interactions Endpoint
 
@@ -864,6 +1107,28 @@ let client = Client::builder("bot-token", gateway_intents::GUILD_MESSAGES)
 
 Use `CacheConfig::unbounded()` only when retaining all cached gateway data is an intentional operator decision.
 
+`CacheConfig::sweep_interval(...)` controls how often TTL sweeps may run on the hot upsert paths (default 5s):
+
+```rust
+use std::time::Duration;
+use discordrs::CacheConfig;
+
+let config = CacheConfig::default().sweep_interval(Duration::from_secs(30));
+```
+
+`ClientBuilder::cache_backend(...)` registers an external `CacheBackend` (Redis, Valkey, ...) that receives the same member, message, and presence writes the in-memory cache applies for gateway events. Writes are forwarded from a spawned task per event, so a slow backend cannot stall the gateway:
+
+```rust
+use std::sync::Arc;
+use discordrs::cache::CacheBackend;
+use discordrs::{gateway_intents, Client};
+
+fn with_backend(token: &str, backend: Arc<dyn CacheBackend>) {
+    let _builder = Client::builder(token, gateway_intents::GUILD_MESSAGES)
+        .cache_backend(backend);
+}
+```
+
 For hot member, message, and presence reads, use the `Arc` variants to avoid deep cloning cached payloads:
 
 ```rust
@@ -875,6 +1140,51 @@ async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::Snowfl
 ```
 
 The `cache` feature also exposes `CacheBackend`, an async trait for external member/message/presence stores. The default `CacheHandle` implements it, so custom backends can follow the same `Arc`-returning read shape without changing the owned manager APIs.
+
+## 8.1 Collector Controls: stop, idle, end reasons
+
+Collectors (behind the `collectors` feature) mirror discord.js's `Collector` controls. All four collector types — `MessageCollector`, `InteractionCollector`, `ComponentCollector`, and `ModalCollector` — share the same API, including `filter(...)` on component and modal collectors:
+
+```rust
+use std::time::Duration;
+use discordrs::collector::CollectorEndReason;
+
+async fn collect_clicks(ctx: &discordrs::Context) {
+    let mut collector = ctx
+        .collectors()
+        .component_collector()
+        .filter(|component| component.data.custom_id == "ticket_open")
+        .timeout(Duration::from_secs(60)) // overall window
+        .idle(Duration::from_secs(15))    // separate idle window
+        .max_items(5);
+
+    // Cloneable handle to stop the collector from another task.
+    let stop = collector.stop_handle();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        stop.stop_with_reason("shutting down");
+    });
+
+    while let Some(component) = collector.next().await {
+        println!("clicked: {}", component.data.custom_id);
+        collector.reset_timer(); // restart the overall window
+    }
+
+    match collector.end_reason() {
+        Some(CollectorEndReason::Limit) => println!("hit max_items"),
+        Some(CollectorEndReason::Time) => println!("overall timeout elapsed"),
+        Some(CollectorEndReason::Idle) => println!("idle window elapsed"),
+        Some(CollectorEndReason::User(reason)) => println!("stopped: {reason}"),
+        Some(CollectorEndReason::ChannelDropped) => println!("hub dropped"),
+        None => println!("still collecting"),
+    }
+    println!("received {} items", collector.received_count());
+}
+```
+
+- `stop()` records the default `"user"` reason; `stop_with_reason(...)` records a custom one.
+- `idle(...)` ends collection when no *matching* item arrives within the window; filtered-out items do not reset it and do not count toward `max_items`.
+- `end_reason()` reports why collection ended (`Limit`/`Time`/`Idle`/`User(reason)`/`ChannelDropped`).
 
 ## 8.5 REST Safety Notes
 
@@ -1010,6 +1320,94 @@ let incidents = rest
 
 Generated query strings are percent-encoded. Request body serialization failures return `DiscordError::Json` instead of panicking, and repeated HTTP 429 responses are retried up to a bounded limit before surfacing `DiscordError::RateLimit`.
 
+## 8.6 Audit-Log Reasons with `with_reason`
+
+`RestClient` is `Clone`, and `with_reason(...)` returns a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request it makes. The clone shares rate-limit state and the connection pool with the original client, so creating one per call site is the intended pattern:
+
+```rust
+async fn moderate(
+    rest: &discordrs::RestClient,
+    guild_id: u64,
+    user_id: u64,
+) -> Result<(), discordrs::DiscordError> {
+    rest.with_reason("spam")
+        .remove_guild_member(guild_id, user_id)
+        .await?;
+    Ok(())
+}
+```
+
+The reason applies to any mutating route called on the scoped clone — bans, kicks, channel edits, role edits, guild edits — and shows up in the guild audit log.
+
+Guild lifecycle routes are typed too:
+
+```rust
+use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::DiscordHttpClient;
+
+async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
+    // POST /guilds — only usable by bots in fewer than 10 guilds.
+    let guild = http
+        .create_guild(&CreateGuild {
+            name: "Support HQ".to_string(),
+            ..Default::default()
+        })
+        .await?;
+
+    // POST /guilds/templates/{code}
+    let from_template = http
+        .create_guild_from_template(
+            "template-code",
+            &CreateGuildFromTemplate {
+                name: "Support HQ 2".to_string(),
+                icon: None,
+            },
+        )
+        .await?;
+
+    // POST /guilds/{id}/mfa — returns the updated level.
+    let level = http.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+    println!("mfa level: {}", level.level);
+
+    // DELETE /guilds/{id} — the bot must own the guild.
+    http.delete_guild(from_template.id).await?;
+
+    Ok(())
+}
+```
+
+## 8.7 Configure the REST Client (`RestClient::builder`)
+
+`RestClient::builder(token, application_id)` returns a `RestClientBuilder`, mirroring discord.js's `RESTOptions`. `RestClient::new(...)` keeps the zero-configuration behavior:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use discordrs::{AllowedMentions, RestClient};
+
+fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
+    RestClient::builder(token, 0)
+        .api_version(10)                                // or .api_base("https://discord.com/api/v10")
+        .connect_timeout(Duration::from_secs(5))
+        .request_timeout(Duration::from_secs(20))
+        .user_agent("my-bot/1.0")
+        .proxy("http://localhost:8888")                 // reqwest::Proxy::all
+        .rate_limit_callback(Arc::new(|info| {
+            eprintln!(
+                "429 on {} — retry after {}s (global: {})",
+                info.route, info.retry_after, info.global
+            );
+        }))
+        .default_allowed_mentions(AllowedMentions::default())
+        .build()
+}
+```
+
+- `use_client(reqwest::Client)` is the escape hatch for a fully custom client; it supersedes `connect_timeout`, `request_timeout`, and `proxy`.
+- `rate_limit_callback(...)` fires on every 429 with a `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
+
 ## 9. Control the Active Shard from `Context`
 
 When you are inside a gateway handler, `Context` can drive shard-local gateway actions directly.
@@ -1032,6 +1430,28 @@ Available `Context` control methods:
 - `leave_voice(...).await`
 
 If you want the underlying shard-local sender, call `ctx.shard_messenger().await` and use `ShardMessenger` directly.
+
+## 9.5 Fetch Guild Members over the Gateway
+
+`Context::fetch_members(...)` requests guild members over the gateway and awaits the correlated `GUILD_MEMBERS_CHUNK` payloads — the discord.js `guild.members.fetch()` equivalent. Fetched members and presences also fill the cache.
+
+```rust
+async fn load_members(ctx: &discordrs::Context, guild_id: u64) -> Result<(), discordrs::DiscordError> {
+    // All members (requires the GUILD_MEMBERS privileged intent).
+    let members = ctx.fetch_members(guild_id, None, None).await?;
+    println!("fetched {} members", members.len());
+
+    // Username prefix search with a limit.
+    let admins = ctx
+        .fetch_members(guild_id, Some("admin".to_string()), Some(10))
+        .await?;
+    println!("matched {} members", admins.len());
+
+    Ok(())
+}
+```
+
+Use `fetch_members_with_timeout(guild_id, query, limit, timeout)` to override the default 60-second overall deadline. The lower-level `ctx.request_guild_members(...)` remains available when you want raw `GUILD_MEMBERS_CHUNK` events without awaiting collection.
 
 ## 10. Spawn and Supervise Multiple Shards
 
@@ -1087,6 +1507,72 @@ Useful supervisor APIs:
 - `shutdown()`
 - `shutdown_and_wait().await`
 - `wait_for_shutdown(duration).await`
+
+## 10.5 Multi-Process Sharding (`ProcessShardManager`)
+
+`discordrs::sharding::process` is the discord.js `ShardingManager` equivalent: one parent process spawns one child process per shard group, respawns crashed children with exponential backoff, and exchanges JSON-lines IPC over child stdio. One binary serves as both parent and child — `ShardChildProcess::from_env()` returns `Some` only in child mode:
+
+```rust
+use discordrs::sharding::process::{
+    ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess,
+};
+use serde_json::json;
+
+#[tokio::main]
+async fn main() -> Result<(), discordrs::DiscordError> {
+    let token = std::env::var("DISCORD_TOKEN")?;
+
+    if let Some(child) = ShardChildProcess::from_env() {
+        // Child mode: run the assigned shards with a normal gateway Client
+        // (see examples/process_sharding_bot.rs for the full handler).
+        // IMPORTANT: stdout is the IPC channel — log to stderr only.
+        eprintln!(
+            "[child] shards {:?} of {}",
+            child.shard_ids(),
+            child.shard_count()
+        );
+
+        // Answer parent broadcasts (the broadcastEval equivalent).
+        child.serve(|request| async move { json!({ "echo": request, "guilds": 42 }) });
+        child.notify_ready()?;
+        child.shutdown_signal().await;
+        return Ok(());
+    }
+
+    // Parent mode: fetch the recommended shard count from /gateway/bot and
+    // spawn one child per shard, staggered for identify rate limits.
+    let manager = ProcessShardManager::spawn_auto(
+        token,
+        ProcessShardManagerConfig {
+            respawn: true,
+            shards_per_process: 1,
+            ..ProcessShardManagerConfig::default()
+        },
+    )
+    .await?;
+
+    println!("spawned {} shards", manager.shard_count());
+
+    // Request/response across all children.
+    let stats = manager.broadcast(json!({ "op": "stats" })).await?;
+    for (shard_id, value) in stats {
+        println!("shard {shard_id}: {value}");
+    }
+
+    for status in manager.children() {
+        println!("child state: {:?}", status.state);
+    }
+
+    manager.wait().await?;
+    Ok(())
+}
+```
+
+`ProcessShardManagerConfig` controls `total_shards` (use `spawn(...)` with `Some`, or `spawn_auto(...)` to ask Discord), `shard_list`, `shards_per_process`, `respawn`/`respawn_delay`/`max_respawns` (exponential backoff, reset after 60s of uptime), `program`/`args`/`extra_env` for custom child binaries, and `spawn_stagger` (default 5s between child starts). `manager.shutdown()` broadcasts a graceful shutdown op; children observe it through `shutdown_signal()` or a closed stdin pipe. Run the complete example with:
+
+```sh
+DISCORD_TOKEN=... cargo run --example process_sharding_bot --features sharding
+```
 
 ## 11. Voice Manager and Voice Runtime
 
@@ -1219,6 +1705,69 @@ $env:DISCORDRS_CAPTURE_CHANNEL_ID="345678901234567890"
 cargo run --all-features --example live_dave_capture_bot
 ```
 
+## 11.7 Audio Playback with `AudioPlayer`
+
+`discordrs::voice::player` (with `voice` + `voice-encode` for Opus encoding) is the discord.js `@discordjs/voice` playback equivalent: `AudioInput` produces PCM (FFmpeg process, raw PCM readers, or files), `AudioResource` chunks it into 20ms frames with live volume control, and `AudioPlayer` runs the Idle/Buffering/Playing/Paused/AutoPaused state machine with broadcast events:
+
+```rust
+use std::sync::Arc;
+
+use discordrs::voice::player::{
+    AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
+};
+use discordrs::{connect_voice_runtime, VoiceRuntimeConfig};
+
+async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::DiscordError> {
+    // Connect the voice runtime (see §11 for obtaining the config values).
+    let handle = Arc::new(connect_voice_runtime(config).await?);
+
+    let player = AudioPlayer::new(AudioPlayerOptions::default());
+    let subscription = player.subscribe_runtime(Arc::clone(&handle))?;
+
+    // Anything FFmpeg can decode: URLs, files, streams (needs `ffmpeg` on PATH).
+    let resource = AudioResource::new(AudioInput::ffmpeg(input)?)
+        .with_title(input)
+        .with_volume(0.8);
+    let volume = resource.volume(); // live handle, adjustable during playback
+
+    let mut events = player.events();
+    player.play(resource)?;
+
+    while let Ok(event) = events.recv().await {
+        match event {
+            AudioPlayerEvent::StateChange { old, new } => {
+                println!("player state: {old:?} -> {new:?}");
+            }
+            AudioPlayerEvent::TrackStart => {
+                println!("track started");
+                volume.set(0.5);
+            }
+            AudioPlayerEvent::TrackEnd { reason } => {
+                println!("track ended: {reason:?}");
+                break;
+            }
+        }
+    }
+
+    subscription.unsubscribe();
+    handle.close().await?;
+    Ok(())
+}
+```
+
+- `player.pause()`, `player.unpause()`, and `player.stop()` drive the state machine; `player.state()` and `player.state_watch()` observe it.
+- `TrackEnd { reason }` carries a `TrackEndReason` (`Finished`, `Stopped`, or `Error(...)`).
+- `AudioPlayerOptions` includes `NoSubscriberBehavior::{Pause, Play, Stop}` for what happens when no voice connection is subscribed (default pauses, the discord.js behavior).
+- `AudioInput::file(path)`, `AudioInput::raw_pcm(reader)`, `AudioInput::ffmpeg_with_binary(...)`, and `AudioInput::ffmpeg_with_args(...)` cover non-URL sources.
+- Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the player from the voice connection.
+
+Run the complete gateway-integrated example with:
+
+```sh
+DISCORD_TOKEN=... MUSIC_GUILD_ID=... MUSIC_CHANNEL_ID=... MUSIC_INPUT=... \
+  cargo run --example music_bot --features gateway,voice,voice-encode
+```
+
 ## 12. Modal and Components V2 Helpers
 
 V2 modal parsing still preserves Discord-specific component types such as `FileUpload`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`.
@@ -1257,12 +1806,77 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 }
 ```
 
+## 12.5 Builder Validation (`validate` / `try_build`)
+
+Every command, button, select-menu, action-row, embed, modal, container, and media builder now has `validate()` (check without consuming) and `try_build()` (validate, then build), enforcing Discord's documented limits — codepoint-counted lengths, option/choice/field counts, action-row composition, the 6000-character embed total, and Components V2 caps. The plain `build()` methods remain non-validating:
+
+```rust
+use discordrs::{EmbedBuilder, ModalBuilder, SlashCommandBuilder};
+
+// Command builders: try_build() returns the validated CommandDefinition.
+let command = SlashCommandBuilder::new("ticket", "Create a support ticket").try_build()?;
+
+// Embed builders enforce per-field and total-size limits.
+let embed = EmbedBuilder::new()
+    .title("Status")
+    .description("All systems nominal")
+    .try_build()?;
+
+// validate() checks without consuming the builder.
+let modal = ModalBuilder::new("feedback", "Feedback");
+if let Err(error) = modal.validate() {
+    eprintln!("invalid modal: {error}");
+}
+```
+
+Validation errors name the field, the limit, and the actual value, so a too-long description fails locally with an actionable message instead of a Discord 400 after the HTTP round trip.
+
+## 12.7 Typed Message Components, Resolved Data, and Interaction Metadata
+
+Read-side payloads that used to be raw `serde_json::Value` are now tolerant typed structures:
+
+- `Message.components` is a `Vec<MessageComponent>` — one deliberately wide struct that covers the whole component tree (`kind` carries the raw component `type`; every known field is optional). `MessageComponent::iter()` walks the component and every nested child depth-first, and associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `CONTAINER`, ...) name the type codes:
+
+```rust
+use discordrs::{Message, MessageComponent};
+
+fn find_custom_ids(message: &Message) -> Vec<String> {
+    message
+        .components
+        .iter()
+        .flat_map(|component| component.iter())
+        .filter(|component| component.kind == MessageComponent::BUTTON)
+        .filter_map(|component| component.custom_id.clone())
+        .collect()
+}
+```
+
+- Interaction `resolved` data is a typed `ResolvedData` with six lookup maps (`users`, `members`, `roles`, `channels`, `messages`, `attachments`) and by-ID accessors (`resolved.user(id)`, `resolved.member(id)`, `resolved.role(id)`, `resolved.channel(id)`, `resolved.message(id)`, `resolved.attachment(id)`), plus `is_empty()`.
+- `Message::interaction_metadata` is a typed `MessageInteractionMetadata` (triggering interaction id/type, user, authorizing integration owners, target user/message, and nested `triggering_interaction_metadata` for modals). Prefer it over the deprecated `Message::interaction`.
+
 ## 13. Frequently Used APIs
 
 - `Client::builder(token, intents)`
 - `Context::new(http, data)`
 - `Context::rest()`
 - `RestClient::new(token, application_id)`
+- `RestClient::builder(token, application_id)` / `RestClientBuilder`
+- `RestClient::with_reason(...)`
+- `discordrs::response::InteractionResponder` — `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `show_modal`
+- `ComponentInteraction::defer_update(...)` / `update_message(...)` and `AutocompleteInteraction::respond_autocomplete(...)`
+- `discordrs::model_ext` entity methods — `message.reply(...)`, `member.timeout(...)`, `guild.create_channel(...)`, `channel.send(...)`, `user.dm(...)`, and friends
+- `discordrs::sharding::process::{ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess}`
+- `discordrs::voice::player::{AudioPlayer, AudioResource, AudioInput, NoSubscriberBehavior}`
+- collector `stop()` / `stop_with_reason(...)` / `stop_handle()` / `end_reason()` / `idle(...)` / `reset_timer()`
+- builder `validate()` / `try_build()`
+- `ClientBuilder::default_allowed_mentions(...)` / `cache_backend(...)` and `CacheConfig::sweep_interval(...)`
+- `Context::fetch_members(...)` / `Context::fetch_members_with_timeout(...)`
+- `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, `modify_guild_mfa_level(...)`
+- `create_interaction_response_with_result(...)`
+- `forward_message(...)`
+- `OAuth2Client::revoke_token(...)`
+- `get_guild_scheduled_events_with_query(...)`
+- `get_guild_scheduled_event_users_with_query(...)`
 - `get_poll_answer_voters(...)`
 - `end_poll(...)`
 - `get_skus(...)`
@@ -1318,6 +1932,9 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
 ## 14. Notes
 
 - `Client` is the main gateway runtime surface. `BotClient` is kept as an alias for compatibility.
+- Import `discordrs::response::InteractionResponder` wherever you call `interaction.reply(...)` and the other responder methods — they are trait methods and do not resolve without the import. The `model_ext` entity methods are inherent impls and need no import.
+- Double acknowledgements fail locally: the interaction response state is shared across clones, so a second `reply(...)` or an early `follow_up(...)` returns an "already acknowledged" error without hitting Discord.
+- Prefer `try_build()` over `build()` on builders when you want Discord's documented limits enforced before the HTTP call.
 - `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy callbacks such as `ready`, `message_create`, and `interaction_create` are still available for compatibility and now receive typed payloads.
 - `RestClient` is the preferred REST-facing name. `DiscordHttpClient` remains available.
 - Prefer the typed `RestClient` methods for new code.

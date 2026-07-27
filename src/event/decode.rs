@@ -136,26 +136,8 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
             raw: data,
         }),
-        "INVITE_CREATE" => Event::InviteCreate(InviteEvent {
-            guild_id: data
-                .get("guild_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data
-                .get("channel_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            code: data.get("code").and_then(|v| v.as_str().map(String::from)),
-            raw: data,
-        }),
-        "INVITE_DELETE" => Event::InviteDelete(InviteEvent {
-            guild_id: data
-                .get("guild_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            channel_id: data
-                .get("channel_id")
-                .and_then(|v| serde_json::from_value(v.clone()).ok()),
-            code: data.get("code").and_then(|v| v.as_str().map(String::from)),
-            raw: data,
-        }),
+        "INVITE_CREATE" => Event::InviteCreate(decode_invite_event(data)),
+        "INVITE_DELETE" => Event::InviteDelete(decode_invite_event(data)),
         "MESSAGE_REACTION_ADD" => Event::MessageReactionAdd(decode_reaction_event(data)),
         "MESSAGE_REACTION_REMOVE" => Event::MessageReactionRemove(decode_reaction_event(data)),
         "MESSAGE_REACTION_REMOVE_ALL" => Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
@@ -203,22 +185,33 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
         "RESUMED" => Event::Resumed(ResumedEvent { raw: data }),
         "THREAD_CREATE" => Event::ThreadCreate(ThreadEvent {
             thread: serde_json::from_value(data.clone())?,
+            newly_created: data.get("newly_created").and_then(Value::as_bool),
             raw: data,
         }),
         "THREAD_UPDATE" => Event::ThreadUpdate(ThreadEvent {
             thread: serde_json::from_value(data.clone())?,
+            newly_created: None,
             raw: data,
         }),
         "THREAD_DELETE" => Event::ThreadDelete(ThreadEvent {
             thread: serde_json::from_value(data.clone())?,
+            newly_created: None,
             raw: data,
         }),
         "THREAD_LIST_SYNC" => Event::ThreadListSync(ThreadListSyncEvent {
             guild_id: data
                 .get("guild_id")
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            channel_ids: data
+                .get("channel_ids")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
             threads: data
                 .get("threads")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default(),
+            members: data
+                .get("members")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default(),
             raw: data,
@@ -230,6 +223,13 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             thread_id: data
                 .get("id")
                 .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            user_id: data
+                .get("user_id")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            join_timestamp: data
+                .get("join_timestamp")
+                .and_then(|v| v.as_str().map(String::from)),
+            flags: data.get("flags").and_then(Value::as_u64),
             raw: data,
         }),
         "THREAD_MEMBERS_UPDATE" => Event::ThreadMembersUpdate(ThreadMembersUpdateEvent {
@@ -432,7 +432,9 @@ fn decode_scheduled_event(data: Value) -> Result<ScheduledEvent, DiscordError> {
         status: read_optional_u64(&data, "status"),
         entity_type: read_optional_u64(&data, "entity_type"),
         entity_id: read_optional_snowflake(&data, "entity_id"),
-        entity_metadata: data.get("entity_metadata").cloned(),
+        entity_metadata: data
+            .get("entity_metadata")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
         user_count: read_optional_u64(&data, "user_count"),
         image: read_optional_string(&data, "image"),
         raw: data,
@@ -540,8 +542,7 @@ fn decode_application_command_permissions_update_event(
         guild_id: read_optional_snowflake(&data, "guild_id"),
         permissions: data
             .get("permissions")
-            .and_then(Value::as_array)
-            .cloned()
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default(),
         raw: data,
     }
@@ -619,6 +620,28 @@ fn decode_rate_limited_event(data: Value) -> RateLimitedEvent {
     }
 }
 
+fn decode_invite_event(data: Value) -> InviteEvent {
+    InviteEvent {
+        guild_id: read_optional_snowflake(&data, "guild_id"),
+        channel_id: read_optional_snowflake(&data, "channel_id"),
+        code: read_optional_string(&data, "code"),
+        inviter: data
+            .get("inviter")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        uses: read_optional_u64(&data, "uses"),
+        max_uses: read_optional_u64(&data, "max_uses"),
+        max_age: read_optional_u64(&data, "max_age"),
+        temporary: data.get("temporary").and_then(Value::as_bool),
+        created_at: read_optional_string(&data, "created_at"),
+        expires_at: read_optional_string(&data, "expires_at"),
+        target_type: read_optional_u64(&data, "target_type"),
+        target_user: data
+            .get("target_user")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
+        raw: data,
+    }
+}
+
 fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
     AutoModerationEvent {
         id: read_optional_snowflake(&data, "id"),
@@ -627,7 +650,9 @@ fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
         creator_id: read_optional_snowflake(&data, "creator_id"),
         event_type: read_optional_u64(&data, "event_type"),
         trigger_type: read_optional_u64(&data, "trigger_type"),
-        trigger_metadata: data.get("trigger_metadata").cloned(),
+        trigger_metadata: data
+            .get("trigger_metadata")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
         actions: data
             .get("actions")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -641,7 +666,9 @@ fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
             .get("exempt_channels")
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default(),
-        action: data.get("action").cloned(),
+        action: data
+            .get("action")
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
         rule_id: read_optional_snowflake(&data, "rule_id"),
         rule_trigger_type: read_optional_u64(&data, "rule_trigger_type"),
         user_id: read_optional_snowflake(&data, "user_id"),

@@ -9,15 +9,31 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ## Features
 
 - Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
-- Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
+- Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias; the client is `Clone`, and the retry-hardened transport applies per-route request gating to all requests, honors `Retry-After` and global-scope rate-limit headers, and retries 5xx responses and transient transport errors with backoff
+- `RestClient::with_reason(...)` scoped clones that send `X-Audit-Log-Reason` on every mutating request so bans, kicks, and edits show up with a reason in the guild audit log
+- Guild lifecycle routes: `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies
+- `create_interaction_response_with_result(...)` for `with_response=true` interaction callbacks returning the typed `InteractionCallbackResult` resource
+- Message forwarding helpers: `MessageReferenceType`, `MessageReference::reply(...)`/`forward(...)`, and one-call `RestClient::forward_message(...)`
+- Poll gateway intents `GUILD_MESSAGE_POLLS` and `DIRECT_MESSAGE_POLLS` (both in `NON_PRIVILEGED`), plus a `GUILD_EXPRESSIONS` alias for bit 3
+- Initial presence inside IDENTIFY via `ClientBuilder::presence(...)` and serial or concurrent handler scheduling via `ClientBuilder::event_dispatch(EventDispatchMode::...)`
+- `Context::fetch_members(...)` gateway member fetching that awaits the correlated `GUILD_MEMBERS_CHUNK` payloads and fills the cache — the discord.js `guild.members.fetch()` equivalent
+- discord.js-style interaction response API (`discordrs::response::InteractionResponder`): `interaction.reply(...)`, `reply_ephemeral`, `defer`, `defer_update`, `update_message`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `show_modal(ModalBuilder)`, and `respond_autocomplete`, with an atomic shared acknowledgement state that fails double replies locally
+- Entity convenience methods (`discordrs::model_ext`): `message.reply/edit/delete/react/pin/crosspost/forward_to/start_thread/link`, `member.kick/ban/timeout/add_role`, `guild.create_channel/fetch_member/ban/icon_url`, `channel.send/mention/is_text_based`, `role.mention`, `user.create_dm/dm/tag/display_avatar_url`, plus CDN URL helpers
+- Multi-process sharding (`discordrs::sharding::process`): `ProcessShardManager` with `spawn`/`spawn_auto`, exponential-backoff auto-respawn, JSON-lines IPC over child stdio, `broadcast(...)` across all children (the `broadcastEval` equivalent), and one-binary parent/child via `ShardChildProcess::from_env()`
+- Audio playback pipeline (`discordrs::voice::player`): `AudioInput` (FFmpeg, raw PCM, files), `AudioResource` with 20ms framing and live volume, `AudioPlayer` state machine with `TrackStart`/`TrackEnd` events, and drop-safe subscriptions with `NoSubscriberBehavior`
+- Collector controls: `stop()`/`stop_with_reason(...)`, cloneable `CollectorStopHandle`, `end_reason()`, `idle(...)` timeouts, `reset_timer()`, and uniform `filter(...)` on component and modal collectors
+- Builder runtime validation: `validate()` and `try_build()` on command, component, embed, modal, container, and media builders, enforcing Discord's documented limits with errors that name the field, the limit, and the actual value
+- Configurable REST client via `RestClient::builder()` (API base/version, timeouts, user agent, proxy, custom reqwest client, rate-limit callback, default allowed mentions) plus `ClientBuilder::default_allowed_mentions(...)` and `ClientBuilder::cache_backend(...)`
+- Typed read-side components: `Message.components` as `Vec<MessageComponent>` with a depth-first `iter()`, typed `ResolvedData` lookup maps, and typed `MessageInteractionMetadata`
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
 - Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults, cheap `Arc` read APIs for hot member/message/presence paths, and explicit `CacheConfig` overrides
+- GUILD_CREATE cache population for channels, threads, members, voice states, presences, emojis, stickers, and stage instances (plus GUILD_MEMBERS_CHUNK and THREAD_* events), with O(log n) LRU order tracking, incremental per-guild/per-channel cap counters, and throttled TTL sweeps
 - Collectors for messages, interactions, components, and modals behind the `collectors` feature
-- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections
-- Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates
+- Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling, and fixed compressed binary frame decoding for explicit `zlib-stream` connections; IDENTIFY is paced to Discord's 1-per-5s-per-shard limit and short-lived sessions reconnect with escalating backoff
+- Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates; `spawn_shards(...)` uses the account's real `max_concurrency` from `/gateway/bot` for identify wave sizing
 - Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
 - Live-validated `dave` feature with DAVE opcode state tracking, `davey`/OpenMLS-backed MLS lifecycle helpers, receive decryptor hooks, and outbound media encryption hooks
-- Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, and refresh-token exchange
+- Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, refresh-token exchange, and token revocation via `OAuth2Client::revoke_token(...)`
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
 - Application framework routing for slash commands, components, and modals behind the `interactions` feature
 - Components V2 builders (`Container`, `TextDisplay`, `Section`, `MediaGallery`, `Button`, `SelectMenu` with auto-populated defaults, and more)
@@ -32,43 +48,70 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.0.2"
+discordrs = "2.2.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.0.2", features = ["interactions"] }
+discordrs = { version = "2.2.0", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.0.2", default-features = false }
+discordrs = { version = "2.2.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.0.2", features = ["gateway", "collectors"] }
+discordrs = { version = "2.2.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "2.0.2", features = ["gateway", "sharding"] }
+discordrs = { version = "2.2.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
 
 # DAVE receive/outbound media integration
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.0.2", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.2.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "2.0.2", features = ["gateway", "interactions"] }
+discordrs = { version = "2.2.0", features = ["gateway", "interactions"] }
+```
+
+## Quick Taste: 2.2.0 Ergonomics
+
+```rust
+use discordrs::response::InteractionResponder;
+use discordrs::{Context, Event, Interaction};
+
+async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
+    match event {
+        // Reply to a slash command like discord.js: interaction.reply(...)
+        Event::InteractionCreate(event) => {
+            if let Interaction::ChatInputCommand(command) = event.interaction {
+                command.reply(&ctx.http, "hi").await?;
+            }
+        }
+        // Reply to a message like discord.js: message.reply(...)
+        Event::MessageCreate(event) => {
+            let message = event.message;
+            if message.content == "!ping" {
+                message.reply(&ctx.http, "pong").await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
 ```
 
 ## API Cleanup
@@ -267,9 +310,9 @@ fn app(public_key: &str) -> Router {
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
 | `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
-| `collectors` | Async collectors for messages and interactions | tokio |
-| `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
-| `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
+| `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
+| `voice` | Voice connection/player skeletons, the `AudioPlayer`/`AudioResource` playback pipeline, plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
 | `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
 | `dave` | DAVE/MLS receive and outbound media hooks backed by `davey`, with live Discord MLS transition validation coverage | voice, davey |
 

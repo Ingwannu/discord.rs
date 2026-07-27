@@ -6,13 +6,13 @@ Voice is an optional runtime layer. It stays feature-gated so core Gateway, REST
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.2", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # PCM -> Opus encode/playback helpers
-discordrs = { version = "2.0.2", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS hook
-discordrs = { version = "2.0.2", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ```
 
 ## Surfaces
@@ -29,6 +29,56 @@ discordrs = { version = "2.0.2", features = ["voice", "dave"] }
 - `VoiceDaveFrameEncryptor` and `send_opus_frame_with_dave(...)`: behind `dave`, encrypt Opus with DAVE before RTP packetization.
 - `VoiceDaveySession`: experimental `dave` feature wrapper over `davey` / OpenMLS. `VoiceDaveyDecryptor` remains as a compatibility alias.
 - `get_current_user_voice_state(...)`, `get_user_voice_state(...)`, `modify_current_user_voice_state_from_request(...)`, and `modify_user_voice_state_from_request(...)`: typed Voice Resource REST helpers for stage voice-state reads and moderation updates.
+- `discordrs::voice::player::{AudioPlayer, AudioResource, AudioInput, NoSubscriberBehavior}`: the `2.2.0` discord.js-style playback pipeline (see below).
+
+## Audio Playback Pipeline (2.2.0)
+
+`discordrs::voice::player` mirrors `@discordjs/voice`: `AudioInput` produces PCM (FFmpeg process spawn, raw PCM readers, or files), `AudioResource` chunks it into 20ms frames with live volume control and silence padding, and `AudioPlayer` runs the `Idle`/`Buffering`/`Playing`/`Paused`/`AutoPaused` state machine with watch-based state and broadcast events. Opus encoding sits behind `voice-encode`.
+
+```rust
+use std::sync::Arc;
+
+use discordrs::voice::player::{
+    AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
+};
+use discordrs::{connect_voice_runtime, VoiceRuntimeConfig};
+
+async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::DiscordError> {
+    let handle = Arc::new(connect_voice_runtime(config).await?);
+
+    let player = AudioPlayer::new(AudioPlayerOptions::default());
+    let subscription = player.subscribe_runtime(Arc::clone(&handle))?;
+
+    // Anything FFmpeg can decode (needs `ffmpeg` on PATH).
+    let resource = AudioResource::new(AudioInput::ffmpeg(input)?).with_volume(0.8);
+
+    let mut events = player.events();
+    player.play(resource)?;
+
+    while let Ok(event) = events.recv().await {
+        match event {
+            AudioPlayerEvent::TrackStart => println!("track started"),
+            AudioPlayerEvent::TrackEnd { reason } => {
+                println!("track ended: {reason:?}");
+                break;
+            }
+            AudioPlayerEvent::StateChange { old, new } => {
+                println!("player state: {old:?} -> {new:?}");
+            }
+        }
+    }
+
+    subscription.unsubscribe();
+    handle.close().await
+}
+```
+
+- `player.play/pause/unpause/stop` drive the state machine; `player.state()` and `player.state_watch()` observe it.
+- `TrackEnd { reason }` carries a `TrackEndReason` (`Finished`, `Stopped`, `Error(...)`), and five silence frames plus speaking-flag handling flush at track end.
+- `NoSubscriberBehavior::{Pause, Play, Stop}` (in `AudioPlayerOptions`) chooses what happens while no connection is subscribed; the default `Pause` matches discord.js.
+- `AudioResource::volume()` returns a live `VolumeControl` that can be adjusted during playback; `AudioInput::file(...)`, `raw_pcm(...)`, `ffmpeg_with_binary(...)`, and `ffmpeg_with_args(...)` cover non-URL sources.
+- Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the player.
+- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`).
 
 ## Example
 

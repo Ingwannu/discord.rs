@@ -16,12 +16,32 @@ impl RestClient {
         channel_id: impl Into<Snowflake>,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::POST,
             &format!("/channels/{}/messages", channel_id.into()),
-            Some(body),
+            Some(body.as_ref()),
         )
         .await
+    }
+
+    /// Forwards a message into another channel using a
+    /// `MessageReferenceType::FORWARD` reference — the equivalent of
+    /// discord.js's `message.forward(channel)`.
+    pub async fn forward_message(
+        &self,
+        from_channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+        to_channel_id: impl Into<Snowflake>,
+    ) -> Result<Message, DiscordError> {
+        let body = CreateMessage {
+            message_reference: Some(crate::model::MessageReference::forward(
+                from_channel_id,
+                message_id,
+            )),
+            ..CreateMessage::default()
+        };
+        self.create_message(to_channel_id, &body).await
     }
 
     pub async fn create_message_with_files(
@@ -30,10 +50,11 @@ impl RestClient {
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::POST,
             &format!("/channels/{}/messages", channel_id.into()),
-            body,
+            body.as_ref(),
             files,
         )
         .await
@@ -45,6 +66,7 @@ impl RestClient {
         message_id: impl Into<Snowflake>,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::PATCH,
             &format!(
@@ -52,7 +74,7 @@ impl RestClient {
                 channel_id.into(),
                 message_id.into()
             ),
-            Some(body),
+            Some(body.as_ref()),
         )
         .await
     }
@@ -64,6 +86,7 @@ impl RestClient {
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
+        let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::PATCH,
             &format!(
@@ -71,7 +94,7 @@ impl RestClient {
                 channel_id.into(),
                 message_id.into()
             ),
-            body,
+            body.as_ref(),
             files,
         )
         .await

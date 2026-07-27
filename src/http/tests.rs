@@ -6745,3 +6745,507 @@ async fn request_retries_repeated_rate_limits_until_success() {
         assert_request_basics(request, "GET", "/channels/9", Some("Bot retry-token"));
     }
 }
+
+#[test]
+fn audit_log_reason_encoding_matches_encode_uri_component() {
+    assert_eq!(super::encode_audit_log_reason("simple"), "simple");
+    assert_eq!(super::encode_audit_log_reason("a b"), "a%20b");
+    assert_eq!(super::encode_audit_log_reason("50%"), "50%25");
+    assert_eq!(
+        super::encode_audit_log_reason("스팸"),
+        "%EC%8A%A4%ED%8C%B8"
+    );
+    assert_eq!(super::encode_audit_log_reason("ok!~*'()"), "ok!~*'()");
+}
+
+#[test]
+fn server_error_backoff_doubles_and_is_bounded() {
+    assert!((super::server_error_backoff(1) - 0.5).abs() < f64::EPSILON);
+    assert!((super::server_error_backoff(2) - 1.0).abs() < f64::EPSILON);
+    assert!((super::server_error_backoff(3) - 2.0).abs() < f64::EPSILON);
+    assert!(super::server_error_backoff(100) <= 200.0);
+}
+
+#[tokio::test]
+async fn with_reason_sends_encoded_audit_log_header_on_mutations_only() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("reason-token", 123, base_url);
+    let scoped = client.with_reason("spam 스팸");
+    scoped
+        .remove_guild_member("1", "2")
+        .await
+        .expect("kick with reason");
+    scoped.get_channel("9").await.expect("get channel");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].header("x-audit-log-reason"),
+        Some("spam%20%EC%8A%A4%ED%8C%B8")
+    );
+    assert_eq!(
+        requests[1].header("x-audit-log-reason"),
+        None,
+        "GET requests must not carry the audit-log header"
+    );
+}
+
+#[tokio::test]
+async fn server_errors_are_retried_and_then_succeed() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::BAD_GATEWAY, "bad gateway"),
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("retry-5xx-token", 123, base_url);
+    let channel = client.get_channel("9").await.expect("retried channel get");
+    assert_eq!(channel.id, crate::model::Snowflake::from("9"));
+    task.await.expect("server task");
+
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn rate_limit_retry_uses_retry_after_header_for_non_json_bodies() {
+    let mut limited = PlannedResponse::text(StatusCode::TOO_MANY_REQUESTS, "<html>limited</html>");
+    limited
+        .headers
+        .push(("Retry-After".to_string(), "0".to_string()));
+
+    let (base_url, captured, task) = spawn_test_server(vec![
+        limited,
+        PlannedResponse::json(StatusCode::OK, channel_payload("9", 0, Some("general"))),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("retry-header-token", 123, base_url);
+    client.get_channel("9").await.expect("channel after 429");
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn new_guild_lifecycle_routes_have_expected_shapes() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::CREATED, guild_payload("1", "created")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::CREATED, guild_payload("2", "from-template")),
+        PlannedResponse::json(StatusCode::OK, json!({ "level": 1 })),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("guild-token", 123, base_url);
+    client
+        .create_guild(&crate::model::CreateGuild {
+            name: "created".to_string(),
+            ..crate::model::CreateGuild::default()
+        })
+        .await
+        .expect("create guild");
+    client.delete_guild("1").await.expect("delete guild");
+    client
+        .create_guild_from_template(
+            "abcDEF123",
+            &crate::model::CreateGuildFromTemplate {
+                name: "from-template".to_string(),
+                icon: None,
+            },
+        )
+        .await
+        .expect("create guild from template");
+    let mfa = client
+        .modify_guild_mfa_level("2", 1)
+        .await
+        .expect("modify mfa");
+    assert_eq!(mfa.level, 1);
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/guilds");
+    assert_eq!(requests[1].method, "DELETE");
+    assert_eq!(requests[1].path, "/guilds/1");
+    assert_eq!(requests[2].method, "POST");
+    assert_eq!(requests[2].path, "/guilds/templates/abcDEF123");
+    assert_eq!(requests[3].method, "POST");
+    assert_eq!(requests[3].path, "/guilds/2/mfa");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[3].body).expect("mfa body"),
+        json!({ "level": 1 })
+    );
+}
+
+#[tokio::test]
+async fn interaction_response_with_result_requests_callback_resource() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::OK,
+        json!({
+            "interaction": { "id": "10", "type": 2, "response_message_id": "11" },
+            "resource": {
+                "type": 4,
+                "message": message_payload("11", "12", "hello")
+            }
+        }),
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("callback-token", 123, base_url);
+    let result = client
+        .create_interaction_response_with_result(
+            "10",
+            "interactiontoken",
+            &crate::model::InteractionCallbackResponse {
+                kind: 4,
+                data: Some(json!({ "content": "hello" })),
+            },
+        )
+        .await
+        .expect("callback result");
+    task.await.expect("server task");
+
+    assert_eq!(
+        result.interaction.response_message_id,
+        Some(crate::model::Snowflake::from("11"))
+    );
+    let message = result
+        .resource
+        .expect("resource present")
+        .message
+        .expect("message present");
+    assert_eq!(message.content, "hello");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(
+        requests[0].path,
+        "/interactions/10/interactiontoken/callback?with_response=true"
+    );
+}
+
+#[tokio::test]
+async fn forward_message_sends_forward_reference_type() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::OK,
+        message_payload("31", "30", ""),
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("forward-token", 123, base_url);
+    client
+        .forward_message("20", "21", "30")
+        .await
+        .expect("forward message");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests[0].path, "/channels/30/messages");
+    let body: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("forward body json");
+    assert_eq!(body["message_reference"]["type"], json!(1));
+    assert_eq!(body["message_reference"]["channel_id"], json!("20"));
+    assert_eq!(body["message_reference"]["message_id"], json!("21"));
+}
+
+#[tokio::test]
+async fn rest_client_builder_applies_base_url_user_agent_and_api_version() {
+    let responses = vec![PlannedResponse::json(
+        StatusCode::OK,
+        json!({ "url": "wss://gateway.discord.gg" }),
+    )];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+
+    let client = RestClient::builder("builder-token", 123)
+        .api_base(format!("{base_url}/"))
+        .user_agent("MyLib/1.2 (+https://example.test)")
+        .connect_timeout(Duration::from_secs(2))
+        .request_timeout(Duration::from_secs(5))
+        .build()
+        .expect("build client");
+    assert_eq!(client.api_base(), base_url);
+
+    let gateway = client.get_gateway().await.expect("get gateway");
+    assert_eq!(gateway.url, "wss://gateway.discord.gg");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/gateway");
+    assert_eq!(
+        requests[0].header("user-agent"),
+        Some("MyLib/1.2 (+https://example.test)")
+    );
+
+    // api_version selects the versioned default host; api_base wins when set.
+    let versioned = RestClient::builder("t", 1)
+        .api_version(9)
+        .build()
+        .expect("versioned client");
+    assert_eq!(versioned.api_base(), "https://discord.com/api/v9");
+    let overridden = RestClient::builder("t", 1)
+        .api_version(9)
+        .api_base("http://proxy.example.test/api")
+        .build()
+        .expect("overridden client");
+    assert_eq!(overridden.api_base(), "http://proxy.example.test/api");
+    let default_base = RestClient::builder("t", 1).build().expect("default client");
+    assert_eq!(default_base.api_base(), super::API_BASE);
+}
+
+#[tokio::test]
+async fn rest_client_builder_rate_limit_callback_fires_on_every_429() {
+    let mut global_rate_limited = PlannedResponse::json(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({ "message": "You are being rate limited.", "retry_after": 0.01 }),
+    );
+    global_rate_limited
+        .headers
+        .push(("x-ratelimit-global".to_string(), "true".to_string()));
+    let responses = vec![
+        PlannedResponse::json(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({
+                "message": "You are being rate limited.",
+                "retry_after": 0.01,
+                "global": false
+            }),
+        ),
+        global_rate_limited,
+        PlannedResponse::json(StatusCode::OK, message_payload("900", "555", "sent")),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+
+    let observed: Arc<Mutex<Vec<super::RateLimitInfo>>> = Arc::new(Mutex::new(Vec::new()));
+    let observed_for_callback = Arc::clone(&observed);
+    let client = RestClient::builder("limited-token", 123)
+        .api_base(base_url)
+        .rate_limit_callback(Arc::new(move |info| {
+            observed_for_callback
+                .lock()
+                .expect("callback mutex")
+                .push(info);
+        }))
+        .build()
+        .expect("build client");
+
+    let message = client
+        .create_message(
+            Snowflake::from("555"),
+            &CreateMessage {
+                content: Some("hello".to_string()),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("create message after retries");
+    assert_eq!(message.content, "sent");
+
+    server.await.expect("server finished");
+    assert_eq!(captured.lock().expect("captured requests").len(), 3);
+
+    let observed = observed.lock().expect("observed rate limits");
+    let expected_route = rate_limit_route_key(&Method::POST, "/channels/555/messages");
+    assert_eq!(observed.len(), 2);
+    assert_eq!(observed[0].route, expected_route);
+    assert!((observed[0].retry_after - 0.01).abs() < 1e-9);
+    assert!(!observed[0].global);
+    assert_eq!(observed[1].route, expected_route);
+    assert!(observed[1].global);
+}
+
+#[test]
+fn rest_client_builder_proxy_and_custom_client_construct() {
+    RestClient::builder("t", 1)
+        .proxy("http://127.0.0.1:9999")
+        .build()
+        .expect("http proxy accepted");
+    RestClient::builder("t", 1)
+        .proxy("https://user:pass@127.0.0.1:9999")
+        .build()
+        .expect("https proxy accepted");
+    assert!(RestClient::builder("t", 1)
+        .proxy("::::not a proxy url")
+        .build()
+        .is_err());
+    RestClient::builder("t", 1)
+        .use_client(default_http_client())
+        .build()
+        .expect("custom reqwest client accepted");
+}
+
+#[tokio::test]
+async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, message_payload("901", "555", "first")),
+        PlannedResponse::json(StatusCode::OK, message_payload("902", "555", "second")),
+        PlannedResponse::json(StatusCode::OK, message_payload("903", "555", "third")),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+
+    let client = RestClient::builder("mentions-token", 123)
+        .api_base(base_url)
+        .default_allowed_mentions(crate::model::AllowedMentions {
+            users: vec![Snowflake::from("42")],
+            replied_user: Some(false),
+            ..crate::model::AllowedMentions::default()
+        })
+        .build()
+        .expect("build client");
+
+    client
+        .create_message(
+            Snowflake::from("555"),
+            &CreateMessage {
+                content: Some("no explicit mentions".to_string()),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("create message");
+    client
+        .create_message(
+            Snowflake::from("555"),
+            &CreateMessage {
+                content: Some("explicit mentions".to_string()),
+                allowed_mentions: Some(crate::model::AllowedMentions {
+                    parse: vec!["users".to_string()],
+                    ..crate::model::AllowedMentions::default()
+                }),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("create message with explicit mentions");
+    client
+        .update_message(
+            Snowflake::from("555"),
+            Snowflake::from("901"),
+            &CreateMessage {
+                content: Some("edited".to_string()),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("update message");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 3);
+
+    let injected: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("first body json");
+    assert_eq!(
+        injected["allowed_mentions"],
+        json!({ "users": ["42"], "replied_user": false })
+    );
+
+    let explicit: serde_json::Value =
+        serde_json::from_str(&requests[1].body).expect("second body json");
+    assert_eq!(explicit["allowed_mentions"], json!({ "parse": ["users"] }));
+
+    let updated: serde_json::Value =
+        serde_json::from_str(&requests[2].body).expect("third body json");
+    assert_eq!(
+        updated["allowed_mentions"],
+        json!({ "users": ["42"], "replied_user": false })
+    );
+}
+
+#[tokio::test]
+async fn default_allowed_mentions_cover_webhook_and_interaction_response_payloads() {
+    let responses = vec![
+        PlannedResponse::json(StatusCode::OK, json!({ "id": "1000" })),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ];
+    let (base_url, captured, server) = spawn_test_server(responses).await;
+
+    let client = RestClient::builder("mentions-token", 123)
+        .api_base(base_url)
+        .default_allowed_mentions(crate::model::AllowedMentions {
+            replied_user: Some(false),
+            ..crate::model::AllowedMentions::default()
+        })
+        .build()
+        .expect("build client");
+
+    client
+        .execute_webhook(
+            Snowflake::from("777"),
+            "webhooktoken",
+            &json!({ "content": "from webhook" }),
+        )
+        .await
+        .expect("execute webhook");
+    client
+        .create_interaction_response_typed(
+            Snowflake::from("10"),
+            "interactiontoken",
+            &InteractionCallbackResponse {
+                kind: 4,
+                data: Some(json!({ "content": "reply" })),
+            },
+        )
+        .await
+        .expect("interaction response");
+    client
+        .create_interaction_response_typed(
+            Snowflake::from("11"),
+            "interactiontoken",
+            &InteractionCallbackResponse {
+                kind: 4,
+                data: Some(json!({
+                    "content": "explicit",
+                    "allowed_mentions": { "parse": ["roles"] }
+                })),
+            },
+        )
+        .await
+        .expect("interaction response with explicit mentions");
+    client
+        .create_interaction_response_typed(
+            Snowflake::from("12"),
+            "interactiontoken",
+            &InteractionCallbackResponse {
+                kind: 9,
+                data: Some(json!({ "custom_id": "modal", "title": "t", "components": [] })),
+            },
+        )
+        .await
+        .expect("modal response");
+
+    server.await.expect("server finished");
+    let requests = captured.lock().expect("captured requests");
+    assert_eq!(requests.len(), 4);
+
+    let webhook_body: serde_json::Value =
+        serde_json::from_str(&requests[0].body).expect("webhook body json");
+    assert_eq!(
+        webhook_body["allowed_mentions"],
+        json!({ "replied_user": false })
+    );
+
+    let injected: serde_json::Value =
+        serde_json::from_str(&requests[1].body).expect("interaction body json");
+    assert_eq!(
+        injected["data"]["allowed_mentions"],
+        json!({ "replied_user": false })
+    );
+
+    let explicit: serde_json::Value =
+        serde_json::from_str(&requests[2].body).expect("explicit body json");
+    assert_eq!(
+        explicit["data"]["allowed_mentions"],
+        json!({ "parse": ["roles"] })
+    );
+
+    let modal: serde_json::Value =
+        serde_json::from_str(&requests[3].body).expect("modal body json");
+    assert!(modal["data"].get("allowed_mentions").is_none());
+}

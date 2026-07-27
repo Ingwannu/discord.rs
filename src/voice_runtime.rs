@@ -54,8 +54,11 @@ const DAVE_MAGIC_MARKER: [u8; 2] = [0xfa, 0xfa];
 const RTP_VERSION: u8 = 2;
 const RTP_PAYLOAD_TYPE_OPUS: u8 = 120;
 const DISCORD_OPUS_SAMPLE_RATE: u32 = 48_000;
+#[cfg(feature = "voice-encode")]
 const DISCORD_OPUS_CHANNELS: usize = 2;
+#[cfg(feature = "voice-encode")]
 const DISCORD_OPUS_SAMPLES_PER_CHANNEL: usize = 960;
+#[cfg(feature = "voice-encode")]
 const DISCORD_OPUS_STEREO_FRAME_SAMPLES: usize =
     DISCORD_OPUS_CHANNELS * DISCORD_OPUS_SAMPLES_PER_CHANNEL;
 const DISCORD_OPUS_FRAME_MS: u64 = 20;
@@ -1945,7 +1948,9 @@ mod tests {
     use serde_json::Value;
     use tokio::net::{TcpListener, UdpSocket};
     use tokio::sync::{oneshot, watch};
-    use tokio::time::{timeout, Duration};
+    #[cfg(feature = "dave")]
+    use tokio::time::timeout;
+    use tokio::time::Duration;
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
     use super::{
@@ -1957,9 +1962,10 @@ mod tests {
     };
     #[cfg(feature = "voice-encode")]
     use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
+    #[cfg(feature = "dave")]
+    use crate::voice::VoiceGatewayCommand;
     use crate::voice::{
-        VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayReady, VoiceSpeakingFlags,
-        VoiceUdpDiscoveryPacket,
+        VoiceEncryptionMode, VoiceGatewayReady, VoiceSpeakingFlags, VoiceUdpDiscoveryPacket,
     };
 
     fn encrypt_aes_rtp_packet(
@@ -2651,6 +2657,9 @@ mod tests {
         server.await.unwrap();
     }
 
+    // Exercises the DAVE send helpers, which only exist behind the `dave`
+    // feature; building with `voice` alone must not compile this test.
+    #[cfg(feature = "dave")]
     #[tokio::test]
     async fn voice_runtime_loop_updates_state_and_sends_custom_commands() {
         let udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();

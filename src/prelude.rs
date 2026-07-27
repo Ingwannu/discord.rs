@@ -17,7 +17,7 @@ pub use crate::event::Event;
 #[cfg(all(feature = "gateway", feature = "sharding"))]
 pub use crate::gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
-pub use crate::gateway::{Client, Context, EventHandler, ShardMessenger};
+pub use crate::gateway::{Client, Context, EventDispatchMode, EventHandler, ShardMessenger};
 pub use crate::helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
     delete_original_response, edit_followup_response, edit_original_response, followup_message,
@@ -44,13 +44,14 @@ pub use crate::model::{
     GuildScheduledEventRecurrenceRule, GuildWidget, GuildWidgetImageStyle, Integration,
     Interaction, InteractionCallbackResponse, InteractionContextData, InteractionContextType,
     Invite, InviteTargetUsersJobStatus, JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby,
-    LobbyMember, LobbyMemberUpdate, Message, MessageCall, MessageSnapshot,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
-    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
-    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField,
-    PollAnswerVoters, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, RoleColors,
+    LobbyMember, LobbyMemberUpdate, Message, MessageCall, MessageComponent, MessageInteraction,
+    MessageInteractionMetadata, MessageSnapshot, ModifyCurrentApplication, ModifyCurrentMember,
+    ModifyCurrentUser, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
+    ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
+    ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
+    ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField, PollAnswerVoters,
+    ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, ResolvedData, RoleColors,
     SearchGuildMembersQuery, SearchGuildMessagesQuery, SessionStartLimit, SetVoiceChannelStatus,
     SharedClientTheme, Sku, Snowflake, SoundboardSound, SoundboardSoundList, Subscription,
     SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, UpdatePresence,

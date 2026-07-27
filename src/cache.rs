@@ -27,10 +27,10 @@ pub use backend::CacheBackend;
 mod store;
 #[cfg(feature = "cache")]
 use store::{
-    any_seen_expired, enforce_channel_limit, enforce_guild_limit, enforce_member_limit,
-    enforce_message_limits, evict_channel_entries, evict_guild_entries, ordered_overflow_keys,
-    prune_expired, remember_key, remove_member_key, remove_message_key, remove_presence_key,
-    seen_expired, CacheStore,
+    enforce_channel_limit, enforce_guild_limit, enforce_member_limit, enforce_message_limits,
+    evict_channel_entries, evict_guild_entries, insert_member_entry, insert_message_entry,
+    maybe_prune_expired, ordered_overflow_keys, prune_expired, remember_key, remove_member_key,
+    remove_message_key, remove_presence_key, seen_expired, CacheStore,
 };
 
 #[derive(Clone, Default)]
@@ -96,6 +96,9 @@ impl CacheHandle {
         store.member_seen.clear();
         store.message_seen.clear();
         store.presence_seen.clear();
+        store.member_counts.clear();
+        store.message_counts.clear();
+        store.last_prune = None;
     }
 
     #[cfg(not(feature = "cache"))]
@@ -167,6 +170,230 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn upsert_channel(&self, _channel: Channel) {}
 
+    /// Inserts a channel only when the cache does not already hold one with
+    /// the same id, so partial channel objects (for example the stubs
+    /// derived from component interactions) never clobber a full channel
+    /// received from the gateway.
+    #[cfg(feature = "cache")]
+    pub async fn upsert_channel_if_absent(&self, channel: Channel) {
+        let mut store = self.store.write().await;
+        if store.channels.contains_key(&channel.id) {
+            return;
+        }
+        let channel_id = channel.id.clone();
+        store.channels.insert(channel_id.clone(), channel);
+        remember_key(&mut store.channel_order, channel_id);
+        enforce_channel_limit(&mut store, &self.config);
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn upsert_channel_if_absent(&self, _channel: Channel) {}
+
+    /// Distributes a full GUILD_CREATE payload into the per-entity stores —
+    /// channels, threads, members, users, voice states, presences, emojis,
+    /// stickers, and stage instances — under a single write lock, then
+    /// stores the guild itself with the bulk collections stripped so the
+    /// data is not held twice.
+    #[cfg(feature = "cache")]
+    pub async fn apply_guild_create(&self, guild: &Guild) {
+        let mut store = self.store.write().await;
+        let guild_id = guild.id.clone();
+        let now = Instant::now();
+
+        store
+            .guilds
+            .insert(guild_id.clone(), guild.without_create_collections());
+        remember_key(&mut store.guild_order, guild_id.clone());
+
+        for role in &guild.roles {
+            let key = (guild_id.clone(), role.id.clone());
+            store.roles.insert(key.clone(), role.clone());
+            remember_key(&mut store.role_order, key);
+        }
+
+        for channel in guild.channels.iter().chain(guild.threads.iter()) {
+            let mut channel = channel.clone();
+            if channel.guild_id.is_none() {
+                channel.guild_id = Some(guild_id.clone());
+            }
+            let channel_id = channel.id.clone();
+            store.channels.insert(channel_id.clone(), channel);
+            remember_key(&mut store.channel_order, channel_id);
+        }
+
+        for member in &guild.members {
+            let Some(user) = member.user.as_ref() else {
+                continue;
+            };
+            let user_id = user.id.clone();
+            store.users.insert(user_id.clone(), user.clone());
+            remember_key(&mut store.user_order, user_id.clone());
+            let key = (guild_id.clone(), user_id);
+            insert_member_entry(&mut store, key, Arc::new(member.clone()), now);
+        }
+
+        for voice_state in &guild.voice_states {
+            let Some(user_id) = voice_state.user_id.clone() else {
+                continue;
+            };
+            let mut voice_state = voice_state.clone();
+            if voice_state.guild_id.is_none() {
+                voice_state.guild_id = Some(guild_id.clone());
+            }
+            let key = (guild_id.clone(), user_id);
+            store.voice_states.insert(key.clone(), voice_state);
+            remember_key(&mut store.voice_state_order, key);
+        }
+
+        for presence in &guild.presences {
+            let user_id = presence
+                .user_id
+                .clone()
+                .or_else(|| presence.user.as_ref().map(|user| user.id.clone()));
+            let Some(user_id) = user_id else {
+                continue;
+            };
+            let mut presence = presence.clone();
+            presence.user_id = Some(user_id.clone());
+            let key = (guild_id.clone(), user_id);
+            store.presences.insert(key.clone(), Arc::new(presence));
+            store.presence_seen.insert(key.clone(), now);
+            remember_key(&mut store.presence_order, key);
+        }
+
+        if self.config.cache_emojis {
+            for emoji in &guild.emojis {
+                if let Some(emoji_id) = emoji.id.clone() {
+                    let key = (guild_id.clone(), Snowflake::from(emoji_id.as_str()));
+                    store.emojis.insert(key.clone(), emoji.clone());
+                    remember_key(&mut store.emoji_order, key);
+                }
+            }
+        }
+
+        if self.config.cache_stickers {
+            for sticker in &guild.stickers {
+                let key = (guild_id.clone(), sticker.id.clone());
+                store.stickers.insert(key.clone(), sticker.clone());
+                remember_key(&mut store.sticker_order, key);
+            }
+        }
+
+        if self.config.cache_stage_instances {
+            for stage_instance in &guild.stage_instances {
+                let key = (guild_id.clone(), stage_instance.id.clone());
+                store
+                    .stage_instances
+                    .insert(key.clone(), stage_instance.clone());
+                remember_key(&mut store.stage_instance_order, key);
+            }
+        }
+
+        for sound in &guild.soundboard_sounds {
+            let key = (guild_id.clone(), sound.sound_id.clone());
+            store.soundboard_sounds.insert(key.clone(), sound.clone());
+            remember_key(&mut store.soundboard_sound_order, key);
+        }
+
+        enforce_guild_limit(&mut store, &self.config);
+        enforce_channel_limit(&mut store, &self.config);
+        enforce_member_limit(&mut store, &self.config, &guild_id);
+        let user_len = store.users.len();
+        for key in ordered_overflow_keys(&mut store.user_order, user_len, self.config.max_users) {
+            store.users.remove(&key);
+        }
+        let role_len = store.roles.len();
+        for key in ordered_overflow_keys(&mut store.role_order, role_len, self.config.max_roles) {
+            store.roles.remove(&key);
+        }
+        if let Some(max) = self.config.max_presences {
+            while store.presences.len() > max {
+                let Some(key) = store.presence_order.pop_front() else {
+                    break;
+                };
+                store.presences.remove(&key);
+                store.presence_seen.remove(&key);
+            }
+        }
+        let voice_len = store.voice_states.len();
+        for key in ordered_overflow_keys(
+            &mut store.voice_state_order,
+            voice_len,
+            self.config.max_voice_states,
+        ) {
+            store.voice_states.remove(&key);
+        }
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_guild_create(&self, _guild: &Guild) {}
+
+    /// Stores every member (and its user) from a GUILD_MEMBERS_CHUNK
+    /// payload, plus any presences it carries, under a single write lock —
+    /// so `request_guild_members` fills the cache the same way discord.js's
+    /// `guild.members.fetch()` does.
+    #[cfg(feature = "cache")]
+    pub async fn apply_members_chunk(
+        &self,
+        guild_id: &Snowflake,
+        members: &[Member],
+        presences: Option<&[Presence]>,
+    ) {
+        let mut store = self.store.write().await;
+        let now = Instant::now();
+
+        for member in members {
+            let Some(user) = member.user.as_ref() else {
+                continue;
+            };
+            let user_id = user.id.clone();
+            store.users.insert(user_id.clone(), user.clone());
+            remember_key(&mut store.user_order, user_id.clone());
+            let key = (guild_id.clone(), user_id);
+            insert_member_entry(&mut store, key, Arc::new(member.clone()), now);
+        }
+
+        for presence in presences.unwrap_or_default() {
+            let user_id = presence
+                .user_id
+                .clone()
+                .or_else(|| presence.user.as_ref().map(|user| user.id.clone()));
+            let Some(user_id) = user_id else {
+                continue;
+            };
+            let mut presence = presence.clone();
+            presence.user_id = Some(user_id.clone());
+            let key = (guild_id.clone(), user_id);
+            store.presences.insert(key.clone(), Arc::new(presence));
+            store.presence_seen.insert(key.clone(), now);
+            remember_key(&mut store.presence_order, key);
+        }
+
+        enforce_member_limit(&mut store, &self.config, guild_id);
+        let user_len = store.users.len();
+        for key in ordered_overflow_keys(&mut store.user_order, user_len, self.config.max_users) {
+            store.users.remove(&key);
+        }
+        if let Some(max) = self.config.max_presences {
+            while store.presences.len() > max {
+                let Some(key) = store.presence_order.pop_front() else {
+                    break;
+                };
+                store.presences.remove(&key);
+                store.presence_seen.remove(&key);
+            }
+        }
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_members_chunk(
+        &self,
+        _guild_id: &Snowflake,
+        _members: &[Member],
+        _presences: Option<&[Presence]>,
+    ) {
+    }
+
     #[cfg(feature = "cache")]
     pub async fn remove_channel(&self, channel_id: &Snowflake) {
         let mut store = self.store.write().await;
@@ -219,7 +446,7 @@ impl CacheHandle {
     pub async fn remove_user(&self, user_id: &Snowflake) {
         let mut store = self.store.write().await;
         store.users.remove(user_id);
-        store.user_order.retain(|stored_id| stored_id != user_id);
+        store.user_order.remove(user_id);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -252,11 +479,10 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn upsert_member(&self, guild_id: Snowflake, user_id: Snowflake, member: Member) {
         let mut store = self.store.write().await;
+        let now = Instant::now();
         let key = (guild_id.clone(), user_id);
-        store.members.insert(key.clone(), Arc::new(member));
-        store.member_seen.insert(key.clone(), Instant::now());
-        remember_key(&mut store.member_order, key);
-        prune_expired(&mut store, &self.config, Instant::now());
+        insert_member_entry(&mut store, key, Arc::new(member), now);
+        maybe_prune_expired(&mut store, &self.config, now);
         enforce_member_limit(&mut store, &self.config, &guild_id);
     }
 
@@ -293,15 +519,12 @@ impl CacheHandle {
     ) -> Option<Arc<Member>> {
         let key = (guild_id.clone(), user_id.clone());
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !seen_expired(store.member_seen.get(&key), self.config.member_ttl, now) {
-                return store.members.get(&key).cloned();
-            }
+        let store = self.store.read().await;
+        if seen_expired(store.member_seen.get(&key), self.config.member_ttl, now) {
+            // Expired entries are never returned; physical removal is left
+            // to the throttled sweep on the write paths.
+            return None;
         }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
         store.members.get(&key).cloned()
     }
 
@@ -326,24 +549,16 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn members_arc(&self, guild_id: &Snowflake) -> Vec<Arc<Member>> {
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !any_seen_expired(store.member_seen.values(), self.config.member_ttl, now) {
-                return store
-                    .members
-                    .iter()
-                    .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
-                    .map(|(_, member)| member.clone())
-                    .collect();
-            }
-        }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
+        let store = self.store.read().await;
         store
             .members
             .iter()
             .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
+            .filter(|(key, _)| {
+                // Filter expired entries per-key at read time; physical
+                // removal is left to the throttled sweep.
+                !seen_expired(store.member_seen.get(*key), self.config.member_ttl, now)
+            })
             .map(|(_, member)| member.clone())
             .collect()
     }
@@ -367,11 +582,10 @@ impl CacheHandle {
         let channel_id = message.channel_id.clone();
         let message_id = message.id.clone();
         let mut store = self.store.write().await;
+        let now = Instant::now();
         let key = (channel_id.clone(), message_id);
-        store.messages.insert(key.clone(), Arc::new(message));
-        store.message_seen.insert(key.clone(), Instant::now());
-        remember_key(&mut store.message_order, key);
-        prune_expired(&mut store, &self.config, Instant::now());
+        insert_message_entry(&mut store, key, Arc::new(message), now);
+        maybe_prune_expired(&mut store, &self.config, now);
         enforce_message_limits(&mut store, &self.config, &channel_id);
     }
 
@@ -391,21 +605,10 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn remove_messages_bulk(&self, channel_id: &Snowflake, message_ids: &[Snowflake]) {
         let mut store = self.store.write().await;
-        store
-            .messages
-            .retain(|(stored_channel_id, stored_message_id), _| {
-                stored_channel_id != channel_id || !message_ids.contains(stored_message_id)
-            });
-        store
-            .message_seen
-            .retain(|(stored_channel_id, stored_message_id), _| {
-                stored_channel_id != channel_id || !message_ids.contains(stored_message_id)
-            });
-        store
-            .message_order
-            .retain(|(stored_channel_id, stored_message_id)| {
-                stored_channel_id != channel_id || !message_ids.contains(stored_message_id)
-            });
+        for message_id in message_ids {
+            let key = (channel_id.clone(), message_id.clone());
+            remove_message_key(&mut store, &key);
+        }
     }
 
     #[cfg(not(feature = "cache"))]
@@ -435,15 +638,12 @@ impl CacheHandle {
     ) -> Option<Arc<Message>> {
         let key = (channel_id.clone(), message_id.clone());
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
-                return store.messages.get(&key).cloned();
-            }
+        let store = self.store.read().await;
+        if seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
+            // Expired entries are never returned; physical removal is left
+            // to the throttled sweep on the write paths.
+            return None;
         }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
         store.messages.get(&key).cloned()
     }
 
@@ -468,24 +668,16 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn messages_arc(&self, channel_id: &Snowflake) -> Vec<Arc<Message>> {
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !any_seen_expired(store.message_seen.values(), self.config.message_ttl, now) {
-                return store
-                    .messages
-                    .iter()
-                    .filter(|((stored_channel_id, _), _)| stored_channel_id == channel_id)
-                    .map(|(_, message)| message.clone())
-                    .collect();
-            }
-        }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
+        let store = self.store.read().await;
         store
             .messages
             .iter()
             .filter(|((stored_channel_id, _), _)| stored_channel_id == channel_id)
+            .filter(|(key, _)| {
+                // Filter expired entries per-key at read time; physical
+                // removal is left to the throttled sweep.
+                !seen_expired(store.message_seen.get(*key), self.config.message_ttl, now)
+            })
             .map(|(_, message)| message.clone())
             .collect()
     }
@@ -524,7 +716,7 @@ impl CacheHandle {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), role_id.clone());
         store.roles.remove(&key);
-        store.role_order.retain(|stored_key| stored_key != &key);
+        store.role_order.remove(&key);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -574,11 +766,12 @@ impl CacheHandle {
         presence: Presence,
     ) {
         let mut store = self.store.write().await;
+        let now = Instant::now();
         let key = (guild_id, user_id);
         store.presences.insert(key.clone(), Arc::new(presence));
-        store.presence_seen.insert(key.clone(), Instant::now());
+        store.presence_seen.insert(key.clone(), now);
         remember_key(&mut store.presence_order, key);
-        prune_expired(&mut store, &self.config, Instant::now());
+        maybe_prune_expired(&mut store, &self.config, now);
         if let Some(max) = self.config.max_presences {
             while store.presences.len() > max {
                 let Some(key) = store.presence_order.pop_front() else {
@@ -624,15 +817,12 @@ impl CacheHandle {
     ) -> Option<Arc<Presence>> {
         let key = (guild_id.clone(), user_id.clone());
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !seen_expired(store.presence_seen.get(&key), self.config.presence_ttl, now) {
-                return store.presences.get(&key).cloned();
-            }
+        let store = self.store.read().await;
+        if seen_expired(store.presence_seen.get(&key), self.config.presence_ttl, now) {
+            // Expired entries are never returned; physical removal is left
+            // to the throttled sweep on the write paths.
+            return None;
         }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
         store.presences.get(&key).cloned()
     }
 
@@ -662,24 +852,16 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn presences_arc(&self, guild_id: &Snowflake) -> Vec<Arc<Presence>> {
         let now = Instant::now();
-        {
-            let store = self.store.read().await;
-            if !any_seen_expired(store.presence_seen.values(), self.config.presence_ttl, now) {
-                return store
-                    .presences
-                    .iter()
-                    .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
-                    .map(|(_, presence)| presence.clone())
-                    .collect();
-            }
-        }
-
-        let mut store = self.store.write().await;
-        prune_expired(&mut store, &self.config, now);
+        let store = self.store.read().await;
         store
             .presences
             .iter()
             .filter(|((stored_guild_id, _), _)| stored_guild_id == guild_id)
+            .filter(|(key, _)| {
+                // Filter expired entries per-key at read time; physical
+                // removal is left to the throttled sweep.
+                !seen_expired(store.presence_seen.get(*key), self.config.presence_ttl, now)
+            })
             .map(|(_, presence)| presence.clone())
             .collect()
     }
@@ -733,9 +915,7 @@ impl CacheHandle {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), user_id.clone());
         store.voice_states.remove(&key);
-        store
-            .voice_state_order
-            .retain(|stored_key| stored_key != &key);
+        store.voice_state_order.remove(&key);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -845,9 +1025,7 @@ impl CacheHandle {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), sound_id.clone());
         store.soundboard_sounds.remove(&key);
-        store
-            .soundboard_sound_order
-            .retain(|stored_key| stored_key != &key);
+        store.soundboard_sound_order.remove(&key);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1049,9 +1227,7 @@ impl CacheHandle {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), event_id.clone());
         store.scheduled_events.remove(&key);
-        store
-            .scheduled_event_order
-            .retain(|stored_key| stored_key != &key);
+        store.scheduled_event_order.remove(&key);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1124,9 +1300,7 @@ impl CacheHandle {
         let mut store = self.store.write().await;
         let key = (guild_id.clone(), stage_instance_id.clone());
         store.stage_instances.remove(&key);
-        store
-            .stage_instance_order
-            .retain(|stored_key| stored_key != &key);
+        store.stage_instance_order.remove(&key);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -2136,6 +2310,186 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn member_cap_counters_evict_per_guild_without_touching_other_guilds() {
+        let cache =
+            CacheHandle::with_config(CacheConfig::unbounded().max_members_per_guild(2));
+        let guild_a = Snowflake::from("1");
+        let guild_b = Snowflake::from("2");
+
+        let upsert = |guild: Snowflake, id: &str| {
+            let cache = cache.clone();
+            let user_id = Snowflake::from(id);
+            async move {
+                cache
+                    .upsert_member(
+                        guild,
+                        user_id.clone(),
+                        crate::model::Member {
+                            user: Some(User {
+                                id: user_id,
+                                ..User::default()
+                            }),
+                            ..crate::model::Member::default()
+                        },
+                    )
+                    .await;
+            }
+        };
+
+        upsert(guild_a.clone(), "10").await;
+        upsert(guild_a.clone(), "11").await;
+        upsert(guild_b.clone(), "20").await;
+        upsert(guild_b.clone(), "21").await;
+        upsert(guild_b.clone(), "22").await;
+
+        // Guild B is over its cap: its oldest member is evicted; guild A is
+        // untouched even though the global member map holds more entries.
+        assert!(cache.member(&guild_b, &Snowflake::from("20")).await.is_none());
+        assert!(cache.member(&guild_b, &Snowflake::from("21")).await.is_some());
+        assert!(cache.member(&guild_b, &Snowflake::from("22")).await.is_some());
+        assert_eq!(cache.members(&guild_a).await.len(), 2);
+        assert_eq!(cache.members(&guild_b).await.len(), 2);
+
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.member_counts.get(&guild_a), Some(&2));
+            assert_eq!(store.member_counts.get(&guild_b), Some(&2));
+        }
+
+        // Replacing an existing key must not double-count or evict, and must
+        // refresh its LRU position.
+        upsert(guild_a.clone(), "10").await;
+        assert_eq!(cache.members(&guild_a).await.len(), 2);
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.member_counts.get(&guild_a), Some(&2));
+        }
+
+        // A new member for guild A now evicts "11" (oldest after the touch),
+        // not the re-upserted "10".
+        upsert(guild_a.clone(), "12").await;
+        assert!(cache.member(&guild_a, &Snowflake::from("11")).await.is_none());
+        assert!(cache.member(&guild_a, &Snowflake::from("10")).await.is_some());
+        assert!(cache.member(&guild_a, &Snowflake::from("12")).await.is_some());
+
+        // Removing a guild's entries drops its counter entirely.
+        cache.remove_guild(&guild_b).await;
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.member_counts.get(&guild_b), None);
+            assert_eq!(store.member_counts.get(&guild_a), Some(&2));
+        }
+    }
+
+    #[tokio::test]
+    async fn message_upsert_replacing_existing_key_does_not_corrupt_counts() {
+        let cache =
+            CacheHandle::with_config(CacheConfig::unbounded().max_messages_per_channel(2));
+        let channel_id = Snowflake::from("10");
+
+        let upsert = |id: &str| {
+            let cache = cache.clone();
+            let channel_id = channel_id.clone();
+            let message_id = Snowflake::from(id);
+            async move {
+                cache
+                    .upsert_message(Message {
+                        id: message_id,
+                        channel_id,
+                        content: "hi".to_string(),
+                        ..Message::default()
+                    })
+                    .await;
+            }
+        };
+
+        upsert("100").await;
+        upsert("101").await;
+        // Replace the same key repeatedly: nothing may be evicted and the
+        // per-channel counter must stay at 2.
+        upsert("100").await;
+        upsert("100").await;
+        assert_eq!(cache.messages(&channel_id).await.len(), 2);
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.message_counts.get(&channel_id), Some(&2));
+            assert_eq!(store.messages.len(), 2);
+            assert_eq!(store.message_order.len(), 2);
+        }
+
+        // The replacement refreshed "100", so the next insert evicts "101".
+        upsert("102").await;
+        assert!(cache
+            .message(&channel_id, &Snowflake::from("101"))
+            .await
+            .is_none());
+        assert!(cache
+            .message(&channel_id, &Snowflake::from("100"))
+            .await
+            .is_some());
+        assert!(cache
+            .message(&channel_id, &Snowflake::from("102"))
+            .await
+            .is_some());
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.message_counts.get(&channel_id), Some(&2));
+        }
+    }
+
+    #[tokio::test]
+    async fn upsert_paths_throttle_full_prune_but_purge_expired_sweeps_immediately() {
+        let cache = CacheHandle::with_config(
+            CacheConfig::unbounded().message_ttl(Duration::from_millis(50)),
+        );
+        let channel_id = Snowflake::from("10");
+        let first_id = Snowflake::from("100");
+        let second_id = Snowflake::from("101");
+
+        cache
+            .upsert_message(Message {
+                id: first_id.clone(),
+                channel_id: channel_id.clone(),
+                content: "first".to_string(),
+                ..Message::default()
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        cache
+            .upsert_message(Message {
+                id: second_id.clone(),
+                channel_id: channel_id.clone(),
+                content: "second".to_string(),
+                ..Message::default()
+            })
+            .await;
+
+        // The second upsert happened within the throttle window, so the
+        // expired first message is still physically present...
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.messages.len(), 2);
+            assert_eq!(store.message_counts.get(&channel_id), Some(&2));
+        }
+        // ...but never visible through the read paths.
+        assert!(cache.message(&channel_id, &first_id).await.is_none());
+        assert_eq!(cache.messages(&channel_id).await.len(), 1);
+
+        // An explicit purge runs the unthrottled sweep and reclaims it.
+        cache.purge_expired().await;
+        {
+            let store = cache.store.read().await;
+            assert_eq!(store.messages.len(), 1);
+            assert_eq!(store.message_counts.get(&channel_id), Some(&1));
+            assert_eq!(store.message_order.len(), 1);
+            assert_eq!(store.message_seen.len(), 1);
+        }
+        // The fresh second message survives the sweep and stays readable.
+        assert!(cache.message(&channel_id, &second_id).await.is_some());
+        assert_eq!(cache.messages(&channel_id).await.len(), 1);
+    }
+
+    #[tokio::test]
     async fn cache_config_enforces_core_and_metadata_size_limits() {
         let cache = CacheHandle::with_config(
             CacheConfig::unbounded()
@@ -2914,5 +3268,71 @@ mod tests {
                 .len(),
             1
         );
+    }
+}
+
+#[cfg(all(test, feature = "cache"))]
+mod sweep_interval_tests {
+    use std::time::Duration;
+
+    use super::{CacheConfig, CacheHandle};
+    use crate::model::{Message, Snowflake};
+
+    #[test]
+    fn cache_config_sweep_interval_defaults_and_overrides() {
+        assert_eq!(
+            CacheConfig::bounded().sweep_interval,
+            Duration::from_secs(5)
+        );
+        assert_eq!(
+            CacheConfig::unbounded().sweep_interval,
+            Duration::from_secs(5)
+        );
+        let config = CacheConfig::default().sweep_interval(Duration::from_millis(50));
+        assert_eq!(config.sweep_interval, Duration::from_millis(50));
+    }
+
+    /// Upserts one message, waits past its TTL, upserts another, and
+    /// reports whether the first message entry is still physically stored
+    /// (per-entry read expiry aside).
+    async fn expired_entry_survives_second_upsert(sweep_interval: Duration) -> bool {
+        let cache = CacheHandle::with_config(
+            CacheConfig::default()
+                .message_ttl(Duration::from_millis(1))
+                .sweep_interval(sweep_interval),
+        );
+        let channel_id = Snowflake::from("10");
+
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from("1"),
+                channel_id: channel_id.clone(),
+                content: "first".to_string(),
+                ..Message::default()
+            })
+            .await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from("2"),
+                channel_id: channel_id.clone(),
+                content: "second".to_string(),
+                ..Message::default()
+            })
+            .await;
+
+        let store = cache.store.read().await;
+        store
+            .messages
+            .contains_key(&(channel_id, Snowflake::from("1")))
+    }
+
+    #[tokio::test]
+    async fn sweep_interval_controls_ttl_sweeps_from_hot_upsert_paths() {
+        // A zero interval sweeps on every upsert, evicting the expired entry.
+        assert!(!expired_entry_survives_second_upsert(Duration::ZERO).await);
+        // A long interval keeps the throttle closed, so the expired entry is
+        // still physically present after the second upsert.
+        assert!(expired_entry_survives_second_upsert(Duration::from_secs(3600)).await);
     }
 }

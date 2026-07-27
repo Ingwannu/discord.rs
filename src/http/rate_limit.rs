@@ -8,6 +8,45 @@ use reqwest::{header::HeaderMap, StatusCode};
 use super::body::{header_string, parse_body_value};
 
 pub(crate) const RATE_LIMIT_BUCKET_RETENTION: Duration = Duration::from_secs(60 * 60);
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Extracts the retry delay in seconds for a 429 response, preferring the
+/// JSON body's fractional `retry_after`, then the `Retry-After` header
+/// (integer seconds, also present on Cloudflare-level bans with non-JSON
+/// bodies), then `x-ratelimit-reset-after`, then a one-second fallback.
+pub(crate) fn retry_after_seconds(headers: &HeaderMap, body: &str) -> f64 {
+    let payload = parse_body_value(body.to_string());
+    if let Some(retry_after) = payload.get("retry_after").and_then(serde_json::Value::as_f64) {
+        return retry_after.max(0.0);
+    }
+    if let Some(retry_after) = header_string(headers.get("retry-after"))
+        .and_then(|value| f64::from_str(value.trim()).ok())
+    {
+        return retry_after.max(0.0);
+    }
+    if let Some(reset_after) = header_string(headers.get("x-ratelimit-reset-after"))
+        .and_then(|value| f64::from_str(value.trim()).ok())
+    {
+        return reset_after.max(0.0);
+    }
+    1.0
+}
+
+/// Returns true when a 429 applies to the global limit rather than a
+/// route bucket, checking the `x-ratelimit-global` and
+/// `x-ratelimit-scope: global` headers as well as the JSON body flag.
+pub(crate) fn is_global_rate_limit(headers: &HeaderMap, body: &str) -> bool {
+    if headers.get("x-ratelimit-global").is_some() {
+        return true;
+    }
+    if header_string(headers.get("x-ratelimit-scope")).as_deref() == Some("global") {
+        return true;
+    }
+    parse_body_value(body.to_string())
+        .get("global")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
 
 #[derive(Default)]
 pub(crate) struct RateLimitState {
@@ -15,6 +54,7 @@ pub(crate) struct RateLimitState {
     pub(crate) bucket_last_seen: Mutex<HashMap<String, Instant>>,
     pub(crate) blocked_until: Mutex<HashMap<String, Instant>>,
     pub(crate) global_blocked_until: Mutex<Option<Instant>>,
+    last_cleanup: Mutex<Option<Instant>>,
 }
 
 impl RateLimitState {
@@ -26,20 +66,19 @@ impl RateLimitState {
 
     pub(crate) fn wait_duration(&self, route_key: &str) -> Option<Duration> {
         let now = Instant::now();
-        self.cleanup_old_buckets(now);
+        self.maybe_cleanup(now);
         if let Some(global_until) = *Self::lock(&self.global_blocked_until) {
             if global_until > now {
                 return Some(global_until.duration_since(now));
             }
         }
 
-        let blocked_until = Self::lock(&self.blocked_until);
         let route_bucket_key = Self::lock(&self.route_buckets)
             .get(route_key)
             .cloned()
             .unwrap_or_else(|| route_key.to_string());
 
-        blocked_until
+        Self::lock(&self.blocked_until)
             .get(&route_bucket_key)
             .copied()
             .and_then(|until| {
@@ -59,25 +98,17 @@ impl RateLimitState {
         body: &str,
     ) {
         let now = Instant::now();
-        self.cleanup_old_buckets(now);
+        self.maybe_cleanup(now);
         if let Some(bucket_id) = header_string(headers.get("x-ratelimit-bucket")) {
             Self::lock(&self.route_buckets).insert(route_key.to_string(), bucket_id.clone());
-            Self::lock(&self.bucket_last_seen).insert(bucket_id.clone(), now);
+            Self::lock(&self.bucket_last_seen).insert(bucket_id, now);
         }
 
         if status == StatusCode::TOO_MANY_REQUESTS {
-            let payload = parse_body_value(body.to_string());
-            let retry_after = payload
-                .get("retry_after")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(1.0);
-            let blocked_until = now + Duration::from_secs_f64(retry_after.max(0.0));
+            let retry_after = retry_after_seconds(headers, body);
+            let blocked_until = now + Duration::from_secs_f64(retry_after);
 
-            if payload
-                .get("global")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
+            if is_global_rate_limit(headers, body) {
                 *Self::lock(&self.global_blocked_until) = Some(blocked_until);
             } else {
                 self.block_key(route_key, headers, blocked_until);
@@ -105,6 +136,22 @@ impl RateLimitState {
 
         Self::lock(&self.blocked_until).insert(bucket_key.clone(), blocked_until);
         Self::lock(&self.bucket_last_seen).insert(bucket_key, Instant::now());
+    }
+
+    /// Runs the retention sweep at most once per [`CLEANUP_INTERVAL`].
+    /// Expiry of individual blocks is already checked at read time, so
+    /// delaying the sweep never delays a request.
+    fn maybe_cleanup(&self, now: Instant) {
+        {
+            let mut last_cleanup = Self::lock(&self.last_cleanup);
+            if last_cleanup
+                .is_some_and(|last| now.saturating_duration_since(last) < CLEANUP_INTERVAL)
+            {
+                return;
+            }
+            *last_cleanup = Some(now);
+        }
+        self.cleanup_old_buckets(now);
     }
 
     pub(crate) fn cleanup_old_buckets(&self, now: Instant) {

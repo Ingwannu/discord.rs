@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::command::validation;
 use crate::constants::{component_type, separator_spacing};
+use crate::error::DiscordError;
 use crate::types::{to_json_value, ButtonConfig, MediaGalleryItem};
 
 use super::components::{ActionRowBuilder, ButtonBuilder};
@@ -153,6 +155,56 @@ mod tests {
         );
     }
 
+    fn expect_model_error<T: std::fmt::Debug>(
+        result: Result<T, crate::error::DiscordError>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("expected validation failure").to_string();
+        assert!(
+            err.contains(needle),
+            "error message {err:?} should contain {needle:?}"
+        );
+    }
+
+    #[test]
+    fn text_display_try_build_matches_build_and_rejects_invalid_content() {
+        let make = || TextDisplayBuilder::new("hello").id(42);
+        assert_eq!(make().build(), make().try_build().expect("valid text display"));
+
+        expect_model_error(
+            TextDisplayBuilder::new("").try_build(),
+            "text display content must be 1-4000 characters, got 0",
+        );
+        expect_model_error(
+            TextDisplayBuilder::new(&"c".repeat(4001)).try_build(),
+            "text display content must be 1-4000 characters, got 4001",
+        );
+        // 4000 multibyte codepoints (8000 bytes) must pass: Discord counts codepoints.
+        TextDisplayBuilder::new(&"é".repeat(4000))
+            .validate()
+            .expect("codepoint-length content should be valid");
+    }
+
+    #[test]
+    fn container_try_build_matches_build_and_rejects_invalid_containers() {
+        let make = || ContainerBuilder::new().add_text_display(TextDisplayBuilder::new("hi"));
+        assert_eq!(make().build(), make().try_build().expect("valid container"));
+
+        expect_model_error(
+            ContainerBuilder::new().try_build(),
+            "container components must contain 1-40 items, got 0",
+        );
+
+        let mut overfull = ContainerBuilder::new();
+        for _ in 0..41 {
+            overfull = overfull.add_text_display(TextDisplayBuilder::new("x"));
+        }
+        expect_model_error(
+            overfull.try_build(),
+            "container components must contain 1-40 items, got 41",
+        );
+    }
+
     #[test]
     fn create_container_assembles_image_description_and_chunked_buttons() {
         let buttons = vec![
@@ -298,6 +350,19 @@ impl TextDisplayBuilder {
     pub fn build(self) -> Value {
         to_json_value(self)
     }
+
+    /// Validates the text display against Discord's limits without consuming
+    /// the builder: content must be 1-4000 characters.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("text display content", &self.content, 1, 4000)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -422,6 +487,20 @@ impl ContainerBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the container against Discord's limits without consuming
+    /// the builder: a container must hold at least one child component, and
+    /// a components-V2 message allows at most 40 components in total.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_count("container components", self.components.len(), 1, 40)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 

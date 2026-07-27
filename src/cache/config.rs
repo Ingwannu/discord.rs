@@ -17,6 +17,7 @@ const DEFAULT_MAX_STAGE_INSTANCES: usize = 50_000;
 const DEFAULT_MESSAGE_TTL_SECS: u64 = 60 * 60;
 const DEFAULT_PRESENCE_TTL_SECS: u64 = 10 * 60;
 const DEFAULT_MEMBER_TTL_SECS: u64 = 24 * 60 * 60;
+const DEFAULT_SWEEP_INTERVAL_SECS: u64 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Typed Discord API object for `CacheConfig`.
@@ -38,6 +39,9 @@ pub struct CacheConfig {
     pub message_ttl: Option<Duration>,
     pub presence_ttl: Option<Duration>,
     pub member_ttl: Option<Duration>,
+    /// Minimum interval between full TTL sweeps triggered from hot upsert
+    /// paths (default 5s).
+    pub sweep_interval: Duration,
     pub cache_emojis: bool,
     pub cache_stickers: bool,
     pub cache_scheduled_events: bool,
@@ -71,6 +75,7 @@ impl CacheConfig {
             message_ttl: Some(Duration::from_secs(DEFAULT_MESSAGE_TTL_SECS)),
             presence_ttl: Some(Duration::from_secs(DEFAULT_PRESENCE_TTL_SECS)),
             member_ttl: Some(Duration::from_secs(DEFAULT_MEMBER_TTL_SECS)),
+            sweep_interval: Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS),
             cache_emojis: true,
             cache_stickers: true,
             cache_scheduled_events: true,
@@ -98,6 +103,7 @@ impl CacheConfig {
             message_ttl: None,
             presence_ttl: None,
             member_ttl: None,
+            sweep_interval: Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS),
             cache_emojis: true,
             cache_stickers: true,
             cache_scheduled_events: true,
@@ -187,6 +193,13 @@ impl CacheConfig {
 
     pub fn member_ttl(mut self, ttl: Duration) -> Self {
         self.member_ttl = Some(ttl);
+        self
+    }
+
+    /// Sets the minimum interval between full TTL sweeps triggered from hot
+    /// upsert paths (default 5s).
+    pub fn sweep_interval(mut self, interval: Duration) -> Self {
+        self.sweep_interval = interval;
         self
     }
 

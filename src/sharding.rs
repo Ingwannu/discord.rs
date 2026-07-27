@@ -1,3 +1,9 @@
+/// Multi-process shard management: child spawning, auto-respawn, and
+/// JSON-lines IPC (the discord.js `ShardingManager` equivalent).
+#[cfg(not(target_family = "wasm"))]
+#[path = "sharding/process.rs"]
+pub mod process;
+
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};

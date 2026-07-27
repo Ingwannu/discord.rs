@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.2.0 - 2026-07-27
+
+High-level framework release: the discord.js-style ergonomics layer. Where 2.1.0 closed protocol gaps, 2.2.0 closes the developer-experience gap.
+
+- Added the **interaction response API** — `interaction.reply(...)`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `defer_update`, `update_message`, `show_modal`, `respond_autocomplete`, `edit_reply`, `fetch_reply`, `delete_reply`, and `follow_up` on every responding-capable interaction variant via the `InteractionResponder` trait in `discordrs::response`. A shared atomic response state enforces the discord.js contract: double replies and follow-ups before acknowledgement fail locally, deferred interactions promote to replied on `edit_reply`, and the state slot is claimed atomically before the HTTP call with rollback on transport failure. `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
+- Added **entity convenience methods** (`discordrs::model_ext`) — `message.reply/edit/delete/react/pin/crosspost/forward_to/start_thread/link`, `member.kick/ban/timeout/add_role/remove_role/edit/display_name`, `guild.edit/delete/leave/fetch_channels/create_channel/fetch_member/fetch_roles/create_role/ban/unban/kick/set_mfa_level/icon_url/banner_url`, `channel.send/send_message/edit/delete/create_invite/mention/is_text_based/is_voice_based/is_thread`, `role.edit/delete/mention`, `user.create_dm/dm/tag/mention/avatar_url/display_avatar_url` — plus CDN URL helpers with animated-hash and default-avatar handling.
+- Added **multi-process sharding** (`discordrs::sharding::process`) — `ProcessShardManager` spawns one child process per shard group with staggered identify-safe boot, exponential-backoff auto-respawn, JSON-lines IPC over child stdio, `broadcast(...)` request/response across all children (the `broadcastEval`/`fetchClientValues` equivalent), graceful shutdown, and `ShardChildProcess::from_env()` so one binary serves as both parent and child. Ships a `process_sharding_bot` example.
+- Added the **audio playback pipeline** (`discordrs::voice::player`) — `AudioInput` (FFmpeg, raw PCM readers, files), `AudioResource` with 20ms frame chunking and live volume control, `AudioPlayer` state machine (Idle/Buffering/Playing/Paused/AutoPaused) with broadcast events (`TrackStart`, `TrackEnd` with reasons), Opus encoding behind `voice-encode`, five-frame silence flush, and drop-safe subscriptions with `NoSubscriberBehavior::{Pause,Play,Stop}`. Ships a `music_bot` example.
+- Added **collector parity** — `stop()`/`stop_with_reason`, cloneable `CollectorStopHandle`, `end_reason()` (`Limit`/`Time`/`Idle`/`User`/`ChannelDropped`), idle timeouts distinct from the overall timeout, `reset_timer()`, uniform `filter()` on component and modal collectors, and `received_count()`.
+- Added **builder runtime validation** — `validate()` and `try_build()` on command, button, select-menu, action-row, embed, modal, container, and media builders, enforcing Discord's documented limits with errors that name the field, the limit, and the actual value.
+- Added **configuration parity** — `RestClient::builder()` (API base/version, connect/request timeouts, user agent, proxy, custom reqwest client, rate-limit callback); default allowed mentions on both `RestClient` and `ClientBuilder`, injected only when a payload omits them; `ClientBuilder::cache_backend(...)` forwarding cache writes to a pluggable `CacheBackend` without stalling the gateway; and a configurable `CacheConfig::sweep_interval(...)`.
+- Completed **typed models** — `Message.components` and related read-side payloads become tolerant typed `MessageComponent` trees with a depth-first `iter()`, interaction `resolved` data becomes the typed `ResolvedData` container, and message interaction metadata becomes `MessageInteractionMetadata`.
+
+## 2.1.0 - 2026-07-27
+
+Feature-parity and hardening release closing the remaining gaps against discord.js v14.27.
+
+- Added `GUILD_MESSAGE_POLLS` (`1 << 24`) and `DIRECT_MESSAGE_POLLS` (`1 << 25`) gateway intents (both in `NON_PRIVILEGED`, enabling `MESSAGE_POLL_VOTE_*` events), plus a `GUILD_EXPRESSIONS` alias for bit 3.
+- Added `RestClient::with_reason(...)`, a cheap scoped clone that sends `X-Audit-Log-Reason` (percent-encoded like discord.js's `encodeURIComponent`) with every mutating request; `RestClient` is now `Clone`.
+- Added `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` REST helpers with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies.
+- Added `create_interaction_response_with_result(...)` — interaction callback with `with_response=true`, returning the typed `InteractionCallbackResult` resource (mirrors discord.js `withResponse: true`).
+- Added `MessageReferenceType` (`DEFAULT`/`FORWARD`), `MessageReference::reply(...)`/`forward(...)` constructors, and `RestClient::forward_message(...)` for one-call message forwarding.
+- Added `OAuth2Client::revoke_token(...)` for `POST /oauth2/token/revoke`.
+- Added scheduled-event query options: `get_guild_scheduled_events_with_query(...)` (`with_user_count`) and `get_guild_scheduled_event_users_with_query(...)` (`limit`, `with_member`, `before`, `after`).
+- Added `ClientBuilder::presence(...)` for an initial presence delivered inside IDENTIFY, and `EventDispatchMode` (`Serial` default / `Concurrent`) via `ClientBuilder::event_dispatch(...)`.
+- Added `Context::fetch_members(...)` / `fetch_members_with_timeout(...)`, which request guild members over the gateway and await the correlated `GUILD_MEMBERS_CHUNK` payloads (the discord.js `guild.members.fetch()` equivalent); fetched members and presences fill the cache.
+- Added GUILD_CREATE collections on `Guild` (`channels`, `threads`, `members`, `voice_states`, `presences`, `emojis`, `stickers`, `stage_instances`, `soundboard_sounds`, `guild_scheduled_events`, `joined_at`, `large`) and typed event-field completion for `InviteEvent`, `ThreadEvent::newly_created`, `ThreadListSyncEvent`, `ThreadMemberUpdateEvent`, typed `ThreadMember`, and typed auto-moderation actions/trigger metadata.
+- Changed GUILD_CREATE, GUILD_MEMBERS_CHUNK, and THREAD_* processing to populate the caches; cache hot paths rewritten with O(log n) LRU order tracking, incremental cap counters, throttled TTL sweeps, and read-lock-only list reads.
+- Changed the REST transport into one retry loop: per-route gating for all requests, `Retry-After` and `x-ratelimit-scope`/`x-ratelimit-global` handling, and 5xx/transport retries with backoff; added `HttpError::is_timeout()`/`is_connect()`/`is_body()`/`is_retryable()` and `DiscordError::is_retryable_transport()`.
+- Changed the gateway to pace IDENTIFY to 1-per-5s-per-shard with short-session reconnect backoff, and `spawn_shards(...)` now uses the account's real `max_concurrency` from `/gateway/bot`; gateway protocol failures surface as `DiscordError::Gateway`.
+
 ## 2.0.2 - 2026-05-02
 
 - Included the post-2.0.1 DAVE runtime clippy cleanup in the published crate so Linux stable CI and local release artifacts match.

@@ -4,7 +4,6 @@ use super::client::{
     request_soundboard_sounds_payload, voice_state_update_payload, GatewayCommand,
 };
 use crate::error::DiscordError;
-use crate::types::invalid_data_error;
 
 #[derive(Clone)]
 /// Typed Discord API object for `ShardMessenger`.
@@ -98,7 +97,11 @@ impl ShardMessenger {
     fn send(&self, command: GatewayCommand) -> Result<(), DiscordError> {
         self.command_tx
             .try_send(command)
-            .map_err(|error| invalid_data_error(format!("failed to send gateway command: {error}")))
+            .map_err(|error| {
+                crate::error::DiscordError::gateway(format!(
+                    "failed to send gateway command (queue full or shard stopped): {error}"
+                ))
+            })
     }
 }
 

@@ -33,6 +33,9 @@ pub mod http;
 pub mod manager;
 /// Typed Discord API models and request payload shapes.
 pub mod model;
+/// discord.js-style convenience methods on model entities
+/// (`message.reply(...)`, `member.kick(...)`, `guild.create_channel(...)`).
+pub mod model_ext;
 /// OAuth2 authorization URL and token exchange helpers.
 pub mod oauth2;
 /// Parsers for Discord interaction and modal payloads.
@@ -121,23 +124,26 @@ pub use model::{
     IntegrationAccount, IntegrationApplication, Interaction, InteractionCallbackResponse,
     InteractionContextData, InteractionContextType, Invite, InviteTargetUsersJobStatus,
     JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby, LobbyMember, LobbyMemberUpdate, Member,
-    Message, MessageActivity, MessageCall, MessageContextMenuInteraction, MessagePin,
-    MessageReference, MessageSnapshot, MessageSnapshotMessage, ModalSubmitInteraction,
+    Message, MessageActivity, MessageCall, MessageComponent, MessageComponentIter,
+    MessageContextMenuInteraction, MessageInteraction, MessageInteractionMetadata,
+    MessageMediaGalleryItem, MessagePin, MessageReference, MessageSelectDefaultValue,
+    MessageSelectOption, MessageSnapshot, MessageSnapshotMessage, ModalSubmitInteraction,
     ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
     ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite,
-    PermissionsBitField, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia,
-    PollResults, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, Role, RoleColors,
-    RoleSubscriptionData, RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery,
-    SearchGuildMessagesResponse, SetVoiceChannelStatus, SharedClientTheme, Sku, Snowflake,
-    SoundboardSound, SoundboardSoundList, StageInstance, Sticker, StickerItem, StickerPack,
-    StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember,
-    ThreadMemberQuery, UpdatePresence, UpdateUserApplicationRoleConnection, User,
-    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserContextMenuInteraction,
-    UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
-    Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PartialApplication,
+    PermissionOverwrite, PermissionsBitField, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters,
+    PollMedia, PollResults, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers,
+    ResolvedData, Role, RoleColors, RoleSubscriptionData, RoleTags, SearchGuildMembersQuery,
+    SearchGuildMessagesQuery, SearchGuildMessagesResponse, SetVoiceChannelStatus,
+    SharedClientTheme, Sku, Snowflake, SoundboardSound, SoundboardSoundList, StageInstance,
+    Sticker, StickerItem, StickerPack, StickerPackList, Subscription, SubscriptionQuery,
+    ThreadListResponse, ThreadMember, ThreadMemberQuery, UnfurledMediaItem, UpdatePresence,
+    UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection, UserCollectibles,
+    UserConnection, UserContextMenuInteraction, UserNameplate, UserPrimaryGuild, VanityUrl,
+    VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreen, WelcomeScreenChannel,
 };
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
@@ -221,8 +227,8 @@ pub use helpers::{
 pub use gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
 pub use gateway::{
-    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventHandler, ShardMessenger,
-    TypeMap,
+    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventDispatchMode, EventHandler,
+    ShardMessenger, TypeMap,
 };
 
 #[cfg(feature = "interactions")]

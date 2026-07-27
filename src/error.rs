@@ -1,10 +1,15 @@
 use std::fmt;
 
 /// Wrapper around `reqwest::Error` that is `Clone`-able.
-/// Stores the Display representation since reqwest errors are not Clone.
+/// Stores the Display representation since reqwest errors are not Clone,
+/// plus classification flags so callers can distinguish timeouts from
+/// connection failures without string matching.
 #[derive(Clone, Debug)]
 pub struct HttpError {
     message: String,
+    is_timeout: bool,
+    is_connect: bool,
+    is_body: bool,
 }
 
 impl HttpError {
@@ -12,11 +17,36 @@ impl HttpError {
     pub fn new(err: &reqwest::Error) -> Self {
         Self {
             message: err.to_string(),
+            is_timeout: err.is_timeout(),
+            is_connect: err.is_connect(),
+            is_body: err.is_body() || err.is_decode(),
         }
     }
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Returns true when the request timed out.
+    pub fn is_timeout(&self) -> bool {
+        self.is_timeout
+    }
+
+    /// Returns true when the connection could not be established.
+    pub fn is_connect(&self) -> bool {
+        self.is_connect
+    }
+
+    /// Returns true when reading or decoding the response body failed.
+    pub fn is_body(&self) -> bool {
+        self.is_body
+    }
+
+    /// Returns true when retrying the request may succeed (timeout,
+    /// connect failure, or truncated body), as opposed to errors that are
+    /// deterministic such as an invalid request builder.
+    pub fn is_retryable(&self) -> bool {
+        self.is_timeout || self.is_connect || self.is_body
     }
 }
 
@@ -137,6 +167,15 @@ impl DiscordError {
         match self {
             Self::Api { code, .. } => *code,
             _ => None,
+        }
+    }
+
+    /// Returns true when the error is a transient transport failure that a
+    /// retry may resolve (timeout, connect failure, truncated body).
+    pub fn is_retryable_transport(&self) -> bool {
+        match self {
+            Self::Http(err) => err.is_retryable(),
+            _ => false,
         }
     }
 }

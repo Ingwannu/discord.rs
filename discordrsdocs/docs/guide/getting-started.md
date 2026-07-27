@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-discordrs = { version = "2.0.2", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 ```
 
 ## Minimal Typed Gateway Bot
@@ -60,4 +60,5 @@ cargo run
 - Go to [Usage Guide](usage-guide.md)
 - Read [Architecture](architecture.md)
 - Explore [Commands API](../api/commands.md)
+- New in `2.2.0`: reply to interactions with `use discordrs::response::InteractionResponder;` and `interaction.reply(&ctx.http, "hi")`, and call `message.reply(...)`, `channel.send(...)`, `user.dm(...)` directly on the typed models — see the [Usage Guide](usage-guide.md) and [Changelog](changelog.md)
 

@@ -2,11 +2,165 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
     ApplicationCommandOptionChoice, ApplicationIntegrationType, InteractionContextType,
     PermissionsBitField,
 };
+
+/// Crate-internal helpers shared by the builder validation methods.
+///
+/// Discord counts limits in Unicode codepoints, so all length checks use
+/// `chars().count()` rather than byte length.
+pub(crate) mod validation {
+    use crate::error::DiscordError;
+
+    /// Number of Unicode codepoints in `value` (Discord's counting unit).
+    pub(crate) fn char_count(value: &str) -> usize {
+        value.chars().count()
+    }
+
+    /// Ensures `value` is `min..=max` characters long.
+    pub(crate) fn ensure_len(
+        field: &str,
+        value: &str,
+        min: usize,
+        max: usize,
+    ) -> Result<(), DiscordError> {
+        let count = char_count(value);
+        if count < min || count > max {
+            return Err(DiscordError::model(format!(
+                "{field} must be {min}-{max} characters, got {count}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Ensures `value` is at most `max` characters long.
+    pub(crate) fn ensure_max_len(field: &str, value: &str, max: usize) -> Result<(), DiscordError> {
+        let count = char_count(value);
+        if count > max {
+            return Err(DiscordError::model(format!(
+                "{field} must be at most {max} characters, got {count}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Ensures a collection holds `min..=max` items.
+    pub(crate) fn ensure_count(
+        field: &str,
+        actual: usize,
+        min: usize,
+        max: usize,
+    ) -> Result<(), DiscordError> {
+        if actual < min || actual > max {
+            return Err(DiscordError::model(format!(
+                "{field} must contain {min}-{max} items, got {actual}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Ensures a collection holds at most `max` items.
+    pub(crate) fn ensure_max_count(
+        field: &str,
+        actual: usize,
+        max: usize,
+    ) -> Result<(), DiscordError> {
+        if actual > max {
+            return Err(DiscordError::model(format!(
+                "{field} must contain at most {max} items, got {actual}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Ensures a chat-input command/option name is valid: 1-32 characters,
+    /// no spaces, no uppercase ASCII.
+    pub(crate) fn ensure_command_name(field: &str, value: &str) -> Result<(), DiscordError> {
+        ensure_len(field, value, 1, 32)?;
+        if value.contains(' ') {
+            return Err(DiscordError::model(format!(
+                "{field} must not contain spaces, got \"{value}\""
+            )));
+        }
+        if value.chars().any(|c| c.is_ascii_uppercase()) {
+            return Err(DiscordError::model(format!(
+                "{field} must be lowercase, got \"{value}\""
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Recursively validates a chat-input command option against Discord limits.
+fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError> {
+    let name = &option.name;
+    validation::ensure_command_name(&format!("option \"{name}\" name"), name)?;
+    validation::ensure_len(
+        &format!("option \"{name}\" description"),
+        &option.description,
+        1,
+        100,
+    )?;
+    validation::ensure_max_count(
+        &format!("option \"{name}\" choices"),
+        option.choices.len(),
+        25,
+    )?;
+    for choice in &option.choices {
+        validation::ensure_len(
+            &format!("option \"{name}\" choice name"),
+            &choice.name,
+            1,
+            100,
+        )?;
+    }
+    validation::ensure_max_count(
+        &format!("option \"{name}\" options"),
+        option.options.len(),
+        25,
+    )?;
+    match option.kind {
+        option_type::SUB_COMMAND_GROUP => {
+            for nested in &option.options {
+                if nested.kind != option_type::SUB_COMMAND {
+                    return Err(DiscordError::model(format!(
+                        "subcommand group \"{name}\" may only contain subcommands, \
+                         got option \"{}\" of type {}",
+                        nested.name, nested.kind
+                    )));
+                }
+                validate_option(nested)?;
+            }
+        }
+        option_type::SUB_COMMAND => {
+            for nested in &option.options {
+                if nested.kind == option_type::SUB_COMMAND
+                    || nested.kind == option_type::SUB_COMMAND_GROUP
+                {
+                    return Err(DiscordError::model(format!(
+                        "subcommand \"{name}\" cannot contain nested subcommand \
+                         or subcommand group \"{}\"",
+                        nested.name
+                    )));
+                }
+                validate_option(nested)?;
+            }
+        }
+        _ => {
+            if !option.options.is_empty() {
+                return Err(DiscordError::model(format!(
+                    "option \"{name}\" of type {} cannot have nested options",
+                    option.kind
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Public module for `command_type` APIs.
 pub mod command_type {
@@ -227,6 +381,19 @@ impl CommandOptionBuilder {
     pub fn build(self) -> ApplicationCommandOption {
         self.inner
     }
+
+    /// Validates this option (recursively) against Discord's limits without
+    /// consuming the builder.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validate_option(&self.inner)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<ApplicationCommandOption, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -328,6 +495,25 @@ impl SlashCommandBuilder {
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
+
+    /// Validates the command definition against Discord's limits without
+    /// consuming the builder.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_command_name("command name", &self.inner.name)?;
+        validation::ensure_len("command description", &self.inner.description, 1, 100)?;
+        validation::ensure_max_count("command options", self.inner.options.len(), 25)?;
+        for option in &self.inner.options {
+            validate_option(option)?;
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<CommandDefinition, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -389,6 +575,20 @@ impl PrimaryEntryPointCommandBuilder {
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
+
+    /// Validates the command definition against Discord's limits without
+    /// consuming the builder.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("command name", &self.inner.name, 1, 32)?;
+        validation::ensure_len("command description", &self.inner.description, 1, 100)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<CommandDefinition, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -422,6 +622,20 @@ impl UserCommandBuilder {
     pub fn build(self) -> CommandDefinition {
         self.inner
     }
+
+    /// Validates the command definition against Discord's limits without
+    /// consuming the builder. Context-menu names may contain spaces and
+    /// mixed case, so only the length is checked.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("command name", &self.inner.name, 1, 32)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<CommandDefinition, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -454,6 +668,20 @@ impl MessageCommandBuilder {
 
     pub fn build(self) -> CommandDefinition {
         self.inner
+    }
+
+    /// Validates the command definition against Discord's limits without
+    /// consuming the builder. Context-menu names may contain spaces and
+    /// mixed case, so only the length is checked.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len("command name", &self.inner.name, 1, 32)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<CommandDefinition, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
     }
 }
 
@@ -672,6 +900,158 @@ mod tests {
         assert_eq!(value["integration_types"], json!([0, 1]));
         assert_eq!(value["contexts"], json!([0, 1]));
         assert_eq!(value["handler"], json!(2));
+    }
+
+    fn expect_model_error<T: std::fmt::Debug>(
+        result: Result<T, crate::error::DiscordError>,
+        needle: &str,
+    ) {
+        let err = result.expect_err("expected validation failure").to_string();
+        assert!(
+            err.contains(needle),
+            "error message {err:?} should contain {needle:?}"
+        );
+    }
+
+    #[test]
+    fn slash_command_try_build_matches_build_for_valid_command() {
+        let make = || {
+            SlashCommandBuilder::new("hello", "Say hello").option(
+                CommandOptionBuilder::string("target", "Target user")
+                    .required(true)
+                    .choice("World", "world"),
+            )
+        };
+
+        let built = serde_json::to_value(make().build()).unwrap();
+        let validated = serde_json::to_value(make().try_build().expect("valid command")).unwrap();
+        assert_eq!(built, validated);
+    }
+
+    #[test]
+    fn slash_command_validate_accepts_multibyte_names_by_codepoint_count() {
+        // 32 codepoints but 64 UTF-8 bytes: must pass because Discord counts codepoints.
+        let name = "é".repeat(32);
+        SlashCommandBuilder::new(&name, "desc")
+            .validate()
+            .expect("codepoint-length name should be valid");
+    }
+
+    #[test]
+    fn slash_command_try_build_rejects_invalid_names() {
+        expect_model_error(
+            SlashCommandBuilder::new(&"a".repeat(45), "desc").try_build(),
+            "command name must be 1-32 characters, got 45",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("Hello", "desc").try_build(),
+            "command name must be lowercase",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("hi there", "desc").try_build(),
+            "command name must not contain spaces",
+        );
+    }
+
+    #[test]
+    fn slash_command_try_build_rejects_bad_description_and_option_overflow() {
+        expect_model_error(
+            SlashCommandBuilder::new("hello", "").try_build(),
+            "command description must be 1-100 characters, got 0",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("hello", &"d".repeat(101)).try_build(),
+            "command description must be 1-100 characters, got 101",
+        );
+
+        let mut command = SlashCommandBuilder::new("hello", "desc");
+        for index in 0..26 {
+            command = command.string_option(&format!("opt{index}"), "desc", false);
+        }
+        expect_model_error(
+            command.try_build(),
+            "command options must contain at most 25 items, got 26",
+        );
+    }
+
+    #[test]
+    fn command_option_try_build_rejects_invalid_fields() {
+        expect_model_error(
+            CommandOptionBuilder::string("name", &"d".repeat(101)).try_build(),
+            "option \"name\" description must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("Name", "desc").try_build(),
+            "option \"Name\" name must be lowercase",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("choices", "desc")
+                .choice(&"c".repeat(101), 1)
+                .try_build(),
+            "option \"choices\" choice name must be 1-100 characters, got 101",
+        );
+
+        let mut option = CommandOptionBuilder::string("choices", "desc");
+        for index in 0..26 {
+            option = option.choice(&format!("choice{index}"), index);
+        }
+        expect_model_error(
+            option.try_build(),
+            "option \"choices\" choices must contain at most 25 items, got 26",
+        );
+    }
+
+    #[test]
+    fn command_option_try_build_enforces_subcommand_nesting_rules() {
+        expect_model_error(
+            CommandOptionBuilder::subcommand("outer", "desc")
+                .option(CommandOptionBuilder::subcommand("inner", "desc"))
+                .try_build(),
+            "subcommand \"outer\" cannot contain nested subcommand",
+        );
+        expect_model_error(
+            CommandOptionBuilder::subcommand_group("group", "desc")
+                .option(CommandOptionBuilder::string("plain", "desc"))
+                .try_build(),
+            "subcommand group \"group\" may only contain subcommands",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("plain", "desc")
+                .option(CommandOptionBuilder::string("nested", "desc"))
+                .try_build(),
+            "option \"plain\" of type 3 cannot have nested options",
+        );
+
+        // Group -> subcommand -> basic option is the valid shape.
+        CommandOptionBuilder::subcommand_group("group", "desc")
+            .option(
+                CommandOptionBuilder::subcommand("sub", "desc")
+                    .option(CommandOptionBuilder::string("plain", "desc")),
+            )
+            .try_build()
+            .expect("valid nesting should build");
+    }
+
+    #[test]
+    fn context_menu_and_entry_point_builders_validate_names() {
+        let valid = UserCommandBuilder::new("Inspect Member").try_build().unwrap();
+        assert_eq!(valid.name, "Inspect Member");
+
+        expect_model_error(
+            UserCommandBuilder::new(&"n".repeat(33)).try_build(),
+            "command name must be 1-32 characters, got 33",
+        );
+        expect_model_error(
+            MessageCommandBuilder::new("").try_build(),
+            "command name must be 1-32 characters, got 0",
+        );
+        expect_model_error(
+            PrimaryEntryPointCommandBuilder::new("launch", "").try_build(),
+            "command description must be 1-100 characters, got 0",
+        );
+        PrimaryEntryPointCommandBuilder::new("launch", "Launch activity")
+            .try_build()
+            .expect("valid entry point command");
     }
 
     #[test]
