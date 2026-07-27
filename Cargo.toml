@@ -1,6 +1,6 @@
 [package]
 name = "discordrs"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 description = "discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client"
 authors = [
