@@ -72,6 +72,30 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
     );
 ```
 
+## Runtime Validation (2.2.0)
+
+Every command, button, select-menu, action-row, embed, modal, container, and media builder exposes `validate()` (check without consuming) and `try_build()` (validate, then build). They enforce Discord's documented limits — codepoint-counted lengths, option/choice/field counts, action-row composition, the 6000-character embed total, and Components V2 caps — with errors that name the field, the limit, and the actual value. Plain `build()` remains non-validating:
+
+```rust
+use discordrs::{EmbedBuilder, ModalBuilder, SlashCommandBuilder};
+
+// try_build() = validate + build.
+let command = SlashCommandBuilder::new("ticket", "Create a support ticket").try_build()?;
+
+let embed = EmbedBuilder::new()
+    .title("Status")
+    .description("All systems nominal")
+    .try_build()?;
+
+// validate() checks without consuming the builder.
+let modal = ModalBuilder::new("feedback", "Feedback");
+if let Err(error) = modal.validate() {
+    eprintln!("invalid modal: {error}");
+}
+```
+
+A too-long label or an overfull action row fails locally with an actionable message instead of a Discord 400 after the HTTP round trip.
+
 ## Practical Advice
 
 - Keep `custom_id` values stable; they are routing keys.

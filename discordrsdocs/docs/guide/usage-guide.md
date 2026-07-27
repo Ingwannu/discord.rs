@@ -9,28 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core default with cache storage
-discordrs = "2.1.0"
+discordrs = "2.2.0"
 
 # Typed gateway runtime
-discordrs = { version = "2.1.0", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.1.0", default-features = false }
+discordrs = { version = "2.2.0", default-features = false }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
+discordrs = { version = "2.2.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.1.0", features = ["interactions"] }
+discordrs = { version = "2.2.0", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "2.1.0", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hook
-discordrs = { version = "2.1.0", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -63,6 +63,37 @@ async fn main() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
+## 2.5 Reply like discord.js (2.2.0)
+
+Import `discordrs::response::InteractionResponder` and respond to interactions directly; the `discordrs::model_ext` entity methods need no import at all:
+
+```rust
+use discordrs::response::InteractionResponder;
+use discordrs::{Context, Event, Interaction};
+
+async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
+    match event {
+        Event::InteractionCreate(event) => {
+            if let Interaction::ChatInputCommand(command) = event.interaction {
+                command.reply(&ctx.http, "hi").await?;
+                // also: reply_ephemeral, defer + edit_reply, follow_up,
+                // show_modal(ModalBuilder), respond_autocomplete
+            }
+        }
+        Event::MessageCreate(event) => {
+            let message = event.message;
+            if message.content == "!ping" {
+                message.reply(&ctx.http, "pong").await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+```
+
+Double acknowledgements fail locally: the response state is shared atomically across clones of one interaction, so a second `reply(...)` or an early `follow_up(...)` returns an "already acknowledged" error without hitting Discord. See the [HTTP and Helpers API](../api/http-and-helpers.md) for the full responder and entity-method surface.
+
 ## 3. Register typed commands
 
 ```rust
@@ -87,6 +118,8 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 - Use `GetGuildQuery` with `get_guild_with_query(...)` for approximate guild counts, `ModifyGuildChannelPosition` with `modify_guild_channel_positions(...)` for guild channel reordering, `CreateStageInstance` and `ModifyStageInstance` for Stage Instance writes, `AddGuildMember` with `add_guild_member(...)` for OAuth2 `guilds.join` member adds, `AuditLogQuery` with `get_guild_audit_log_typed(...)` for Audit Log reads, `get_guild_role_member_counts(...)` for role membership counts, `get_guild_widget_image(...)` for public PNG widgets, and `AddGroupDmRecipient` for `gdm.join` group DM recipient flows.
 - Use `RestClient::with_reason("...")` when a mutating call should record an `X-Audit-Log-Reason` in the guild audit log, `forward_message(...)` for one-call message forwarding, `create_interaction_response_with_result(...)` for `with_response=true` interaction callbacks, and `create_guild(...)` / `delete_guild(...)` / `create_guild_from_template(...)` / `modify_guild_mfa_level(...)` for guild lifecycle routes.
 - Use `Context::fetch_members(...)` on the gateway runtime to collect `GUILD_MEMBERS_CHUNK` payloads (the discord.js `guild.members.fetch()` equivalent), and `ClientBuilder::presence(...)` / `event_dispatch(EventDispatchMode::Concurrent)` for initial IDENTIFY presence and concurrent handler dispatch.
+- Use `RestClient::builder(token, application_id)` when the client needs configuration (API base/version, timeouts, user agent, proxy, custom reqwest client, a 429 `rate_limit_callback`, default allowed mentions); `RestClient::new(...)` keeps the zero-configuration path.
+- Use the `discordrs::model_ext` entity methods (`message.reply(...)`, `member.timeout(...)`, `guild.create_channel(...)`, `channel.send(...)`, `user.dm(...)`) for one-line discord.js-style calls on typed models, and builder `try_build()`/`validate()` to enforce Discord's documented limits before the HTTP round trip.
 - Prefer typed legacy replacements: `list_public_archived_threads(...)` instead of `get_public_archived_threads(...)`, and `get_guild_audit_log_typed(...)` instead of `get_guild_audit_log(...)`.
 - `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
 
@@ -114,8 +147,10 @@ Pass the framework to `try_typed_interactions_endpoint(...)` when you want route
 
 ## 5. Turn on cache or collectors when the bot needs them
 
-- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default in `2.1.0`
-- `collectors`: enables async collectors for messages, interactions, components, and modals
+- `cache`: enables the in-memory cache storage, `CacheBackend` extension trait, and gateway manager reads; this feature is included by default
+- `collectors`: enables async collectors for messages, interactions, components, and modals — since `2.2.0` with `stop()`/`stop_with_reason(...)`, cloneable stop handles, `end_reason()`, `idle(...)` timeouts, `reset_timer()`, and uniform `filter(...)` across all four collector types
+
+Since `2.2.0`, `CacheConfig::sweep_interval(...)` tunes TTL sweep throttling, and `ClientBuilder::cache_backend(...)` forwards member/message/presence cache writes to an external `CacheBackend` (Redis, Valkey, ...) without stalling the gateway.
 
 Hot member, message, and presence cache lookups have `Arc` variants such as `member_arc(...)`, `message_arc(...)`, `presence_arc(...)`, and manager `cached_arc(...)` helpers. Use them when repeated cache reads should avoid deep cloning larger cached payloads. The existing owned-return methods remain available for compatibility.
 
@@ -165,7 +200,7 @@ async fn receive_pcm() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
-Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes `VoiceDaveySession` and outbound DAVE media helpers. The ignored live MLS transition harness is the release gate for Discord interop evidence.
+Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Since `2.2.0`, `discordrs::voice::player` adds the discord.js-style playback pipeline — `AudioInput::ffmpeg(url)`, `AudioResource`, and `AudioPlayer` with `TrackStart`/`TrackEnd` events (see the [Voice API](../api/voice.md) and `examples/music_bot.rs`). Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes `VoiceDaveySession` and outbound DAVE media helpers. The ignored live MLS transition harness is the release gate for Discord interop evidence.
 
 ## 8. Keep old raw helpers only for migration
 

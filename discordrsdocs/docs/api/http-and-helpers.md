@@ -2,7 +2,7 @@
 
 ## `RestClient`
 
-`RestClient` is the primary Discord REST v10 surface. It keeps shared route/global rate-limit state and also keeps `DiscordHttpClient` as a compatibility alias. Since `2.1.0` the client is `Clone`; clones share rate-limit state, the connection pool, and the application id.
+`RestClient` is the primary Discord REST v10 surface. It keeps shared route/global rate-limit state and also keeps `DiscordHttpClient` as a compatibility alias. Since `2.1` the client is `Clone`; clones share rate-limit state, the connection pool, and the application id.
 
 Common operations include:
 
@@ -38,12 +38,83 @@ Raw `serde_json::Value` methods remain available for routes where Discord adds f
 - request body serialization failures return `DiscordError::Json` instead of panicking
 - repeated HTTP 429 responses are retried up to a bounded limit before `DiscordError::RateLimit`
 
-`2.1.0` unifies the transport into one retry loop:
+`2.1` unified the transport into one retry loop:
 
 - the per-route serialization gate now covers all requests (previously JSON requests bypassed it, allowing same-bucket 429 races), and the route-gate map is garbage-collected
 - 5xx responses and transient transport errors retry with backoff (0.5s/1s/2s)
 - 429 handling reads the `Retry-After` header and the `x-ratelimit-scope`/`x-ratelimit-global` headers, so Cloudflare-level bans with HTML bodies back off correctly
 - `HttpError` exposes `is_timeout()`, `is_connect()`, `is_body()`, and `is_retryable()`, and `DiscordError::is_retryable_transport()` classifies retry-worthy failures
+
+## REST Client Configuration (`RestClient::builder`, 2.2.0)
+
+`RestClient::builder(token, application_id)` returns a `RestClientBuilder` mirroring discord.js's `RESTOptions`; `RestClient::new(...)` keeps the zero-configuration behavior:
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use discordrs::{AllowedMentions, RestClient};
+
+let rest = RestClient::builder("bot-token", 0)
+    .api_version(10)                     // or .api_base("https://discord.com/api/v10")
+    .connect_timeout(Duration::from_secs(5))
+    .request_timeout(Duration::from_secs(20))
+    .user_agent("my-bot/1.0")
+    .proxy("http://localhost:8888")
+    .rate_limit_callback(Arc::new(|info| {
+        eprintln!("429 on {} — retry after {}s (global: {})", info.route, info.retry_after, info.global);
+    }))
+    .default_allowed_mentions(AllowedMentions::default())
+    .build()?;
+```
+
+- `use_client(reqwest::Client)` supplies a fully custom client, superseding `connect_timeout`, `request_timeout`, and `proxy`.
+- `rate_limit_callback(...)` fires on every 429 with `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
+
+## Interaction Response API (`InteractionResponder`, 2.2.0)
+
+`discordrs::response::InteractionResponder` puts the discord.js responder methods on every responding-capable interaction variant. Import the trait so the methods resolve:
+
+```rust
+use discordrs::response::InteractionResponder;
+
+// command: ChatInputCommandInteraction (also works on context-menu,
+// component, and modal-submit interactions)
+command.reply(&rest, "hi").await?;
+command.reply_ephemeral(&rest, "only you can see this").await?;
+
+command.defer(&rest).await?;
+command.edit_reply(&rest, "done!").await?;
+let followup = command.follow_up(&rest, "extra detail").await?;
+```
+
+The full surface: `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `show_modal(ModalBuilder)`, plus `defer_update`/`update_message` on component and modal-submit interactions and `respond_autocomplete(Vec<AutocompleteChoice>)` on autocomplete interactions. `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
+
+The acknowledgement state is created at parse time and shared atomically across clones of one interaction: double replies and follow-ups before acknowledgement fail locally with an "already acknowledged" error, deferred interactions promote to replied on `edit_reply`, and the state slot is claimed before the HTTP call with rollback on transport failure. `is_replied()`, `is_deferred()`, and `is_acknowledged()` report the current state.
+
+## Entity Convenience Methods (`model_ext`, 2.2.0)
+
+`discordrs::model_ext` adds discord.js-style inherent methods to the typed models — no trait import needed:
+
+```rust
+// Message
+let reply = message.reply(&rest, "On it!").await?;
+reply.react(&rest, "✅").await?;
+message.forward_to(&rest, announce_channel_id).await?;
+let thread = message.start_thread(&rest, "follow-up").await?;
+
+// Member (guild id passed explicitly)
+member.timeout(&rest, guild_id, "2026-08-01T00:00:00+00:00").await?;
+member.kick_with_reason(&rest, guild_id, "spam").await?;
+
+// Guild, Channel, User
+let channel = guild.create_channel(&rest, &body).await?;
+channel.send(&rest, "Welcome!").await?;
+user.dm(&rest, "thanks for the report").await?;
+```
+
+Coverage: `message.reply/edit/edit_with/delete/react/unreact/pin/unpin/crosspost/forward_to/start_thread/link`, `member.kick/ban/timeout/remove_timeout/add_role/remove_role/edit/display_name` (plus `_with_reason` variants), `guild.edit/delete/leave/fetch_channels/create_channel/fetch_member/fetch_roles/create_role/ban/unban/kick/set_mfa_level/icon_url/banner_url`, `channel.send/send_message/edit/delete/create_invite/mention/is_text_based/is_voice_based/is_thread`, `role.edit/delete/mention`, and `user.create_dm/dm/tag/mention/avatar_url/default_avatar_url/display_avatar_url` — with CDN URL helpers that handle animated hashes and default avatars.
 
 ## Audit-Log Reasons
 
@@ -57,7 +128,7 @@ rest.with_reason("spam")
 
 ## Guild Lifecycle Routes
 
-`2.1.0` adds typed helpers for guild creation and deletion:
+`2.1` added typed helpers for guild creation and deletion:
 
 ```rust
 use discordrs::model::{CreateGuild, CreateGuildFromTemplate};

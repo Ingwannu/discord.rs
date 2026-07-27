@@ -17,6 +17,14 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Poll gateway intents `GUILD_MESSAGE_POLLS` and `DIRECT_MESSAGE_POLLS` (both in `NON_PRIVILEGED`), plus a `GUILD_EXPRESSIONS` alias for bit 3
 - Initial presence inside IDENTIFY via `ClientBuilder::presence(...)` and serial or concurrent handler scheduling via `ClientBuilder::event_dispatch(EventDispatchMode::...)`
 - `Context::fetch_members(...)` gateway member fetching that awaits the correlated `GUILD_MEMBERS_CHUNK` payloads and fills the cache — the discord.js `guild.members.fetch()` equivalent
+- discord.js-style interaction response API (`discordrs::response::InteractionResponder`): `interaction.reply(...)`, `reply_ephemeral`, `defer`, `defer_update`, `update_message`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `show_modal(ModalBuilder)`, and `respond_autocomplete`, with an atomic shared acknowledgement state that fails double replies locally
+- Entity convenience methods (`discordrs::model_ext`): `message.reply/edit/delete/react/pin/crosspost/forward_to/start_thread/link`, `member.kick/ban/timeout/add_role`, `guild.create_channel/fetch_member/ban/icon_url`, `channel.send/mention/is_text_based`, `role.mention`, `user.create_dm/dm/tag/display_avatar_url`, plus CDN URL helpers
+- Multi-process sharding (`discordrs::sharding::process`): `ProcessShardManager` with `spawn`/`spawn_auto`, exponential-backoff auto-respawn, JSON-lines IPC over child stdio, `broadcast(...)` across all children (the `broadcastEval` equivalent), and one-binary parent/child via `ShardChildProcess::from_env()`
+- Audio playback pipeline (`discordrs::voice::player`): `AudioInput` (FFmpeg, raw PCM, files), `AudioResource` with 20ms framing and live volume, `AudioPlayer` state machine with `TrackStart`/`TrackEnd` events, and drop-safe subscriptions with `NoSubscriberBehavior`
+- Collector controls: `stop()`/`stop_with_reason(...)`, cloneable `CollectorStopHandle`, `end_reason()`, `idle(...)` timeouts, `reset_timer()`, and uniform `filter(...)` on component and modal collectors
+- Builder runtime validation: `validate()` and `try_build()` on command, component, embed, modal, container, and media builders, enforcing Discord's documented limits with errors that name the field, the limit, and the actual value
+- Configurable REST client via `RestClient::builder()` (API base/version, timeouts, user agent, proxy, custom reqwest client, rate-limit callback, default allowed mentions) plus `ClientBuilder::default_allowed_mentions(...)` and `ClientBuilder::cache_backend(...)`
+- Typed read-side components: `Message.components` as `Vec<MessageComponent>` with a depth-first `iter()`, typed `ResolvedData` lookup maps, and typed `MessageInteractionMetadata`
 - `prelude::*` re-exports for common runtime, builder, helper, and response types
 - Cache-backed manager reads for guilds, channels, members, roles, presences, and messages, with bounded defaults, cheap `Arc` read APIs for hot member/message/presence paths, and explicit `CacheConfig` overrides
 - GUILD_CREATE cache population for channels, threads, members, voice states, presences, emojis, stickers, and stage instances (plus GUILD_MEMBERS_CHUNK and THREAD_* events), with O(log n) LRU order tracking, incremental per-guild/per-channel cap counters, and throttled TTL sweeps
@@ -40,43 +48,70 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.1.0"
+discordrs = "2.2.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.1.0", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.1.0", features = ["interactions"] }
+discordrs = { version = "2.2.0", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "2.1.0", features = ["gateway"] }
+discordrs = { version = "2.2.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.1.0", default-features = false }
+discordrs = { version = "2.2.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "2.1.0", features = ["gateway", "collectors"] }
+discordrs = { version = "2.2.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "2.1.0", features = ["gateway", "sharding"] }
+discordrs = { version = "2.2.0", features = ["gateway", "sharding"] }
 
 # Voice foundations
-discordrs = { version = "2.1.0", features = ["voice"] }
+discordrs = { version = "2.2.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "2.1.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
 
 # DAVE receive/outbound media integration
-discordrs = { version = "2.1.0", features = ["voice", "dave"] }
+discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "2.1.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "2.2.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "2.1.0", features = ["gateway", "interactions"] }
+discordrs = { version = "2.2.0", features = ["gateway", "interactions"] }
+```
+
+## Quick Taste: 2.2.0 Ergonomics
+
+```rust
+use discordrs::response::InteractionResponder;
+use discordrs::{Context, Event, Interaction};
+
+async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
+    match event {
+        // Reply to a slash command like discord.js: interaction.reply(...)
+        Event::InteractionCreate(event) => {
+            if let Interaction::ChatInputCommand(command) = event.interaction {
+                command.reply(&ctx.http, "hi").await?;
+            }
+        }
+        // Reply to a message like discord.js: message.reply(...)
+        Event::MessageCreate(event) => {
+            let message = event.message;
+            if message.content == "!ping" {
+                message.reply(&ctx.http, "pong").await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
 ```
 
 ## API Cleanup
@@ -275,9 +310,9 @@ fn app(public_key: &str) -> Router {
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
 | `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
 | `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
-| `collectors` | Async collectors for messages and interactions | tokio |
-| `sharding` | Sharding manager and reusable gateway config abstractions | tokio |
-| `voice` | Voice connection/player skeletons plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
+| `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
+| `voice` | Voice connection/player skeletons, the `AudioPlayer`/`AudioResource` playback pipeline, plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
 | `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
 | `dave` | DAVE/MLS receive and outbound media hooks backed by `davey`, with live Discord MLS transition validation coverage | voice, davey |
 
