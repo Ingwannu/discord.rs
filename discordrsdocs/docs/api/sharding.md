@@ -13,7 +13,8 @@ Sharding is provided behind the `sharding` feature on top of the `gateway` runti
 
 - `ShardConfig`, `ShardInfo`, `ShardIpcMessage`, `ShardRuntimeStatus`
 - `ShardingManager`, `ShardMessenger`, `ShardSupervisor`
-- `discordrs::sharding::process::{ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess, IdentifyPermit}` (multi-process; `IdentifyPermit` since 3.0)
+- `discordrs::sharding::process::{ProcessShardManager, ProcessShardManagerConfig, SessionStartBudget, ShardChildProcess}` (multi-process)
+- `IdentifyGate`, `IdentifyPermit`, `IdentifyOutcome` and `GatewayConnectionConfig::identify_gate(...)` (3.0): a hook that paces every fresh IDENTIFY of a gateway client
 
 ## Multi-Process Sharding
 
@@ -21,7 +22,7 @@ Sharding is provided behind the `sharding` feature on top of the `gateway` runti
 
 - spawns one child process per shard group;
 - respawns crashed children with exponential backoff: base `respawn_delay`, capped at five minutes, reset after 60s of uptime, bounded by `max_respawns`;
-- grants IDENTIFY permits per `max_concurrency` bucket across every child;
+- grants every IDENTIFY attempt per `max_concurrency` bucket and within the daily session-start budget, across all children;
 - exchanges framed JSON lines over child stdio.
 
 By default children re-execute the current binary. `ShardChildProcess::from_env()` returns `Some` only in child mode, so one binary serves both roles:
@@ -30,6 +31,7 @@ By default children re-execute the current binary. `ShardChildProcess::from_env(
 use discordrs::sharding::process::{
     ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess,
 };
+use discordrs::{gateway_intents, Client, GatewayConnectionConfig};
 use serde_json::json;
 
 #[tokio::main]
@@ -39,20 +41,22 @@ async fn main() -> Result<(), discordrs::DiscordError> {
     if let Some(child) = ShardChildProcess::from_env() {
         // Child mode. Serve broadcasts first; earlier requests get null.
         child.serve(|request| async move { json!({ "echo": request }) })?;
+        // Every fresh IDENTIFY of these clients waits for the parent's grant.
+        let gateway = GatewayConnectionConfig::default().identify_gate(child.identify_gate());
         for &shard_id in child.shard_ids() {
-            // Wait for the parent's IDENTIFY grant for this shard's bucket.
-            let permit = child.acquire_identify(shard_id).await?;
-            // ... start a gateway Client for shard_id here, then release the
-            // permit and report readiness when READY arrives:
-            drop(permit);
-            child.notify_shard_ready(shard_id)?;
+            // Add .event_handler(...) and call child.notify_shard_ready(shard_id)
+            // from its READY event.
+            let builder = Client::builder(&token, gateway_intents::GUILDS)
+                .gateway_config(gateway.clone())
+                .shard(shard_id, child.shard_count());
+            tokio::spawn(builder.start());
         }
         child.shutdown_signal().await;
         return Ok(());
     }
 
-    // Parent mode: spawn_auto reads the shard count and max_concurrency
-    // from /gateway/bot when they are None.
+    // Parent mode: spawn_auto reads the shard count, max_concurrency, and the
+    // session-start budget from /gateway/bot.
     let manager =
         ProcessShardManager::spawn_auto(token, ProcessShardManagerConfig::default()).await?;
 
@@ -63,12 +67,14 @@ async fn main() -> Result<(), discordrs::DiscordError> {
         println!("shard {shard_id}: {value}");
     }
 
-    manager.wait().await?;
+    // shutdown() is the completion API: it returns once every child is gone,
+    // and errors if one could not be confirmed stopped.
+    manager.shutdown().await?;
     Ok(())
 }
 ```
 
-The full example `examples/process_sharding_bot.rs` holds each permit until the shard's READY event (`cargo run --example process_sharding_bot --features sharding`).
+The full example is `examples/process_sharding_bot.rs` (`cargo run --example process_sharding_bot --features sharding`).
 
 ### Configuration
 
@@ -80,56 +86,68 @@ The full example `examples/process_sharding_bot.rs` holds each permit until the 
 | `respawn`, `respawn_delay`, `max_respawns` | `true`, 5s, unlimited | Respawn policy (exponential backoff, capped at 5 min). |
 | `program`, `args`, `extra_env` | current exe | Custom child binary and its arguments and environment. |
 | `max_concurrency` | `None` | IDENTIFY buckets (`shard_id % max_concurrency`). `spawn_auto` reads it from `/gateway/bot`; `spawn` assumes `1`. |
-| `identify_interval` | 5s | Spacing between grants in one bucket, measured from the previous permit's release. |
-| `identify_permit_timeout` | 30s | A permit that is not released by then is reclaimed. |
+| `session_start_budget` | `FromGateway` | Daily session-start budget source: `FromGateway` (needs `spawn_auto`), `Fixed(SessionStartLimit)`, or `Unchecked` (explicit opt-out). `spawn` rejects `FromGateway` because it has no token. |
+| `identify_interval` | 5s | Spacing between IDENTIFYs in one bucket, measured from the previous attempt's reported send. |
+| `identify_permit_timeout` | 30s | A child holding a permit longer than this is killed; the bucket is reused only after its exit is confirmed. |
 | `spawn_stagger` | `0` | Delay between child *process* starts. Only needed for custom children that never request permits. |
-| `broadcast_timeout` | 10s | Per-child answer deadline for `broadcast`. |
+| `broadcast_timeout` | 10s | Per-child answer deadline for `broadcast`; children cancel the handler after the same time. |
 | `shutdown_timeout` | 10s | Total time a child gets to exit after shutdown before it is killed. |
 | `max_ipc_frame_bytes` | 1 MiB | Largest IPC line in either direction (minimum 4 KiB). |
 
 ### IDENTIFY coordination
 
-Discord allows one IDENTIFY per bucket every 5 seconds, where the bucket is `shard_id % max_concurrency` ([Gateway: max concurrency](https://docs.discord.com/developers/events/gateway#max-concurrency)). The parent keeps one FIFO queue per bucket, shared by every child and every respawn:
+Discord allows one IDENTIFY per bucket every 5 seconds, where the bucket is `shard_id % max_concurrency` ([Gateway: max concurrency](https://docs.discord.com/developers/events/gateway#max-concurrency)), and a daily number of session starts. The parent keeps one FIFO queue per bucket plus the session-start budget, shared by every child and every respawn:
 
-- `child.acquire_identify(shard_id)` asks the parent for a permit and resolves when it is granted. Different buckets proceed in parallel.
-- Drop the returned `IdentifyPermit` (or call `release()`) once the shard has sent IDENTIFY. READY is the simplest signal; also drop it if the shard fails to start. The next grant in that bucket comes `identify_interval` after the release.
-- If a child exits while holding a permit, the parent reclaims it at exit time, so a crash loop cannot identify faster than the bucket allows. A permit held longer than `identify_permit_timeout` is reclaimed as well.
-- When `/gateway/bot` reports `session_start_limit.remaining == 0`, `spawn_auto` delays the first grant until `reset_after`.
-- Limitation: the gateway client re-IDENTIFYs on its own after an invalidated session (with its 5s-per-shard pacing). Those re-IDENTIFYs do not go through the parent.
+- **Every fresh IDENTIFY goes through the parent.** With `GatewayConnectionConfig::identify_gate(child.identify_gate())`, the gateway client asks for a permit before each connection that will IDENTIFY. That covers the first connect and every fresh session after INVALID_SESSION, close codes 4007/4009, or a reconnect before READY. RESUME needs no permit. READY handlers play no part in pacing.
+- **The client reports each outcome.** It sends `Sent` right after the IDENTIFY write (also when the write fails or is cancelled midway), or `Abandoned` when the attempt ended before the write, such as a connect failure or a close before HELLO.
+- **The next grant waits for that outcome.** After `Sent`, the next grant in the bucket comes `identify_interval` later. After `Abandoned`, it comes at once and the session start is refunded.
+- **The permit is taken before dialing.** This client heartbeats only after IDENTIFY/RESUME, so a queue wait after HELLO could outlast `heartbeat_interval`. The permit therefore also covers connect + HELLO; a connect attempt is abandoned after 15s while holding one.
+- **The parent keeps the bucket until it hears the outcome or the child is confirmed dead.** A child that holds a permit longer than `identify_permit_timeout` is killed. The bucket is reused only after its exit is confirmed, so a stalled child can never IDENTIFY next to the shard that got its slot. A child that dies while holding a permit counts as having sent its IDENTIFY.
+- **The session budget is counted conservatively,** one start per grant. When it runs out, grants pause until the reset, then `spawn_auto` reads `/gateway/bot` again. With `Fixed(..)`, the budget is assumed to be back at `total` after the reset. The count is per manager: several managers sharing one token must split the budget themselves.
+- **Custom gateways** can use `IdentifyGate` directly. `child.acquire_identify(shard_id)` returns an `IdentifyPermit`: call `finish(IdentifyOutcome::Sent)` after writing IDENTIFY, and dropping it reports `Abandoned`.
+
+`ClientBuilder` has no dedicated setter yet; pass the gate through `ClientBuilder::gateway_config(...)` as shown above.
 
 ### IPC framing
 
 Every protocol message is one line, `@discordrs-ipc/1 ` followed by a JSON object (`IPC_FRAME_PREFIX`), sent over the child's stdin (parent → child) and stdout (child → parent).
 
-- Lines without the prefix are ordinary output. The parent logs them at INFO (`child stdout: ...`) instead of failing, so a stray `println!` no longer corrupts IPC.
+- Lines without the prefix are ordinary output. The parent logs them at INFO (`child stdout: ...`) instead of failing, so a stray `println!` does not corrupt IPC.
 - Lines longer than `max_ipc_frame_bytes` are discarded while they stream in, so a child cannot make the parent buffer unbounded memory. Invalid UTF-8 is tolerated.
 - A broadcast payload that would exceed the limit makes `broadcast` return an error before anything is sent. A child response that would exceed it is replaced with `null` by the child.
-- Child stderr is inherited unchanged and remains the right place for logs. Child code must **not** read stdin, because the IPC reader owns it.
+- Both sides write through a dedicated writer. Control frames (grants, releases, shutdown) go first and are never dropped; the protocol bounds them to one grant per shard plus one shutdown. Data frames have bounded queues that reject new frames when full. No async task or destructor waits on a pipe: a parent that stops reading child stdout cannot block the child's Tokio runtime or its stdin reader. If a grant can no longer be delivered because the child's stdin is gone, the parent kills that child instead of leaving it waiting.
+- Child stderr is inherited unchanged and remains the right place for logs. Child code must **not** read stdin, because the IPC reader owns it. Frames are written by a background thread, so a child that exits right after `log(...)` can lose that line.
 - Writes that bypass Rust's stdout lock (C libraries, subprocesses sharing fd 1) can tear one frame. That frame is dropped and its broadcast entry reads `null`.
 
-Why stdio framing instead of an extra pipe fd or a socket: it needs no `unsafe` fd plumbing, works the same on Windows and Unix and with any child program (including shell scripts), opens no local listening endpoint, and keeps stdin EOF as the "parent died" signal.
+Why stdio framing instead of an extra pipe fd or a socket: it needs no `unsafe` fd plumbing, works the same on Windows and Unix and with any child program (including shell scripts), opens no local listening endpoint, and keeps stdin EOF as the "parent went away" signal.
 
 | Direction | `op` | Fields | Meaning |
 |---|---|---|---|
 | parent → child | `shutdown` | | Stop gracefully; stdin closes right after. |
 | parent → child | `request` | `id`, `payload` | Answer with `response` carrying the same `id`. |
-| parent → child | `identify_grant` | `shard_id` | The shard may IDENTIFY now. |
-| child → parent | `ready` | `shard_id` | The shard is connected. |
+| parent → child | `identify_grant` | `shard_id`, `lease` | The shard may send one IDENTIFY now. |
+| child → parent | `ready` | `shard_id` | The shard is connected (status only). |
 | child → parent | `response` | `id`, `payload` | Broadcast answer. |
 | child → parent | `log` | `message` | Logged through the parent's `tracing`. |
 | child → parent | `identify_request` | `shard_id` | Queue for a permit (one outstanding per shard). |
-| child → parent | `identify_release` | `shard_id` | IDENTIFY sent or abandoned; the bucket interval starts. |
+| child → parent | `identify_release` | `shard_id`, `lease`, `sent` | The attempt is over; `sent: false` means IDENTIFY was never written (default `true`). |
 
-Children also receive `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`, `DISCORDRS_SHARD_IPC=1`, and `DISCORDRS_SHARD_IPC_MAX_FRAME`.
+Children also receive `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`, `DISCORDRS_SHARD_IPC=1`, `DISCORDRS_SHARD_IPC_MAX_FRAME`, and `DISCORDRS_SHARD_IPC_REQUEST_TIMEOUT_MS`.
+
+### Broadcast handlers
+
+`child.serve(handler)` runs at most 32 handlers at once (`DEFAULT_MAX_CONCURRENT_REQUESTS`). Requests beyond that are answered with `null` before any task is spawned. Running handlers are tracked: each is cancelled when the parent's `broadcast_timeout` passes, since its answer could no longer be used, and all of them are cancelled when shutdown arrives. `serve` can be called once and needs a Tokio runtime.
 
 ### Lifecycle
 
 - `manager.children()` reports per-child `ChildStatus` (`Starting` → `Ready`/`Running` → `Respawning`/`Stopped`).
-- `manager.shutdown()` sends the `shutdown` op, closes stdin, keeps reading the child's stdout, and kills the child when `shutdown_timeout` (measured from the shutdown request) passes. A child that stopped reading stdin cannot delay this, and it cannot stall `broadcast` either: each child has its own bounded writer queue, and a full queue answers `null` immediately.
-- `manager.wait()` and `manager.shutdown()` share one completion signal, so any number of concurrent callers all return only after every child has exited.
-- Broadcast entries are `null` for children that are down, respawning, not yet serving, or not answering within `broadcast_timeout`.
-- Children observe shutdown through `shutdown_signal()`, which also resolves when the parent dies and stdin closes, so children never linger as orphans. Dropping the manager also stops its children.
+- `manager.shutdown().await` is the completion API. It sends the `shutdown` op ahead of any queued data, closes stdin, keeps reading the child's stdout, and kills the child when `shutdown_timeout` (measured from the shutdown request) passes. A child that stopped reading stdin cannot delay this, and it cannot stall `broadcast` either: a full data queue answers `null` immediately.
+- `manager.wait()` and `manager.shutdown()` share one completion state, so any number of concurrent callers all return only after every child monitor has finished, with the same result. That result is an error if a killed child's exit could not be confirmed (its IDENTIFY permits then stay held until it does exit), if a monitor panicked, or if the runtime shut down underneath it.
+- Broadcast entries are `null` for children that are down, respawning, not yet serving, at their handler limit, or not answering within `broadcast_timeout`.
+- Children observe shutdown through `shutdown_signal()`, which also resolves when stdin closes. That stops *cooperative* children, the ones awaiting the signal. A child that ignores it is killed by the parent's shutdown deadline, but if the parent process itself dies abruptly, nothing kills such a child.
+- Dropping the manager without `shutdown()` stops the children in the background only while the Tokio runtime keeps running. Otherwise `kill_on_drop` is the only cleanup.
 - `child.log(...)` sends log lines to the parent; `child.notify_shard_ready(id)` / `child.notify_ready()` report readiness.
+- Testing note: the strongest lifecycle tests (stalled stdin, kill and reap, IDENTIFY spacing across processes) use `/bin/sh` children and run only on Unix; the cross-process timing tests run only on Linux.
 
 ## Behavior
 

@@ -233,7 +233,10 @@ pub use voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
 #[cfg(all(feature = "voice", feature = "dave"))]
 pub use voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
 #[cfg(any(feature = "gateway", feature = "sharding"))]
-pub use ws::{GatewayCompression, GatewayConnectionConfig, GatewayEncoding};
+pub use ws::{
+    GatewayCompression, GatewayConnectionConfig, GatewayEncoding, IdentifyGate, IdentifyOutcome,
+    IdentifyPermit, IdentifyPermitFuture,
+};
 
 pub use builders::{
     create_container, create_default_buttons, ActionRowBuilder, ButtonBuilder, CheckboxBuilder,

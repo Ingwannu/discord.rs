@@ -2,7 +2,7 @@
 //!
 //! A [`ProcessShardManager`] spawns one child process per shard group, keeps
 //! each child alive (respawning it with exponential backoff when it exits
-//! unexpectedly), coordinates when each shard may IDENTIFY, and talks to the
+//! unexpectedly), decides when each shard may IDENTIFY, and talks to the
 //! children over a line-based JSON IPC protocol on the children's
 //! stdin/stdout pipes. The child half of the protocol is
 //! [`ShardChildProcess`], which the same binary can construct via
@@ -17,8 +17,8 @@
 //! are not protocol traffic:
 //!
 //! - A stray `println!` (or a tracing subscriber writing to stdout) in a
-//!   child no longer corrupts the protocol. The parent logs such lines
-//!   through `tracing` at INFO level (`child stdout: ...`) and carries on.
+//!   child does not corrupt the protocol. The parent logs such lines through
+//!   `tracing` at INFO level (`child stdout: ...`) and carries on.
 //! - Lines longer than [`ProcessShardManagerConfig::max_ipc_frame_bytes`]
 //!   are discarded while they stream in, so a runaway child cannot make the
 //!   parent buffer unbounded memory. Invalid UTF-8 is tolerated.
@@ -31,19 +31,34 @@
 //! one frame is then dropped as malformed and the affected broadcast entry
 //! reads `null`.
 //!
+//! Both sides write through a dedicated writer with two queues: control
+//! frames (IDENTIFY grants and releases, shutdown) always go first, while
+//! data frames (broadcasts, responses, logs) have bounded queues that reject
+//! new frames when full. No async task or destructor ever blocks on a pipe.
+//!
 //! # IDENTIFY coordination
 //!
 //! Discord allows one IDENTIFY per rate-limit bucket every 5 seconds, where
 //! the bucket is `shard_id % max_concurrency`
-//! (<https://docs.discord.com/developers/events/gateway#max-concurrency>).
-//! The parent owns one queue per bucket and hands out IDENTIFY permits over
-//! IPC. Children ask with [`ShardChildProcess::acquire_identify`] before
-//! starting a shard and release the [`IdentifyPermit`] once the shard's
-//! IDENTIFY has gone out (READY is the easiest signal). The bucket's next
-//! grant comes `identify_interval` after the release. Because the parent
-//! coordinates across every child, initial boots and respawns share one
-//! schedule. [`ProcessShardManager::spawn_auto`] reads `max_concurrency`
-//! from `/gateway/bot`.
+//! (<https://docs.discord.com/developers/events/gateway#max-concurrency>), and
+//! a daily number of session starts. The parent owns one queue per bucket
+//! plus the session-start budget, and grants one permit per IDENTIFY attempt
+//! over IPC.
+//!
+//! Children pass [`ShardChildProcess::identify_gate`] to
+//! [`GatewayConnectionConfig::identify_gate`]. The gateway client then asks
+//! for a permit before *every* connection that will IDENTIFY: the first
+//! one, and every fresh session after INVALID_SESSION, close codes 4007/4009,
+//! or a reconnect before READY. It reports `Sent` right after the IDENTIFY
+//! write, or `Abandoned` if the attempt ended earlier. RESUME needs no
+//! permit.
+//!
+//! The parent keeps the bucket until the child reports the outcome or the
+//! child's exit is confirmed. The next grant comes `identify_interval` after
+//! a `Sent`, or right away after an `Abandoned`. A child that holds a permit
+//! longer than [`ProcessShardManagerConfig::identify_permit_timeout`] is
+//! killed, and the bucket is reused only once that child is gone, so a
+//! stalled child can never IDENTIFY next to the shard that got its slot.
 //!
 //! # Protocol reference (for custom child programs)
 //!
@@ -51,28 +66,39 @@
 //! |---|---|---|---|
 //! | parent → child | `shutdown` | | Stop gracefully; stdin closes right after. |
 //! | parent → child | `request` | `id`, `payload` | Answer with a `response` carrying the same `id`. |
-//! | parent → child | `identify_grant` | `shard_id` | The shard may send IDENTIFY now. |
+//! | parent → child | `identify_grant` | `shard_id`, `lease` | The shard may send one IDENTIFY now. |
 //! | child → parent | `ready` | `shard_id` | The shard is connected. |
 //! | child → parent | `response` | `id`, `payload` | Answer to a `request`. |
 //! | child → parent | `log` | `message` | Surfaced through the parent's `tracing`. |
-//! | child → parent | `identify_request` | `shard_id` | Queue for an IDENTIFY permit (one outstanding per shard). |
-//! | child → parent | `identify_release` | `shard_id` | IDENTIFY was sent (or abandoned); the bucket's interval starts now. |
+//! | child → parent | `identify_request` | `shard_id` | Queue for a permit (one outstanding per shard). |
+//! | child → parent | `identify_release` | `shard_id`, `lease`, `sent` | The attempt is over; `sent: false` means IDENTIFY was never written. |
 //!
 //! Example frame: `@discordrs-ipc/1 {"op":"ready","shard_id":0}`. Empty
 //! lines are ignored. The Rust child writes a newline before every frame
-//! so that an unterminated `print!` cannot swallow the prefix. A permit that
-//! is not released within
-//! [`ProcessShardManagerConfig::identify_permit_timeout`] is reclaimed, and
-//! a child that exits gives back every permit it held.
+//! so that an unterminated `print!` cannot swallow the prefix.
+//!
+//! # Lifecycle guarantees
+//!
+//! [`ProcessShardManager::shutdown`] is the completion API: it resolves only
+//! once every child has exited, been killed, or failed to be confirmed dead,
+//! and reports the last case as an error. Children see a `shutdown` op and
+//! then stdin EOF. That stops *cooperative* children (those awaiting
+//! [`ShardChildProcess::shutdown_signal`]); others are killed when
+//! `shutdown_timeout` expires. If the manager is dropped without
+//! `shutdown()`, the monitors stop their children in the background; that
+//! needs the Tokio runtime to stay alive, otherwise `kill_on_drop` is the
+//! only cleanup. If the parent process dies abruptly, a child notices only
+//! through stdin EOF, so only cooperative children exit then.
 //!
 //! [`ProcessShardManager`]: crate::sharding::process::ProcessShardManager
-//! [`ProcessShardManager::spawn_auto`]: crate::sharding::process::ProcessShardManager::spawn_auto
+//! [`ProcessShardManager::shutdown`]: crate::sharding::process::ProcessShardManager::shutdown
 //! [`ProcessShardManagerConfig::max_ipc_frame_bytes`]: crate::sharding::process::ProcessShardManagerConfig::max_ipc_frame_bytes
 //! [`ProcessShardManagerConfig::identify_permit_timeout`]: crate::sharding::process::ProcessShardManagerConfig::identify_permit_timeout
 //! [`ShardChildProcess`]: crate::sharding::process::ShardChildProcess
 //! [`ShardChildProcess::from_env`]: crate::sharding::process::ShardChildProcess::from_env
-//! [`ShardChildProcess::acquire_identify`]: crate::sharding::process::ShardChildProcess::acquire_identify
-//! [`IdentifyPermit`]: crate::sharding::process::IdentifyPermit
+//! [`ShardChildProcess::identify_gate`]: crate::sharding::process::ShardChildProcess::identify_gate
+//! [`ShardChildProcess::shutdown_signal`]: crate::sharding::process::ShardChildProcess::shutdown_signal
+//! [`GatewayConnectionConfig::identify_gate`]: crate::ws::GatewayConnectionConfig::identify_gate
 //! [`IPC_FRAME_PREFIX`]: crate::sharding::process::IPC_FRAME_PREFIX
 
 // [Decision Log] IPC channel
@@ -99,56 +125,61 @@
 //   frame pays a 17-byte prefix.
 //
 // [Decision Log] IDENTIFY coordination
-// - Purpose: respect Discord's per-bucket IDENTIFY limit across every child
-//   process, including respawns.
-// - Previous implementation and constraints: child *process starts* were
-//   staggered by 5 seconds. Shards inside one child, respawns, and
-//   `max_concurrency` were ignored. The gateway client (`src/gateway/*`)
-//   has no IDENTIFY hook this module may change, so the permit has to be
-//   taken before the shard connects.
-// - Alternatives considered: (1) a smarter start stagger computed from
-//   `max_concurrency`; (2) a file lock or shared memory between children;
-//   (3) parent-granted permits over the existing IPC channel.
-// - Chosen approach: (3). Release-based leases are spaced by
-//   `identify_interval`, with a timeout for children that never release.
-// - Why: only the parent sees every start and respawn. A stagger cannot
-//   account for respawns or slow boots. Permits need no extra OS resources
-//   and match discord.js's `WaitForIdentify` worker protocol.
-// - Trade-offs: children must call `acquire_identify`; children that never
-//   ask are not paced, except by the optional `spawn_stagger`. Because the
-//   permit is taken before connecting, a bucket's slot also covers the
-//   connect time. Re-IDENTIFYs that the gateway client performs on its own
-//   after a session invalidation are not routed through the parent.
+// - Purpose: never let two IDENTIFYs of one `max_concurrency` bucket overlap,
+//   across every child process, every respawn, and every re-IDENTIFY the
+//   gateway client performs on its own, and stay within the daily
+//   session-start budget.
+// - Previous implementation and constraints: first child process starts were
+//   staggered by 5 seconds. Then (first 3.0 draft) permits were taken once
+//   before `Client::start()` and expired into a free bucket after a timeout:
+//   a stalled child could still IDENTIFY next to the shard that got its
+//   slot, and internal re-IDENTIFYs bypassed the parent. Only a budget of
+//   `remaining == 0` at startup was respected.
+// - Alternatives considered: (1) grant spacing alone, with lease IDs;
+//   (2) expiring permits into the next grant; (3) parent-owned bucket leases
+//   released only by an acknowledged outcome or a confirmed child exit,
+//   with kill-and-reap as the timeout recovery, and the gateway asking for a
+//   permit per IDENTIFY attempt through `IdentifyGate`.
+// - Chosen approach: (3), plus a conservative budget counter that consumes
+//   one start per grant, refunds `Abandoned` attempts, and waits for the
+//   reset (then refreshes from `/gateway/bot`) when it reaches zero.
+// - Why: lease IDs and expiry cannot stop a process that is merely slow;
+//   only its confirmed death proves it will not IDENTIFY later. Asking per
+//   attempt, from inside the gateway client, is the only way to cover the
+//   client's own re-IDENTIFYs.
+// - Trade-offs: a child stuck in connect for longer than the permit timeout
+//   is killed and respawned, taking every shard in that process with it.
+//   The budget is counted per manager: several managers sharing one token
+//   must split the budget themselves.
 //
 // [Decision Log] Monitor lifecycle
-// - Purpose: shutdown must always be observable and bounded, and `wait()` /
-//   `shutdown()` must agree on when children are gone.
+// - Purpose: shutdown must always be observable and bounded, `wait()` and
+//   `shutdown()` must agree on the outcome, and failures must be visible.
 // - Previous implementation and constraints: the monitor awaited stdin
-//   writes inside its `select!`, so a child that stopped reading stdin hid
-//   the shutdown request. The graceful-stop write ran before its timeout
-//   started. `wait()` took the task handles, so a concurrent `shutdown()`
-//   returned before children exited.
-// - Alternatives considered: write timeouts on the inline write; a
-//   `JoinSet` drained by whichever caller comes first; a dedicated writer
-//   task per child plus a shared completion counter.
-// - Chosen approach: a bounded per-child writer task (frames are enqueued
-//   with `try_send`, so the monitor never waits on a pipe), one deadline
-//   that covers write + wait before the kill, and a `watch` counter that
-//   every monitor decrements on drop and every waiter observes.
-// - Why: write timeouts still stall the loop for the timeout length, and
-//   handle ownership makes waiters race. A counter is shared and survives
-//   monitor panics.
-// - Trade-offs: a child that reads stdin too slowly sees its broadcast
-//   entries answered with `null` once 64 frames are queued, instead of
-//   making the broadcast wait.
+//   writes inside its `select!`. `wait()` took the task handles, so a
+//   concurrent `shutdown()` returned before children exited. A failed kill
+//   and a panicking monitor were both reported as success.
+// - Alternatives considered: write timeouts on the inline write; a `JoinSet`
+//   drained by whichever caller comes first; per-child writer tasks plus a
+//   shared completion state that records each monitor's terminal outcome.
+// - Chosen approach: the last one. Frames go to a writer task with a
+//   control-priority queue and a bounded data queue. One deadline covers
+//   write + wait before the kill. A `watch` state counts live monitors and
+//   collects their failures, and every waiter reads the same final state.
+// - Why: write timeouts still stall the loop. Handle ownership makes waiters
+//   race. A failure recorded on drop also covers panics and runtime shutdown.
+// - Trade-offs: a child that reads stdin too slowly gets `null` broadcast
+//   entries once 64 data frames are queued. Control frames are not limited
+//   by count; the protocol bounds them (one grant per shard plus one
+//   shutdown).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::{self, BufRead, Write as _};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -158,12 +189,16 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, watch, Mutex as AsyncMutex, OwnedMutexGuard};
+use tokio::task::JoinSet;
 use tokio::time::{sleep_until, timeout, timeout_at, Instant};
 use tracing::{debug, info, warn};
 
 use crate::error::DiscordError;
 use crate::http::RestClient;
-use crate::model::GatewayBot;
+use crate::model::SessionStartLimit;
+#[cfg(doc)]
+use crate::ws::GatewayConnectionConfig;
+use crate::ws::{IdentifyGate, IdentifyOutcome, IdentifyPermit, IdentifyPermitFuture};
 
 /// Environment variable holding the comma-separated shard id list assigned to
 /// a child process (e.g. `"0,1"`).
@@ -178,12 +213,19 @@ pub const ENV_SHARD_IPC: &str = "DISCORDRS_SHARD_IPC";
 /// oversized responses with `null` instead of sending a frame the parent
 /// would discard.
 pub const ENV_SHARD_IPC_MAX_FRAME: &str = "DISCORDRS_SHARD_IPC_MAX_FRAME";
+/// Environment variable holding the parent's broadcast timeout in
+/// milliseconds. Children cancel a request handler once the parent has
+/// stopped waiting for its answer.
+pub const ENV_SHARD_IPC_REQUEST_TIMEOUT_MS: &str = "DISCORDRS_SHARD_IPC_REQUEST_TIMEOUT_MS";
 
 /// Prefix that marks a line as an IPC frame. The `/1` is the protocol
 /// version; lines with any other prefix are treated as ordinary output.
 pub const IPC_FRAME_PREFIX: &str = "@discordrs-ipc/1 ";
 /// Default for [`ProcessShardManagerConfig::max_ipc_frame_bytes`] (1 MiB).
 pub const DEFAULT_MAX_IPC_FRAME_BYTES: usize = 1024 * 1024;
+/// How many broadcast requests a child runs at once. Requests beyond this
+/// are answered with `null` before a task is spawned for them.
+pub const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 32;
 
 /// Smallest accepted frame limit: below this even a `ready` frame with a
 /// large shard id plus some payload would not fit, so smaller settings are
@@ -193,9 +235,16 @@ const MIN_IPC_FRAME_BYTES: usize = 4096;
 /// monitor. The monitor drains it without awaiting I/O, so it only fills
 /// when broadcasts arrive faster than the monitor loop can turn.
 const COMMAND_QUEUE_CAPACITY: usize = 256;
-/// Frames waiting for the per-child stdin writer. When a child stops reading
-/// stdin this fills up, and further sends fail fast instead of piling up.
+/// Data frames (broadcast requests) waiting for a child's stdin writer. When
+/// a child stops reading stdin this fills up, and further broadcasts fail
+/// fast instead of piling up.
 const IPC_WRITE_QUEUE_CAPACITY: usize = 64;
+/// Data frames (responses, logs, ready) waiting for the child's stdout
+/// writer thread.
+const CHILD_DATA_QUEUE_CAPACITY: usize = 256;
+/// Default broadcast timeout, also the child's request-handler timeout when
+/// the parent does not pass one.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long to wait for the OS to reap a child after `SIGKILL`; only a
 /// process stuck in uninterruptible kernel sleep takes longer.
 const KILL_REAP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -209,12 +258,23 @@ const LOGGED_LINE_CHARS: usize = 512;
 const MAX_RESPAWN_DELAY: Duration = Duration::from_secs(5 * 60);
 /// A child that stays alive at least this long resets the backoff schedule.
 const BACKOFF_RESET_UPTIME: Duration = Duration::from_secs(60);
+/// When a budget refresh is impossible, Discord's daily window is assumed.
+const BUDGET_FALLBACK_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+/// Minimum pause before asking `/gateway/bot` again when it still reports
+/// an exhausted budget with an already elapsed reset.
+const BUDGET_RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Clamp for user-supplied durations so deadline arithmetic cannot overflow.
 const FAR_FUTURE: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
 fn deadline_after(duration: Duration) -> Instant {
     let now = Instant::now();
     now.checked_add(duration.min(FAR_FUTURE)).unwrap_or(now)
+}
+
+fn lock_or_recover<T>(mutex: &StdMutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 // ---------------------------------------------------------------------------
@@ -237,12 +297,14 @@ pub enum ParentMessage {
         /// Arbitrary application payload.
         payload: Value,
     },
-    /// Answer to [`ChildMessage::IdentifyRequest`]: the shard may send
-    /// IDENTIFY now. The child must reply with
-    /// [`ChildMessage::IdentifyRelease`] once it has.
+    /// Answer to [`ChildMessage::IdentifyRequest`]: the shard may send one
+    /// IDENTIFY now and must then report [`ChildMessage::IdentifyRelease`]
+    /// with the same `lease`.
     IdentifyGrant {
         /// Shard whose IDENTIFY is permitted.
         shard_id: u32,
+        /// Correlation id for the release.
+        lease: u64,
     },
 }
 
@@ -275,12 +337,22 @@ pub enum ChildMessage {
         /// Shard that wants to IDENTIFY.
         shard_id: u32,
     },
-    /// The shard's IDENTIFY has been sent (or will not be sent); the bucket's
-    /// next grant is spaced from this moment.
+    /// The IDENTIFY attempt for `lease` is over.
     IdentifyRelease {
         /// Shard whose permit is returned.
         shard_id: u32,
+        /// Lease id from the grant.
+        lease: u64,
+        /// Whether IDENTIFY was (or may have been) written. `false` frees
+        /// the bucket without waiting out the interval and refunds the
+        /// session-start budget. Defaults to `true`, the safe assumption.
+        #[serde(default = "identify_sent_default")]
+        sent: bool,
     },
+}
+
+fn identify_sent_default() -> bool {
+    true
 }
 
 /// Encodes an IPC message as one frame: [`IPC_FRAME_PREFIX`] followed by the
@@ -506,6 +578,24 @@ pub fn respawn_backoff(base: Duration, attempt: u32) -> Duration {
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// Where the manager gets Discord's daily session-start budget from.
+#[derive(Clone, Debug, Default)]
+pub enum SessionStartBudget {
+    /// Read `session_start_limit` from `/gateway/bot`, even when the shard
+    /// count and `max_concurrency` are configured, and read it again
+    /// whenever the budget runs out and its reset passes. Only
+    /// [`ProcessShardManager::spawn_auto`] has a token to do this;
+    /// [`ProcessShardManager::spawn`] rejects it.
+    #[default]
+    FromGateway,
+    /// Start from these numbers (e.g. from your own `/gateway/bot` call).
+    /// After `reset_after` passes, the budget is assumed to be back at
+    /// `total` (with nothing to refresh from).
+    Fixed(SessionStartLimit),
+    /// Do not track the session-start budget. Only bucket pacing applies.
+    Unchecked,
+}
+
 /// Configuration for [`ProcessShardManager`].
 #[derive(Clone, Debug)]
 pub struct ProcessShardManagerConfig {
@@ -540,11 +630,10 @@ pub struct ProcessShardManagerConfig {
     /// Delay between consecutive child *process* starts (default
     /// [`Duration::ZERO`]).
     ///
-    /// IDENTIFY pacing is done by the permits children request with
-    /// [`ShardChildProcess::acquire_identify`], which also covers respawns
-    /// and several shards per process. Set a stagger (e.g. 5s) only for
-    /// custom child programs that do not speak the identify part of the
-    /// protocol.
+    /// IDENTIFY pacing comes from the permits children's gateway clients
+    /// request through [`ShardChildProcess::identify_gate`]. Set a stagger
+    /// only for custom child programs that do not speak the identify part of
+    /// the protocol.
     pub spawn_stagger: Duration,
     /// Discord's `max_concurrency`: how many IDENTIFY buckets
     /// (`shard_id % max_concurrency`) may identify in parallel. `None` means
@@ -552,16 +641,20 @@ pub struct ProcessShardManagerConfig {
     /// [`ProcessShardManager::spawn`] assumes `1` (the value for bots
     /// without large bot sharding).
     pub max_concurrency: Option<u32>,
-    /// Minimum spacing between IDENTIFY grants in one bucket, measured from
-    /// the previous permit's release (default 5s, Discord's documented
+    /// Daily session-start budget source (default
+    /// [`SessionStartBudget::FromGateway`]).
+    pub session_start_budget: SessionStartBudget,
+    /// Minimum spacing between IDENTIFYs in one bucket, measured from the
+    /// previous attempt's reported send (default 5s, Discord's documented
     /// window). Lower it only in tests.
     pub identify_interval: Duration,
-    /// How long a child may hold an IDENTIFY permit before the parent
-    /// reclaims it (default 30s). It stops one stuck child from blocking
-    /// every other shard in its bucket.
+    /// How long a child may hold an IDENTIFY permit before the parent kills
+    /// it (default 30s). The bucket is reused only after that child has
+    /// exited. The gateway client gives up a connect attempt after 15s while
+    /// holding a permit, so this only fires for a stuck child.
     pub identify_permit_timeout: Duration,
     /// Per-child response deadline used by [`ProcessShardManager::broadcast`]
-    /// (default 10s).
+    /// (default 10s). Children cancel request handlers after the same time.
     pub broadcast_timeout: Duration,
     /// Total time a child gets to exit after shutdown is requested (default
     /// 10s). The deadline covers sending the `shutdown` op, closing stdin,
@@ -588,9 +681,10 @@ impl Default for ProcessShardManagerConfig {
             extra_env: Vec::new(),
             spawn_stagger: Duration::ZERO,
             max_concurrency: None,
+            session_start_budget: SessionStartBudget::FromGateway,
             identify_interval: Duration::from_secs(5),
             identify_permit_timeout: Duration::from_secs(30),
-            broadcast_timeout: Duration::from_secs(10),
+            broadcast_timeout: DEFAULT_REQUEST_TIMEOUT,
             shutdown_timeout: Duration::from_secs(10),
             max_ipc_frame_bytes: DEFAULT_MAX_IPC_FRAME_BYTES,
         }
@@ -636,70 +730,177 @@ pub struct ChildStatus {
     pub respawns: u32,
 }
 
-fn lock_or_recover<T>(mutex: &StdMutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 // ---------------------------------------------------------------------------
 // IDENTIFY coordination (parent side)
 // ---------------------------------------------------------------------------
 
-/// Per-bucket IDENTIFY queues shared by every child monitor.
-///
-/// Each bucket is a FIFO `tokio::sync::Mutex`. Holding its guard means
-/// "this bucket is identifying right now", so waiters queue fairly, and a
-/// waiter that is dropped (its child exited) leaves the queue without
-/// disturbing the others.
-struct IdentifyGate {
-    buckets: Vec<Arc<AsyncMutex<IdentifyBucket>>>,
-    max_concurrency: u32,
-    interval: Duration,
+/// Daily session-start budget, counted conservatively: one start per grant,
+/// refunded only for attempts reported as never sent.
+struct SessionBudget {
+    state: StdMutex<BudgetState>,
+    /// Serializes consumers so only one of them waits for a reset and
+    /// refreshes.
+    consume_lock: AsyncMutex<()>,
+    refresher: Option<RestClient>,
 }
 
-struct IdentifyBucket {
+#[derive(Debug, PartialEq, Eq)]
+struct BudgetState {
+    remaining: u32,
+    total: u32,
+    reset_at: Instant,
+}
+
+impl BudgetState {
+    fn from_limit(limit: &SessionStartLimit) -> Self {
+        Self {
+            remaining: limit.remaining,
+            total: limit.total.max(limit.remaining).max(1),
+            reset_at: deadline_after(Duration::from_millis(limit.reset_after)),
+        }
+    }
+}
+
+impl SessionBudget {
+    fn new(state: BudgetState, refresher: Option<RestClient>) -> Self {
+        Self {
+            state: StdMutex::new(state),
+            consume_lock: AsyncMutex::new(()),
+            refresher,
+        }
+    }
+
+    /// Takes one session start, waiting for the reset when none are left.
+    /// Cancel-safe: the count only changes in synchronous sections.
+    async fn consume(&self) {
+        let _serialized = self.consume_lock.lock().await;
+        loop {
+            let reset_at = {
+                let mut state = lock_or_recover(&self.state);
+                if state.remaining > 0 {
+                    state.remaining -= 1;
+                    return;
+                }
+                state.reset_at
+            };
+            warn!(
+                wait_ms = reset_at
+                    .saturating_duration_since(Instant::now())
+                    .as_millis() as u64,
+                "session start budget exhausted; holding IDENTIFY grants until it resets"
+            );
+            sleep_until(reset_at).await;
+            self.refresh().await;
+        }
+    }
+
+    async fn refresh(&self) {
+        let fresh = match &self.refresher {
+            Some(rest) => match rest.get_gateway_bot().await {
+                Ok(gateway_bot) => Some(BudgetState::from_limit(&gateway_bot.session_start_limit)),
+                Err(error) => {
+                    warn!("refreshing the session start limit failed: {error}; assuming it reset");
+                    None
+                }
+            },
+            None => None,
+        };
+        let mut state = lock_or_recover(&self.state);
+        *state = fresh.unwrap_or_else(|| BudgetState {
+            remaining: state.total,
+            total: state.total,
+            reset_at: deadline_after(BUDGET_FALLBACK_WINDOW),
+        });
+        if state.remaining == 0 && state.reset_at <= Instant::now() {
+            state.reset_at = deadline_after(BUDGET_RETRY_DELAY);
+        }
+        info!(
+            remaining = state.remaining,
+            total = state.total,
+            "session start budget refreshed"
+        );
+    }
+
+    fn refund(&self) {
+        let mut state = lock_or_recover(&self.state);
+        state.remaining = state.remaining.saturating_add(1);
+    }
+}
+
+/// Per-bucket IDENTIFY queues and the session budget, shared by every child
+/// monitor.
+///
+/// Each bucket is a FIFO `tokio::sync::Mutex`. Holding its guard means
+/// "this bucket's IDENTIFY attempt is in progress", so waiters queue fairly,
+/// and a waiter that is dropped (its child exited) leaves the queue without
+/// disturbing the others.
+struct IdentifyScheduler {
+    buckets: Vec<Arc<AsyncMutex<BucketState>>>,
+    max_concurrency: u32,
+    interval: Duration,
+    budget: Option<Arc<SessionBudget>>,
+}
+
+struct BucketState {
     /// Earliest moment the next permit for this bucket may be granted.
     available_at: Instant,
 }
 
-/// A granted IDENTIFY slot. Dropping it (release, permit timeout, or the
-/// child exiting) starts the bucket's `interval` from that moment. Spacing
-/// from release instead of grant stays safe even when the child needed a
-/// while to connect before sending IDENTIFY.
-struct IdentifyLease {
-    bucket: OwnedMutexGuard<IdentifyBucket>,
+/// Ownership of a bucket for one granted IDENTIFY attempt. It ends with the
+/// attempt's reported outcome, or, when dropped without one (the child
+/// exited or was killed while holding it), as `Sent`, the safe assumption.
+struct BucketLease {
+    bucket: Option<OwnedMutexGuard<BucketState>>,
     interval: Duration,
+    budget: Option<Arc<SessionBudget>>,
 }
 
-impl Drop for IdentifyLease {
-    fn drop(&mut self) {
-        self.bucket.available_at = deadline_after(self.interval);
+impl BucketLease {
+    fn finish(mut self, outcome: IdentifyOutcome) {
+        self.end(outcome);
+    }
+
+    fn end(&mut self, outcome: IdentifyOutcome) {
+        let Some(mut bucket) = self.bucket.take() else {
+            return;
+        };
+        match outcome {
+            IdentifyOutcome::Sent => bucket.available_at = deadline_after(self.interval),
+            IdentifyOutcome::Abandoned => {
+                if let Some(budget) = &self.budget {
+                    budget.refund();
+                }
+            }
+        }
     }
 }
 
-impl IdentifyGate {
+impl Drop for BucketLease {
+    fn drop(&mut self) {
+        self.end(IdentifyOutcome::Sent);
+    }
+}
+
+impl IdentifyScheduler {
     fn new(
         max_concurrency: u32,
         total_shards: u32,
         interval: Duration,
-        not_before: Instant,
+        budget: Option<Arc<SessionBudget>>,
     ) -> Self {
         let max_concurrency = max_concurrency.max(1);
         // `shard_id % max_concurrency` never exceeds the shard count, so
         // allocating more buckets than shards would be wasted.
         let bucket_count = max_concurrency.min(total_shards.max(1)) as usize;
+        let now = Instant::now();
         let buckets = (0..bucket_count)
-            .map(|_| {
-                Arc::new(AsyncMutex::new(IdentifyBucket {
-                    available_at: not_before,
-                }))
-            })
+            .map(|_| Arc::new(AsyncMutex::new(BucketState { available_at: now })))
             .collect();
         Self {
             buckets,
             max_concurrency,
             interval,
+            budget,
         }
     }
 
@@ -709,40 +910,20 @@ impl IdentifyGate {
         (shard_id % self.max_concurrency) as usize % self.buckets.len()
     }
 
-    async fn acquire(&self, shard_id: u32) -> IdentifyLease {
+    async fn acquire(&self, shard_id: u32) -> BucketLease {
         let bucket = Arc::clone(&self.buckets[self.bucket_of(shard_id)]);
         let guard = bucket.lock_owned().await;
-        // Cancelling during this sleep drops the guard without touching
-        // `available_at`, which is correct because nothing identified.
+        // Cancelling during either wait drops the guard without touching
+        // `available_at` or the budget, which is correct because nothing
+        // was granted.
         sleep_until(guard.available_at).await;
-        IdentifyLease {
-            bucket: guard,
-            interval: self.interval,
+        if let Some(budget) = &self.budget {
+            budget.consume().await;
         }
-    }
-}
-
-/// Values taken from `/gateway/bot` for [`ProcessShardManager::spawn_auto`].
-#[derive(Debug, PartialEq, Eq)]
-struct IdentifyPlan {
-    shards: u32,
-    max_concurrency: u32,
-    /// Wait before the first grant when the daily session-start budget is
-    /// exhausted (`remaining == 0`).
-    initial_delay: Duration,
-}
-
-impl IdentifyPlan {
-    fn from_gateway_bot(gateway_bot: &GatewayBot) -> Self {
-        let limit = &gateway_bot.session_start_limit;
-        Self {
-            shards: gateway_bot.shards.max(1),
-            max_concurrency: limit.max_concurrency.max(1),
-            initial_delay: if limit.remaining == 0 {
-                Duration::from_millis(limit.reset_after)
-            } else {
-                Duration::ZERO
-            },
+        BucketLease {
+            bucket: Some(guard),
+            interval: self.interval,
+            budget: self.budget.clone(),
         }
     }
 }
@@ -778,115 +959,205 @@ struct MonitorContext {
     max_respawns: Option<u32>,
     start_delay: Duration,
     shutdown_timeout: Duration,
+    kill_reap_timeout: Duration,
     max_frame: usize,
-    identify_gate: Arc<IdentifyGate>,
+    scheduler: Arc<IdentifyScheduler>,
     identify_permit_timeout: Duration,
 }
 
-/// Decrements the live-monitor counter when a monitor task ends for any
-/// reason, including a panic or runtime shutdown, so `wait()` cannot hang
-/// on a monitor that is already gone.
-struct MonitorCompletion(Arc<watch::Sender<usize>>);
+/// Knobs that are not part of the public configuration; tests shorten them.
+struct SpawnInternals {
+    /// How long to wait for a killed child to be reaped. Zero skips the wait
+    /// and treats the exit as unconfirmed right away.
+    kill_reap_timeout: Duration,
+}
+
+impl Default for SpawnInternals {
+    fn default() -> Self {
+        Self {
+            kill_reap_timeout: KILL_REAP_TIMEOUT,
+        }
+    }
+}
+
+/// Shared outcome of all monitors: how many are still running and which
+/// ones ended in failure.
+#[derive(Clone, Debug, Default)]
+struct CompletionState {
+    remaining: usize,
+    failures: Vec<String>,
+}
+
+/// Records one monitor's terminal outcome when the monitor task ends for
+/// any reason, including a panic or runtime shutdown, so waiters neither
+/// hang on a monitor that is gone nor mistake its failure for success.
+struct MonitorCompletion {
+    state: Arc<watch::Sender<CompletionState>>,
+    label: String,
+    result: Option<Result<(), String>>,
+}
 
 impl Drop for MonitorCompletion {
     fn drop(&mut self) {
-        if std::thread::panicking() {
-            warn!("shard child monitor panicked");
+        let failure = match self.result.take() {
+            Some(Ok(())) => None,
+            Some(Err(error)) => Some(format!("{}: {error}", self.label)),
+            None if std::thread::panicking() => Some(format!("{}: monitor panicked", self.label)),
+            None => Some(format!(
+                "{}: monitor was cancelled before its child was confirmed stopped \
+                 (Tokio runtime shut down?)",
+                self.label
+            )),
+        };
+        if let Some(failure) = &failure {
+            warn!("{failure}");
         }
-        self.0
-            .send_modify(|remaining| *remaining = remaining.saturating_sub(1));
+        self.state.send_modify(|state| {
+            state.remaining = state.remaining.saturating_sub(1);
+            if let Some(failure) = failure {
+                state.failures.push(failure);
+            }
+        });
+    }
+}
+
+fn completion_result(state: &CompletionState) -> Result<(), DiscordError> {
+    if state.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(DiscordError::gateway(format!(
+            "{} shard child monitor(s) failed: {}",
+            state.failures.len(),
+            state.failures.join("; ")
+        )))
     }
 }
 
 /// Multi-process shard manager: spawns one child process per shard group,
 /// respawns crashed children with exponential backoff, grants IDENTIFY
-/// permits per `max_concurrency` bucket, and provides request/response
-/// broadcasting over framed IPC — the discord.js `ShardingManager`
-/// equivalent.
+/// permits per `max_concurrency` bucket within the session-start budget, and
+/// provides request/response broadcasting over framed IPC — the discord.js
+/// `ShardingManager` equivalent.
 ///
 /// Children are started with `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`,
-/// `DISCORDRS_SHARD_IPC=1`, and `DISCORDRS_SHARD_IPC_MAX_FRAME` in their
-/// environment so the same binary can detect child mode via
-/// [`ShardChildProcess::from_env`].
+/// `DISCORDRS_SHARD_IPC=1`, `DISCORDRS_SHARD_IPC_MAX_FRAME`, and
+/// `DISCORDRS_SHARD_IPC_REQUEST_TIMEOUT_MS` in their environment so the same
+/// binary can detect child mode via [`ShardChildProcess::from_env`].
 ///
-/// Dropping the manager without [`Self::shutdown`] still stops the
-/// children gracefully in the background; nothing waits for them, though.
+/// Use [`Self::shutdown`] to stop the children and learn the outcome.
+/// Dropping the manager also stops them, but only in the background and
+/// only while the Tokio runtime keeps running.
 pub struct ProcessShardManager {
     total_shards: u32,
     max_concurrency: u32,
     children: Vec<ChildEntry>,
     shutdown_tx: watch::Sender<bool>,
-    monitors_remaining: watch::Receiver<usize>,
+    completion: watch::Receiver<CompletionState>,
     next_request_id: AtomicU64,
     broadcast_timeout: Duration,
     max_frame: usize,
 }
 
 impl ProcessShardManager {
-    /// Starts child processes for every shard group described by `config`.
+    /// Starts child processes for every shard group described by `config`,
+    /// without contacting Discord.
     ///
-    /// `config.total_shards` must be `Some`; use [`Self::spawn_auto`] to let
-    /// Discord recommend a shard count and `max_concurrency`. Without
-    /// `config.max_concurrency`, IDENTIFY permits are granted for one
-    /// bucket only.
+    /// `config.total_shards` must be `Some`. Without a token the
+    /// session-start budget cannot be read, so `config.session_start_budget`
+    /// must be [`SessionStartBudget::Fixed`] or
+    /// [`SessionStartBudget::Unchecked`]; use [`Self::spawn_auto`] to read
+    /// the shard count, `max_concurrency`, and the budget from Discord.
+    /// Without `config.max_concurrency`, permits are granted for one bucket.
     pub async fn spawn(config: ProcessShardManagerConfig) -> Result<Self, DiscordError> {
-        Self::spawn_with_identify_delay(config, Duration::ZERO).await
+        let budget = match &config.session_start_budget {
+            SessionStartBudget::FromGateway => {
+                return Err(DiscordError::model(
+                    "ProcessShardManager::spawn cannot read the session start limit without \
+                     a token; use spawn_auto(token, ..), or set session_start_budget to \
+                     SessionStartBudget::Fixed(..) or SessionStartBudget::Unchecked",
+                ));
+            }
+            SessionStartBudget::Fixed(limit) => {
+                Some(SessionBudget::new(BudgetState::from_limit(limit), None))
+            }
+            SessionStartBudget::Unchecked => None,
+        };
+        Self::start(config, budget, SpawnInternals::default()).await
     }
 
-    /// Like [`Self::spawn`], but fills `config.total_shards` and
-    /// `config.max_concurrency` from Discord's `/gateway/bot` endpoint when
-    /// they are `None`. When the daily session-start budget is exhausted,
-    /// the first IDENTIFY grant waits for its reset.
+    /// Like [`Self::spawn`], but reads `/gateway/bot` with `token`.
     ///
-    /// If only `max_concurrency` was missing and the request fails, a
-    /// warning is logged and one bucket is assumed; if the shard count is
-    /// missing, the error is returned.
+    /// The response fills `config.total_shards` and `config.max_concurrency`
+    /// when they are `None`, and, with the default
+    /// [`SessionStartBudget::FromGateway`], seeds the session-start budget,
+    /// which is read again whenever it runs out. That request is made even
+    /// when the shard count and concurrency are configured, and its failure
+    /// is an error, because skipping it would silently disable budget
+    /// protection.
     pub async fn spawn_auto(
         token: impl Into<String>,
         config: ProcessShardManagerConfig,
     ) -> Result<Self, DiscordError> {
         let rest = RestClient::new(token, 0);
-        Self::spawn_auto_with(&rest, config).await
+        Self::spawn_auto_with(rest, config).await
     }
 
     async fn spawn_auto_with(
-        rest: &RestClient,
+        rest: RestClient,
         mut config: ProcessShardManagerConfig,
     ) -> Result<Self, DiscordError> {
-        let mut identify_delay = Duration::ZERO;
-        if config.total_shards.is_none() || config.max_concurrency.is_none() {
+        let budget_from_gateway =
+            matches!(config.session_start_budget, SessionStartBudget::FromGateway);
+        let gateway_bot = if budget_from_gateway
+            || config.total_shards.is_none()
+            || config.max_concurrency.is_none()
+        {
             match rest.get_gateway_bot().await {
-                Ok(gateway_bot) => {
-                    let plan = IdentifyPlan::from_gateway_bot(&gateway_bot);
-                    info!(
-                        shards = plan.shards,
-                        max_concurrency = plan.max_concurrency,
-                        identify_delay_ms = plan.initial_delay.as_millis() as u64,
-                        "using /gateway/bot sharding parameters"
-                    );
-                    if config.total_shards.is_none() {
-                        config.total_shards = Some(plan.shards);
-                    }
-                    if config.max_concurrency.is_none() {
-                        config.max_concurrency = Some(plan.max_concurrency);
-                    }
-                    identify_delay = plan.initial_delay;
-                }
-                Err(error) if config.total_shards.is_some() => {
+                Ok(gateway_bot) => Some(gateway_bot),
+                Err(error) if !budget_from_gateway && config.total_shards.is_some() => {
                     warn!(
                         "failed to fetch /gateway/bot for max_concurrency; \
                          granting one IDENTIFY at a time: {error}"
                     );
+                    None
                 }
                 Err(error) => return Err(error),
             }
+        } else {
+            None
+        };
+        if let Some(gateway_bot) = &gateway_bot {
+            let limit = &gateway_bot.session_start_limit;
+            info!(
+                shards = gateway_bot.shards,
+                max_concurrency = limit.max_concurrency,
+                remaining = limit.remaining,
+                "read /gateway/bot sharding parameters"
+            );
+            if config.total_shards.is_none() {
+                config.total_shards = Some(gateway_bot.shards.max(1));
+            }
+            if config.max_concurrency.is_none() {
+                config.max_concurrency = Some(limit.max_concurrency.max(1));
+            }
         }
-        Self::spawn_with_identify_delay(config, identify_delay).await
+        let budget = match (&config.session_start_budget, &gateway_bot) {
+            (SessionStartBudget::FromGateway, Some(gateway_bot)) => Some(SessionBudget::new(
+                BudgetState::from_limit(&gateway_bot.session_start_limit),
+                Some(rest),
+            )),
+            (SessionStartBudget::Fixed(limit), _) => {
+                Some(SessionBudget::new(BudgetState::from_limit(limit), None))
+            }
+            _ => None,
+        };
+        Self::start(config, budget, SpawnInternals::default()).await
     }
 
-    async fn spawn_with_identify_delay(
+    async fn start(
         config: ProcessShardManagerConfig,
-        identify_delay: Duration,
+        budget: Option<SessionBudget>,
+        internals: SpawnInternals,
     ) -> Result<Self, DiscordError> {
         let Some(total_shards) = config.total_shards else {
             return Err(DiscordError::model(
@@ -918,11 +1189,11 @@ impl ProcessShardManager {
         let shards_per_process = config.shards_per_process.max(1) as usize;
         let max_concurrency = config.max_concurrency.unwrap_or(1).max(1);
         let max_frame = config.max_ipc_frame_bytes.max(MIN_IPC_FRAME_BYTES);
-        let identify_gate = Arc::new(IdentifyGate::new(
+        let scheduler = Arc::new(IdentifyScheduler::new(
             max_concurrency,
             total_shards,
             config.identify_interval,
-            deadline_after(identify_delay),
+            budget.map(Arc::new),
         ));
 
         let groups: Vec<Vec<u32>> = shard_ids
@@ -930,7 +1201,10 @@ impl ProcessShardManager {
             .map(<[u32]>::to_vec)
             .collect();
         let (shutdown_tx, _) = watch::channel(false);
-        let (completion_tx, monitors_remaining) = watch::channel(groups.len());
+        let (completion_tx, completion) = watch::channel(CompletionState {
+            remaining: groups.len(),
+            failures: Vec::new(),
+        });
         let completion_tx = Arc::new(completion_tx);
         let mut children = Vec::with_capacity(groups.len());
 
@@ -955,9 +1229,14 @@ impl ProcessShardManager {
                 (ENV_SHARD_COUNT.to_string(), total_shards.to_string()),
                 (ENV_SHARD_IPC.to_string(), "1".to_string()),
                 (ENV_SHARD_IPC_MAX_FRAME.to_string(), max_frame.to_string()),
+                (
+                    ENV_SHARD_IPC_REQUEST_TIMEOUT_MS.to_string(),
+                    config.broadcast_timeout.as_millis().to_string(),
+                ),
             ];
             env.extend(config.extra_env.iter().cloned());
 
+            let label = format!("shard child {index} (shards {group:?})");
             let context = MonitorContext {
                 index,
                 shard_ids: group.clone(),
@@ -973,16 +1252,24 @@ impl ProcessShardManager {
                     .checked_mul(u32::try_from(index).unwrap_or(u32::MAX))
                     .unwrap_or(MAX_RESPAWN_DELAY),
                 shutdown_timeout: config.shutdown_timeout,
+                kill_reap_timeout: internals.kill_reap_timeout,
                 max_frame,
-                identify_gate: Arc::clone(&identify_gate),
+                scheduler: Arc::clone(&scheduler),
                 identify_permit_timeout: config.identify_permit_timeout,
             };
 
             let shutdown_rx = shutdown_tx.subscribe();
-            let completion = MonitorCompletion(Arc::clone(&completion_tx));
+            let completion = MonitorCompletion {
+                state: Arc::clone(&completion_tx),
+                label,
+                result: None,
+            };
             tokio::spawn(async move {
-                let _completion = completion;
-                run_child_monitor(context, command_rx, shutdown_rx).await;
+                // Move the whole guard into the task; capturing only
+                // `completion.result` would drop the guard (and report the
+                // monitor as finished) right here.
+                let mut completion = completion;
+                completion.result = Some(run_child_monitor(context, command_rx, shutdown_rx).await);
             });
             children.push(ChildEntry {
                 shard_ids: group,
@@ -1003,7 +1290,7 @@ impl ProcessShardManager {
             max_concurrency,
             children,
             shutdown_tx,
-            monitors_remaining,
+            completion,
             next_request_id: AtomicU64::new(1),
             broadcast_timeout: config.broadcast_timeout,
             max_frame,
@@ -1038,8 +1325,9 @@ impl ProcessShardManager {
     /// keyed by the lowest shard id in that child's group. A child that does
     /// not answer within `broadcast_timeout` contributes `Value::Null` for
     /// its entry, and so does a child that is down, respawning, has not
-    /// called [`ShardChildProcess::serve`] yet, or is not draining its
-    /// stdin. Callers should treat `Null` entries as "shard unavailable".
+    /// called [`ShardChildProcess::serve`] yet, is at its concurrent-request
+    /// limit, or is not draining its stdin. Callers should treat `Null`
+    /// entries as "shard unavailable".
     ///
     /// Fails only when the encoded request would exceed
     /// `max_ipc_frame_bytes`; nothing is sent in that case.
@@ -1093,9 +1381,14 @@ impl ProcessShardManager {
         Ok(futures_util::future::join_all(pending).await)
     }
 
-    /// Gracefully stops all children. Each receives the `shutdown` op and
-    /// gets `shutdown_timeout` in total to exit before it is killed.
-    /// Resolves once every child monitor has finished. Safe to call
+    /// Stops all children and waits for the outcome. Each child receives the
+    /// `shutdown` op and gets `shutdown_timeout` in total to exit before it
+    /// is killed.
+    ///
+    /// Resolves once every child monitor has finished. Errors list every
+    /// monitor that failed: a killed child whose exit could not be confirmed
+    /// (its IDENTIFY permits stay held until it does exit), a panicked
+    /// monitor, or a monitor cancelled by runtime shutdown. Safe to call
     /// concurrently with [`Self::wait`] and more than once.
     pub async fn shutdown(&self) -> Result<(), DiscordError> {
         info!("process shard manager shutting down");
@@ -1104,15 +1397,19 @@ impl ProcessShardManager {
     }
 
     /// Waits until every child monitor has finished, i.e. all children have
-    /// exited and no further respawns will happen. Any number of callers
-    /// may wait concurrently, including alongside [`Self::shutdown`]; all
-    /// of them observe the same completion.
+    /// exited and no further respawns will happen, and returns the same
+    /// outcome as [`Self::shutdown`]. Any number of callers may wait
+    /// concurrently; all of them observe the same result.
     pub async fn wait(&self) -> Result<(), DiscordError> {
-        let mut remaining = self.monitors_remaining.clone();
-        // An error means every monitor (and with it the sender) is gone,
-        // which is completion as well.
-        let _ = remaining.wait_for(|count| *count == 0).await;
-        Ok(())
+        let mut completion = self.completion.clone();
+        let finished = completion
+            .wait_for(|state| state.remaining == 0)
+            .await
+            .map(|state| state.clone());
+        // An error means every monitor (and with it the sender) is gone; the
+        // last value is final.
+        let state = finished.unwrap_or_else(|_| completion.borrow().clone());
+        completion_result(&state)
     }
 }
 
@@ -1121,14 +1418,19 @@ impl ProcessShardManager {
 // ---------------------------------------------------------------------------
 
 enum ChildRunOutcome {
-    /// The child exited on its own (crash or clean exit).
+    /// The child exited on its own (crash or clean exit), or after the
+    /// monitor killed it for holding a permit too long or for a broken IPC
+    /// session.
     Exited,
-    /// Shutdown was requested; the child was stopped.
-    ShutdownRequested,
+    /// Shutdown was requested and the child is confirmed gone.
+    Stopped,
+    /// Shutdown was requested, the child was killed, but its exit could not
+    /// be confirmed.
+    StopUnconfirmed(String),
 }
 
-/// Resolves once shutdown has been requested or the manager was dropped
-/// (sender gone), which also means "stop the children".
+/// Resolves once shutdown has been requested or the sender is gone, which
+/// also means "stop".
 async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
     let _ = shutdown_rx.wait_for(|requested| *requested).await;
 }
@@ -1167,7 +1469,7 @@ async fn run_child_monitor(
     context: MonitorContext,
     mut command_rx: mpsc::Receiver<ChildCommand>,
     mut shutdown_rx: watch::Receiver<bool>,
-) {
+) -> Result<(), String> {
     if !context.start_delay.is_zero()
         && !idle_until(
             deadline_after(context.start_delay),
@@ -1177,7 +1479,7 @@ async fn run_child_monitor(
         .await
     {
         set_state(&context.status, ChildState::Stopped);
-        return;
+        return Ok(());
     }
 
     let mut backoff_attempt: u32 = 0;
@@ -1186,7 +1488,7 @@ async fn run_child_monitor(
     loop {
         if shutdown_requested(&shutdown_rx) {
             set_state(&context.status, ChildState::Stopped);
-            return;
+            return Ok(());
         }
 
         set_state(&context.status, ChildState::Starting);
@@ -1207,21 +1509,25 @@ async fn run_child_monitor(
                 lock_or_recover(&context.status).pid = None;
 
                 match outcome {
-                    ChildRunOutcome::ShutdownRequested => {
+                    ChildRunOutcome::Stopped => {
                         set_state(&context.status, ChildState::Stopped);
                         info!(
                             child = context.index,
                             shard_ids = ?context.shard_ids,
                             "shard child stopped after shutdown request"
                         );
-                        return;
+                        return Ok(());
+                    }
+                    ChildRunOutcome::StopUnconfirmed(reason) => {
+                        set_state(&context.status, ChildState::Stopped);
+                        return Err(reason);
                     }
                     ChildRunOutcome::Exited => {
                         warn!(
                             child = context.index,
                             shard_ids = ?context.shard_ids,
                             uptime_secs = started.elapsed().as_secs(),
-                            "shard child exited unexpectedly"
+                            "shard child exited"
                         );
                         if started.elapsed() >= BACKOFF_RESET_UPTIME {
                             backoff_attempt = 0;
@@ -1240,7 +1546,7 @@ async fn run_child_monitor(
 
         if !context.respawn {
             set_state(&context.status, ChildState::Stopped);
-            return;
+            return Ok(());
         }
         if let Some(max) = context.max_respawns {
             if respawns >= max {
@@ -1251,7 +1557,7 @@ async fn run_child_monitor(
                     "shard child reached max respawns; giving up"
                 );
                 set_state(&context.status, ChildState::Stopped);
-                return;
+                return Ok(());
             }
         }
 
@@ -1270,7 +1576,7 @@ async fn run_child_monitor(
         );
         if !idle_until(deadline_after(delay), &mut shutdown_rx, &mut command_rx).await {
             set_state(&context.status, ChildState::Stopped);
-            return;
+            return Ok(());
         }
     }
 }
@@ -1290,57 +1596,91 @@ fn spawn_child_process(context: &MonitorContext) -> Result<Child, DiscordError> 
 }
 
 /// Owns a child's stdin in a dedicated task so the monitor never awaits a
-/// pipe write. Frames are queued with `try_send`; a full queue means the
-/// child stopped reading, and the caller fails that one message instead of
-/// stalling. Dropping the writer aborts the task, which closes stdin even if
-/// a write is stuck.
-struct IpcWriter {
-    tx: Option<mpsc::Sender<String>>,
+/// pipe write.
+///
+/// Control frames (grants, shutdown) go through an unbounded queue that the
+/// task always serves first. The protocol bounds them to one grant per
+/// assigned shard plus one shutdown, so they can never be dropped. Data
+/// frames (broadcast requests) go through a bounded queue and fail fast when
+/// it is full. A failed write is reported once through the receiver
+/// returned by [`Self::spawn`]: the child can no longer receive grants or
+/// shutdown, so the session is over. Dropping the writer aborts the task,
+/// which closes stdin even if a write is stuck.
+struct ParentWriter {
+    control_tx: Option<mpsc::UnboundedSender<String>>,
+    data_tx: Option<mpsc::Sender<String>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl IpcWriter {
-    fn spawn(stdin: Option<ChildStdin>) -> Self {
-        let (tx, mut rx) = mpsc::channel::<String>(IPC_WRITE_QUEUE_CAPACITY);
-        let task = stdin.map(|mut stdin| {
-            tokio::spawn(async move {
-                while let Some(frame) = rx.recv().await {
+impl ParentWriter {
+    fn spawn(stdin: Option<ChildStdin>) -> (Self, oneshot::Receiver<String>) {
+        let (control_tx, mut control_rx) = mpsc::unbounded_channel::<String>();
+        let (data_tx, mut data_rx) = mpsc::channel::<String>(IPC_WRITE_QUEUE_CAPACITY);
+        let (failed_tx, failed_rx) = oneshot::channel();
+        let task = match stdin {
+            Some(mut stdin) => Some(tokio::spawn(async move {
+                loop {
+                    let frame = tokio::select! {
+                        biased;
+                        Some(frame) = control_rx.recv() => frame,
+                        Some(frame) = data_rx.recv() => frame,
+                        else => break,
+                    };
                     let written = async {
                         stdin.write_all(frame.as_bytes()).await?;
                         stdin.flush().await
                     }
                     .await;
                     if let Err(error) = written {
-                        debug!("shard child stdin closed: {error}");
+                        let _ = failed_tx.send(error.to_string());
                         return;
                     }
                 }
-                // Queue closed by `close()`: dropping stdin sends EOF.
-            })
-        });
-        Self { tx: Some(tx), task }
+                // Both queues closed by `close()`: dropping stdin sends EOF.
+            })),
+            None => {
+                let _ = failed_tx.send("child stdin pipe missing".to_string());
+                None
+            }
+        };
+        (
+            Self {
+                control_tx: Some(control_tx),
+                data_tx: Some(data_tx),
+                task,
+            },
+            failed_rx,
+        )
     }
 
-    fn try_send(&self, frame: String) -> Result<(), &'static str> {
-        let Some(tx) = &self.tx else {
+    fn send_control(&self, frame: String) -> Result<(), &'static str> {
+        match &self.control_tx {
+            Some(tx) => tx.send(frame).map_err(|_| "child stdin writer has stopped"),
+            None => Err("IPC writer is closed"),
+        }
+    }
+
+    fn try_send_data(&self, frame: String) -> Result<(), &'static str> {
+        let Some(tx) = &self.data_tx else {
             return Err("IPC writer is closed");
         };
         tx.try_send(frame).map_err(|error| match error {
             mpsc::error::TrySendError::Full(_) => {
                 "IPC write queue is full (child is not reading stdin)"
             }
-            mpsc::error::TrySendError::Closed(_) => "child stdin is closed",
+            mpsc::error::TrySendError::Closed(_) => "child stdin writer has stopped",
         })
     }
 
     /// Stops accepting frames. Already queued frames are still written,
-    /// then stdin is closed.
+    /// control frames first, then stdin is closed.
     fn close(&mut self) {
-        self.tx = None;
+        self.control_tx = None;
+        self.data_tx = None;
     }
 }
 
-impl Drop for IpcWriter {
+impl Drop for ParentWriter {
     fn drop(&mut self) {
         if let Some(task) = self.task.take() {
             task.abort();
@@ -1348,16 +1688,17 @@ impl Drop for IpcWriter {
     }
 }
 
-type IdentifyWait = Pin<Box<dyn Future<Output = (u32, IdentifyLease)> + Send>>;
+type IdentifyWait = Pin<Box<dyn Future<Output = (u32, BucketLease)> + Send>>;
 
 struct HeldPermit {
-    _lease: IdentifyLease,
+    lease_id: u64,
+    lease: BucketLease,
     expires_at: Instant,
 }
 
-/// IPC state of one child process instance. Dropping it (child exit,
-/// respawn, shutdown) fails pending broadcasts with `null`, leaves the
-/// IDENTIFY queues, and returns held permits.
+/// IPC state of one child process instance. Dropping it (after the child's
+/// exit is confirmed) fails pending broadcasts with `null`, leaves the
+/// IDENTIFY queues, and returns held buckets as if their IDENTIFY was sent.
 struct ChildSession<'a> {
     context: &'a MonitorContext,
     pending: HashMap<u64, oneshot::Sender<Value>>,
@@ -1365,6 +1706,8 @@ struct ChildSession<'a> {
     identify_waiting: FuturesUnordered<IdentifyWait>,
     identify_queued: HashSet<u32>,
     identify_held: HashMap<u32, HeldPermit>,
+    next_lease_id: u64,
+    /// Set once the child is being stopped or killed: no further grants.
     stopping: bool,
 }
 
@@ -1377,13 +1720,14 @@ impl<'a> ChildSession<'a> {
             identify_waiting: FuturesUnordered::new(),
             identify_queued: HashSet::new(),
             identify_held: HashMap::new(),
+            next_lease_id: 0,
             stopping: false,
         }
     }
 
     fn forward_request(
         &mut self,
-        writer: &IpcWriter,
+        writer: &ParentWriter,
         id: u64,
         frame: String,
         respond_to: oneshot::Sender<Value>,
@@ -1392,7 +1736,7 @@ impl<'a> ChildSession<'a> {
             return; // broadcaster already timed out
         }
         self.pending.retain(|_, sender| !sender.is_closed());
-        match writer.try_send(frame) {
+        match writer.try_send_data(frame) {
             Ok(()) => {
                 self.pending.insert(id, respond_to);
             }
@@ -1466,14 +1810,11 @@ impl<'a> ChildSession<'a> {
                 info!(child = context.index, "child log: {message}");
             }
             ChildMessage::IdentifyRequest { shard_id } => self.queue_identify(shard_id),
-            ChildMessage::IdentifyRelease { shard_id } => {
-                if self.identify_held.remove(&shard_id).is_none() {
-                    debug!(
-                        child = context.index,
-                        shard_id, "identify release without a held permit"
-                    );
-                }
-            }
+            ChildMessage::IdentifyRelease {
+                shard_id,
+                lease,
+                sent,
+            } => self.release_identify(shard_id, lease, sent),
         }
     }
 
@@ -1482,7 +1823,7 @@ impl<'a> ChildSession<'a> {
         if self.stopping {
             debug!(
                 child = index,
-                shard_id, "ignoring identify request during shutdown"
+                shard_id, "ignoring identify request while stopping"
             );
             return;
         }
@@ -1501,72 +1842,114 @@ impl<'a> ChildSession<'a> {
             return;
         }
         self.identify_queued.insert(shard_id);
-        let gate = Arc::clone(&self.context.identify_gate);
+        let scheduler = Arc::clone(&self.context.scheduler);
         self.identify_waiting.push(Box::pin(async move {
-            let lease = gate.acquire(shard_id).await;
+            let lease = scheduler.acquire(shard_id).await;
             (shard_id, lease)
         }));
     }
 
-    fn grant_identify(&mut self, writer: &IpcWriter, shard_id: u32, lease: IdentifyLease) {
+    /// Records the grant as held, then queues it for delivery. The bucket
+    /// stays held whether or not the frame arrives: only a matching release
+    /// or the child's confirmed exit gives it back. An error means the
+    /// writer is gone and the child must be stopped.
+    fn grant_identify(
+        &mut self,
+        writer: &ParentWriter,
+        shard_id: u32,
+        lease: BucketLease,
+    ) -> Result<(), String> {
         self.identify_queued.remove(&shard_id);
-        let delivered = frame_line(&ParentMessage::IdentifyGrant { shard_id })
-            .map_err(|error| error.to_string())
-            .and_then(|frame| writer.try_send(frame).map_err(str::to_string));
-        match delivered {
-            Ok(()) => {
-                debug!(
-                    child = self.context.index,
-                    shard_id, "granted IDENTIFY permit"
-                );
-                self.identify_held.insert(
-                    shard_id,
-                    HeldPermit {
-                        _lease: lease,
-                        expires_at: deadline_after(self.context.identify_permit_timeout),
-                    },
-                );
+        self.next_lease_id += 1;
+        let lease_id = self.next_lease_id;
+        self.identify_held.insert(
+            shard_id,
+            HeldPermit {
+                lease_id,
+                lease,
+                expires_at: deadline_after(self.context.identify_permit_timeout),
+            },
+        );
+        let frame = frame_line(&ParentMessage::IdentifyGrant {
+            shard_id,
+            lease: lease_id,
+        })
+        .map_err(|error| error.to_string())?;
+        writer.send_control(frame).map_err(|reason| {
+            format!("cannot deliver identify grant for shard {shard_id}: {reason}")
+        })?;
+        debug!(
+            child = self.context.index,
+            shard_id, lease_id, "granted IDENTIFY permit"
+        );
+        Ok(())
+    }
+
+    fn release_identify(&mut self, shard_id: u32, lease_id: u64, sent: bool) {
+        let index = self.context.index;
+        match self.identify_held.get(&shard_id) {
+            Some(held) if held.lease_id == lease_id => {
+                if let Some(held) = self.identify_held.remove(&shard_id) {
+                    held.lease.finish(if sent {
+                        IdentifyOutcome::Sent
+                    } else {
+                        IdentifyOutcome::Abandoned
+                    });
+                }
             }
-            // `lease` drops here, so the bucket moves on after its interval.
-            Err(reason) => warn!(
-                child = self.context.index,
-                shard_id, "could not deliver identify grant ({reason}); releasing it"
+            Some(held) => warn!(
+                child = index,
+                shard_id,
+                lease_id,
+                held_lease = held.lease_id,
+                "identify release for a stale lease; ignoring"
+            ),
+            None => debug!(
+                child = index,
+                shard_id, "identify release without a held permit"
             ),
         }
     }
 
     fn next_permit_expiry(&self) -> Option<Instant> {
+        if self.stopping {
+            return None;
+        }
         self.identify_held
             .values()
             .map(|held| held.expires_at)
             .min()
     }
 
-    fn expire_identify_permits(&mut self) {
+    fn expired_permit(&self) -> String {
         let now = Instant::now();
-        let index = self.context.index;
-        let permit_timeout = self.context.identify_permit_timeout;
-        self.identify_held.retain(|&shard_id, held| {
-            let keep = held.expires_at > now;
-            if !keep {
-                warn!(
-                    child = index,
-                    shard_id,
-                    "identify permit not released within {permit_timeout:?}; \
-                     assuming IDENTIFY was sent"
-                );
-            }
-            keep
-        });
+        let expired = self
+            .identify_held
+            .iter()
+            .find(|(_, held)| held.expires_at <= now)
+            .map(|(&shard_id, held)| (shard_id, held.lease_id));
+        match expired {
+            Some((shard_id, lease_id)) => format!(
+                "IDENTIFY permit {lease_id} for shard {shard_id} was not released within {:?}",
+                self.context.identify_permit_timeout
+            ),
+            None => "an IDENTIFY permit was not released in time".to_string(),
+        }
     }
 
-    /// Leaves every IDENTIFY queue and returns held permits; used when the
-    /// child is being stopped.
-    fn release_identify(&mut self) {
+    /// Stops queueing and granting. Held permits stay held until the
+    /// child's exit is confirmed.
+    fn stop_granting(&mut self) {
         self.stopping = true;
         self.identify_waiting = FuturesUnordered::new();
         self.identify_queued.clear();
-        self.identify_held.clear();
+    }
+
+    fn take_held_leases(&mut self) -> Vec<BucketLease> {
+        self.identify_held
+            .drain()
+            .map(|(_, held)| held.lease)
+            .collect()
     }
 
     /// Processes stdout lines still buffered after the child exited.
@@ -1579,6 +1962,30 @@ impl<'a> ChildSession<'a> {
         })
         .await;
     }
+}
+
+/// Kills the child (if not already doing so) without waiting; the supervise
+/// loop keeps running until `child.wait()` confirms the exit, and held
+/// permits stay held until then.
+fn begin_kill(
+    context: &MonitorContext,
+    child: &mut Child,
+    session: &mut ChildSession<'_>,
+    killing: &mut Option<String>,
+    reason: String,
+) {
+    if killing.is_some() {
+        return;
+    }
+    warn!(child = context.index, "killing shard child: {reason}");
+    session.stop_granting();
+    if let Err(error) = child.start_kill() {
+        debug!(
+            child = context.index,
+            "kill failed (child already gone?): {error}"
+        );
+    }
+    *killing = Some(reason);
 }
 
 /// Runs one child process until it exits or shutdown is requested, pumping
@@ -1595,19 +2002,22 @@ async fn supervise_child(
             child = context.index,
             "child stdout pipe missing; killing it"
         );
-        kill_and_reap(context, &mut child).await;
-        return ChildRunOutcome::Exited;
+        return match kill_and_confirm(context, child, Vec::new()).await {
+            Ok(()) => ChildRunOutcome::Exited,
+            Err(reason) => ChildRunOutcome::StopUnconfirmed(reason),
+        };
     };
-    let writer = IpcWriter::spawn(child.stdin.take());
+    let (writer, mut writer_failed) = ParentWriter::spawn(child.stdin.take());
+    let mut writer_watch = true;
     let mut reader = FrameReader::new(stdout, context.max_frame);
     let mut session = ChildSession::new(context);
+    let mut killing: Option<String> = None;
 
     loop {
         let permit_expiry = session.next_permit_expiry();
         tokio::select! {
             () = wait_for_shutdown(shutdown_rx) => {
-                graceful_stop(&mut child, writer, &mut reader, &mut session).await;
-                return ChildRunOutcome::ShutdownRequested;
+                return graceful_stop(child, writer, &mut reader, session).await;
             }
             status = child.wait() => {
                 match status {
@@ -1615,6 +2025,8 @@ async fn supervise_child(
                     Err(error) => warn!(child = context.index, "waiting for shard child failed: {error}"),
                 }
                 session.drain_stdout(&mut reader).await;
+                // Exit confirmed: held buckets are returned when `session`
+                // drops, counted as sent.
                 return ChildRunOutcome::Exited;
             }
             command = command_rx.recv() => match command {
@@ -1623,8 +2035,7 @@ async fn supervise_child(
                 }
                 None => {
                     // The manager was dropped: do not leave orphans.
-                    graceful_stop(&mut child, writer, &mut reader, &mut session).await;
-                    return ChildRunOutcome::ShutdownRequested;
+                    return graceful_stop(child, writer, &mut reader, session).await;
                 }
             },
             event = reader.next_event(), if !reader.is_closed() => {
@@ -1632,33 +2043,47 @@ async fn supervise_child(
             }
             Some((shard_id, lease)) = session.identify_waiting.next(),
                 if !session.identify_waiting.is_empty() => {
-                session.grant_identify(&writer, shard_id, lease);
+                if let Err(reason) = session.grant_identify(&writer, shard_id, lease) {
+                    begin_kill(context, &mut child, &mut session, &mut killing, reason);
+                }
             }
             () = sleep_until(permit_expiry.unwrap_or_else(Instant::now)),
                 if permit_expiry.is_some() => {
-                session.expire_identify_permits();
+                let reason = session.expired_permit();
+                begin_kill(context, &mut child, &mut session, &mut killing, reason);
+            }
+            failure = &mut writer_failed, if writer_watch => {
+                writer_watch = false;
+                if let Ok(error) = failure {
+                    let reason = format!(
+                        "IPC write to the child failed ({error}); it can no longer \
+                         receive grants or shutdown"
+                    );
+                    begin_kill(context, &mut child, &mut session, &mut killing, reason);
+                }
             }
         }
     }
 }
 
 /// Stops a child within `shutdown_timeout`, measured from the start of
-/// this call: queue the `shutdown` op, close stdin, keep draining stdout
-/// (a child blocked on a full stdout pipe could not exit), and kill the
-/// child when the deadline passes.
+/// this call: queue the `shutdown` op ahead of any data, close stdin, keep
+/// draining stdout (a child blocked on a full stdout pipe could not exit),
+/// and kill the child when the deadline passes. Held IDENTIFY permits are
+/// returned only once the exit is confirmed.
 async fn graceful_stop(
-    child: &mut Child,
-    mut writer: IpcWriter,
+    mut child: Child,
+    mut writer: ParentWriter,
     reader: &mut FrameReader<ChildStdout>,
-    session: &mut ChildSession<'_>,
-) {
+    mut session: ChildSession<'_>,
+) -> ChildRunOutcome {
     let context = session.context;
     let deadline = deadline_after(context.shutdown_timeout);
-    session.release_identify();
+    session.stop_granting();
 
     let queued = frame_line(&ParentMessage::Shutdown)
         .map_err(|error| error.to_string())
-        .and_then(|frame| writer.try_send(frame).map_err(str::to_string));
+        .and_then(|frame| writer.send_control(frame).map_err(str::to_string));
     if let Err(reason) = queued {
         warn!(
             child = context.index,
@@ -1679,16 +2104,17 @@ async fn graceful_stop(
     })
     .await;
 
-    match exited {
+    let confirmed = match exited {
         Ok(Ok(status)) => {
-            debug!(child = context.index, %status, "shard child exited after shutdown op")
+            debug!(child = context.index, %status, "shard child exited after shutdown op");
+            Ok(())
         }
         Ok(Err(error)) => {
             warn!(
                 child = context.index,
                 "waiting for shard child failed ({error}); killing it"
             );
-            kill_and_reap(context, child).await;
+            kill_and_confirm(context, child, session.take_held_leases()).await
         }
         Err(_) => {
             warn!(
@@ -1696,56 +2122,77 @@ async fn graceful_stop(
                 timeout_ms = context.shutdown_timeout.as_millis() as u64,
                 "shard child did not exit before the shutdown deadline; killing it"
             );
-            kill_and_reap(context, child).await;
+            kill_and_confirm(context, child, session.take_held_leases()).await
         }
-    }
+    };
     // `writer` drops here and aborts a write that is still stuck.
+    drop(writer);
+    match confirmed {
+        Ok(()) => ChildRunOutcome::Stopped,
+        Err(reason) => ChildRunOutcome::StopUnconfirmed(reason),
+    }
 }
 
-async fn kill_and_reap(context: &MonitorContext, child: &mut Child) {
+/// Kills the child and waits up to `kill_reap_timeout` for the OS to confirm
+/// its exit. If the exit cannot be confirmed, the child and its held
+/// IDENTIFY buckets move to a background task that keeps the buckets until
+/// the exit is observed. Better to block a bucket than to let a live child
+/// IDENTIFY next to another shard.
+async fn kill_and_confirm(
+    context: &MonitorContext,
+    mut child: Child,
+    held: Vec<BucketLease>,
+) -> Result<(), String> {
     if let Err(error) = child.start_kill() {
         debug!(
             child = context.index,
             "kill failed (child already gone?): {error}"
         );
     }
-    if timeout(KILL_REAP_TIMEOUT, child.wait()).await.is_err() {
-        warn!(
-            child = context.index,
-            "shard child was not reaped within {KILL_REAP_TIMEOUT:?} after kill"
-        );
+    let reap_timeout = context.kill_reap_timeout;
+    if !reap_timeout.is_zero() {
+        match timeout(reap_timeout, child.wait()).await {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(error)) => {
+                warn!(
+                    child = context.index,
+                    "waiting for killed shard child failed: {error}"
+                );
+            }
+            Err(_) => {}
+        }
     }
+    let reason = format!(
+        "shard child (pid {:?}) was killed but its exit was not confirmed within \
+         {reap_timeout:?}; {} IDENTIFY permit(s) stay held until it exits",
+        child.id(),
+        held.len()
+    );
+    warn!(child = context.index, "{reason}");
+    tokio::spawn(async move {
+        match child.wait().await {
+            Ok(_) => drop(held),
+            Err(error) => {
+                warn!(
+                    "cannot confirm that a killed shard child exited ({error}); \
+                     its IDENTIFY buckets stay blocked"
+                );
+                let _held = held;
+                std::future::pending::<()>().await;
+            }
+        }
+    });
+    Err(reason)
 }
 
 // ---------------------------------------------------------------------------
 // Child side
 // ---------------------------------------------------------------------------
 
-type FrameSink = Box<dyn Fn(&[u8]) -> io::Result<()> + Send + Sync>;
+type FrameSink = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
 type FrameSource = Box<dyn BufRead + Send>;
 type RequestFuture = Pin<Box<dyn Future<Output = Value> + Send>>;
 type RequestHandler = Arc<dyn Fn(Value) -> RequestFuture + Send + Sync>;
-
-#[derive(Clone)]
-struct ServeHandler {
-    handler: RequestHandler,
-    runtime: tokio::runtime::Handle,
-}
-
-enum IdentifySlot {
-    /// Requested from the parent; the sender delivers the permit.
-    Pending(oneshot::Sender<IdentifyPermit>),
-    /// Granted and not yet released.
-    Held,
-}
-
-#[derive(Default)]
-struct ChildIdentifyState {
-    /// Set once the parent asked for shutdown or the IPC channel closed; no
-    /// further permits will be granted.
-    closed: bool,
-    slots: HashMap<u32, IdentifySlot>,
-}
 
 /// Values a child reads from its environment.
 #[derive(Debug, PartialEq, Eq)]
@@ -1753,6 +2200,8 @@ struct ChildSettings {
     shard_ids: Vec<u32>,
     shard_count: u32,
     max_frame: usize,
+    request_timeout: Duration,
+    max_concurrent_requests: usize,
 }
 
 impl ChildSettings {
@@ -1796,42 +2245,188 @@ impl ChildSettings {
                 }
             },
         };
+        let request_timeout = match get(ENV_SHARD_IPC_REQUEST_TIMEOUT_MS) {
+            None => DEFAULT_REQUEST_TIMEOUT,
+            Some(raw) => match raw.trim().parse::<u64>() {
+                Ok(ms) => Duration::from_millis(ms),
+                Err(_) => {
+                    warn!(
+                        "malformed {ENV_SHARD_IPC_REQUEST_TIMEOUT_MS} value {raw:?}; \
+                         using the default"
+                    );
+                    DEFAULT_REQUEST_TIMEOUT
+                }
+            },
+        };
         Some(Self {
             shard_ids,
             shard_count,
             max_frame,
+            request_timeout,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FramePriority {
+    /// IDENTIFY requests and releases: never rejected, written first. The
+    /// identify slots bound them to two per assigned shard.
+    Control,
+    /// Responses, logs, ready notices: bounded, rejected when full.
+    Data,
+}
+
+#[derive(Default)]
+struct WriterQueues {
+    control: VecDeque<Vec<u8>>,
+    data: VecDeque<Vec<u8>>,
+    closed: bool,
+    failed: Option<String>,
+}
+
+/// Queues between child code and the stdout writer thread. Enqueueing
+/// never blocks, so async tasks and destructors (like a dropped
+/// [`IdentifyPermit`]) never wait on a full stdout pipe.
+#[derive(Default)]
+struct ChildWriter {
+    queues: StdMutex<WriterQueues>,
+    ready: Condvar,
+}
+
+impl ChildWriter {
+    fn enqueue(&self, frame: Vec<u8>, priority: FramePriority) -> Result<(), DiscordError> {
+        let mut queues = lock_or_recover(&self.queues);
+        if let Some(error) = &queues.failed {
+            return Err(DiscordError::gateway(format!(
+                "IPC stdout write failed: {error}"
+            )));
+        }
+        if queues.closed {
+            return Err(DiscordError::gateway("IPC writer is closed"));
+        }
+        match priority {
+            FramePriority::Control => queues.control.push_back(frame),
+            FramePriority::Data => {
+                if queues.data.len() >= CHILD_DATA_QUEUE_CAPACITY {
+                    return Err(DiscordError::gateway(
+                        "IPC write queue is full (the parent is not reading stdout)",
+                    ));
+                }
+                queues.data.push_back(frame);
+            }
+        }
+        drop(queues);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    /// Blocks until a frame is available (control first). `None` once the
+    /// writer is closed and drained, or has failed.
+    fn next_frame(&self) -> Option<Vec<u8>> {
+        let mut queues = lock_or_recover(&self.queues);
+        loop {
+            if queues.failed.is_some() {
+                return None;
+            }
+            if let Some(frame) = queues.control.pop_front() {
+                return Some(frame);
+            }
+            if let Some(frame) = queues.data.pop_front() {
+                return Some(frame);
+            }
+            if queues.closed {
+                return None;
+            }
+            queues = self
+                .ready
+                .wait(queues)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    fn close(&self) {
+        lock_or_recover(&self.queues).closed = true;
+        self.ready.notify_all();
+    }
+
+    fn fail(&self, error: String) {
+        {
+            let mut queues = lock_or_recover(&self.queues);
+            queues.failed = Some(error);
+            queues.control.clear();
+            queues.data.clear();
+        }
+        self.ready.notify_all();
+    }
+
+    fn has_failed(&self) -> bool {
+        lock_or_recover(&self.queues).failed.is_some()
+    }
+}
+
+/// Body of the stdout writer thread. A failed write ends the IPC session:
+/// the parent can no longer hear this child, so the child is told to shut
+/// down and every waiter is resolved.
+fn run_child_writer(writer: Arc<ChildWriter>, mut sink: FrameSink, ipc: Weak<ChildIpc>) {
+    while let Some(frame) = writer.next_frame() {
+        if let Err(error) = sink(&frame) {
+            warn!("IPC stdout write failed: {error}; ending the IPC session");
+            writer.fail(error.to_string());
+            if let Some(ipc) = ipc.upgrade() {
+                ipc.close();
+            }
+            return;
+        }
+    }
+}
+
+enum IdentifySlot {
+    /// Requested from the parent; the sender delivers the permit.
+    Pending(oneshot::Sender<IdentifyPermit>),
+    /// Granted and not yet finished.
+    Held,
+}
+
+#[derive(Default)]
+struct ChildIdentifyState {
+    /// Set once the parent asked for shutdown or the IPC session ended; no
+    /// further permits will be granted.
+    closed: bool,
+    slots: HashMap<u32, IdentifySlot>,
+}
+
 /// Shared child-side IPC state behind every [`ShardChildProcess`] clone and
-/// every [`IdentifyPermit`].
+/// every outstanding [`IdentifyPermit`].
 struct ChildIpc {
-    shard_ids: Vec<u32>,
-    shard_count: u32,
-    max_frame: usize,
+    settings: ChildSettings,
     shutdown_tx: watch::Sender<bool>,
-    /// Writes one complete frame (with newlines). Production code locks
-    /// stdout so frames never interleave with each other or with a
-    /// concurrent `println!`.
-    sink: FrameSink,
+    writer: Arc<ChildWriter>,
     /// Taken by the reader thread when IPC starts.
     source: StdMutex<Option<FrameSource>>,
-    handler: StdMutex<Option<ServeHandler>>,
+    /// Request queue of the dispatcher started by `serve()`.
+    dispatcher: StdMutex<Option<mpsc::Sender<(u64, Value)>>>,
     identify: StdMutex<ChildIdentifyState>,
 }
 
+impl Drop for ChildIpc {
+    fn drop(&mut self) {
+        // Lets the writer thread flush what is queued and exit.
+        self.writer.close();
+    }
+}
+
 impl ChildIpc {
-    fn send(&self, message: &ChildMessage) -> Result<(), DiscordError> {
-        self.send_encoded(encode_ipc_line(message)?)
+    fn send(&self, message: &ChildMessage, priority: FramePriority) -> Result<(), DiscordError> {
+        self.send_encoded(encode_ipc_line(message)?, priority)
     }
 
-    fn send_encoded(&self, frame: String) -> Result<(), DiscordError> {
-        if frame.len() > self.max_frame {
+    fn send_encoded(&self, frame: String, priority: FramePriority) -> Result<(), DiscordError> {
+        if frame.len() > self.settings.max_frame {
             return Err(DiscordError::model(format!(
                 "IPC frame of {} bytes exceeds the parent's limit of {} bytes",
                 frame.len(),
-                self.max_frame
+                self.settings.max_frame
             )));
         }
         // The leading newline ends any unterminated `print!` output so the
@@ -1840,8 +2435,7 @@ impl ChildIpc {
         bytes.push(b'\n');
         bytes.extend_from_slice(frame.as_bytes());
         bytes.push(b'\n');
-        (self.sink)(&bytes)
-            .map_err(|error| DiscordError::gateway(format!("IPC stdout write failed: {error}")))
+        self.writer.enqueue(bytes, priority)
     }
 
     /// Answers a request. A response larger than the parent accepts would be
@@ -1849,23 +2443,28 @@ impl ChildIpc {
     /// `null` here, where the reason can be logged.
     fn send_response(&self, id: u64, payload: Value) {
         let result = match encode_ipc_line(&ChildMessage::Response { id, payload }) {
-            Ok(frame) if frame.len() <= self.max_frame => self.send_encoded(frame),
+            Ok(frame) if frame.len() <= self.settings.max_frame => {
+                self.send_encoded(frame, FramePriority::Data)
+            }
             Ok(frame) => {
                 warn!(
                     request_id = id,
                     bytes = frame.len(),
-                    limit = self.max_frame,
+                    limit = self.settings.max_frame,
                     "broadcast response exceeds the IPC frame limit; answering null"
                 );
-                self.send(&ChildMessage::Response {
-                    id,
-                    payload: Value::Null,
-                })
+                self.send(
+                    &ChildMessage::Response {
+                        id,
+                        payload: Value::Null,
+                    },
+                    FramePriority::Data,
+                )
             }
             Err(error) => Err(error),
         };
         if let Err(error) = result {
-            warn!(request_id = id, "failed to write IPC response: {error}");
+            warn!(request_id = id, "failed to queue IPC response: {error}");
         }
     }
 
@@ -1878,7 +2477,7 @@ impl ChildIpc {
         };
         let ipc = Arc::clone(self);
         let spawned = std::thread::Builder::new()
-            .name("discordrs-shard-ipc".to_string())
+            .name("discordrs-shard-ipc-in".to_string())
             .spawn(move || ipc.read_loop(source));
         if let Err(error) = spawned {
             warn!("failed to start the IPC reader thread: {error}; treating as shutdown");
@@ -1887,7 +2486,7 @@ impl ChildIpc {
     }
 
     fn read_loop(self: Arc<Self>, mut source: FrameSource) {
-        let mut limiter = LineLimiter::new(self.max_frame);
+        let mut limiter = LineLimiter::new(self.settings.max_frame);
         loop {
             let event = match source.fill_buf() {
                 Ok([]) => {
@@ -1911,19 +2510,21 @@ impl ChildIpc {
                 self.handle_parent_line(event);
             }
         }
-        // stdin closed: the parent went away or finished shutting us down.
-        // Treat it as shutdown so the child does not linger as an orphan.
+        // stdin closed: the parent finished shutting us down or went away.
         info!("IPC stdin closed; treating as shutdown");
         self.close();
     }
 
+    /// Handles one parent line on the reader thread. Everything here only
+    /// enqueues, so the reader keeps seeing shutdown and EOF even when
+    /// stdout is backed up.
     fn handle_parent_line(self: &Arc<Self>, event: LineEvent) {
         let line = match event {
             LineEvent::Line(line) => line,
             LineEvent::Oversized(bytes) => {
                 warn!(
                     bytes,
-                    limit = self.max_frame,
+                    limit = self.settings.max_frame,
                     "discarded oversized parent IPC line"
                 );
                 return;
@@ -1945,32 +2546,38 @@ impl ChildIpc {
             IpcLine::Message(ParentMessage::Request { id, payload }) => {
                 self.dispatch_request(id, payload);
             }
-            IpcLine::Message(ParentMessage::IdentifyGrant { shard_id }) => {
-                self.grant_identify(shard_id);
+            IpcLine::Message(ParentMessage::IdentifyGrant { shard_id, lease }) => {
+                self.grant_identify(shard_id, lease);
             }
         }
     }
 
-    fn dispatch_request(self: &Arc<Self>, id: u64, payload: Value) {
-        let serve = lock_or_recover(&self.handler).clone();
-        match serve {
-            None => {
-                debug!(request_id = id, "request before serve(); answering null");
+    /// Admission control happens here, before any task exists: the
+    /// dispatcher queue holds at most `max_concurrent_requests` requests,
+    /// and anything beyond is answered with `null` at once.
+    fn dispatch_request(&self, id: u64, payload: Value) {
+        let dispatcher = lock_or_recover(&self.dispatcher).clone();
+        let Some(dispatcher) = dispatcher else {
+            debug!(request_id = id, "request before serve(); answering null");
+            self.send_response(id, Value::Null);
+            return;
+        };
+        match dispatcher.try_send((id, payload)) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full((id, _))) => {
+                warn!(
+                    request_id = id,
+                    "too many concurrent broadcast requests; answering null"
+                );
                 self.send_response(id, Value::Null);
             }
-            Some(serve) => {
-                // One task per request so a slow handler never delays
-                // shutdown or IDENTIFY grants that arrive behind it.
-                let ipc = Arc::clone(self);
-                serve.runtime.spawn(async move {
-                    let response = (serve.handler)(payload).await;
-                    ipc.send_response(id, response);
-                });
+            Err(mpsc::error::TrySendError::Closed((id, _))) => {
+                self.send_response(id, Value::Null);
             }
         }
     }
 
-    fn grant_identify(self: &Arc<Self>, shard_id: u32) {
+    fn grant_identify(self: &Arc<Self>, shard_id: u32, lease: u64) {
         let waiter = {
             let mut state = lock_or_recover(&self.identify);
             match state.slots.get_mut(&shard_id) {
@@ -1985,12 +2592,12 @@ impl ChildIpc {
         };
         match waiter {
             Some(waiter) => {
-                let permit = IdentifyPermit {
-                    ipc: Arc::clone(self),
-                    shard_id,
-                };
+                let ipc = Arc::clone(self);
+                let permit = IdentifyPermit::new(move |outcome| {
+                    ipc.finish_identify(shard_id, lease, outcome);
+                });
                 // If the acquirer gave up, the permit comes back and its
-                // drop releases the slot at once.
+                // drop reports the attempt as abandoned.
                 if let Err(permit) = waiter.send(permit) {
                     drop(permit);
                 }
@@ -1998,20 +2605,41 @@ impl ChildIpc {
             None => {
                 warn!(
                     shard_id,
-                    "identify grant without a pending request; releasing it"
+                    lease, "identify grant without a pending request; returning it"
                 );
-                if let Err(error) = self.send(&ChildMessage::IdentifyRelease { shard_id }) {
+                let release = ChildMessage::IdentifyRelease {
+                    shard_id,
+                    lease,
+                    sent: false,
+                };
+                if let Err(error) = self.send(&release, FramePriority::Control) {
                     warn!(
                         shard_id,
-                        "failed to release unexpected identify grant: {error}"
+                        "failed to return unexpected identify grant: {error}"
                     );
                 }
             }
         }
     }
 
-    /// Signals shutdown and fails acquisitions that are still waiting; held
-    /// permits stay valid until dropped.
+    fn finish_identify(&self, shard_id: u32, lease: u64, outcome: IdentifyOutcome) {
+        // Queue the release before freeing the slot: once the slot is free a
+        // new acquire may queue its request, and the parent must see the
+        // release first or it would reject the request as a duplicate.
+        let release = ChildMessage::IdentifyRelease {
+            shard_id,
+            lease,
+            sent: outcome == IdentifyOutcome::Sent,
+        };
+        if let Err(error) = self.send(&release, FramePriority::Control) {
+            warn!(shard_id, "failed to release IDENTIFY permit: {error}");
+        }
+        lock_or_recover(&self.identify).slots.remove(&shard_id);
+    }
+
+    /// Signals shutdown, fails acquisitions that are still waiting, and
+    /// thereby stops the request dispatcher (which cancels running
+    /// handlers). Held permits stay valid until finished.
     fn close(&self) {
         self.shutdown_tx.send_replace(true);
         let mut state = lock_or_recover(&self.identify);
@@ -2020,6 +2648,60 @@ impl ChildIpc {
             .slots
             .retain(|_, slot| matches!(slot, IdentifySlot::Held));
     }
+}
+
+/// Runs request handlers for `serve()`: at most `max_concurrent_requests`
+/// at once (tracked in a `JoinSet`), each cancelled after the parent's
+/// broadcast timeout, and all of them cancelled on shutdown.
+async fn run_request_dispatcher(
+    ipc: Arc<ChildIpc>,
+    mut requests: mpsc::Receiver<(u64, Value)>,
+    handler: RequestHandler,
+) {
+    let limit = ipc.settings.max_concurrent_requests.max(1);
+    let request_timeout = ipc.settings.request_timeout;
+    let mut shutdown_rx = ipc.shutdown_tx.subscribe();
+    let mut running: JoinSet<(u64, Option<Value>)> = JoinSet::new();
+    let mut request_ids: HashMap<tokio::task::Id, u64> = HashMap::new();
+    loop {
+        tokio::select! {
+            biased;
+            () = wait_for_shutdown(&mut shutdown_rx) => break,
+            Some(joined) = running.join_next_with_id(), if !running.is_empty() => match joined {
+                Ok((task_id, (id, Some(response)))) => {
+                    request_ids.remove(&task_id);
+                    ipc.send_response(id, response);
+                }
+                Ok((task_id, (id, None))) => {
+                    request_ids.remove(&task_id);
+                    debug!(request_id = id, "request handler timed out; the parent stopped waiting");
+                }
+                Err(error) => {
+                    if let Some(id) = request_ids.remove(&error.id()) {
+                        warn!(request_id = id, "request handler failed: {error}");
+                        ipc.send_response(id, Value::Null);
+                    }
+                }
+            },
+            request = requests.recv() => {
+                let Some((id, payload)) = request else {
+                    break;
+                };
+                if running.len() >= limit {
+                    warn!(request_id = id, "too many concurrent broadcast requests; answering null");
+                    ipc.send_response(id, Value::Null);
+                    continue;
+                }
+                let handler = Arc::clone(&handler);
+                let task = running.spawn(async move {
+                    (id, timeout(request_timeout, handler(payload)).await.ok())
+                });
+                request_ids.insert(task.id(), id);
+            }
+        }
+    }
+    // The parent no longer waits for these answers.
+    running.shutdown().await;
 }
 
 fn write_stdout_frame(bytes: &[u8]) -> io::Result<()> {
@@ -2033,20 +2715,21 @@ fn write_stdout_frame(bytes: &[u8]) -> io::Result<()> {
 /// Construct with [`ShardChildProcess::from_env`]: it returns `Some` only
 /// when the process was launched by a [`ProcessShardManager`] (detected via
 /// `DISCORDRS_SHARD_IPC=1`), so the same binary runs standalone otherwise.
-/// The handle is cheap to clone and can be moved into shard tasks and event
-/// handlers.
+/// The handle is cheap to clone.
 ///
-/// A typical child calls [`Self::serve`], then for each assigned shard
-/// awaits [`Self::acquire_identify`], starts the gateway client, and drops
-/// the permit plus calls [`Self::notify_shard_ready`] when READY arrives.
-/// Finally it awaits [`Self::shutdown_signal`].
+/// A typical child calls [`Self::serve`], starts one gateway client per
+/// assigned shard with
+/// `GatewayConnectionConfig::default().identify_gate(child.identify_gate())`,
+/// reports [`Self::notify_shard_ready`] from each READY, and awaits
+/// [`Self::shutdown_signal`].
 ///
 /// # stdin and stdout
 ///
-/// IPC frames share stdout with any other output. Stray prints no longer
-/// break the protocol (the parent logs them), but logs belong on stderr,
-/// which the parent passes through unchanged. **Never read stdin** in child
-/// mode: the IPC reader owns it.
+/// IPC frames share stdout with any other output. Stray prints do not break
+/// the protocol (the parent logs them), but logs belong on stderr, which the
+/// parent passes through unchanged. **Never read stdin** in child mode: the
+/// IPC reader owns it. Frames are written by a background thread, so a
+/// process that exits right after [`Self::log`] can lose that line.
 #[derive(Clone)]
 pub struct ShardChildProcess {
     ipc: Arc<ChildIpc>,
@@ -2071,66 +2754,83 @@ impl ShardChildProcess {
 
     fn with_io(settings: ChildSettings, source: FrameSource, sink: FrameSink) -> Self {
         let (shutdown_tx, _) = watch::channel(false);
-        Self {
-            ipc: Arc::new(ChildIpc {
-                shard_ids: settings.shard_ids,
-                shard_count: settings.shard_count,
-                max_frame: settings.max_frame,
+        let writer = Arc::new(ChildWriter::default());
+        let ipc = Arc::new_cyclic(|weak: &Weak<ChildIpc>| {
+            let thread_writer = Arc::clone(&writer);
+            let thread_ipc = weak.clone();
+            let spawned = std::thread::Builder::new()
+                .name("discordrs-shard-ipc-out".to_string())
+                .spawn(move || run_child_writer(thread_writer, sink, thread_ipc));
+            if let Err(error) = spawned {
+                writer.fail(format!("failed to start the IPC writer thread: {error}"));
+            }
+            ChildIpc {
+                settings,
                 shutdown_tx,
-                sink,
+                writer,
                 source: StdMutex::new(Some(source)),
-                handler: StdMutex::new(None),
+                dispatcher: StdMutex::new(None),
                 identify: StdMutex::new(ChildIdentifyState::default()),
-            }),
+            }
+        });
+        if ipc.writer.has_failed() {
+            ipc.close();
         }
+        Self { ipc }
     }
 
     /// Shard ids assigned to this process.
     pub fn shard_ids(&self) -> &[u32] {
-        &self.ipc.shard_ids
+        &self.ipc.settings.shard_ids
     }
 
     /// Total shard count across all processes.
     pub fn shard_count(&self) -> u32 {
-        self.ipc.shard_count
+        self.ipc.settings.shard_count
     }
 
     /// Reports every assigned shard as ready. Prefer
     /// [`Self::notify_shard_ready`] from each shard's READY handler for an
     /// accurate status.
     pub fn notify_ready(&self) -> Result<(), DiscordError> {
-        for &shard_id in &self.ipc.shard_ids {
-            self.ipc.send(&ChildMessage::Ready { shard_id })?;
+        for &shard_id in &self.ipc.settings.shard_ids {
+            self.ipc
+                .send(&ChildMessage::Ready { shard_id }, FramePriority::Data)?;
         }
         Ok(())
     }
 
     /// Reports one assigned shard as ready. Fails for a shard that is not
-    /// assigned to this process.
+    /// assigned to this process. Status only: READY does not pace IDENTIFY.
     pub fn notify_shard_ready(&self, shard_id: u32) -> Result<(), DiscordError> {
         self.ensure_assigned(shard_id)?;
-        self.ipc.send(&ChildMessage::Ready { shard_id })
+        self.ipc
+            .send(&ChildMessage::Ready { shard_id }, FramePriority::Data)
     }
 
     /// Sends a `log` line to the parent, which surfaces it via `tracing`.
-    /// Fails if the encoded line exceeds the parent's frame limit.
+    /// Fails if the encoded line exceeds the parent's frame limit or the
+    /// outgoing queue is full.
     pub fn log(&self, message: impl Into<String>) -> Result<(), DiscordError> {
-        self.ipc.send(&ChildMessage::Log {
-            message: message.into(),
-        })
+        self.ipc.send(
+            &ChildMessage::Log {
+                message: message.into(),
+            },
+            FramePriority::Data,
+        )
     }
 
-    /// Starts serving broadcast requests: each `request` op is answered with
-    /// the value `handler` produces, run as its own Tokio task. Also starts
-    /// the IPC reader if it is not running yet, so [`Self::shutdown_signal`]
-    /// and IDENTIFY grants work.
+    /// Starts serving broadcast requests with `handler` and starts the IPC
+    /// reader if it is not running yet.
     ///
-    /// Requests that arrive before `serve` is called are answered with
-    /// `null`, so call it early. Calling it again replaces the handler.
-    /// The process is **not** exited automatically; await
-    /// [`Self::shutdown_signal`] and tear down gracefully.
+    /// At most [`DEFAULT_MAX_CONCURRENT_REQUESTS`] handlers run at once;
+    /// further requests are answered with `null` without spawning anything.
+    /// Each handler is cancelled when the parent's broadcast timeout passes
+    /// (its answer could no longer be used), and all running handlers are
+    /// cancelled when the parent requests shutdown. Requests that arrive
+    /// before `serve` are answered with `null`, so call it early.
     ///
-    /// Fails when called outside a Tokio runtime.
+    /// Fails outside a Tokio runtime or when called a second time.
     pub fn serve<F, Fut>(&self, handler: F) -> Result<(), DiscordError>
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
@@ -2139,33 +2839,61 @@ impl ShardChildProcess {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
             DiscordError::model("ShardChildProcess::serve must be called inside a Tokio runtime")
         })?;
+        let (requests_tx, requests_rx) =
+            mpsc::channel(self.ipc.settings.max_concurrent_requests.max(1));
+        {
+            let mut dispatcher = lock_or_recover(&self.ipc.dispatcher);
+            if dispatcher.is_some() {
+                return Err(DiscordError::model(
+                    "ShardChildProcess::serve was already called",
+                ));
+            }
+            *dispatcher = Some(requests_tx);
+        }
         let handler: RequestHandler =
             Arc::new(move |payload| -> RequestFuture { Box::pin(handler(payload)) });
-        *lock_or_recover(&self.ipc.handler) = Some(ServeHandler { handler, runtime });
+        runtime.spawn(run_request_dispatcher(
+            Arc::clone(&self.ipc),
+            requests_rx,
+            handler,
+        ));
         self.ipc.start_reader();
         Ok(())
     }
 
-    /// Waits for the parent to grant `shard_id` an IDENTIFY slot.
+    /// IDENTIFY gate for this child's gateway clients:
+    /// `GatewayConnectionConfig::default().identify_gate(child.identify_gate())`.
+    ///
+    /// The gateway client then asks the parent for a permit before every
+    /// connection that will IDENTIFY and reports the outcome itself, so no
+    /// application code handles permits. The client must be configured with
+    /// `.shard(id, count)` for one of this process's shards.
+    pub fn identify_gate(&self) -> Arc<dyn IdentifyGate> {
+        Arc::new(self.clone())
+    }
+
+    /// Waits for the parent to grant `shard_id` one IDENTIFY attempt. The
+    /// gateway hook ([`Self::identify_gate`]) calls this; use it directly
+    /// only for a custom gateway implementation.
     ///
     /// The parent grants at most one permit per bucket
     /// (`shard_id % max_concurrency`) at a time, across every child process,
-    /// and spaces grants by `identify_interval` after each release. Hold the
-    /// returned [`IdentifyPermit`] until the shard has sent IDENTIFY;
-    /// dropping it when READY arrives (or when the shard fails to start) is
-    /// the simplest correct choice. A permit that is never released is
-    /// reclaimed after `identify_permit_timeout`.
+    /// and keeps the bucket until the permit is finished. Call
+    /// `permit.finish(IdentifyOutcome::Sent)` right after writing IDENTIFY.
+    /// Dropping the permit reports `Abandoned` (never sent), which frees the
+    /// bucket without the interval. A permit held past
+    /// `identify_permit_timeout` gets this process killed.
     ///
     /// Cancelling this future is safe: a grant that arrives later is
-    /// released automatically, and a new call for the same shard takes over
+    /// returned as abandoned, and a new call for the same shard takes over
     /// the request that is already queued.
     ///
     /// # Errors
     ///
     /// Fails if `shard_id` is not assigned to this process, if a permit for
     /// it is already held or being acquired, if the request cannot be
-    /// written, or if shutdown is requested (or stdin closes) before the
-    /// grant arrives.
+    /// queued, or if shutdown is requested (or the IPC session ends) before
+    /// the grant arrives.
     pub async fn acquire_identify(&self, shard_id: u32) -> Result<IdentifyPermit, DiscordError> {
         self.ensure_assigned(shard_id)?;
         let (waiter, permit_rx) = oneshot::channel();
@@ -2173,7 +2901,8 @@ impl ShardChildProcess {
             let mut state = lock_or_recover(&self.ipc.identify);
             if state.closed {
                 return Err(DiscordError::gateway(
-                    "shard manager requested shutdown; no IDENTIFY permits will be granted",
+                    "the IPC session has ended (shutdown requested, stdin closed, or stdout \
+                     broken); no IDENTIFY permits will be granted",
                 ));
             }
             let send_request = match state.slots.get(&shard_id) {
@@ -2197,22 +2926,27 @@ impl ShardChildProcess {
         };
         self.ipc.start_reader();
         if send_request {
-            if let Err(error) = self.ipc.send(&ChildMessage::IdentifyRequest { shard_id }) {
+            let request = ChildMessage::IdentifyRequest { shard_id };
+            if let Err(error) = self.ipc.send(&request, FramePriority::Control) {
                 lock_or_recover(&self.ipc.identify).slots.remove(&shard_id);
                 return Err(error);
             }
         }
         permit_rx.await.map_err(|_| {
             DiscordError::gateway(format!(
-                "IPC closed before the IDENTIFY permit for shard {shard_id} was granted"
+                "IPC session ended before the IDENTIFY permit for shard {shard_id} was granted"
             ))
         })
     }
 
     /// Future that resolves once the parent has requested shutdown (via the
-    /// `shutdown` op or by closing stdin, which also happens when the parent
-    /// dies, so children never linger as orphans). Starts the IPC reader if
-    /// needed. Can be called multiple times.
+    /// `shutdown` op or by closing stdin) or the IPC session failed. Starts
+    /// the IPC reader if needed. Can be called multiple times.
+    ///
+    /// Only a child that awaits this (or exits some other way) stops
+    /// gracefully. The parent kills children that are still running when
+    /// its shutdown deadline passes, but cannot do so if the parent itself
+    /// died.
     pub fn shutdown_signal(&self) -> impl Future<Output = ()> + Send + 'static {
         self.ipc.start_reader();
         let mut shutdown_rx = self.ipc.shutdown_tx.subscribe();
@@ -2224,63 +2958,34 @@ impl ShardChildProcess {
     }
 
     fn ensure_assigned(&self, shard_id: u32) -> Result<(), DiscordError> {
-        if self.ipc.shard_ids.contains(&shard_id) {
+        if self.ipc.settings.shard_ids.contains(&shard_id) {
             Ok(())
         } else {
             Err(DiscordError::model(format!(
                 "shard {shard_id} is not assigned to this child process (assigned: {:?})",
-                self.ipc.shard_ids
+                self.ipc.settings.shard_ids
             )))
         }
     }
 }
 
-/// Permission from the parent for one shard to send IDENTIFY, obtained with
-/// [`ShardChildProcess::acquire_identify`].
-///
-/// Dropping the permit (or calling [`Self::release`]) tells the parent the
-/// IDENTIFY has gone out, and the shard's bucket becomes available again
-/// after `identify_interval`.
-#[must_use = "dropping the permit releases the IDENTIFY slot immediately; hold it until READY"]
-pub struct IdentifyPermit {
-    ipc: Arc<ChildIpc>,
-    shard_id: u32,
-}
-
-impl IdentifyPermit {
-    /// Shard this permit was granted for.
-    pub fn shard_id(&self) -> u32 {
-        self.shard_id
-    }
-
-    /// Releases the permit now; equivalent to dropping it.
-    pub fn release(self) {}
-}
-
-impl std::fmt::Debug for IdentifyPermit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IdentifyPermit")
-            .field("shard_id", &self.shard_id)
-            .finish()
-    }
-}
-
-impl Drop for IdentifyPermit {
-    fn drop(&mut self) {
-        // Send the release before freeing the slot: once the slot is free a
-        // new acquire may write its request, and the parent must see the
-        // release first or it would reject the request as a duplicate.
-        if let Err(error) = self.ipc.send(&ChildMessage::IdentifyRelease {
-            shard_id: self.shard_id,
-        }) {
-            warn!(
-                shard_id = self.shard_id,
-                "failed to release IDENTIFY permit: {error}"
-            );
-        }
-        lock_or_recover(&self.ipc.identify)
-            .slots
-            .remove(&self.shard_id);
+impl IdentifyGate for ShardChildProcess {
+    fn acquire(&self, shard_id: u32, shard_count: u32) -> IdentifyPermitFuture<'_> {
+        Box::pin(async move {
+            // A mismatch usually means the gateway client was built without
+            // `.shard(id, count)`; identifying with the wrong shard pair
+            // would be rejected by Discord anyway.
+            if shard_count != self.shard_count() {
+                return Err(DiscordError::model(format!(
+                    "gateway client identifies as shard {shard_id}/{shard_count}, but this \
+                     child process runs shards of {}; configure the client with \
+                     .shard(id, {})",
+                    self.shard_count(),
+                    self.shard_count()
+                )));
+            }
+            self.acquire_identify(shard_id).await
+        })
     }
 }
 
@@ -2291,8 +2996,9 @@ impl Drop for IdentifyPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::SessionStartLimit;
+    use crate::model::GatewayBot;
     use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
     use tokio::time::sleep;
 
     // -- protocol -----------------------------------------------------------
@@ -2300,36 +3006,31 @@ mod tests {
     #[test]
     fn parent_messages_round_trip_with_expected_wire_format() {
         assert_eq!(IPC_FRAME_PREFIX, "@discordrs-ipc/1 ");
-
-        let shutdown = ParentMessage::Shutdown;
-        let encoded = encode_ipc_line(&shutdown).unwrap();
-        assert_eq!(encoded, r#"@discordrs-ipc/1 {"op":"shutdown"}"#);
-        assert_eq!(
-            decode_ipc_line::<ParentMessage>(&encoded).unwrap(),
-            shutdown
-        );
-
-        let request = ParentMessage::Request {
-            id: 7,
-            payload: json!({"kind": "stats"}),
-        };
-        let encoded = encode_ipc_line(&request).unwrap();
-        assert_eq!(
-            encoded,
-            r#"@discordrs-ipc/1 {"op":"request","id":7,"payload":{"kind":"stats"}}"#
-        );
-        assert_eq!(
-            decode_ipc_line::<ParentMessage>(&format!("  {encoded}\n")).unwrap(),
-            request
-        );
-
-        let grant = ParentMessage::IdentifyGrant { shard_id: 3 };
-        let encoded = encode_ipc_line(&grant).unwrap();
-        assert_eq!(
-            encoded,
-            r#"@discordrs-ipc/1 {"op":"identify_grant","shard_id":3}"#
-        );
-        assert_eq!(decode_ipc_line::<ParentMessage>(&encoded).unwrap(), grant);
+        let cases = [
+            (ParentMessage::Shutdown, r#"{"op":"shutdown"}"#),
+            (
+                ParentMessage::Request {
+                    id: 7,
+                    payload: json!({"kind": "stats"}),
+                },
+                r#"{"op":"request","id":7,"payload":{"kind":"stats"}}"#,
+            ),
+            (
+                ParentMessage::IdentifyGrant {
+                    shard_id: 3,
+                    lease: 9,
+                },
+                r#"{"op":"identify_grant","shard_id":3,"lease":9}"#,
+            ),
+        ];
+        for (message, json) in cases {
+            let encoded = encode_ipc_line(&message).unwrap();
+            assert_eq!(encoded, format!("{IPC_FRAME_PREFIX}{json}"));
+            assert_eq!(
+                decode_ipc_line::<ParentMessage>(&format!("  {encoded}\n")).unwrap(),
+                message
+            );
+        }
     }
 
     #[test]
@@ -2357,8 +3058,12 @@ mod tests {
                 r#"{"op":"identify_request","shard_id":4}"#,
             ),
             (
-                ChildMessage::IdentifyRelease { shard_id: 4 },
-                r#"{"op":"identify_release","shard_id":4}"#,
+                ChildMessage::IdentifyRelease {
+                    shard_id: 4,
+                    lease: 2,
+                    sent: false,
+                },
+                r#"{"op":"identify_release","shard_id":4,"lease":2,"sent":false}"#,
             ),
         ];
         for (message, json) in cases {
@@ -2366,6 +3071,18 @@ mod tests {
             assert_eq!(encoded, format!("{IPC_FRAME_PREFIX}{json}"));
             assert_eq!(decode_ipc_line::<ChildMessage>(&encoded).unwrap(), message);
         }
+        // A release without `sent` is assumed to have identified.
+        assert_eq!(
+            decode_ipc_line::<ChildMessage>(&format!(
+                r#"{IPC_FRAME_PREFIX}{{"op":"identify_release","shard_id":1,"lease":5}}"#
+            ))
+            .unwrap(),
+            ChildMessage::IdentifyRelease {
+                shard_id: 1,
+                lease: 5,
+                sent: true
+            }
+        );
         assert!(decode_ipc_line::<ChildMessage>(&format!(
             "{IPC_FRAME_PREFIX}{{\"op\":\"bogus\"}}"
         ))
@@ -2504,7 +3221,7 @@ mod tests {
         assert!(reader.is_closed());
     }
 
-    // -- backoff, settings, plan ---------------------------------------------
+    // -- backoff, settings -----------------------------------------------------
 
     #[test]
     fn respawn_backoff_doubles_and_caps_at_five_minutes() {
@@ -2551,6 +3268,8 @@ mod tests {
                 shard_ids: vec![0, 2],
                 shard_count: 4,
                 max_frame: DEFAULT_MAX_IPC_FRAME_BYTES,
+                request_timeout: DEFAULT_REQUEST_TIMEOUT,
+                max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
             })
         );
 
@@ -2575,6 +3294,14 @@ mod tests {
             with((ENV_SHARD_IPC_MAX_FRAME, "lots")).map(|s| s.max_frame),
             Some(DEFAULT_MAX_IPC_FRAME_BYTES)
         );
+        assert_eq!(
+            with((ENV_SHARD_IPC_REQUEST_TIMEOUT_MS, "1500")).map(|s| s.request_timeout),
+            Some(Duration::from_millis(1500))
+        );
+        assert_eq!(
+            with((ENV_SHARD_IPC_REQUEST_TIMEOUT_MS, "soon")).map(|s| s.request_timeout),
+            Some(DEFAULT_REQUEST_TIMEOUT)
+        );
         assert_eq!(with((ENV_SHARD_IPC, "0")), None);
         assert_eq!(with((ENV_SHARD_IDS, "0,x")), None);
         assert_eq!(with((ENV_SHARD_IDS, "")), None);
@@ -2591,92 +3318,135 @@ mod tests {
         );
     }
 
+    // -- monitor completion -----------------------------------------------------
+
     #[test]
-    fn identify_plan_reads_gateway_bot_limits() {
-        let mut gateway_bot = GatewayBot {
-            url: String::new(),
-            shards: 0,
-            session_start_limit: SessionStartLimit {
-                total: 1000,
-                remaining: 0,
-                reset_after: 1500,
-                max_concurrency: 0,
-            },
+    fn monitor_completion_records_failures_cancellations_and_panics() {
+        let (tx, rx) = watch::channel(CompletionState {
+            remaining: 4,
+            failures: Vec::new(),
+        });
+        let tx = Arc::new(tx);
+        let guard = |label: &str| MonitorCompletion {
+            state: Arc::clone(&tx),
+            label: label.to_string(),
+            result: None,
         };
-        assert_eq!(
-            IdentifyPlan::from_gateway_bot(&gateway_bot),
-            IdentifyPlan {
-                shards: 1,
-                max_concurrency: 1,
-                initial_delay: Duration::from_millis(1500),
-            }
+
+        let mut ok = guard("ok");
+        ok.result = Some(Ok(()));
+        drop(ok);
+        let mut failed = guard("failed");
+        failed.result = Some(Err("boom".to_string()));
+        drop(failed);
+        drop(guard("cancelled"));
+        let panicking = guard("panicking");
+        let joined = std::thread::spawn(move || {
+            let _guard = panicking;
+            panic!("monitor bug");
+        })
+        .join();
+        assert!(joined.is_err());
+
+        let state = rx.borrow().clone();
+        assert_eq!(state.remaining, 0);
+        assert_eq!(state.failures.len(), 3, "{:?}", state.failures);
+        let error = completion_result(&state).unwrap_err().to_string();
+        assert!(error.contains("failed: boom"), "{error}");
+        assert!(
+            error.contains("cancelled: monitor was cancelled"),
+            "{error}"
         );
-        gateway_bot.shards = 12;
-        gateway_bot.session_start_limit.remaining = 5;
-        gateway_bot.session_start_limit.max_concurrency = 4;
-        assert_eq!(
-            IdentifyPlan::from_gateway_bot(&gateway_bot),
-            IdentifyPlan {
-                shards: 12,
-                max_concurrency: 4,
-                initial_delay: Duration::ZERO,
-            }
-        );
+        assert!(error.contains("panicking: monitor panicked"), "{error}");
+        assert!(completion_result(&CompletionState::default()).is_ok());
     }
 
-    // -- identify gate --------------------------------------------------------
+    // -- IDENTIFY scheduling and session budget --------------------------------
+
+    fn session_limit(remaining: u32, total: u32, reset_after: u64) -> SessionStartLimit {
+        SessionStartLimit {
+            total,
+            remaining,
+            reset_after,
+            max_concurrency: 1,
+        }
+    }
 
     #[test]
-    fn identify_gate_buckets_follow_shard_modulo_max_concurrency() {
-        let gate = IdentifyGate::new(2, 10, Duration::ZERO, Instant::now());
-        assert_eq!(gate.buckets.len(), 2);
-        assert_eq!(gate.bucket_of(7), 1);
-        assert_eq!(gate.bucket_of(8), 0);
+    fn identify_scheduler_buckets_follow_shard_modulo_max_concurrency() {
+        let scheduler = IdentifyScheduler::new(2, 10, Duration::ZERO, None);
+        assert_eq!(scheduler.buckets.len(), 2);
+        assert_eq!(scheduler.bucket_of(7), 1);
+        assert_eq!(scheduler.bucket_of(8), 0);
 
         // More concurrency than shards: one bucket per shard.
-        let gate = IdentifyGate::new(16, 4, Duration::ZERO, Instant::now());
-        assert_eq!(gate.buckets.len(), 4);
-        assert_eq!(gate.bucket_of(3), 3);
-        assert!(gate.bucket_of(100) < 4);
+        let scheduler = IdentifyScheduler::new(16, 4, Duration::ZERO, None);
+        assert_eq!(scheduler.buckets.len(), 4);
+        assert_eq!(scheduler.bucket_of(3), 3);
+        assert!(scheduler.bucket_of(100) < 4);
 
-        let gate = IdentifyGate::new(0, 0, Duration::ZERO, Instant::now());
-        assert_eq!(gate.buckets.len(), 1);
-        assert_eq!(gate.bucket_of(5), 0);
+        let scheduler = IdentifyScheduler::new(0, 0, Duration::ZERO, None);
+        assert_eq!(scheduler.buckets.len(), 1);
+        assert_eq!(scheduler.bucket_of(5), 0);
     }
 
     #[tokio::test]
-    async fn identify_gate_spaces_same_bucket_grants_from_release() {
+    async fn identify_scheduler_holds_a_bucket_until_the_attempt_ends() {
         let interval = Duration::from_millis(150);
-        let gate = IdentifyGate::new(2, 4, interval, Instant::now());
-        let first = gate.acquire(0).await;
+        let scheduler = IdentifyScheduler::new(2, 4, interval, None);
+        let first = scheduler.acquire(0).await;
 
         // A different bucket does not wait for bucket 0.
-        let other = timeout(Duration::from_secs(1), gate.acquire(1))
+        let other = timeout(Duration::from_secs(1), scheduler.acquire(1))
             .await
             .expect("bucket 1 must not wait for bucket 0");
 
-        // The same bucket waits until the permit is released...
-        let mut same = Box::pin(gate.acquire(2));
+        // The same bucket waits for as long as the attempt is in progress...
+        let mut same = Box::pin(scheduler.acquire(2));
         assert!(timeout(Duration::from_millis(100), &mut same)
             .await
             .is_err());
-        let released_at = Instant::now();
-        drop(first);
-        // ...and then for the interval measured from the release.
-        let _second = timeout(Duration::from_secs(2), &mut same)
+        let sent_at = Instant::now();
+        first.finish(IdentifyOutcome::Sent);
+        // ...and then for the interval measured from the reported send.
+        let second = timeout(Duration::from_secs(2), &mut same)
             .await
-            .expect("granted after release");
-        assert!(released_at.elapsed() >= interval);
+            .expect("granted after the send");
+        assert!(sent_at.elapsed() >= interval);
         drop(other);
+
+        // A lease dropped without an outcome (child gone) counts as sent.
+        let dropped_at = Instant::now();
+        drop(second);
+        let _third = scheduler.acquire(0).await;
+        assert!(dropped_at.elapsed() >= interval);
     }
 
     #[tokio::test]
-    async fn identify_gate_queues_fifo_and_skips_cancelled_waiters() {
-        let gate = IdentifyGate::new(1, 3, Duration::ZERO, Instant::now());
-        let held = gate.acquire(0).await;
-        let mut cancelled = Box::pin(gate.acquire(1));
-        let mut second = Box::pin(gate.acquire(2));
-        let mut third = Box::pin(gate.acquire(0));
+    async fn abandoned_attempts_free_the_bucket_at_once_and_refund_the_budget() {
+        // One session start left, and its reset is an hour away.
+        let budget = Arc::new(SessionBudget::new(
+            BudgetState::from_limit(&session_limit(1, 1000, 3_600_000)),
+            None,
+        ));
+        let scheduler = IdentifyScheduler::new(1, 1, Duration::from_secs(60), Some(budget));
+        let lease = scheduler.acquire(0).await;
+        lease.finish(IdentifyOutcome::Abandoned);
+        // Neither the 60s interval nor the exhausted budget applies: the
+        // attempt never reached Discord.
+        let lease = timeout(Duration::from_secs(1), scheduler.acquire(0))
+            .await
+            .expect("an abandoned attempt must not hold the bucket or consume the budget");
+        lease.finish(IdentifyOutcome::Abandoned);
+    }
+
+    #[tokio::test]
+    async fn identify_scheduler_queues_fifo_and_skips_cancelled_waiters() {
+        let scheduler = IdentifyScheduler::new(1, 3, Duration::ZERO, None);
+        let held = scheduler.acquire(0).await;
+        let mut cancelled = Box::pin(scheduler.acquire(1));
+        let mut second = Box::pin(scheduler.acquire(2));
+        let mut third = Box::pin(scheduler.acquire(0));
         assert!(futures_util::poll!(&mut cancelled).is_pending());
         assert!(futures_util::poll!(&mut second).is_pending());
         assert!(futures_util::poll!(&mut third).is_pending());
@@ -2693,12 +3463,56 @@ mod tests {
             .expect("third waiter follows");
     }
 
+    #[test]
+    fn budget_state_from_limit_keeps_a_usable_total() {
+        let state = BudgetState::from_limit(&session_limit(5, 0, 0));
+        assert_eq!((state.remaining, state.total), (5, 5));
+        let state = BudgetState::from_limit(&session_limit(0, 0, 0));
+        assert_eq!((state.remaining, state.total), (0, 1));
+    }
+
     #[tokio::test]
-    async fn identify_gate_honours_initial_delay() {
+    async fn session_budget_waits_for_the_reset_when_exhausted() {
+        let budget = SessionBudget::new(BudgetState::from_limit(&session_limit(1, 3, 200)), None);
         let start = Instant::now();
-        let gate = IdentifyGate::new(1, 1, Duration::ZERO, start + Duration::from_millis(120));
-        let _lease = gate.acquire(0).await;
-        assert!(start.elapsed() >= Duration::from_millis(120));
+        budget.consume().await;
+        assert!(start.elapsed() < Duration::from_millis(150));
+        // Exhausted: wait for the reset, then (nothing to refresh from)
+        // assume the daily total is back.
+        budget.consume().await;
+        assert!(start.elapsed() >= Duration::from_millis(200));
+        assert_eq!(lock_or_recover(&budget.state).remaining, 2);
+        budget.refund();
+        assert_eq!(lock_or_recover(&budget.state).remaining, 3);
+    }
+
+    #[tokio::test]
+    async fn session_budget_refreshes_from_gateway_bot_after_the_reset() {
+        let fresh = r#"{"url":"wss://gateway.discord.gg","shards":1,"session_start_limit":{"total":1000,"remaining":7,"reset_after":3600000,"max_concurrency":1}}"#;
+        let unauthorized = r#"{"message":"401: Unauthorized","code":0}"#;
+        let (port, server) =
+            gateway_bot_server(vec![("200 OK", fresh), ("401 Unauthorized", unauthorized)]).await;
+        let rest = RestClient::builder("token", 0)
+            .api_base(format!("http://127.0.0.1:{port}"))
+            .build()
+            .unwrap();
+        let exhausted = || BudgetState {
+            remaining: 0,
+            total: 5,
+            reset_at: Instant::now() + Duration::from_millis(100),
+        };
+
+        let budget = SessionBudget::new(exhausted(), Some(rest.clone()));
+        budget.consume().await;
+        assert_eq!(lock_or_recover(&budget.state).remaining, 6);
+
+        // A failed refresh assumes the reset happened.
+        let budget = SessionBudget::new(exhausted(), Some(rest));
+        budget.consume().await;
+        assert_eq!(lock_or_recover(&budget.state).remaining, 4);
+
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 2);
     }
 
     // -- child side (in-process, in-memory pipes) ------------------------------
@@ -2738,11 +3552,44 @@ mod tests {
         }
     }
 
-    fn child_settings(shard_ids: &[u32], max_frame: usize) -> ChildSettings {
+    /// Stand-in for a stdout pipe that can be "full": writes block until
+    /// the valve opens.
+    struct Valve {
+        open: StdMutex<bool>,
+        changed: Condvar,
+    }
+
+    impl Valve {
+        fn closed() -> Arc<Self> {
+            Arc::new(Self {
+                open: StdMutex::new(false),
+                changed: Condvar::new(),
+            })
+        }
+
+        fn open(&self) {
+            *lock_or_recover(&self.open) = true;
+            self.changed.notify_all();
+        }
+
+        fn wait_open(&self) {
+            let mut open = lock_or_recover(&self.open);
+            while !*open {
+                open = self
+                    .changed
+                    .wait(open)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+        }
+    }
+
+    fn child_settings(shard_ids: &[u32]) -> ChildSettings {
         ChildSettings {
             shard_ids: shard_ids.to_vec(),
             shard_count: 8,
-            max_frame,
+            max_frame: MIN_IPC_FRAME_BYTES,
+            request_timeout: Duration::from_secs(60),
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         }
     }
 
@@ -2752,13 +3599,16 @@ mod tests {
         from_child: mpsc::UnboundedReceiver<Vec<u8>>,
     }
 
-    fn child_harness(shard_ids: &[u32]) -> ChildHarness {
+    fn child_harness_with(settings: ChildSettings, valve: Option<Arc<Valve>>) -> ChildHarness {
         let (to_child, rx) = std::sync::mpsc::channel();
         let (frame_tx, from_child) = mpsc::unbounded_channel();
         let child = ShardChildProcess::with_io(
-            child_settings(shard_ids, MIN_IPC_FRAME_BYTES),
+            settings,
             Box::new(std::io::BufReader::new(ChannelSource::new(rx))),
             Box::new(move |bytes: &[u8]| {
+                if let Some(valve) = &valve {
+                    valve.wait_open();
+                }
                 frame_tx
                     .send(bytes.to_vec())
                     .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))
@@ -2769,6 +3619,10 @@ mod tests {
             to_child: Some(to_child),
             from_child,
         }
+    }
+
+    fn child_harness(shard_ids: &[u32]) -> ChildHarness {
+        child_harness_with(child_settings(shard_ids), None)
     }
 
     impl ChildHarness {
@@ -2782,6 +3636,10 @@ mod tests {
 
         fn send(&self, message: &ParentMessage) {
             self.send_raw(frame_line(message).unwrap().as_bytes());
+        }
+
+        fn grant(&self, shard_id: u32, lease: u64) {
+            self.send(&ParentMessage::IdentifyGrant { shard_id, lease });
         }
 
         fn close_stdin(&mut self) {
@@ -2809,6 +3667,14 @@ mod tests {
         }
     }
 
+    fn release(shard_id: u32, lease: u64, sent: bool) -> ChildMessage {
+        ChildMessage::IdentifyRelease {
+            shard_id,
+            lease,
+            sent,
+        }
+    }
+
     #[tokio::test]
     async fn child_answers_null_before_serve_and_ignores_garbage_input() {
         let mut harness = child_harness(&[0]);
@@ -2830,6 +3696,11 @@ mod tests {
             .child
             .serve(|payload| async move { json!({ "echo": payload }) })
             .unwrap();
+        let error = harness
+            .child
+            .serve(|payload| async move { payload })
+            .unwrap_err();
+        assert!(error.to_string().contains("already called"), "{error}");
         harness.send_raw(b"plain text from somewhere\n");
         harness.send_raw(b"@discordrs-ipc/1 {broken\n");
         harness.send_raw(&vec![b'x'; MIN_IPC_FRAME_BYTES * 3]);
@@ -2861,37 +3732,49 @@ mod tests {
             harness.next_message().await,
             ChildMessage::IdentifyRequest { shard_id: 1 }
         );
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 1 });
+        harness.grant(1, 11);
         let permit = timeout(Duration::from_secs(5), acquire)
             .await
             .unwrap()
             .unwrap()
             .unwrap();
-        assert_eq!(permit.shard_id(), 1);
-        assert_eq!(format!("{permit:?}"), "IdentifyPermit { shard_id: 1 }");
 
         let error = harness.child.acquire_identify(1).await.unwrap_err();
         assert!(error.to_string().contains("already held"), "{error}");
 
-        permit.release();
-        assert_eq!(
-            harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 1 }
-        );
+        permit.finish(IdentifyOutcome::Sent);
+        assert_eq!(harness.next_message().await, release(1, 11, true));
 
-        // The slot is free again after the release.
+        // The slot is free again; this time the attempt is abandoned.
         let child = harness.child.clone();
         let again = tokio::spawn(async move { child.acquire_identify(1).await });
         assert_eq!(
             harness.next_message().await,
             ChildMessage::IdentifyRequest { shard_id: 1 }
         );
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 1 });
+        harness.grant(1, 12);
         drop(again.await.unwrap().unwrap());
+        assert_eq!(harness.next_message().await, release(1, 12, false));
+    }
+
+    #[tokio::test]
+    async fn child_identify_gate_checks_the_shard_count() {
+        let mut harness = child_harness(&[0]);
+        let gate = harness.child.identify_gate();
+        let error = gate.acquire(0, 1).await.unwrap_err();
+        assert!(error.to_string().contains(".shard(id, 8)"), "{error}");
+
+        let acquire = tokio::spawn(async move { gate.acquire(0, 8).await });
         assert_eq!(
             harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 1 }
+            ChildMessage::IdentifyRequest { shard_id: 0 }
         );
+        harness.grant(0, 1);
+        let mut permit = acquire.await.unwrap().unwrap();
+        // A cancelled IDENTIFY write still counts as sent.
+        permit.mark_sending();
+        drop(permit);
+        assert_eq!(harness.next_message().await, release(0, 1, true));
     }
 
     #[tokio::test]
@@ -2912,12 +3795,9 @@ mod tests {
             "{error}"
         );
 
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 0 });
-        drop(first.await.unwrap().unwrap());
-        assert_eq!(
-            harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 0 }
-        );
+        harness.grant(0, 3);
+        first.await.unwrap().unwrap().finish(IdentifyOutcome::Sent);
+        assert_eq!(harness.next_message().await, release(0, 3, true));
     }
 
     #[tokio::test]
@@ -2934,11 +3814,8 @@ mod tests {
             harness.next_message().await,
             ChildMessage::IdentifyRequest { shard_id: 0 }
         );
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 0 });
-        assert_eq!(
-            harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 0 }
-        );
+        harness.grant(0, 4);
+        assert_eq!(harness.next_message().await, release(0, 4, false));
 
         // Cancelled and retried: the retry reuses the queued request.
         assert!(
@@ -2953,17 +3830,14 @@ mod tests {
         let child = harness.child.clone();
         let retry = tokio::spawn(async move { child.acquire_identify(1).await });
         harness.assert_quiet().await;
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 1 });
+        harness.grant(1, 5);
         let permit = timeout(Duration::from_secs(5), retry)
             .await
             .unwrap()
             .unwrap()
             .unwrap();
-        drop(permit);
-        assert_eq!(
-            harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 1 }
-        );
+        permit.finish(IdentifyOutcome::Sent);
+        assert_eq!(harness.next_message().await, release(1, 5, true));
     }
 
     #[tokio::test]
@@ -2981,16 +3855,16 @@ mod tests {
             .await
             .expect("shutdown signal");
         let error = waiting.await.unwrap().unwrap_err();
-        assert!(error.to_string().contains("IPC closed"), "{error}");
+        assert!(error.to_string().contains("IPC session ended"), "{error}");
         let error = harness.child.acquire_identify(0).await.unwrap_err();
-        assert!(error.to_string().contains("shutdown"), "{error}");
-
-        // A grant that still arrives is not kept.
-        harness.send(&ParentMessage::IdentifyGrant { shard_id: 0 });
-        assert_eq!(
-            harness.next_message().await,
-            ChildMessage::IdentifyRelease { shard_id: 0 }
+        assert!(
+            error.to_string().contains("IPC session has ended"),
+            "{error}"
         );
+
+        // A grant that still arrives is returned unused.
+        harness.grant(0, 6);
+        assert_eq!(harness.next_message().await, release(0, 6, false));
     }
 
     #[tokio::test]
@@ -3062,41 +3936,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stdout_write_failures_surface_as_errors() {
-        let (to_child, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    async fn stdout_write_failure_ends_the_ipc_session() {
+        let (_to_child, rx) = std::sync::mpsc::channel::<Vec<u8>>();
         let child = ShardChildProcess::with_io(
-            child_settings(&[0], MIN_IPC_FRAME_BYTES),
+            child_settings(&[0]),
             Box::new(std::io::BufReader::new(ChannelSource::new(rx))),
             Box::new(|_: &[u8]| Err(io::Error::from(io::ErrorKind::BrokenPipe))),
         );
-        let error = child.notify_ready().unwrap_err();
+        // Queued; the writer thread then fails and ends the session.
+        child.notify_ready().unwrap();
+        timeout(Duration::from_secs(5), child.shutdown_signal())
+            .await
+            .expect("a broken stdout must end the IPC session");
+        let error = child.log("after").unwrap_err();
         assert!(
             error.to_string().contains("IPC stdout write failed"),
             "{error}"
         );
-        // A failed request leaves no stale slot behind, so the next attempt
-        // fails the same way instead of reporting a duplicate.
-        for _ in 0..2 {
-            let error = child.acquire_identify(0).await.unwrap_err();
-            assert!(error.to_string().contains("write failed"), "{error}");
-        }
-        // Responses and unexpected grants cannot be written either; the
-        // reader logs and keeps going until stdin closes.
-        for message in [
-            ParentMessage::Request {
-                id: 1,
-                payload: Value::Null,
-            },
-            ParentMessage::IdentifyGrant { shard_id: 0 },
-        ] {
-            to_child
-                .send(frame_line(&message).unwrap().into_bytes())
-                .unwrap();
-        }
-        drop(to_child);
-        timeout(Duration::from_secs(5), child.shutdown_signal())
-            .await
-            .expect("EOF ends the session");
+        let error = child.acquire_identify(0).await.unwrap_err();
+        assert!(
+            error.to_string().contains("IPC session has ended"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3107,6 +3968,219 @@ mod tests {
             .serve(|payload| async move { payload })
             .unwrap_err();
         assert!(error.to_string().contains("Tokio runtime"), "{error}");
+    }
+
+    /// Regression: child IPC writes used to lock stdout and write inline from
+    /// async tasks, the reader thread, and `Drop`, so a parent that stopped
+    /// reading blocked Tokio workers and kept the reader from seeing
+    /// shutdown. Runs on the default current-thread runtime, where one
+    /// blocking write would freeze everything.
+    #[tokio::test]
+    async fn full_stdout_pipe_blocks_neither_the_runtime_nor_the_reader() {
+        let valve = Valve::closed();
+        let mut harness = child_harness_with(child_settings(&[0, 1]), Some(Arc::clone(&valve)));
+        harness
+            .child
+            .serve(|payload| async move { payload })
+            .unwrap();
+
+        // The writer thread takes this frame and blocks in the "full pipe".
+        harness.child.log("first").unwrap();
+        let writer = Arc::clone(&harness.child.ipc.writer);
+        let taken = timeout(Duration::from_secs(5), async {
+            while !lock_or_recover(&writer.queues).data.is_empty() {
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(taken.is_ok(), "writer thread never took the first frame");
+
+        // Data frames are admitted up to the bound, then rejected; nothing
+        // blocks.
+        let accepted = (0..CHILD_DATA_QUEUE_CAPACITY + 10)
+            .take_while(|index| harness.child.log(format!("log {index}")).is_ok())
+            .count();
+        assert_eq!(accepted, CHILD_DATA_QUEUE_CAPACITY);
+
+        // Control frames are still admitted: one acquisition that will be
+        // granted, one that is cancelled before its grant.
+        let child = harness.child.clone();
+        let acquire = tokio::spawn(async move { child.acquire_identify(0).await });
+        sleep(Duration::from_millis(20)).await;
+        assert!(
+            timeout(Duration::from_millis(50), harness.child.acquire_identify(1))
+                .await
+                .is_err()
+        );
+        // A request whose response cannot be queued must not wedge anything.
+        harness.send(&ParentMessage::Request {
+            id: 5,
+            payload: json!("x"),
+        });
+        // The reader still handles grants and returns the cancelled one; the
+        // permit's drop only enqueues.
+        harness.grant(1, 7);
+        harness.grant(0, 8);
+        let permit = timeout(Duration::from_secs(5), acquire)
+            .await
+            .expect("grant must arrive while stdout is stuck")
+            .unwrap()
+            .unwrap();
+        let dropped = std::time::Instant::now();
+        drop(permit);
+        assert!(dropped.elapsed() < Duration::from_millis(100));
+        // Timers keep firing on this single-threaded runtime...
+        timeout(Duration::from_secs(1), sleep(Duration::from_millis(20)))
+            .await
+            .expect("runtime is blocked");
+        // ...and the reader still sees shutdown.
+        harness.send(&ParentMessage::Shutdown);
+        timeout(Duration::from_secs(5), harness.child.shutdown_signal())
+            .await
+            .expect("reader blocked behind stdout");
+
+        // Once the pipe drains: the frame in flight, then control frames
+        // ahead of the queued data.
+        valve.open();
+        assert_eq!(
+            harness.next_message().await,
+            ChildMessage::Log {
+                message: "first".to_string()
+            }
+        );
+        assert_eq!(
+            harness.next_message().await,
+            ChildMessage::IdentifyRequest { shard_id: 0 }
+        );
+        assert_eq!(
+            harness.next_message().await,
+            ChildMessage::IdentifyRequest { shard_id: 1 }
+        );
+        assert_eq!(harness.next_message().await, release(1, 7, false));
+        assert_eq!(harness.next_message().await, release(0, 8, false));
+        assert_eq!(
+            harness.next_message().await,
+            ChildMessage::Log {
+                message: "log 0".to_string()
+            }
+        );
+    }
+
+    /// Counts how many handler futures were dropped before finishing.
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn hanging_handler(
+        started: &Arc<AtomicUsize>,
+        cancelled: &Arc<AtomicUsize>,
+    ) -> impl Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync + 'static {
+        let started = Arc::clone(started);
+        let cancelled = Arc::clone(cancelled);
+        move |payload| {
+            started.fetch_add(1, Ordering::SeqCst);
+            let cancelled = Arc::clone(&cancelled);
+            Box::pin(async move {
+                if payload == json!("hang") {
+                    let _counter = DropCounter(cancelled);
+                    std::future::pending::<()>().await;
+                }
+                payload
+            })
+        }
+    }
+
+    async fn wait_for_count(counter: &AtomicUsize, wanted: usize) -> bool {
+        timeout(Duration::from_secs(5), async {
+            while counter.load(Ordering::SeqCst) < wanted {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// Regression: every request used to spawn a detached task, with no
+    /// limit and no cancellation when the parent stopped waiting.
+    #[tokio::test]
+    async fn request_handlers_are_admitted_before_spawning_and_time_out() {
+        let mut settings = child_settings(&[0]);
+        settings.max_concurrent_requests = 2;
+        settings.request_timeout = Duration::from_millis(200);
+        let mut harness = child_harness_with(settings, None);
+        let started = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        harness
+            .child
+            .serve(hanging_handler(&started, &cancelled))
+            .unwrap();
+
+        for id in 1..=2 {
+            harness.send(&ParentMessage::Request {
+                id,
+                payload: json!("hang"),
+            });
+        }
+        assert!(wait_for_count(&started, 2).await);
+        // Beyond the limit: answered null without running the handler.
+        for id in 3..=4 {
+            harness.send(&ParentMessage::Request {
+                id,
+                payload: json!("hang"),
+            });
+            assert_eq!(
+                harness.next_message().await,
+                ChildMessage::Response {
+                    id,
+                    payload: Value::Null
+                }
+            );
+        }
+        assert_eq!(started.load(Ordering::SeqCst), 2);
+
+        // The parent's timeout cancels the running handlers without an
+        // answer, which frees their slots.
+        assert!(wait_for_count(&cancelled, 2).await);
+        harness.send(&ParentMessage::Request {
+            id: 5,
+            payload: json!("echo"),
+        });
+        assert_eq!(
+            harness.next_message().await,
+            ChildMessage::Response {
+                id: 5,
+                payload: json!("echo")
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_running_request_handlers() {
+        let mut harness = child_harness(&[0]);
+        let started = Arc::new(AtomicUsize::new(0));
+        let cancelled = Arc::new(AtomicUsize::new(0));
+        harness
+            .child
+            .serve(hanging_handler(&started, &cancelled))
+            .unwrap();
+        for id in 1..=3 {
+            harness.send(&ParentMessage::Request {
+                id,
+                payload: json!("hang"),
+            });
+        }
+        assert!(wait_for_count(&started, 3).await);
+        // The request timeout here is 60s: only shutdown can cancel them.
+        harness.send(&ParentMessage::Shutdown);
+        assert!(
+            wait_for_count(&cancelled, 3).await,
+            "handlers kept running after shutdown"
+        );
+        harness.assert_quiet().await;
     }
 
     // -- end-to-end with the real child implementation ---------------------------
@@ -3132,10 +4206,12 @@ mod tests {
         // disturb the protocol.
         println!("stray println from user code");
         print!("unterminated print without newline");
+        // Same path the gateway client takes through the hook.
+        let gate = child.identify_gate();
         for &shard_id in child.shard_ids() {
-            let permit = child.acquire_identify(shard_id).await.unwrap();
+            let permit = gate.acquire(shard_id, child.shard_count()).await.unwrap();
+            permit.finish(IdentifyOutcome::Sent);
             child.notify_shard_ready(shard_id).unwrap();
-            drop(permit);
         }
         child.log("e2e child booted").unwrap();
         child.shutdown_signal().await;
@@ -3165,6 +4241,7 @@ mod tests {
             total_shards: Some(2),
             shards_per_process: 2,
             max_concurrency: Some(1),
+            session_start_budget: SessionStartBudget::Unchecked,
             program: Some(std::env::current_exe().unwrap()),
             args: [
                 CHILD_ENTRY_TEST,
@@ -3210,8 +4287,12 @@ mod tests {
     // -- manager with scripted children -------------------------------------------
 
     #[tokio::test]
-    async fn spawn_rejects_missing_total_shards_and_bad_shard_list() {
-        let error = ProcessShardManager::spawn(ProcessShardManagerConfig::default())
+    async fn spawn_rejects_missing_total_shards_bad_shard_lists_and_unread_budgets() {
+        let unchecked = || ProcessShardManagerConfig {
+            session_start_budget: SessionStartBudget::Unchecked,
+            ..ProcessShardManagerConfig::default()
+        };
+        let error = ProcessShardManager::spawn(unchecked())
             .await
             .map(|_| ())
             .unwrap_err();
@@ -3220,7 +4301,7 @@ mod tests {
         let config = ProcessShardManagerConfig {
             total_shards: Some(2),
             shard_list: Some(vec![0, 5]),
-            ..ProcessShardManagerConfig::default()
+            ..unchecked()
         };
         let error = ProcessShardManager::spawn(config)
             .await
@@ -3231,13 +4312,25 @@ mod tests {
         let config = ProcessShardManagerConfig {
             total_shards: Some(2),
             shard_list: Some(Vec::new()),
-            ..ProcessShardManagerConfig::default()
+            ..unchecked()
         };
         let error = ProcessShardManager::spawn(config)
             .await
             .map(|_| ())
             .unwrap_err();
         assert!(error.to_string().contains("must not be empty"));
+
+        // Without a token the budget cannot be read: an explicit choice is
+        // required instead of silently skipping budget protection.
+        let config = ProcessShardManagerConfig {
+            total_shards: Some(1),
+            ..ProcessShardManagerConfig::default()
+        };
+        let error = ProcessShardManager::spawn(config)
+            .await
+            .map(|_| ())
+            .unwrap_err();
+        assert!(error.to_string().contains("session start limit"), "{error}");
     }
 
     #[cfg(unix)]
@@ -3246,6 +4339,7 @@ mod tests {
             total_shards: Some(1),
             program: Some(PathBuf::from("/bin/sh")),
             args: vec!["-c".to_string(), script.to_string()],
+            session_start_budget: SessionStartBudget::Unchecked,
             respawn_delay: Duration::from_millis(10),
             identify_interval: Duration::from_millis(100),
             shutdown_timeout: Duration::from_secs(5),
@@ -3400,7 +4494,7 @@ done
             tokio::spawn(async move { manager.broadcast(json!("x".repeat(1 << 20))).await })
         };
         sleep(Duration::from_millis(200)).await;
-        // Fill the writer queue behind the stuck frame.
+        // Fill the data queue behind the stuck frame.
         let mut queued = Vec::new();
         for _ in 0..IPC_WRITE_QUEUE_CAPACITY {
             let manager = Arc::clone(&manager);
@@ -3489,6 +4583,47 @@ done
             .unwrap();
     }
 
+    /// Regression: a kill whose exit could not be confirmed was reported as
+    /// a clean stop, and `wait()` always returned `Ok`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unconfirmed_termination_is_reported_to_every_waiter() {
+        let mut config = scripted_child_config("exec sleep 30");
+        config.shutdown_timeout = Duration::from_millis(100);
+        // A zero reap timeout treats every kill as unconfirmed.
+        let manager = ProcessShardManager::start(
+            config,
+            None,
+            SpawnInternals {
+                kill_reap_timeout: Duration::ZERO,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            wait_until(Duration::from_secs(5), || manager.children()[0]
+                .pid
+                .is_some())
+            .await
+        );
+
+        let waiter = manager.wait();
+        tokio::pin!(waiter);
+        assert!(futures_util::poll!(&mut waiter).is_pending());
+        let error = timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exit was not confirmed"), "{error}");
+        let waited = timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("the concurrent waiter must finish too")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(waited, error);
+    }
+
     /// Regression: invalid UTF-8 ended the old `lines()` reader, which then
     /// treated the live child as exited and blocked in `wait()`; oversized
     /// and stray lines were buffered without limit or broke parsing.
@@ -3503,7 +4638,7 @@ printf 'unterminated user output'
 echo '@discordrs-ipc/1 {"op":"bogus"}'
 echo '@discordrs-ipc/1 {not json'
 echo '@discordrs-ipc/1 {"op":"ready","shard_id":7}'
-echo '@discordrs-ipc/1 {"op":"identify_release","shard_id":0}'
+echo '@discordrs-ipc/1 {"op":"identify_release","shard_id":0,"lease":9}'
 echo '@discordrs-ipc/1 {"op":"response","id":999,"payload":null}'
 echo
 echo '@discordrs-ipc/1 {"op":"ready","shard_id":0}'
@@ -3606,6 +4741,310 @@ done
         assert!(all_in_state(&manager, ChildState::Stopped));
     }
 
+    // -- IDENTIFY coordination across processes ------------------------------------
+
+    #[cfg(target_os = "linux")]
+    fn scratch_dir(tag: &str) -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "discordrs-process-test-{tag}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Times (ns since the epoch) a scripted child appended to `file`.
+    #[cfg(target_os = "linux")]
+    fn read_times(dir: &std::path::Path, file: &str) -> Vec<i128> {
+        std::fs::read_to_string(dir.join(file))
+            .unwrap_or_default()
+            .lines()
+            .map(|line| line.trim().parse().unwrap())
+            .collect()
+    }
+
+    /// Child that asks for an IDENTIFY permit for its single shard, records
+    /// when each grant arrived (`grant-<shard>`), and keeps the lease id in
+    /// `$L`; the handling of the grant follows.
+    #[cfg(target_os = "linux")]
+    const IDENTIFY_CHILD_PRELUDE: &str = r#"
+P='@discordrs-ipc/1 '
+S=$DISCORDRS_SHARD_IDS
+echo "$P{\"op\":\"identify_request\",\"shard_id\":$S}"
+while read -r line; do
+  case "$line" in
+    *'"op":"shutdown"'*) exit 0 ;;
+    *identify_grant*)
+      L=$(printf '%s' "$line" | sed 's/.*"lease":\([0-9]*\).*/\1/')
+      date +%s%N >> "$SCRATCH_DIR/grant-$S"
+"#;
+
+    #[cfg(target_os = "linux")]
+    fn identify_child_config(dir: &std::path::Path, on_grant: &str) -> ProcessShardManagerConfig {
+        let script = [IDENTIFY_CHILD_PRELUDE, on_grant, " ;;\n  esac\ndone\n"].concat();
+        let mut config = scripted_child_config(&script);
+        config
+            .extra_env
+            .push(("SCRATCH_DIR".to_string(), dir.display().to_string()));
+        config
+    }
+
+    /// "Sends" IDENTIFY (records `sent-<shard>`), releases, and reports ready.
+    #[cfg(target_os = "linux")]
+    const SEND_RELEASE_AND_READY: &str = r#"
+      date +%s%N >> "$SCRATCH_DIR/sent-$S"
+      echo "$P{\"op\":\"identify_release\",\"shard_id\":$S,\"lease\":$L,\"sent\":true}"
+      echo "$P{\"op\":\"ready\",\"shard_id\":$S}""#;
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn identify_grants_are_spaced_per_bucket_across_processes() {
+        let dir = scratch_dir("buckets");
+        let mut config = identify_child_config(&dir, SEND_RELEASE_AND_READY);
+        config.total_shards = Some(4);
+        config.max_concurrency = Some(2);
+        config.identify_interval = Duration::from_millis(300);
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        assert_eq!(manager.max_concurrency(), 2);
+        assert!(
+            wait_until(Duration::from_secs(10), || all_in_state(
+                &manager,
+                ChildState::Running
+            ))
+            .await,
+            "children never reached Running: {:?}",
+            manager.children()
+        );
+
+        let grants: Vec<i128> = (0..4)
+            .map(|shard| {
+                let times = read_times(&dir, &format!("grant-{shard}"));
+                assert_eq!(times.len(), 1, "shard {shard} grants: {times:?}");
+                times[0]
+            })
+            .collect();
+        // Buckets are shard % 2: {0, 2} and {1, 3}. Within a bucket the
+        // second grant follows the first one's release by the interval.
+        for (a, b) in [(0, 2), (1, 3)] {
+            let gap = (grants[a] - grants[b]).abs();
+            assert!(
+                gap >= 290_000_000,
+                "shards {a} and {b} share a bucket but were granted {gap}ns apart"
+            );
+        }
+
+        timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn respawned_child_waits_out_the_interval_after_crashing_with_a_permit() {
+        let dir = scratch_dir("respawn");
+        let on_grant = [
+            r#"
+      if [ ! -e "$SCRATCH_DIR/crashed" ]; then : > "$SCRATCH_DIR/crashed"; exit 1; fi"#,
+            SEND_RELEASE_AND_READY,
+        ]
+        .concat();
+        let mut config = identify_child_config(&dir, &on_grant);
+        config.identify_interval = Duration::from_millis(300);
+        config.max_respawns = Some(3);
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || all_in_state(
+                &manager,
+                ChildState::Running
+            ))
+            .await,
+            "child never reached Running: {:?}",
+            manager.children()
+        );
+        assert_eq!(manager.children()[0].respawns, 1);
+
+        let grants = read_times(&dir, "grant-0");
+        assert_eq!(grants.len(), 2, "grants: {grants:?}");
+        // The crashed child never released its permit; the parent returned
+        // the bucket when the exit was confirmed and spaced the next grant.
+        assert!(
+            grants[1] - grants[0] >= 290_000_000,
+            "respawned child identified {}ns after the crash",
+            grants[1] - grants[0]
+        );
+
+        timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression: an expired permit used to free the bucket while the
+    /// stalled holder could still IDENTIFY, so two shards of one bucket
+    /// could IDENTIFY together. Each child's first incarnation stalls for 3s
+    /// between its grant and its (simulated) IDENTIFY send.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn stalled_permit_holder_is_killed_before_its_bucket_is_reused() {
+        let dir = scratch_dir("stalled");
+        let on_grant = [
+            r#"
+      if [ ! -e "$SCRATCH_DIR/stalled-$S" ]; then : > "$SCRATCH_DIR/stalled-$S"; sleep 3; fi"#,
+            SEND_RELEASE_AND_READY,
+        ]
+        .concat();
+        let mut config = identify_child_config(&dir, &on_grant);
+        config.total_shards = Some(2);
+        config.identify_interval = Duration::from_millis(100);
+        config.identify_permit_timeout = Duration::from_millis(400);
+        config.max_respawns = Some(3);
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        assert!(
+            wait_until(Duration::from_secs(15), || all_in_state(
+                &manager,
+                ChildState::Running
+            ))
+            .await,
+            "children never reached Running: {:?}",
+            manager.children()
+        );
+        assert!(manager.children().iter().all(|child| child.respawns == 1));
+
+        // Every stalled holder was killed before its delayed send: each
+        // shard sent exactly once, from its respawned process.
+        let mut events: Vec<(i128, u32, &str)> = Vec::new();
+        for shard in 0..2 {
+            let sent = read_times(&dir, &format!("sent-{shard}"));
+            assert_eq!(sent.len(), 1, "shard {shard} sends: {sent:?}");
+            events.push((sent[0], shard, "sent"));
+            let grants = read_times(&dir, &format!("grant-{shard}"));
+            assert_eq!(grants.len(), 2, "shard {shard} grants: {grants:?}");
+            events.extend(grants.into_iter().map(|time| (time, shard, "grant")));
+        }
+        events.sort();
+        // Both shards share one bucket: every send must come while its own
+        // shard holds the most recent grant.
+        for (index, &(_, shard, kind)) in events.iter().enumerate() {
+            if kind == "sent" {
+                let holder = events[..index]
+                    .iter()
+                    .rev()
+                    .find(|(_, _, kind)| *kind == "grant")
+                    .map(|&(_, shard, _)| shard);
+                assert_eq!(holder, Some(shard), "events: {events:?}");
+            }
+        }
+        // A stalled grant is followed by the next one only after the kill.
+        let grants: Vec<i128> = events
+            .iter()
+            .filter(|(_, _, kind)| *kind == "grant")
+            .map(|&(time, _, _)| time)
+            .collect();
+        assert!(
+            grants[1] - grants[0] >= 390_000_000,
+            "bucket reused {}ns after a stalled grant",
+            grants[1] - grants[0]
+        );
+
+        timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression: a grant that could not be queued behind a full writer was
+    /// dropped, and the child waited for it forever. The child requests a
+    /// permit while the parent's stdin writer is stuck on a large broadcast
+    /// with its data queue full.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn identify_grant_is_delivered_after_a_saturated_writer_recovers() {
+        let dir = scratch_dir("saturated");
+        let script = r#"
+P='@discordrs-ipc/1 '
+sleep 0.5
+echo "$P{\"op\":\"identify_request\",\"shard_id\":0}"
+sleep 1
+while read -r line; do
+  case "$line" in
+    *'"op":"shutdown"'*) exit 0 ;;
+    *identify_grant*)
+      L=$(printf '%s' "$line" | sed 's/.*"lease":\([0-9]*\).*/\1/')
+      echo "$P{\"op\":\"identify_release\",\"shard_id\":0,\"lease\":$L,\"sent\":true}"
+      echo "$P{\"op\":\"ready\",\"shard_id\":0}" ;;
+  esac
+done
+"#;
+        let mut config = scripted_child_config(script);
+        config.broadcast_timeout = Duration::from_secs(1);
+        let manager = Arc::new(ProcessShardManager::spawn(config).await.unwrap());
+        assert!(
+            wait_until(Duration::from_secs(5), || manager.children()[0]
+                .pid
+                .is_some())
+            .await
+        );
+
+        // Stuck write (200 KiB > pipe buffer) plus a full data queue, all
+        // before the child asks for its permit.
+        let mut broadcasts = vec![{
+            let manager = Arc::clone(&manager);
+            tokio::spawn(async move { manager.broadcast(json!("x".repeat(200 * 1024))).await })
+        }];
+        sleep(Duration::from_millis(100)).await;
+        for _ in 0..IPC_WRITE_QUEUE_CAPACITY + 4 {
+            let manager = Arc::clone(&manager);
+            broadcasts.push(tokio::spawn(async move {
+                manager.broadcast(json!("small")).await
+            }));
+        }
+
+        assert!(
+            wait_until(Duration::from_secs(10), || all_in_state(
+                &manager,
+                ChildState::Running
+            ))
+            .await,
+            "the grant was lost behind the saturated writer: {:?}",
+            manager.children()
+        );
+        for broadcast in broadcasts {
+            let _ = broadcast.await;
+        }
+        timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// When a grant cannot be delivered at all (the child closed stdin),
+    /// the session is failed: the child is killed instead of waiting.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn undeliverable_grant_fails_the_session() {
+        let script = r#"
+exec 0<&-
+echo '@discordrs-ipc/1 {"op":"identify_request","shard_id":0}'
+exec sleep 30
+"#;
+        let mut config = scripted_child_config(script);
+        config.respawn = false;
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        timeout(Duration::from_secs(5), manager.wait())
+            .await
+            .expect("the child must be killed once its stdin is gone")
+            .unwrap();
+        assert_eq!(manager.children()[0].state, ChildState::Stopped);
+    }
+
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn dropping_the_manager_stops_children() {
@@ -3637,185 +5076,9 @@ done
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    // -- IDENTIFY coordination across processes ------------------------------------
-
-    #[cfg(target_os = "linux")]
-    fn scratch_dir(tag: &str) -> PathBuf {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "discordrs-process-test-{tag}-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    /// Grant times (ns since the epoch) a scripted child recorded.
-    #[cfg(target_os = "linux")]
-    fn read_grants(dir: &std::path::Path, shard_id: u32) -> Vec<i128> {
-        std::fs::read_to_string(dir.join(format!("grant-{shard_id}")))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| line.trim().parse().unwrap())
-            .collect()
-    }
-
-    /// Child that asks for an IDENTIFY permit for its single shard and
-    /// records when the grant arrived; the handling of the grant follows.
-    #[cfg(target_os = "linux")]
-    const IDENTIFY_CHILD_PRELUDE: &str = r#"
-P='@discordrs-ipc/1 '
-S=$DISCORDRS_SHARD_IDS
-echo "$P{\"op\":\"identify_request\",\"shard_id\":$S}"
-while read -r line; do
-  case "$line" in
-    *'"op":"shutdown"'*) exit 0 ;;
-    *identify_grant*)
-      date +%s%N >> "$SCRATCH_DIR/grant-$S"
-"#;
-
-    #[cfg(target_os = "linux")]
-    fn identify_child_config(dir: &std::path::Path, on_grant: &str) -> ProcessShardManagerConfig {
-        let script = [IDENTIFY_CHILD_PRELUDE, on_grant, " ;;\n  esac\ndone\n"].concat();
-        let mut config = scripted_child_config(&script);
-        config
-            .extra_env
-            .push(("SCRATCH_DIR".to_string(), dir.display().to_string()));
-        config
-    }
-
-    #[cfg(target_os = "linux")]
-    const RELEASE_AND_READY: &str = r#"
-      echo "$P{\"op\":\"identify_release\",\"shard_id\":$S}"
-      echo "$P{\"op\":\"ready\",\"shard_id\":$S}""#;
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn identify_grants_are_spaced_per_bucket_across_processes() {
-        let dir = scratch_dir("buckets");
-        let mut config = identify_child_config(&dir, RELEASE_AND_READY);
-        config.total_shards = Some(4);
-        config.max_concurrency = Some(2);
-        config.identify_interval = Duration::from_millis(300);
-        let manager = ProcessShardManager::spawn(config).await.unwrap();
-        assert_eq!(manager.max_concurrency(), 2);
-        assert!(
-            wait_until(Duration::from_secs(10), || all_in_state(
-                &manager,
-                ChildState::Running
-            ))
-            .await,
-            "children never reached Running: {:?}",
-            manager.children()
-        );
-
-        let grants: Vec<i128> = (0..4)
-            .map(|shard| {
-                let times = read_grants(&dir, shard);
-                assert_eq!(times.len(), 1, "shard {shard} grants: {times:?}");
-                times[0]
-            })
-            .collect();
-        // Buckets are shard % 2: {0, 2} and {1, 3}. Within a bucket the
-        // second grant follows the first one's release by the interval.
-        for (a, b) in [(0, 2), (1, 3)] {
-            let gap = (grants[a] - grants[b]).abs();
-            assert!(
-                gap >= 290_000_000,
-                "shards {a} and {b} share a bucket but were granted {gap}ns apart"
-            );
-        }
-
-        timeout(Duration::from_secs(5), manager.shutdown())
-            .await
-            .expect("shutdown timed out")
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn respawned_child_waits_out_the_interval_after_crashing_with_a_permit() {
-        let dir = scratch_dir("respawn");
-        let on_grant = [
-            r#"
-      if [ ! -e "$SCRATCH_DIR/crashed" ]; then : > "$SCRATCH_DIR/crashed"; exit 1; fi"#,
-            RELEASE_AND_READY,
-        ]
-        .concat();
-        let mut config = identify_child_config(&dir, &on_grant);
-        config.identify_interval = Duration::from_millis(300);
-        config.max_respawns = Some(3);
-        let manager = ProcessShardManager::spawn(config).await.unwrap();
-        assert!(
-            wait_until(Duration::from_secs(10), || all_in_state(
-                &manager,
-                ChildState::Running
-            ))
-            .await,
-            "child never reached Running: {:?}",
-            manager.children()
-        );
-        assert_eq!(manager.children()[0].respawns, 1);
-
-        let grants = read_grants(&dir, 0);
-        assert_eq!(grants.len(), 2, "grants: {grants:?}");
-        // The crashed child never released its permit; the parent reclaimed
-        // it when the process exited and spaced the respawn's grant.
-        assert!(
-            grants[1] - grants[0] >= 290_000_000,
-            "respawned child identified {}ns after the crash",
-            grants[1] - grants[0]
-        );
-
-        timeout(Duration::from_secs(5), manager.shutdown())
-            .await
-            .expect("shutdown timed out")
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn unreleased_identify_permits_are_reclaimed_after_the_timeout() {
-        let dir = scratch_dir("permit-timeout");
-        // Never releases the permit.
-        let on_grant = r#"
-      echo "$P{\"op\":\"ready\",\"shard_id\":$S}""#;
-        let mut config = identify_child_config(&dir, on_grant);
-        config.total_shards = Some(2);
-        config.identify_interval = Duration::from_millis(100);
-        config.identify_permit_timeout = Duration::from_millis(400);
-        let manager = ProcessShardManager::spawn(config).await.unwrap();
-        assert!(
-            wait_until(Duration::from_secs(10), || all_in_state(
-                &manager,
-                ChildState::Running
-            ))
-            .await,
-            "children never reached Running: {:?}",
-            manager.children()
-        );
-
-        let first = read_grants(&dir, 0);
-        let second = read_grants(&dir, 1);
-        assert_eq!((first.len(), second.len()), (1, 1));
-        // Reclaimed at grant + 400ms, granted again 100ms later. The margin
-        // absorbs the first child's delay between grant and `date`.
-        let gap = (first[0] - second[0]).abs();
-        assert!(gap >= 400_000_000, "grants only {gap}ns apart");
-
-        timeout(Duration::from_secs(5), manager.shutdown())
-            .await
-            .expect("shutdown timed out")
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    // -- /gateway/bot ----------------------------------------------------------------
 
     /// Serves `/gateway/bot` once per scripted response.
-    #[cfg(unix)]
     async fn gateway_bot_server(
         responses: Vec<(&'static str, &'static str)>,
     ) -> (u16, tokio::task::JoinHandle<Vec<String>>) {
@@ -3830,7 +5093,8 @@ while read -r line; do
                 let received = stream.read(&mut buffer).await.unwrap();
                 requests.push(String::from_utf8_lossy(&buffer[..received]).into_owned());
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(response.as_bytes()).await.unwrap();
@@ -3840,25 +5104,30 @@ while read -r line; do
         (port, server)
     }
 
+    fn rest_for(port: u16) -> RestClient {
+        RestClient::builder("token", 0)
+            .api_base(format!("http://127.0.0.1:{port}"))
+            .build()
+            .unwrap()
+    }
+
     #[cfg(unix)]
     #[tokio::test]
-    async fn spawn_auto_reads_shards_and_max_concurrency_from_gateway_bot() {
-        let ok = r#"{"url":"wss://gateway.discord.gg","shards":3,"session_start_limit":{"total":1000,"remaining":0,"reset_after":200,"max_concurrency":2}}"#;
+    async fn spawn_auto_reads_gateway_bot_and_never_skips_the_budget_silently() {
+        let ok = r#"{"url":"wss://gateway.discord.gg","shards":3,"session_start_limit":{"total":1000,"remaining":999,"reset_after":0,"max_concurrency":2}}"#;
         let unauthorized = r#"{"message":"401: Unauthorized","code":0}"#;
         let (port, server) = gateway_bot_server(vec![
             ("200 OK", ok),
             ("401 Unauthorized", unauthorized),
             ("401 Unauthorized", unauthorized),
+            ("401 Unauthorized", unauthorized),
         ])
         .await;
-        let rest = RestClient::builder("token", 0)
-            .api_base(format!("http://127.0.0.1:{port}"))
-            .build()
-            .unwrap();
 
         let mut config = scripted_child_config(EXIT_ON_SHUTDOWN);
         config.total_shards = None;
-        let manager = ProcessShardManager::spawn_auto_with(&rest, config.clone())
+        config.session_start_budget = SessionStartBudget::FromGateway;
+        let manager = ProcessShardManager::spawn_auto_with(rest_for(port), config.clone())
             .await
             .unwrap();
         assert_eq!(manager.shard_count(), 3);
@@ -3869,24 +5138,104 @@ while read -r line; do
             .expect("shutdown timed out")
             .unwrap();
 
-        // A failed lookup is fatal only when the shard count is unknown.
-        assert!(ProcessShardManager::spawn_auto_with(&rest, config.clone())
-            .await
-            .is_err());
-        config.total_shards = Some(2);
-        let manager = ProcessShardManager::spawn_auto_with(&rest, config)
+        // Explicit sizing with a fixed budget: only max_concurrency is
+        // missing, so a failed lookup falls back to one bucket.
+        let fixed = ProcessShardManagerConfig {
+            total_shards: Some(2),
+            session_start_budget: SessionStartBudget::Fixed(session_limit(10, 1000, 0)),
+            ..config.clone()
+        };
+        let manager = ProcessShardManager::spawn_auto_with(rest_for(port), fixed)
             .await
             .unwrap();
-        assert_eq!(manager.shard_count(), 2);
-        assert_eq!(manager.max_concurrency(), 1);
+        assert_eq!((manager.shard_count(), manager.max_concurrency()), (2, 1));
         timeout(Duration::from_secs(5), manager.shutdown())
             .await
             .expect("shutdown timed out")
             .unwrap();
 
+        // Fully explicit sizing still reads the budget, and failing to do
+        // so is an error rather than an unprotected start.
+        let explicit = ProcessShardManagerConfig {
+            total_shards: Some(2),
+            max_concurrency: Some(2),
+            ..config.clone()
+        };
+        assert!(
+            ProcessShardManager::spawn_auto_with(rest_for(port), explicit)
+                .await
+                .is_err()
+        );
+        // An unknown shard count is required either way.
+        let unknown = ProcessShardManagerConfig {
+            session_start_budget: SessionStartBudget::Unchecked,
+            ..config
+        };
+        assert!(
+            ProcessShardManager::spawn_auto_with(rest_for(port), unknown)
+                .await
+                .is_err()
+        );
+
         let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 4);
         assert!(requests
             .iter()
             .all(|request| request.starts_with("GET /gateway/bot ")));
+    }
+
+    /// Regression: only `remaining == 0` at startup was respected, so with
+    /// one session start left two children in different buckets both got
+    /// grants. Sizing is explicit here; the budget is still read.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn session_budget_paces_grants_across_children() {
+        let low = r#"{"url":"wss://gateway.discord.gg","shards":2,"session_start_limit":{"total":1000,"remaining":1,"reset_after":400,"max_concurrency":2}}"#;
+        let refreshed = r#"{"url":"wss://gateway.discord.gg","shards":2,"session_start_limit":{"total":1000,"remaining":10,"reset_after":3600000,"max_concurrency":2}}"#;
+        let (port, server) = gateway_bot_server(vec![("200 OK", low), ("200 OK", refreshed)]).await;
+
+        let dir = scratch_dir("budget");
+        let mut config = identify_child_config(&dir, SEND_RELEASE_AND_READY);
+        config.total_shards = Some(2);
+        config.max_concurrency = Some(2);
+        config.session_start_budget = SessionStartBudget::FromGateway;
+        let manager = ProcessShardManager::spawn_auto_with(rest_for(port), config)
+            .await
+            .unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || all_in_state(
+                &manager,
+                ChildState::Running
+            ))
+            .await,
+            "children never reached Running: {:?}",
+            manager.children()
+        );
+        // Different buckets, so only the budget can separate the grants.
+        let first = read_times(&dir, "grant-0");
+        let second = read_times(&dir, "grant-1");
+        assert_eq!((first.len(), second.len()), (1, 1));
+        let gap = (first[0] - second[0]).abs();
+        assert!(gap >= 350_000_000, "grants only {gap}ns apart");
+        assert_eq!(server.await.unwrap().len(), 2);
+
+        timeout(Duration::from_secs(5), manager.shutdown())
+            .await
+            .expect("shutdown timed out")
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gateway_bot_model_is_used_for_budgets() {
+        // Keeps the import honest for non-Linux targets where the
+        // integration tests above are compiled out.
+        let gateway_bot = GatewayBot {
+            url: String::new(),
+            shards: 1,
+            session_start_limit: session_limit(2, 10, 0),
+        };
+        let state = BudgetState::from_limit(&gateway_bot.session_start_limit);
+        assert_eq!(state.remaining, 2);
     }
 }

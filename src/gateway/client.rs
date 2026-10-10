@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
-use crate::ws::GatewayConnectionConfig;
+use crate::ws::{GatewayConnectionConfig, IdentifyOutcome, IdentifyPermit};
 
 use super::compression::{decode_gateway_message, GatewayCompressionDecoder};
 use super::outbound::{run_gateway_outbound_worker, send_gateway_outbound, GatewayOutboundMessage};
@@ -35,6 +35,11 @@ const OP_HEARTBEAT_ACK: u64 = 11;
 pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Discord allows at most one IDENTIFY per shard per 5 seconds.
 const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
+/// Upper bound on dialing while an IDENTIFY permit is held. The permit
+/// blocks every other shard in the bucket, so a hung TCP/TLS connect gives
+/// it back (as abandoned) and retries through the normal backoff, instead of
+/// holding the bucket until the gate's own timeout.
+const GATED_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// A connection that dies faster than this is treated as unhealthy and
 /// re-dialed with escalating backoff instead of immediately.
 const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
@@ -218,12 +223,48 @@ impl GatewayClient {
         }
     }
 
+    /// Asks the configured IDENTIFY gate for a permit when the next
+    /// connection will IDENTIFY (no session to resume). `Ok(None)` means no
+    /// gate is configured or the connection will RESUME.
+    async fn acquire_identify_permit(
+        &self,
+    ) -> Result<Option<IdentifyPermit>, crate::error::DiscordError> {
+        if self.session_id.is_some() {
+            return Ok(None);
+        }
+        let Some(gate) = self.gateway_config.identify_gate_ref().cloned() else {
+            return Ok(None);
+        };
+        let [shard_id, shard_count] = self.shard_info.unwrap_or([0, 1]);
+        debug!("Waiting for IDENTIFY permit for shard {shard_id}/{shard_count}");
+        gate.acquire(shard_id, shard_count).await.map(Some)
+    }
+
     async fn connect_and_run(
         &mut self,
         url: &str,
         on_event: EventCallback,
     ) -> Result<ReconnectAction, crate::error::DiscordError> {
-        let (ws_stream, _) = connect_async(url).await?;
+        // A connection without a session will IDENTIFY, so take the gate's
+        // permit before dialing (see `IdentifyGate`). RESUME stays outside
+        // the gate. Every early return below drops the permit, which reports
+        // the attempt as abandoned.
+        let mut identify_permit = match self.acquire_identify_permit().await {
+            Ok(permit) => permit,
+            Err(error) => return Ok(ReconnectAction::Fatal(error)),
+        };
+        let (ws_stream, _) = if identify_permit.is_some() {
+            timeout(GATED_CONNECT_TIMEOUT, connect_async(url))
+                .await
+                .map_err(|_| {
+                    crate::error::DiscordError::gateway(format!(
+                        "gateway connect took longer than {GATED_CONNECT_TIMEOUT:?} \
+                         while holding an IDENTIFY permit"
+                    ))
+                })??
+        } else {
+            connect_async(url).await?
+        };
         let (mut write, mut read) = ws_stream.split();
         let mut compression_decoder = GatewayCompressionDecoder::new(
             self.gateway_config.compression_kind(),
@@ -288,12 +329,17 @@ impl GatewayClient {
                 .await?;
             debug!("Sent Resume");
         } else {
-            if let Some(last_identify) = self.last_identify {
-                let since_last = last_identify.elapsed();
-                if since_last < IDENTIFY_MIN_INTERVAL {
-                    let wait = IDENTIFY_MIN_INTERVAL - since_last;
-                    debug!("Pacing IDENTIFY, waiting {wait:?} to respect the 5s/shard limit");
-                    sleep(wait).await;
+            // With a gate, pacing is the gate's job (it spaces the whole
+            // bucket, which includes this shard); sleeping here would only
+            // hold the bucket longer.
+            if identify_permit.is_none() {
+                if let Some(last_identify) = self.last_identify {
+                    let since_last = last_identify.elapsed();
+                    if since_last < IDENTIFY_MIN_INTERVAL {
+                        let wait = IDENTIFY_MIN_INTERVAL - since_last;
+                        debug!("Pacing IDENTIFY, waiting {wait:?} to respect the 5s/shard limit");
+                        sleep(wait).await;
+                    }
                 }
             }
             let identify = identify_payload(
@@ -304,9 +350,17 @@ impl GatewayClient {
                 self.initial_presence.as_ref(),
                 false,
             );
+            // From here the payload may reach Discord even if the write
+            // fails or is cancelled, so the permit must count it as sent.
+            if let Some(permit) = identify_permit.as_mut() {
+                permit.mark_sending();
+            }
             write
                 .send(WsMessage::Text(identify.to_string().into()))
                 .await?;
+            if let Some(permit) = identify_permit.take() {
+                permit.finish(IdentifyOutcome::Sent);
+            }
             self.last_identify = Some(Instant::now());
             debug!("Sent Identify");
         }
@@ -2001,5 +2055,150 @@ mod tests {
                 message: "boom".to_string(),
             }
         );
+    }
+
+    // -- IDENTIFY gate ---------------------------------------------------
+
+    /// Gate that grants immediately (or refuses) and records every acquire
+    /// and every reported outcome.
+    #[derive(Default)]
+    struct RecordingGate {
+        refuse: bool,
+        acquired: Mutex<Vec<(u32, u32)>>,
+        outcomes: Arc<Mutex<Vec<crate::ws::IdentifyOutcome>>>,
+    }
+
+    impl crate::ws::IdentifyGate for RecordingGate {
+        fn acquire(&self, shard_id: u32, shard_count: u32) -> crate::ws::IdentifyPermitFuture<'_> {
+            self.acquired.lock().unwrap().push((shard_id, shard_count));
+            let outcomes = Arc::clone(&self.outcomes);
+            let refuse = self.refuse;
+            Box::pin(async move {
+                if refuse {
+                    return Err(crate::error::DiscordError::gateway("gate closed"));
+                }
+                Ok(crate::ws::IdentifyPermit::new(move |outcome| {
+                    outcomes.lock().unwrap().push(outcome)
+                }))
+            })
+        }
+    }
+
+    fn gated_client(gate: &Arc<RecordingGate>) -> GatewayClient {
+        let gate: Arc<dyn crate::ws::IdentifyGate> = gate.clone();
+        GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::default().identify_gate(gate))
+            .shard(1, 2)
+    }
+
+    /// Serves one connection: HELLO, then returns the first client payload
+    /// and closes. `ready` adds a READY with a session id before closing.
+    async fn serve_one_connection(listener: &TcpListener, ready: bool) -> serde_json::Value {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ws.send(WsMessage::Text(
+            serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60_000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(&ws.next().await.unwrap().unwrap().into_text().unwrap()).unwrap();
+        if ready {
+            ws.send(WsMessage::Text(
+                serde_json::json!({
+                    "op": 0,
+                    "t": "READY",
+                    "s": 1,
+                    "d": {
+                        "user": {"id": "1", "username": "discordrs"},
+                        "session_id": "session-gated",
+                        "resume_gateway_url": "wss://gateway.discord.gg"
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        }
+        let _ = ws.close(None).await;
+        payload
+    }
+
+    #[tokio::test]
+    async fn gated_client_takes_one_permit_per_fresh_identify_and_none_for_resume() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let gate = Arc::new(RecordingGate::default());
+        let mut client = gated_client(&gate);
+
+        // Fresh session: one permit, reported as sent after the write.
+        let server = serve_one_connection(&listener, true);
+        let (sent, action) =
+            tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        assert_eq!(sent["op"], serde_json::json!(2));
+        assert!(matches!(action.unwrap(), ReconnectAction::Resume));
+        assert_eq!(*gate.acquired.lock().unwrap(), vec![(1, 2)]);
+        assert_eq!(
+            *gate.outcomes.lock().unwrap(),
+            vec![crate::ws::IdentifyOutcome::Sent]
+        );
+
+        // Resume: no permit.
+        let server = serve_one_connection(&listener, false);
+        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        assert_eq!(sent["op"], serde_json::json!(6));
+        assert_eq!(gate.acquired.lock().unwrap().len(), 1);
+
+        // A later fresh session (e.g. after INVALID_SESSION) takes a new
+        // permit, and the gate replaces the client's 5s per-shard sleep.
+        client.session_id = None;
+        let started = Instant::now();
+        let server = serve_one_connection(&listener, false);
+        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        assert_eq!(sent["op"], serde_json::json!(2));
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert_eq!(gate.acquired.lock().unwrap().len(), 2);
+        assert_eq!(gate.outcomes.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn gated_attempt_that_fails_before_identify_is_abandoned() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _ = ws.close(None).await;
+        });
+        let gate = Arc::new(RecordingGate::default());
+        let mut client = gated_client(&gate);
+        assert!(client
+            .connect_and_run(&url, Arc::new(|_, _| {}))
+            .await
+            .is_err());
+        server.await.unwrap();
+        assert_eq!(
+            *gate.outcomes.lock().unwrap(),
+            vec![crate::ws::IdentifyOutcome::Abandoned]
+        );
+    }
+
+    #[tokio::test]
+    async fn identify_gate_refusal_stops_the_shard_without_dialing() {
+        let gate = Arc::new(RecordingGate {
+            refuse: true,
+            ..RecordingGate::default()
+        });
+        let mut client = gated_client(&gate);
+        // Nothing listens on this address; a dial attempt would fail with a
+        // connection error and back off instead of returning at once.
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("a refused permit must stop the shard immediately");
+        assert!(result.unwrap_err().to_string().contains("gate closed"));
+        assert_eq!(*gate.acquired.lock().unwrap(), vec![(1, 2)]);
     }
 }
