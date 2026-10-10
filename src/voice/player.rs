@@ -70,10 +70,15 @@ fn voice_error(message: impl Into<String>) -> DiscordError {
 /// `volume`, and clamped back into `[-1.0, 1.0]`. A trailing odd byte, if
 /// any, is ignored.
 pub fn pcm_s16le_to_f32(bytes: &[u8], volume: f32) -> Vec<f32> {
+    // `as_chunks` yields `[u8; 2]` arrays, so the sample conversion needs no
+    // bounds-checked indexing; the remainder (an odd trailing byte) is the
+    // ignored `.1` half.
     bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
-            let sample = i16::from_le_bytes([pair[0], pair[1]]);
+            let sample = i16::from_le_bytes(*pair);
             (f32::from(sample) / 32_768.0 * volume).clamp(-1.0, 1.0)
         })
         .collect()
