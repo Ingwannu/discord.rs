@@ -6,43 +6,77 @@
 //! DISCORD_TOKEN=... cargo run --example process_sharding_bot --features sharding
 //! ```
 //!
-//! The parent fetches the recommended shard count from `/gateway/bot`,
-//! re-executes itself once per shard with `DISCORDRS_SHARD_*` env vars set,
-//! respawns crashed children, and periodically broadcasts a stats request.
+//! The parent fetches the recommended shard count and `max_concurrency` from
+//! `/gateway/bot`, re-executes itself once per shard with `DISCORDRS_SHARD_*`
+//! env vars set, respawns crashed children, grants IDENTIFY permits per
+//! concurrency bucket, and periodically broadcasts a stats request.
 //!
-//! IMPORTANT: in child mode stdout is the IPC channel, so ALL example output
-//! uses eprintln!/stderr. If you install a tracing subscriber, point it at
-//! `std::io::stderr` (e.g. `tracing_subscriber::fmt().with_writer(std::io::stderr)`).
+//! In child mode stdout carries the IPC frames. Stray prints no longer
+//! break the protocol (the parent logs them), but this example sends all of
+//! its output to stderr, which the parent passes through. If you install a
+//! tracing subscriber, point it at stderr too, e.g.
+//! `tracing_subscriber::fmt().with_writer(std::io::stderr)`. Never read
+//! stdin in a child: the IPC reader owns it.
 
+#[cfg(feature = "sharding")]
+use std::collections::HashMap;
 #[cfg(feature = "sharding")]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "sharding")]
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 #[cfg(feature = "sharding")]
 use async_trait::async_trait;
 #[cfg(feature = "sharding")]
 use discordrs::sharding::process::{
-    ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess,
+    IdentifyPermit, ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess,
 };
 #[cfg(feature = "sharding")]
 use discordrs::{gateway_intents, Client, Context, DiscordError, Event, EventHandler};
 #[cfg(feature = "sharding")]
 use serde_json::json;
 
+/// IDENTIFY permits held by shards that have not seen READY yet.
+#[cfg(feature = "sharding")]
+type HeldPermits = Arc<Mutex<HashMap<u32, IdentifyPermit>>>;
+
+/// Gives a shard's IDENTIFY slot back to the parent. The parent spaces the
+/// next grant in the same `shard_id % max_concurrency` bucket from this
+/// moment, so release only after IDENTIFY has gone out.
+#[cfg(feature = "sharding")]
+fn release_identify(permits: &HeldPermits, shard_id: u32) {
+    let permit = permits
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&shard_id);
+    // Dropping the permit sends `identify_release`; do it outside the lock.
+    drop(permit);
+}
+
 #[cfg(feature = "sharding")]
 struct Handler {
+    child: ShardChildProcess,
+    permits: HeldPermits,
     guild_count: Arc<AtomicU64>,
 }
 
 #[cfg(feature = "sharding")]
 #[async_trait]
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
+    async fn handle_event(&self, ctx: Context, event: Event) {
         match event {
             Event::Ready(ready) => {
-                // Child mode: stderr only! stdout belongs to the IPC protocol.
-                eprintln!("[child] shard ready as {}", ready.data.user.username);
+                let (shard_id, _) = ctx.shard_pair();
+                // READY proves the IDENTIFY was accepted, so the bucket can
+                // move on to the next shard.
+                release_identify(&self.permits, shard_id);
+                if let Err(error) = self.child.notify_shard_ready(shard_id) {
+                    eprintln!("[child] failed to report shard {shard_id} ready: {error}");
+                }
+                eprintln!(
+                    "[child] shard {shard_id} ready as {}",
+                    ready.data.user.username
+                );
             }
             Event::GuildCreate(_) => {
                 self.guild_count.fetch_add(1, Ordering::Relaxed);
@@ -62,8 +96,9 @@ impl EventHandler for Handler {
     }
 }
 
-/// Child mode: connect the assigned shards to the gateway and answer the
-/// parent's broadcast requests with this process's guild count.
+/// Child mode: connect the assigned shards to the gateway, one IDENTIFY
+/// permit at a time per bucket, and answer the parent's broadcast requests
+/// with this process's guild count.
 #[cfg(feature = "sharding")]
 async fn run_child(child: ShardChildProcess, token: String) -> Result<(), DiscordError> {
     eprintln!(
@@ -73,25 +108,11 @@ async fn run_child(child: ShardChildProcess, token: String) -> Result<(), Discor
     );
 
     let guild_count = Arc::new(AtomicU64::new(0));
+    let permits: HeldPermits = Arc::new(Mutex::new(HashMap::new()));
     let shard_count = child.shard_count();
 
-    // One gateway client per assigned shard id (shards_per_process may be >1).
-    for &shard_id in child.shard_ids() {
-        let builder = Client::builder(&token, gateway_intents::GUILDS)
-            .event_handler(Handler {
-                guild_count: Arc::clone(&guild_count),
-            })
-            .shard(shard_id, shard_count);
-        tokio::spawn(async move {
-            if let Err(error) = builder.start().await {
-                eprintln!("[child] shard {shard_id} gateway error: {error}");
-            }
-        });
-    }
-
-    // Answer parent broadcasts. A production bot would call notify_ready()
-    // from the Ready event; reporting it once the clients are spawned keeps
-    // this example small.
+    // Serve broadcasts first: requests that arrive before `serve` are
+    // answered with null.
     let shard_ids = child.shard_ids().to_vec();
     let stats_count = Arc::clone(&guild_count);
     child.serve(move |request| {
@@ -104,8 +125,45 @@ async fn run_child(child: ShardChildProcess, token: String) -> Result<(), Discor
                 "guilds": guilds,
             })
         }
-    });
-    child.notify_ready()?;
+    })?;
+
+    // One task per shard so that shards in different buckets do not queue
+    // behind each other (shards_per_process may be > 1).
+    for &shard_id in child.shard_ids() {
+        let child = child.clone();
+        let token = token.clone();
+        let permits = Arc::clone(&permits);
+        let guild_count = Arc::clone(&guild_count);
+        tokio::spawn(async move {
+            // The parent grants one IDENTIFY per bucket at a time, across
+            // every child process and respawn.
+            let permit = match child.acquire_identify(shard_id).await {
+                Ok(permit) => permit,
+                Err(error) => {
+                    eprintln!("[child] no IDENTIFY permit for shard {shard_id}: {error}");
+                    return;
+                }
+            };
+            permits
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(shard_id, permit);
+
+            let builder = Client::builder(&token, gateway_intents::GUILDS)
+                .event_handler(Handler {
+                    child,
+                    permits: Arc::clone(&permits),
+                    guild_count,
+                })
+                .shard(shard_id, shard_count);
+            if let Err(error) = builder.start().await {
+                eprintln!("[child] shard {shard_id} gateway error: {error}");
+            }
+            // The shard stopped (possibly before READY): never keep the
+            // bucket blocked.
+            release_identify(&permits, shard_id);
+        });
+    }
 
     // Exit cleanly when the parent sends the shutdown op (or dies).
     child.shutdown_signal().await;
@@ -118,15 +176,18 @@ async fn run_child(child: ShardChildProcess, token: String) -> Result<(), Discor
 /// exit on their own).
 #[cfg(feature = "sharding")]
 async fn run_parent(token: String) -> Result<(), DiscordError> {
+    // `total_shards` and `max_concurrency` stay `None`, so spawn_auto reads
+    // both from /gateway/bot.
     let config = ProcessShardManagerConfig {
         respawn: true,
         ..ProcessShardManagerConfig::default()
     };
     let manager = Arc::new(ProcessShardManager::spawn_auto(&token, config).await?);
     eprintln!(
-        "[parent] managing {} shard(s) across {} child process(es)",
+        "[parent] managing {} shard(s) across {} child process(es), max_concurrency {}",
         manager.shard_count(),
-        manager.children().len()
+        manager.children().len(),
+        manager.max_concurrency()
     );
 
     let broadcaster = Arc::clone(&manager);
