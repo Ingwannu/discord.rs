@@ -16,6 +16,13 @@ concurrency:
 
 env:
   COVERAGE_MIN_LINES: 90.0
+  # Blocking jobs use a pinned toolchain so a new Rust release cannot turn
+  # unrelated PRs red with new clippy lints (1.99 did on 2026-10-10:
+  # double_must_use, chunks_exact_to_as_chunks). Bump it in a dedicated PR
+  # when the non-blocking stable-canary job goes red. The MSRV job reads
+  # Cargo.toml's rust-version instead.
+  RUST_TOOLCHAIN: "1.99.0"
+
 jobs:
   rust-check:
     name: rust-check
@@ -25,11 +32,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust (stable)
+      - name: Setup Rust (pinned)
         run: |
           rustup set profile minimal
-          rustup toolchain install stable --no-self-update
-          rustup default stable
+          rustup toolchain install "$RUST_TOOLCHAIN" --component clippy,rustfmt --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
           rustc --version
           cargo --version
 
@@ -71,12 +78,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Rust (stable)
+      - name: Setup Rust (pinned)
         run: |
           rustup set profile minimal
-          rustup toolchain install stable --no-self-update
-          rustup default stable
-          rustup component add llvm-tools-preview
+          rustup toolchain install "$RUST_TOOLCHAIN" --component llvm-tools-preview --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
           rustc --version
           cargo --version
 
@@ -116,3 +122,63 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path-to-lcov: lcov.info
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The MSRV is Cargo.toml's rust-version (the all-features minimum);
+      # reading it here keeps that field the single place to change.
+      - name: Setup Rust (MSRV from Cargo.toml)
+        run: |
+          msrv="$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml)"
+          if [ -z "$msrv" ]; then
+            echo "::error file=Cargo.toml::rust-version is missing"
+            exit 1
+          fi
+          rustup set profile minimal
+          rustup toolchain install "$msrv" --no-self-update
+          rustup default "$msrv"
+          rustc --version
+          cargo --version
+
+      - name: Cargo check (all targets, default features)
+        run: cargo check --all-targets --locked
+
+      - name: Cargo check (all targets, all features)
+        run: cargo check --all-targets --all-features --locked
+
+      - name: Cargo test (default features)
+        run: cargo test --locked --no-fail-fast
+
+      - name: Cargo test (all features)
+        run: cargo test --all-features --locked --no-fail-fast
+
+  stable-canary:
+    name: stable-canary (non-blocking)
+    runs-on: ubuntu-latest
+    # Tracks the moving stable toolchain so new lints show up here first
+    # without blocking merges; when it fails, bump RUST_TOOLCHAIN and fix
+    # the lints in one PR.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (latest stable)
+        run: |
+          rustup set profile minimal
+          rustup toolchain install stable --component clippy --no-self-update
+          rustup default stable
+          rustc --version
+
+      - name: Cargo clippy (all features)
+        run: cargo clippy --all-features --all-targets --locked -- -D warnings
+
+      - name: Cargo clippy (default features)
+        run: cargo clippy --all-targets --locked -- -D warnings
