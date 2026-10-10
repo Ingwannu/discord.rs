@@ -244,5 +244,6 @@ pub use interactions::{
 
 #[cfg(feature = "collectors")]
 pub use collector::{
-    CollectorHub, ComponentCollector, InteractionCollector, MessageCollector, ModalCollector,
+    CollectorHub, ComponentCollector, EmojiKey, InteractionCollector, MessageCollector,
+    ModalCollector, ReactionCollector,
 };

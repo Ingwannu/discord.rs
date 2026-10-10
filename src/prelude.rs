@@ -5,7 +5,8 @@ pub use crate::builders::{
 };
 #[cfg(feature = "collectors")]
 pub use crate::collector::{
-    CollectorHub, ComponentCollector, InteractionCollector, MessageCollector, ModalCollector,
+    CollectorHub, ComponentCollector, EmojiKey, InteractionCollector, MessageCollector,
+    ModalCollector, ReactionCollector,
 };
 pub use crate::command::{
     command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
