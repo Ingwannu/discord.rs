@@ -211,7 +211,8 @@ impl VolumeControl {
 
     /// Sets the volume multiplier (clamped to be non-negative).
     pub fn set(&self, volume: f32) {
-        self.bits.store(volume.max(0.0).to_bits(), Ordering::Relaxed);
+        self.bits
+            .store(volume.max(0.0).to_bits(), Ordering::Relaxed);
     }
 }
 
@@ -335,8 +336,11 @@ pub type VoiceSinkFuture<'a> = Pin<Box<dyn Future<Output = Result<(), DiscordErr
 /// for testing or fan-out.
 pub trait VoiceFrameSink: Send + Sync {
     /// Sends one raw Opus payload of the given duration.
-    fn send_opus_packet<'a>(&'a self, opus_frame: &'a [u8], duration: Duration)
-        -> VoiceSinkFuture<'a>;
+    fn send_opus_packet<'a>(
+        &'a self,
+        opus_frame: &'a [u8],
+        duration: Duration,
+    ) -> VoiceSinkFuture<'a>;
 
     /// Updates the speaking indicator for this connection.
     fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError>;
@@ -757,7 +761,10 @@ impl PlayerTask {
                     }
                 }
                 self.subscribers.insert(id, sink);
-                tracing::debug!(subscribers = self.subscribers.len(), "connection subscribed");
+                tracing::debug!(
+                    subscribers = self.subscribers.len(),
+                    "connection subscribed"
+                );
                 if self.current_state() == AudioPlayerState::AutoPaused {
                     self.resume_playback();
                 }
@@ -1027,9 +1034,10 @@ mod tests {
 
     #[tokio::test]
     async fn audio_resource_volume_control_applies_at_read_time() {
-        let bytes: Vec<u8> = std::iter::repeat_n(16_384_i16.to_le_bytes(), PLAYER_FRAME_SAMPLES * 2)
-            .flatten()
-            .collect();
+        let bytes: Vec<u8> =
+            std::iter::repeat_n(16_384_i16.to_le_bytes(), PLAYER_FRAME_SAMPLES * 2)
+                .flatten()
+                .collect();
         let mut resource =
             AudioResource::new(AudioInput::raw_pcm(std::io::Cursor::new(bytes))).with_volume(0.5);
         let volume = resource.volume();
@@ -1052,10 +1060,8 @@ mod tests {
 
     #[tokio::test]
     async fn audio_input_file_reads_raw_pcm() {
-        let path = std::env::temp_dir().join(format!(
-            "discordrs-player-test-{}.pcm",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("discordrs-player-test-{}.pcm", std::process::id()));
         std::fs::write(&path, vec![0_u8; PLAYER_FRAME_BYTES]).expect("write temp pcm file");
 
         let input = AudioInput::file(&path).await.expect("file input");

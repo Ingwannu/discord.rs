@@ -16,11 +16,14 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 /// bodies), then `x-ratelimit-reset-after`, then a one-second fallback.
 pub(crate) fn retry_after_seconds(headers: &HeaderMap, body: &str) -> f64 {
     let payload = parse_body_value(body.to_string());
-    if let Some(retry_after) = payload.get("retry_after").and_then(serde_json::Value::as_f64) {
+    if let Some(retry_after) = payload
+        .get("retry_after")
+        .and_then(serde_json::Value::as_f64)
+    {
         return retry_after.max(0.0);
     }
-    if let Some(retry_after) = header_string(headers.get("retry-after"))
-        .and_then(|value| f64::from_str(value.trim()).ok())
+    if let Some(retry_after) =
+        header_string(headers.get("retry-after")).and_then(|value| f64::from_str(value.trim()).ok())
     {
         return retry_after.max(0.0);
     }

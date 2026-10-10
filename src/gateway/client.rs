@@ -216,21 +216,20 @@ impl GatewayClient {
     ) -> Result<ReconnectAction, crate::error::DiscordError> {
         let (ws_stream, _) = connect_async(url).await?;
         let (mut write, mut read) = ws_stream.split();
-        let mut compression_decoder =
-            GatewayCompressionDecoder::new(self.gateway_config.compression_kind()).map_err(
-                |error| {
-                    crate::error::DiscordError::gateway(format!(
-                        "failed to initialize gateway compression decoder: {error}"
-                    ))
-                },
-            )?;
+        let mut compression_decoder = GatewayCompressionDecoder::new(
+            self.gateway_config.compression_kind(),
+        )
+        .map_err(|error| {
+            crate::error::DiscordError::gateway(format!(
+                "failed to initialize gateway compression decoder: {error}"
+            ))
+        })?;
 
         // Wait for Hello
         let hello_text = loop {
-            let hello = read
-                .next()
-                .await
-                .ok_or_else(|| crate::error::DiscordError::gateway("gateway closed before Hello"))??;
+            let hello = read.next().await.ok_or_else(|| {
+                crate::error::DiscordError::gateway("gateway closed before Hello")
+            })??;
             match decode_gateway_message(hello, &mut compression_decoder) {
                 Ok(Some(text)) => break text,
                 Ok(None) => continue,
@@ -1113,7 +1112,10 @@ mod tests {
         let presence = crate::model::UpdatePresence::online_with_activity("hello");
         let identify = identify_payload("secret-token", 513, None, Some(&presence), false);
 
-        assert_eq!(identify["d"]["presence"]["status"], serde_json::json!("online"));
+        assert_eq!(
+            identify["d"]["presence"]["status"],
+            serde_json::json!("online")
+        );
         assert_eq!(
             identify["d"]["presence"]["activities"][0]["name"],
             serde_json::json!("hello")

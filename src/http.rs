@@ -31,16 +31,16 @@ use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
     ActivityInstance, AddGroupDmRecipient, AddGuildMember, AllowedMentions, Application,
-    ApplicationCommand,
-    ApplicationRoleConnectionMetadata, AuditLog, AuditLogQuery, Ban, BeginGuildPruneRequest,
-    BulkGuildBanRequest, BulkGuildBanResponse, Channel, CreateChannelInvite, CreateDmChannel,
-    CreateGroupDmChannel, CreateGuildChannel, CreateGuildRole, CreateMessage, CreateStageInstance,
-    EditApplicationCommandPermissions, EditChannelPermission, FollowedChannel, Gateway, GatewayBot,
-    GetGuildQuery, Guild, GuildApplicationCommandPermissions, GuildBansQuery, GuildIncidentsData,
-    GuildMembersQuery, GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult,
-    GuildTemplate, GuildWidget, GuildWidgetImageStyle, GuildWidgetSettings, Integration,
-    InteractionCallbackResponse, Invite, InviteTargetUsersJobStatus, Member, Message,
-    ModifyCurrentApplication, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
+    ApplicationCommand, ApplicationRoleConnectionMetadata, AuditLog, AuditLogQuery, Ban,
+    BeginGuildPruneRequest, BulkGuildBanRequest, BulkGuildBanResponse, Channel,
+    CreateChannelInvite, CreateDmChannel, CreateGroupDmChannel, CreateGuildChannel,
+    CreateGuildRole, CreateMessage, CreateStageInstance, EditApplicationCommandPermissions,
+    EditChannelPermission, FollowedChannel, Gateway, GatewayBot, GetGuildQuery, Guild,
+    GuildApplicationCommandPermissions, GuildBansQuery, GuildIncidentsData, GuildMembersQuery,
+    GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult, GuildTemplate, GuildWidget,
+    GuildWidgetImageStyle, GuildWidgetSettings, Integration, InteractionCallbackResponse, Invite,
+    InviteTargetUsersJobStatus, Member, Message, ModifyCurrentApplication,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
     ModifyGuildIncidentActions, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState,
     PollAnswerVoters, Role, SearchGuildMembersQuery, SetVoiceChannelStatus, Snowflake,
@@ -48,12 +48,12 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
-pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use body::{
     build_multipart_form, build_named_file_form, build_sticker_form, clone_json_body,
     multipart_body, named_file_multipart_body, parse_body_value, payload_named_file_multipart_body,
     serialize_body, RequestBody,
 };
+pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use paths::{
     archived_threads_query, audit_log_query, bool_query, configured_application_id,
     entitlement_query, followup_webhook_path, get_guild_query, global_commands_path,
@@ -67,8 +67,7 @@ use rate_limit::RateLimitState;
 use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
 
 const API_BASE: &str = "https://discord.com/api/v10";
-const DEFAULT_USER_AGENT: &str =
-    concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")");
+const DEFAULT_USER_AGENT: &str = concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")");
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_SERVER_ERROR_RETRIES: usize = 3;
 const ROUTE_GATE_GC_THRESHOLD: usize = 512;
@@ -2720,10 +2719,7 @@ impl RestClient {
                     callback(RateLimitInfo {
                         route: route_key.clone(),
                         retry_after,
-                        global: rate_limit::is_global_rate_limit(
-                            &response.headers,
-                            &response_text,
-                        ),
+                        global: rate_limit::is_global_rate_limit(&response.headers, &response_text),
                     });
                 }
 
@@ -2867,10 +2863,7 @@ impl RestClient {
 
     /// Inserts the configured default `allowed_mentions` into a raw JSON
     /// object payload that does not already contain the key.
-    pub(super) fn json_with_default_allowed_mentions<'a>(
-        &self,
-        body: &'a Value,
-    ) -> Cow<'a, Value> {
+    pub(super) fn json_with_default_allowed_mentions<'a>(&self, body: &'a Value) -> Cow<'a, Value> {
         let Some(default) = &self.default_allowed_mentions else {
             return Cow::Borrowed(body);
         };

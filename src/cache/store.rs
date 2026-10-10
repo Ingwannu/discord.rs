@@ -12,7 +12,6 @@ use crate::types::Emoji;
 
 use super::CacheConfig;
 
-
 /// Insertion/recency order tracker with O(log n) touch/remove/pop operations.
 ///
 /// Keys are assigned monotonically increasing sequence numbers; the `queue`

@@ -95,13 +95,11 @@ impl ShardMessenger {
     }
 
     fn send(&self, command: GatewayCommand) -> Result<(), DiscordError> {
-        self.command_tx
-            .try_send(command)
-            .map_err(|error| {
-                crate::error::DiscordError::gateway(format!(
-                    "failed to send gateway command (queue full or shard stopped): {error}"
-                ))
-            })
+        self.command_tx.try_send(command).map_err(|error| {
+            crate::error::DiscordError::gateway(format!(
+                "failed to send gateway command (queue full or shard stopped): {error}"
+            ))
+        })
     }
 }
 

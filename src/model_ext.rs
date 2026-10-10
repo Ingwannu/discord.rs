@@ -671,7 +671,10 @@ impl User {
     /// `embed/avatars/{(id >> 22) % 6}.png`. The CDN ignores `size` for
     /// default avatars, so none is appended.
     pub fn default_avatar_url(&self) -> String {
-        format!("{CDN_BASE}/embed/avatars/{}.png", default_avatar_index(self))
+        format!(
+            "{CDN_BASE}/embed/avatars/{}.png",
+            default_avatar_index(self)
+        )
     }
 
     /// Returns the avatar shown for this user: their custom avatar, or the

@@ -1034,7 +1034,9 @@ mod tests {
 
     #[test]
     fn context_menu_and_entry_point_builders_validate_names() {
-        let valid = UserCommandBuilder::new("Inspect Member").try_build().unwrap();
+        let valid = UserCommandBuilder::new("Inspect Member")
+            .try_build()
+            .unwrap();
         assert_eq!(valid.name, "Inspect Member");
 
         expect_model_error(

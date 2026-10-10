@@ -786,7 +786,11 @@ fn handle_child_line(
 
 /// Sends the `shutdown` op, waits up to [`SHUTDOWN_GRACE`] for the child to
 /// exit, then kills it.
-async fn graceful_stop(context: &MonitorContext, child: &mut Child, stdin: &mut Option<ChildStdin>) {
+async fn graceful_stop(
+    context: &MonitorContext,
+    child: &mut Child,
+    stdin: &mut Option<ChildStdin>,
+) {
     if let Err(error) = write_child_line(stdin, &ParentMessage::Shutdown).await {
         warn!(
             child = context.index,
@@ -1026,14 +1030,20 @@ mod tests {
         let shutdown = ParentMessage::Shutdown;
         let encoded = encode_ipc_line(&shutdown).unwrap();
         assert_eq!(encoded, r#"{"op":"shutdown"}"#);
-        assert_eq!(decode_ipc_line::<ParentMessage>(&encoded).unwrap(), shutdown);
+        assert_eq!(
+            decode_ipc_line::<ParentMessage>(&encoded).unwrap(),
+            shutdown
+        );
 
         let request = ParentMessage::Request {
             id: 7,
             payload: json!({"kind": "stats"}),
         };
         let encoded = encode_ipc_line(&request).unwrap();
-        assert_eq!(encoded, r#"{"op":"request","id":7,"payload":{"kind":"stats"}}"#);
+        assert_eq!(
+            encoded,
+            r#"{"op":"request","id":7,"payload":{"kind":"stats"}}"#
+        );
         assert_eq!(
             decode_ipc_line::<ParentMessage>(&format!("  {encoded}\n")).unwrap(),
             request

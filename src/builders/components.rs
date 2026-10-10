@@ -119,14 +119,12 @@ impl ButtonBuilder {
         if let Some(label) = &normalized.label {
             validation::ensure_max_len("button label", label, 80)?;
         }
-        let is_known_style = (button_style::PRIMARY..=button_style::LINK)
-            .contains(&normalized.style);
+        let is_known_style =
+            (button_style::PRIMARY..=button_style::LINK).contains(&normalized.style);
         if is_known_style {
             if normalized.style == button_style::LINK {
                 if normalized.url.is_none() {
-                    return Err(DiscordError::model(
-                        "button with link style requires a url",
-                    ));
+                    return Err(DiscordError::model("button with link style requires a url"));
                 }
             } else if normalized.custom_id.is_none() {
                 return Err(DiscordError::model(
@@ -1021,8 +1019,15 @@ mod tests {
         let make = || ButtonBuilder::new().label("Go").custom_id("go");
         assert_eq!(make().build(), make().try_build().expect("valid button"));
 
-        let link = || ButtonBuilder::new().label("Docs").url("https://example.com");
-        assert_eq!(link().build(), link().try_build().expect("valid link button"));
+        let link = || {
+            ButtonBuilder::new()
+                .label("Docs")
+                .url("https://example.com")
+        };
+        assert_eq!(
+            link().build(),
+            link().try_build().expect("valid link button")
+        );
     }
 
     #[test]
@@ -1067,7 +1072,9 @@ mod tests {
         assert_eq!(make().build(), make().try_build().expect("valid select"));
 
         expect_model_error(
-            SelectMenuBuilder::string("").add_option(SelectOption::new("One", "one")).try_build(),
+            SelectMenuBuilder::string("")
+                .add_option(SelectOption::new("One", "one"))
+                .try_build(),
             "select menu custom_id must be 1-100 characters, got 0",
         );
         expect_model_error(
@@ -1124,10 +1131,8 @@ mod tests {
 
     #[test]
     fn action_row_try_build_enforces_component_limits() {
-        let make = || {
-            ActionRowBuilder::new()
-                .add_button(ButtonBuilder::new().label("Go").custom_id("go"))
-        };
+        let make =
+            || ActionRowBuilder::new().add_button(ButtonBuilder::new().label("Go").custom_id("go"));
         assert_eq!(make().build(), make().try_build().expect("valid row"));
 
         expect_model_error(

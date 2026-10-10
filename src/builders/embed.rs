@@ -171,12 +171,7 @@ impl EmbedBuilder {
         validation::ensure_max_count("embed fields", self.fields.len(), 25)?;
         for (index, field) in self.fields.iter().enumerate() {
             validation::ensure_len(&format!("embed field {index} name"), &field.name, 1, 256)?;
-            validation::ensure_len(
-                &format!("embed field {index} value"),
-                &field.value,
-                1,
-                1024,
-            )?;
+            validation::ensure_len(&format!("embed field {index} value"), &field.value, 1, 1024)?;
             total += validation::char_count(&field.name) + validation::char_count(&field.value);
         }
         if let Some(text) = self
@@ -565,7 +560,9 @@ mod tests {
             "embed title must be at most 256 characters, got 257",
         );
         expect_model_error(
-            EmbedBuilder::new().description("d".repeat(4097)).try_build(),
+            EmbedBuilder::new()
+                .description("d".repeat(4097))
+                .try_build(),
             "embed description must be at most 4096 characters, got 4097",
         );
         expect_model_error(
@@ -585,7 +582,9 @@ mod tests {
             "embed field 0 value must be 1-1024 characters, got 1025",
         );
         expect_model_error(
-            EmbedBuilder::new().footer("f".repeat(2049), None).try_build(),
+            EmbedBuilder::new()
+                .footer("f".repeat(2049), None)
+                .try_build(),
             "embed footer text must be at most 2048 characters, got 2049",
         );
         expect_model_error(

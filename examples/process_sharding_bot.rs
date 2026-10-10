@@ -48,11 +48,11 @@ impl EventHandler for Handler {
                 self.guild_count.fetch_add(1, Ordering::Relaxed);
             }
             Event::GuildDelete(_) => {
-                let _ = self
-                    .guild_count
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                        count.checked_sub(1)
-                    });
+                let _ =
+                    self.guild_count
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                            count.checked_sub(1)
+                        });
             }
             _ => {}
         }

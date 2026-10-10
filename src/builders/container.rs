@@ -169,7 +169,10 @@ mod tests {
     #[test]
     fn text_display_try_build_matches_build_and_rejects_invalid_content() {
         let make = || TextDisplayBuilder::new("hello").id(42);
-        assert_eq!(make().build(), make().try_build().expect("valid text display"));
+        assert_eq!(
+            make().build(),
+            make().try_build().expect("valid text display")
+        );
 
         expect_model_error(
             TextDisplayBuilder::new("").try_build(),

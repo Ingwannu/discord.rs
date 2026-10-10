@@ -865,7 +865,9 @@ mod tests {
             "text input min_length must be 0-4000, got 4001",
         );
         expect_model_error(
-            TextInputBuilder::short("topic", "Topic").max_length(0).try_build(),
+            TextInputBuilder::short("topic", "Topic")
+                .max_length(0)
+                .try_build(),
             "text input max_length must be 1-4000, got 0",
         );
         expect_model_error(
@@ -904,8 +906,8 @@ mod tests {
 
         let mut overfull = ModalBuilder::new("modal-id", "Title");
         for index in 0..6 {
-            overfull = overfull
-                .add_text_input(TextInputBuilder::short(&format!("input{index}"), "Label"));
+            overfull =
+                overfull.add_text_input(TextInputBuilder::short(&format!("input{index}"), "Label"));
         }
         expect_model_error(
             overfull.try_build(),

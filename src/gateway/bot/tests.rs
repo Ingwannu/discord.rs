@@ -1025,8 +1025,13 @@ async fn shared_runtime_context_reuses_shared_state() {
 #[cfg(feature = "collectors")]
 #[tokio::test]
 async fn shared_runtime_context_reuses_collectors_hub() {
-    let runtime =
-        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default(), None);
+    let runtime = super::SharedRuntime::new(
+        "token",
+        0,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
     let context = runtime.context((0, 1));
     let mut collector = context
         .collectors()
@@ -2859,8 +2864,13 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         .expect("manager mutex poisoned")
         .prepare_runtime(0)
         .unwrap();
-    let runtime =
-        super::SharedRuntime::new("token", 0, super::TypeMap::new(), CacheConfig::default(), None);
+    let runtime = super::SharedRuntime::new(
+        "token",
+        0,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
     let (boot_tx, boot_rx) = watch::channel(false);
     drop(boot_tx);
 
