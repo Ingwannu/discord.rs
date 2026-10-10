@@ -1830,3 +1830,85 @@ fn command_interaction_resolved_data_is_typed() {
     assert!(resolved.member(target_id).is_some());
     assert!(resolved.role(1u64).is_none());
 }
+
+#[test]
+fn component_embed_link_previews_deserialize_with_their_container() {
+    let embed: Embed = serde_json::from_value(json!({
+        "type": "components",
+        "url": "https://example.com/post",
+        "flags": 0,
+        "components": [{
+            "type": 17,
+            "accent_color": 5793266,
+            "components": [{ "type": 10, "content": "# Patch Notes" }]
+        }]
+    }))
+    .expect("component embed");
+    assert!(embed.is_component_embed());
+    assert_eq!(embed.components.len(), 1);
+    assert_eq!(embed.components[0].kind, super::MessageComponent::CONTAINER);
+    assert_eq!(embed.flags, Some(0));
+
+    let rich: Embed =
+        serde_json::from_value(json!({ "type": "rich", "title": "t" })).expect("rich");
+    assert!(!rich.is_component_embed());
+    let outgoing = serde_json::to_value(Embed {
+        title: Some("t".to_string()),
+        ..Embed::default()
+    })
+    .expect("serialize");
+    assert!(outgoing.get("components").is_none() && outgoing.get("flags").is_none());
+}
+
+#[test]
+fn dynamic_profile_fields_round_trip_known_and_unknown_types() {
+    use super::DynamicProfileField;
+
+    let raw = json!([
+        { "type": 1, "name": "Main", "value": "Mage" },
+        { "type": 2, "name": "KDA", "value": 3.5 },
+        { "type": 3, "name": "Badge", "value": { "url": "https://cdn.example/b.png" } },
+        { "type": 42, "name": "Future", "value": [1, 2] }
+    ]);
+    let fields: Vec<DynamicProfileField> = serde_json::from_value(raw.clone()).expect("fields");
+    assert!(matches!(&fields[0], DynamicProfileField::String { value, .. } if value == "Mage"));
+    assert!(
+        matches!(&fields[1], DynamicProfileField::Number { value, .. } if (*value - 3.5).abs() < f64::EPSILON)
+    );
+    assert!(
+        matches!(&fields[2], DynamicProfileField::Media { value, .. } if value.url.ends_with("b.png"))
+    );
+    assert!(matches!(&fields[3], DynamicProfileField::Unknown(_)));
+    assert_eq!(fields[3].name(), Some("Future"));
+    assert_eq!(
+        serde_json::to_value(&fields).expect("serialize"),
+        raw,
+        "unknown types round-trip"
+    );
+
+    assert!(serde_json::from_value::<DynamicProfileField>(
+        json!({ "type": 2, "name": "x", "value": "nan" })
+    )
+    .is_err());
+}
+
+#[test]
+fn channel_obfuscation_is_detected_from_the_flag_not_the_name() {
+    let hidden: Channel = serde_json::from_value(json!({
+        "id": "1", "type": 0, "name": "___hidden___", "flags": 1 << 17
+    }))
+    .expect("channel");
+    assert!(hidden.is_obfuscated());
+    assert!(hidden
+        .channel_flags()
+        .contains(crate::bitfield::channel_flags::CHANNEL_OBFUSCATED.bits()));
+
+    let named_like_hidden: Channel = serde_json::from_value(json!({
+        "id": "2", "type": 0, "name": "___hidden___", "flags": 1 << 21
+    }))
+    .expect("channel");
+    assert!(!named_like_hidden.is_obfuscated());
+    assert!(named_like_hidden
+        .channel_flags()
+        .contains(crate::bitfield::channel_flags::IS_SPOILER_CHANNEL.bits()));
+}

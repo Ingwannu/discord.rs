@@ -79,6 +79,40 @@ pub(crate) mod validation {
 
     /// Ensures a chat-input command/option name is valid: 1-32 characters,
     /// no spaces, no uppercase ASCII.
+    /// Discord's cap on `file_types` entries for File Upload components and
+    /// `ATTACHMENT` options.
+    pub(crate) const MAX_FILE_TYPES: usize = 10;
+
+    /// Validates a `file_types` filter: at most [`MAX_FILE_TYPES`] entries,
+    /// each a dot-prefixed extension (`.pdf`) or a preset group name
+    /// (`image`). Group names are not checked against a fixed list because
+    /// Discord says the presets may change; only the shape is enforced, so
+    /// local validation never rejects a value Discord would accept.
+    pub(crate) fn ensure_file_types(
+        field: &str,
+        file_types: &[String],
+    ) -> Result<(), DiscordError> {
+        ensure_max_count(field, file_types.len(), MAX_FILE_TYPES)?;
+        for file_type in file_types {
+            let valid = match file_type.strip_prefix('.') {
+                Some(extension) => !extension.is_empty() && !extension.contains(['.', '/', ' ']),
+                None => {
+                    !file_type.is_empty()
+                        && file_type
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                }
+            };
+            if !valid {
+                return Err(DiscordError::model(format!(
+                    "{field} entry {file_type:?} must be a dot-prefixed extension \
+                     like \".pdf\" or a group name like \"image\""
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_command_name(field: &str, value: &str) -> Result<(), DiscordError> {
         ensure_len(field, value, 1, 32)?;
         if value.contains(' ') {
@@ -123,6 +157,14 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         option.options.len(),
         25,
     )?;
+    if let Some(file_types) = &option.file_types {
+        if option.kind != option_type::ATTACHMENT {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" sets file_types, which only ATTACHMENT options accept"
+            )));
+        }
+        validation::ensure_file_types(&format!("option \"{name}\" file_types"), file_types)?;
+    }
     match option.kind {
         option_type::SUB_COMMAND_GROUP => {
             for nested in &option.options {
@@ -315,6 +357,18 @@ impl CommandOptionBuilder {
 
     pub fn max_length(mut self, value: u16) -> Self {
         self.inner.max_length = Some(value);
+        self
+    }
+
+    /// Restricts an `ATTACHMENT` option to file types: preset groups
+    /// (`"image"`, `"video"`, `"audio"`) or dot-prefixed extensions
+    /// (`".pdf"`), max 10.
+    pub fn file_types<I, S>(mut self, file_types: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.inner.file_types = Some(file_types.into_iter().map(Into::into).collect());
         self
     }
 
@@ -1076,5 +1130,45 @@ mod tests {
         assert_eq!(message_value["type"], json!(command_type::MESSAGE));
         assert_eq!(message_value["default_member_permissions"], json!("32"));
         assert_eq!(message_value["dm_permission"], json!(false));
+    }
+
+    #[test]
+    fn attachment_options_accept_file_types_and_validate_them() {
+        let option =
+            CommandOptionBuilder::attachment("file", "Upload a file").file_types(["image", ".pdf"]);
+        let value = serde_json::to_value(option.clone().try_build().expect("valid")).expect("json");
+        assert_eq!(value["file_types"], json!(["image", ".pdf"]));
+
+        assert!(CommandOptionBuilder::attachment("file", "Upload a file")
+            .file_types((0..11).map(|index| format!(".e{index}")))
+            .validate()
+            .is_err());
+        assert!(
+            CommandOptionBuilder::attachment("file", "Upload a file")
+                .file_types(["pdf"])
+                .validate()
+                .is_ok(),
+            "a bare token is treated as a group name, which Discord may add"
+        );
+        for bad in [".", "", "../x", "image/png"] {
+            assert!(
+                CommandOptionBuilder::attachment("file", "Upload a file")
+                    .file_types([bad])
+                    .validate()
+                    .is_err(),
+                "{bad:?}"
+            );
+        }
+        assert!(
+            CommandOptionBuilder::string("text", "Some text")
+                .file_types(["image"])
+                .validate()
+                .is_err(),
+            "file_types is only valid on ATTACHMENT options"
+        );
+        let untouched =
+            serde_json::to_value(CommandOptionBuilder::attachment("file", "Upload a file").build())
+                .expect("json");
+        assert!(untouched.get("file_types").is_none());
     }
 }

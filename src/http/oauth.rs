@@ -145,6 +145,24 @@ impl RestClient {
         .await
     }
 
+    /// Deletes the current user's application role connection for this
+    /// client application (Bearer token with `role_connections.write`).
+    pub async fn delete_current_user_application_role_connection(
+        &self,
+        bearer_token: &str,
+    ) -> Result<(), DiscordError> {
+        let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
+        let application_id = configured_application_id(self.application_id())?;
+        self.request_with_headers_authorized(
+            RequestAuthorization::Bearer(bearer_token),
+            Method::DELETE,
+            &format!("/users/@me/applications/{application_id}/role-connection"),
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Returns the bot application's OAuth2 application object.
     pub async fn get_current_bot_application_information(
         &self,

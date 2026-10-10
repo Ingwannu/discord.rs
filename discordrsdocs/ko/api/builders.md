@@ -17,3 +17,7 @@ let button = ButtonBuilder::new()
     .style(button_style::PRIMARY)
     .custom_id("open_ticket");
 ```
+
+## 파일 형식 필터 (3.0)
+
+`FileUploadBuilder::file_types(...)`와 `CommandOptionBuilder::file_types(...)`(`ATTACHMENT` 옵션)는 업로드를 미리 정의된 그룹(`"image"`, `"video"`, `"audio"`)이나 점으로 시작하는 확장자(`".pdf"`)로 제한합니다. 최대 10개입니다. `validate()` / `try_build()`는 개수와 각 항목의 모양만 검사합니다. Discord가 그룹 목록이 바뀔 수 있다고 밝혀서 그룹 이름은 고정 목록과 대조하지 않습니다. Discord는 파일 이름만 확인하므로 파일 내용은 직접 검증해야 합니다.

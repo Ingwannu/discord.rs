@@ -96,6 +96,18 @@ if let Err(error) = modal.validate() {
 
 A too-long label or an overfull action row fails locally with an actionable message instead of a Discord 400 after the HTTP round trip.
 
+## File Type Filters (3.0)
+
+`FileUploadBuilder::file_types(...)` and `CommandOptionBuilder::file_types(...)` (on `ATTACHMENT` options) restrict uploads to preset groups (`"image"`, `"video"`, `"audio"`) or dot-prefixed extensions (`".pdf"`), up to 10 entries. `validate()` / `try_build()` check the count and the shape of each entry; group names are not checked against a fixed list because Discord says the presets may change. Discord compares only the file name, so validate file contents yourself.
+
+```rust
+use discordrs::builders::FileUploadBuilder;
+use discordrs::command::CommandOptionBuilder;
+
+let upload = FileUploadBuilder::new("evidence").file_types(["image", ".pdf"]).try_build()?;
+let option = CommandOptionBuilder::attachment("file", "Upload a clip").file_types(["video"]);
+```
+
 ## Practical Advice
 
 - Keep `custom_id` values stable; they are routing keys.

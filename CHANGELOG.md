@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
+- **Channel obfuscation readiness** (mandatory for all bots from 2026-11-16): `ChannelFlags` with `CHANNEL_OBFUSCATED` and the other documented channel flags, `Channel::channel_flags()` / `Channel::is_obfuscated()`, and IDENTIFY `capabilities` via `GatewayCapabilities`, `GatewayConnectionConfig::capabilities(...)`, and `ClientBuilder::gateway_capabilities(...)` for Discord's temporary early opt-in.
+- `CurrentUserGuildsQuery::shard`, required since 2026-09-15 for `GET /users/@me/guilds` when an app uses large bot sharding.
+- Invite target users without CSV: `CreateChannelInvite::target_user_ids`, `add_invite_target_user`, `remove_invite_target_user`, `bulk_add_invite_target_users`, and `bulk_delete_invite_target_users`.
+- `file_types` filters on `FileUploadBuilder` and `CommandOptionBuilder` (`ATTACHMENT` options), validated for count and shape.
+- Component Embed link previews: `Embed::components`, `Embed::flags`, and `Embed::is_component_embed()`.
+- Application Identity Profile API (Game Stats Widgets): typed models, `UpdateApplicationIdentityProfile::validate()`, and five REST helpers; caller-supplied external IDs are percent-encoded as single path segments.
+- Social SDK routes missing from the 2026-05-02 audit: `get_or_create_lobby` (`PUT /lobbies`), `send_lobby_message`, `get_lobby_messages`, `create_lobby_channel_invite_for_self`, `create_lobby_channel_invite_for_user`, and `delete_current_user_application_role_connection`.
+- REST route coverage re-audited against discord-api-docs `3714862` (2026-10-09): 234 / 234 method + path routes mapped.
 
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.

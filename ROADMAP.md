@@ -31,6 +31,7 @@
 | 단계 | 내용 | 규모 | 주요 위험 |
 |---|---|---|---|
 | 1 ✅ | REST 재시도 안전성(메서드·결과 모호성 기준), 버킷 식별(버킷 해시 + major parameter), 진단용 경로의 토큰 마스킹, 종료 close code 처리, 게이트웨이 워커 정리 보장 | M | 모호한 완료·재접속 가능 여부의 오분류 |
+| 1.5 ✅ | 2026-05-02 감사 이후 Discord 변경 반영: 채널 가리기(`CHANNEL_OBFUSCATED`, IDENTIFY `capabilities`, 11/16 강제), 대규모 봇 샤딩 `shard` 파라미터(9/15부터 필수), 초대 대상 사용자 API, `file_types`, Component Embed 수신, Application Identity Profile API, 빠져 있던 Social SDK 로비 경로. 공식 문서 `3714862` 기준 REST 234/234 | S–M | 기존 공개 타입 위에 추가하는 작업이라 3단계 타입 교체 때 함께 옮겨야 함 |
 | 2 | 내부 이벤트 처리(캐시·청크 대기·컬렉터)와 사용자 핸들러 실행 분리, 핸들러 작업 상한, 인터랙션 응답 상태(Unacknowledged → InFlight → Acknowledged, 취소 처리), 샤드 단위 캐시 무효화, 외부 캐시 백엔드 쓰기 순서 보장 | L | 순서 보장과 과부하 동작을 지키며 교착을 푸는 것 |
 | 3 | `Id<M>(NonZeroU64)` 타입 ID, 열린 판별값 newtype(`ChannelType(u8)` 등), 권한 표현 통일, `Embed.components`·`flags` 수신 필드(Component Embed) | L | 잘못된 기본 ID, 다형 대상(역할/사용자), 허용 값 축소 |
 | 4 | 누락/null/값을 구분하는 patch 필드 타입, 캐시 병합 수정, `Arc` 이벤트 전달, 직접 타입 디코딩, raw 보관 옵션(알 수 없는 이벤트·디코드 실패는 항상 보관), 참조 기반 컬렉터 필터 | L | 누락/null 구분이나 알 수 없는 payload 손실 |
@@ -70,7 +71,7 @@ operation)를 읽고, 8단계 drift CI가 같은 메타데이터를 쓴다.
 제공하는 기능입니다. 출처: discord-api-docs PR #8606 (`developers/link-previews/component-embeds.mdx`).
 
 - 수신: 해당 미리보기가 붙은 메시지는 `type: "components"` 임베드로 오며 `components` 배열에
-  단일 Container가 들어 있다. 현재 `Embed` 모델에는 `components`·`flags`가 없어 버려진다(3단계).
+  단일 Container가 들어 있다. 1.5단계에서 `Embed::components`·`flags`·`is_component_embed()`로 반영했다.
 - 생성: payload는 `{"component": Container}` 하나, 3,000바이트(이스케이프 시퀀스는 전체 길이로
   계산), 컨테이너 포함 컴포넌트 40개, 갤러리 항목은 임베드 전체 10개, 중첩 Container 금지,
   버튼은 `style: 5` 링크 버튼만 허용하며 `id`/`type`/`url`/`style`/`label`/`emoji`/`disabled`

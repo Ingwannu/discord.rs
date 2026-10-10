@@ -46,6 +46,7 @@ pub struct GatewayConnectionConfig {
     encoding: GatewayEncoding,
     compression: Option<GatewayCompression>,
     shard: Option<(u32, u32)>,
+    capabilities: crate::bitfield::GatewayCapabilities,
 }
 
 impl Default for GatewayConnectionConfig {
@@ -63,6 +64,7 @@ impl GatewayConnectionConfig {
             encoding: GatewayEncoding::Json,
             compression: None,
             shard: None,
+            capabilities: crate::bitfield::GatewayCapabilities::from_bits(0),
         }
     }
 
@@ -89,6 +91,23 @@ impl GatewayConnectionConfig {
 
     pub fn compression_kind(&self) -> Option<GatewayCompression> {
         self.compression
+    }
+
+    /// Sets the IDENTIFY `capabilities` bitfield (see
+    /// [`gateway_capabilities`](crate::bitfield::gateway_capabilities)).
+    ///
+    /// Capabilities live on the connection config rather than as another
+    /// runtime argument because they are part of how a connection is
+    /// established, and this config already reaches every shard, resume, and
+    /// reconnect path.
+    pub fn capabilities(mut self, capabilities: crate::bitfield::GatewayCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Returns the IDENTIFY `capabilities` bitfield.
+    pub fn capability_bits(&self) -> u64 {
+        self.capabilities.bits()
     }
 
     pub fn shard(mut self, shard_id: u32, total_shards: u32) -> Self {

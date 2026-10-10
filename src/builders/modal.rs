@@ -325,6 +325,8 @@ pub struct FileUploadBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    file_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<u32>,
 }
 
@@ -337,8 +339,35 @@ impl FileUploadBuilder {
             min_values: None,
             max_values: None,
             required: None,
+            file_types: None,
             id: None,
         }
+    }
+
+    /// Restricts uploads to file types: preset groups (`"image"`,
+    /// `"video"`, `"audio"`) or dot-prefixed extensions (`".pdf"`), max 10.
+    /// Discord checks only the file name; validate contents yourself.
+    pub fn file_types<I, S>(mut self, file_types: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.file_types = Some(file_types.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Checks the `file_types` filter against Discord's documented limits.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        if let Some(file_types) = &self.file_types {
+            validation::ensure_file_types("file upload file_types", file_types)?;
+        }
+        Ok(())
+    }
+
+    /// Validates, then builds the component JSON.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 
     pub fn min_values(mut self, min: u8) -> Self {
@@ -997,5 +1026,22 @@ mod tests {
             components[8].get("type").and_then(|value| value.as_u64()),
             Some(250)
         );
+    }
+
+    #[test]
+    fn file_upload_builder_supports_file_type_filters() {
+        let built = super::FileUploadBuilder::new("upload")
+            .file_types(["video", ".mov"])
+            .try_build()
+            .expect("valid filter");
+        assert_eq!(built["file_types"], serde_json::json!(["video", ".mov"]));
+        assert!(super::FileUploadBuilder::new("upload")
+            .file_types((0..11).map(|index| format!(".e{index}")))
+            .try_build()
+            .is_err());
+        assert!(super::FileUploadBuilder::new("upload")
+            .build()
+            .get("file_types")
+            .is_none());
     }
 }

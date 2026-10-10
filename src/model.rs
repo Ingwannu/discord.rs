@@ -5,12 +5,19 @@ use serde::{Deserialize, Serialize};
 use crate::parsers::V2ModalSubmission;
 use crate::types::Emoji;
 
+mod application_identity;
 mod channel;
 mod permissions;
 mod snowflake;
 mod thread;
 mod user;
 
+pub use application_identity::{
+    ApplicationIdentities, ApplicationIdentity, ApplicationIdentityProfile,
+    ApplicationIdentityProfileData, ApplicationIdentityProviderId, DynamicProfileField,
+    PrimaryProfileData, ProfileMedia, UpdateApplicationIdentityProfile, MAX_PROFILE_DATA_BYTES,
+    MAX_PROFILE_DYNAMIC_FIELDS, MAX_PROFILE_STRING_CHARS, MAX_PROFILE_USERNAME_CHARS,
+};
 pub use channel::{
     Attachment, Channel, ChannelType, CreateGuildChannel, EditChannelPermission,
     PermissionOverwrite,
@@ -143,6 +150,80 @@ pub struct AddLobbyMember {
     /// Lobby member flag bitfield.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
+}
+
+/// Request body for Get or Create Lobby (`PUT /lobbies`, Bearer token).
+///
+/// Creates a lobby identified by `secret`, or joins the calling user to the
+/// existing lobby with that secret.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GetOrCreateLobby {
+    /// Lobby secret (max 250 characters).
+    pub secret: String,
+    /// Seconds before an idle lobby shuts down (5..=604800).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_seconds: Option<u64>,
+    /// Lobby metadata; overwrites existing metadata (max total length 1000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lobby_metadata: Option<HashMap<String, String>>,
+    /// Metadata for the calling user's lobby member (max total length 1000).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_metadata: Option<HashMap<String, String>>,
+}
+
+/// Request body for Send Lobby Message (Bearer token).
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct CreateLobbyMessage {
+    /// Message content; must be non-empty.
+    pub content: String,
+    /// Key/value pairs delivered to active Social SDK clients; not persisted
+    /// on a linked channel's copy of the message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
+    /// Message flags; only flags the Social SDK may create are accepted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u64>,
+}
+
+/// Author details captured on a lobby message.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LobbyMessageMember {
+    /// The author's lobby display name when the message was sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub additional_name: Option<String>,
+}
+
+/// Message sent in a lobby.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct LobbyMessage {
+    pub id: Snowflake,
+    /// Message type.
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub content: String,
+    pub lobby_id: Snowflake,
+    /// Equal to `lobby_id`; present for compatibility with message APIs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<User>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lobby_member: Option<LobbyMessageMember>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moderation_metadata: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub flags: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<Snowflake>,
+}
+
+/// Single-use, one-hour guild invite to a lobby's linked channel.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct LobbyInvite {
+    pub code: String,
 }
 
 /// Request body entry for bulk lobby member updates.
@@ -684,6 +765,11 @@ pub struct CurrentUserGuildsQuery {
     pub after: Option<Snowflake>,
     pub limit: Option<u64>,
     pub with_counts: Option<bool>,
+    /// Returns only the guilds stored in this shard (`0` to
+    /// `max_concurrency - 1` from Get Gateway Bot). Required since
+    /// 2026-09-15 for apps using large bot sharding, which otherwise get a
+    /// 400; this is not the gateway shard id.
+    pub shard: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1746,6 +1832,17 @@ pub struct CreateChannelInvite {
     pub target_application_id: Option<Snowflake>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role_ids: Option<Vec<Snowflake>>,
+    /// Users allowed to see and accept the invite (max 1000). Mutually
+    /// exclusive with a `target_users_file` CSV upload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_user_ids: Option<Vec<Snowflake>>,
+}
+
+/// JSON body for the invite target-user bulk-add and bulk-delete routes.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct InviteTargetUserIds {
+    /// Users to add or remove; Discord accepts at most 1000 per request.
+    pub user_ids: Vec<Snowflake>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -1912,6 +2009,11 @@ pub struct ApplicationCommandOption {
     pub min_length: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_length: Option<u16>,
+    /// File types an `ATTACHMENT` option accepts: preset groups such as
+    /// `image`, `video`, `audio`, or dot-prefixed extensions such as `.pdf`
+    /// (max 10). Discord checks only the file name, not the contents.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_types: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -2760,6 +2862,26 @@ pub struct Embed {
     pub author: Option<EmbedAuthor>,
     #[serde(default)]
     pub fields: Vec<EmbedField>,
+    /// Components of a `components` embed: the single Container a website
+    /// supplied through a Component Embed link preview (Discord changelog
+    /// 2026-10-05). Empty for every other embed type, and never serialized
+    /// when empty, so outgoing embeds are unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<MessageComponent>,
+    /// Embed flags bitfield.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flags: Option<u64>,
+}
+
+impl Embed {
+    /// `type` value of an embed rendered from a website's Component Embed.
+    pub const KIND_COMPONENTS: &'static str = "components";
+
+    /// Returns true for a link preview built from a website's Component
+    /// Embed; its layout is in [`Embed::components`].
+    pub fn is_component_embed(&self) -> bool {
+        self.kind.as_deref() == Some(Self::KIND_COMPONENTS)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

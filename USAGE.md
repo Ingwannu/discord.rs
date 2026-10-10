@@ -1409,6 +1409,23 @@ fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
 - `retry_non_idempotent_requests(true)` (default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. By default only GET/HEAD/OPTIONS/PUT/DELETE and `POST /channels/{id}/messages` with `nonce` + `enforce_nonce: true` (within 60 seconds of the first attempt) are replayed, because Discord may already have applied an ambiguous failure; 429s are always retried, and connection failures are retried for every method unless `use_client(...)` supplied the client (its redirect policy is unknown).
 - `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
 
+## 8.8 Prepare for Channel Obfuscation (mandatory 2026-11-16)
+
+Discord will send channels your bot cannot view with placeholder metadata. Check the flag, not the name, before trusting channel fields:
+
+```rust
+fn describe(channel: &discordrs::Channel) -> String {
+    if channel.is_obfuscated() {
+        // Only id, type, position, and parent_id are reliable here.
+        format!("hidden channel {}", channel.id)
+    } else {
+        channel.name.clone().unwrap_or_default()
+    }
+}
+```
+
+Opt in early with `ClientBuilder::gateway_capabilities(discordrs::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION)` to see the new payloads before the deadline.
+
 ## 9. Control the Active Shard from `Context`
 
 When you are inside a gateway handler, `Context` can drive shard-local gateway actions directly.

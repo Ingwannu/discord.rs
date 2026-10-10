@@ -203,6 +203,52 @@ pub(crate) fn guild_prune_query(
     query_string(params)
 }
 
+/// Percent-encodes one URI component the way JavaScript's
+/// `encodeURIComponent` does: unreserved characters and `!~*'()` pass
+/// through, every other byte (including `/`, `?`, `#`, `%`, spaces, and any
+/// non-ASCII UTF-8 byte) becomes `%XX`. Used for header values and for path
+/// segments that carry caller-supplied strings.
+pub(crate) fn percent_encode_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => encoded.push(byte as char),
+            _ => {
+                encoded.push('%');
+                encoded.push_str(&format!("{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
+/// Encodes a caller-supplied string (for example an external account ID)
+/// as a single path segment.
+///
+/// Percent-encoding keeps `/`, `?`, and `#` from changing the route, but
+/// `.` is unreserved and stays literal, so the dot segments `.` and `..`
+/// would still be normalized away by servers and proxies; those and the
+/// empty string are rejected instead.
+pub(crate) fn external_path_segment(name: &str, value: &str) -> Result<String, DiscordError> {
+    if value.is_empty() || value == "." || value == ".." {
+        return Err(invalid_data_error(format!(
+            "{name} must not be empty, \".\", or \"..\""
+        )));
+    }
+    Ok(percent_encode_component(value))
+}
+
 pub(crate) fn query_string(params: Vec<String>) -> String {
     if params.is_empty() {
         String::new()
@@ -257,6 +303,9 @@ pub(crate) fn current_user_guilds_query(query: &CurrentUserGuildsQuery) -> Strin
     }
     if let Some(with_counts) = query.with_counts {
         params.push(format!("with_counts={with_counts}"));
+    }
+    if let Some(shard) = query.shard {
+        params.push(format!("shard={shard}"));
     }
     query_string(params)
 }

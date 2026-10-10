@@ -613,6 +613,65 @@ pub mod message_flags {
     pub const IS_COMPONENTS_V2: BitField<MessageFlagBits> = BitField::from_bits(1 << 15);
 }
 
+/// Channel flags (`Channel::flags`).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct ChannelFlagBits;
+
+impl BitFieldFlags for ChannelFlagBits {
+    const BITS: &'static [(u64, &'static str)] = &[
+        (1 << 1, "PINNED"),
+        (1 << 4, "REQUIRE_TAG"),
+        (1 << 15, "HIDE_MEDIA_DOWNLOAD_OPTIONS"),
+        (1 << 17, "CHANNEL_OBFUSCATED"),
+        (1 << 21, "IS_SPOILER_CHANNEL"),
+    ];
+}
+
+/// ChannelFlags type alias.
+pub type ChannelFlags = BitField<ChannelFlagBits>;
+
+/// Convenience constants for ChannelFlags.
+pub mod channel_flags {
+    use super::{BitField, ChannelFlagBits};
+
+    /// Thread is pinned to the top of its parent forum or media channel.
+    pub const PINNED: BitField<ChannelFlagBits> = BitField::from_bits(1 << 1);
+    /// A tag is required when creating a thread in this forum or media channel.
+    pub const REQUIRE_TAG: BitField<ChannelFlagBits> = BitField::from_bits(1 << 4);
+    /// Media channel hides embedded media download options.
+    pub const HIDE_MEDIA_DOWNLOAD_OPTIONS: BitField<ChannelFlagBits> = BitField::from_bits(1 << 15);
+    /// The channel's metadata is obfuscated because the current user cannot
+    /// view it. Only set on channels received over the gateway; only `id`,
+    /// `type`, `position`, and `parent_id` are reliable on such a channel.
+    /// Mandatory for all bots from 2026-11-16.
+    pub const CHANNEL_OBFUSCATED: BitField<ChannelFlagBits> = BitField::from_bits(1 << 17);
+    /// Spoiler channel: users must opt in to view its contents.
+    pub const IS_SPOILER_CHANNEL: BitField<ChannelFlagBits> = BitField::from_bits(1 << 21);
+}
+
+/// Gateway capability flags sent in IDENTIFY (`capabilities`), separate from
+/// intents: intents choose which events arrive, capabilities change gateway
+/// behavior.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct GatewayCapabilityBits;
+
+impl BitFieldFlags for GatewayCapabilityBits {
+    const BITS: &'static [(u64, &'static str)] = &[(1 << 15, "CHANNEL_OBFUSCATION")];
+}
+
+/// GatewayCapabilities type alias.
+pub type GatewayCapabilities = BitField<GatewayCapabilityBits>;
+
+/// Convenience constants for GatewayCapabilities.
+pub mod gateway_capabilities {
+    use super::{BitField, GatewayCapabilityBits};
+
+    /// Opts into obfuscated channel metadata for channels the bot cannot
+    /// view. Discord documents this as a temporary, testing-only opt-in that
+    /// will change before obfuscation applies to all bots on 2026-11-16.
+    pub const CHANNEL_OBFUSCATION: BitField<GatewayCapabilityBits> = BitField::from_bits(1 << 15);
+}
+
 /// Interaction callback type constants.
 pub mod interaction_callback_type {
     /// Bit flag constant for `PONG`.

@@ -299,6 +299,7 @@ impl GatewayClient {
             let identify = identify_payload(
                 &self.token,
                 self.intents,
+                self.gateway_config.capability_bits(),
                 self.shard_info,
                 self.initial_presence.as_ref(),
                 false,
@@ -688,6 +689,7 @@ fn resume_payload(token: &str, session_id: &str, seq: u64) -> Value {
 fn identify_payload(
     token: &str,
     intents: u64,
+    capabilities: u64,
     shard_info: Option<[u32; 2]>,
     presence: Option<&UpdatePresence>,
     payload_compression: bool,
@@ -704,6 +706,9 @@ fn identify_payload(
             }
         }
     });
+    if capabilities != 0 {
+        identify["d"]["capabilities"] = serde_json::json!(capabilities);
+    }
     if payload_compression {
         identify["d"]["compress"] = serde_json::json!(true);
     }
@@ -1153,7 +1158,7 @@ mod tests {
 
     #[test]
     fn identify_and_resume_payloads_use_raw_gateway_token() {
-        let identify = identify_payload("secret-token", 513, Some([2, 4]), None, true);
+        let identify = identify_payload("secret-token", 513, 0, Some([2, 4]), None, true);
         let resume = resume_payload("secret-token", "session", 42);
 
         assert_eq!(identify["d"]["token"], serde_json::json!("secret-token"));
@@ -1162,7 +1167,7 @@ mod tests {
 
     #[test]
     fn identify_without_shard_and_resume_without_sequence_keep_expected_shape() {
-        let identify = identify_payload("secret-token", 513, None, None, true);
+        let identify = identify_payload("secret-token", 513, 0, None, None, true);
         let resume = resume_payload("secret-token", "session", 0);
 
         assert!(identify["d"].get("shard").is_none());
@@ -1174,7 +1179,7 @@ mod tests {
 
     #[test]
     fn identify_payload_omits_payload_compression_for_transport_compression() {
-        let identify = identify_payload("secret-token", 513, None, None, false);
+        let identify = identify_payload("secret-token", 513, 0, None, None, false);
 
         assert!(identify["d"].get("compress").is_none());
     }
@@ -1182,7 +1187,7 @@ mod tests {
     #[test]
     fn identify_payload_includes_initial_presence_when_provided() {
         let presence = crate::model::UpdatePresence::online_with_activity("hello");
-        let identify = identify_payload("secret-token", 513, None, Some(&presence), false);
+        let identify = identify_payload("secret-token", 513, 0, None, Some(&presence), false);
 
         assert_eq!(
             identify["d"]["presence"]["status"],
@@ -1911,6 +1916,28 @@ mod tests {
         assert!(
             dropped.load(std::sync::atomic::Ordering::SeqCst),
             "the worker must be aborted when its waiter is cancelled"
+        );
+    }
+
+    #[test]
+    fn identify_payload_sends_capabilities_only_when_set() {
+        let without = identify_payload("token", 513, 0, None, None, false);
+        assert!(without["d"].get("capabilities").is_none());
+
+        let capability = crate::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION.bits();
+        let with = identify_payload("token", 513, capability, None, None, false);
+        assert_eq!(with["d"]["capabilities"], serde_json::json!(1 << 15));
+
+        let config = GatewayConnectionConfig::default()
+            .capabilities(crate::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION);
+        assert_eq!(config.capability_bits(), 1 << 15);
+        assert_eq!(
+            config
+                .clone()
+                .with_base_url("wss://resume.example")
+                .capability_bits(),
+            1 << 15,
+            "resume URLs must keep the IDENTIFY capabilities"
         );
     }
 

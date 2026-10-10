@@ -955,6 +955,19 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets the IDENTIFY `capabilities` bitfield on the gateway connection
+    /// config, e.g. [`gateway_capabilities::CHANNEL_OBFUSCATION`] to test
+    /// Discord's channel obfuscation before it becomes mandatory.
+    ///
+    /// [`gateway_capabilities::CHANNEL_OBFUSCATION`]: crate::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION
+    pub fn gateway_capabilities(
+        mut self,
+        capabilities: crate::bitfield::GatewayCapabilities,
+    ) -> Self {
+        self.gateway_config = self.gateway_config.capabilities(capabilities);
+        self
+    }
+
     pub fn cache_config(mut self, cache_config: CacheConfig) -> Self {
         self.cache_config = cache_config;
         self

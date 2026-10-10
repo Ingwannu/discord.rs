@@ -106,3 +106,17 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 - 2.1부터 IDENTIFY는 Discord의 샤드당 5초 1회 제한에 맞춰 페이싱되고, 30초 미만의 짧은 세션은 즉시 재접속하는 대신 점증 백오프로 재접속하므로 INVALID_SESSION 반복 시의 재접속 루프를 방지합니다.
 - 게이트웨이 프로토콜 실패(누락된 Hello, 디코드 오류, 종료 close code, 명령 큐 오버플로)는 `DiscordError::Model`이 아니라 `DiscordError::Gateway`로 표면화됩니다.
 - 3.0부터 재접속해도 소용없는 close code(4004 인증 실패, 4010 잘못된 샤드, 4011 샤딩 필요, 4012 잘못된 API 버전, 4013 잘못된 인텐트, 4014 허용되지 않은 인텐트)를 받으면 `GatewayClient::run`이 백오프 재접속을 반복하지 않고 `DiscordError::Gateway`를 돌려주며 샤드를 멈춥니다. 4007(잘못된 시퀀스)과 4009(세션 만료)는 Discord가 거부할 RESUME 대신 새 세션으로 접속합니다. 연결별 하트비트·송신 작업은 어느 경로로 끝나든 정리됩니다.
+
+## 채널 가리기 (3.0)
+
+2026-11-16부터 Discord는 봇이 볼 수 없는 채널을 가려진 메타데이터로 보냅니다(`CHANNEL_CREATE`, `CHANNEL_UPDATE`, `GUILD_CREATE`의 채널 목록). `GET /guilds/{id}/channels`에서는 아예 빠집니다. 이름이 아니라 `Channel::is_obfuscated()`(`CHANNEL_OBFUSCATED` 플래그, `1 << 17`)로 판별합니다. 이런 채널은 `id`, `type`, `position`, `parent_id`만 믿을 수 있고, 권한 덮어쓰기는 `@everyone` 거부 하나만 들어 있는 가짜 값입니다. 봇이 다시 접근할 수 있게 되면 Discord가 전체 정보가 담긴 `CHANNEL_UPDATE`를 보내고, 캐시의 사본도 그걸로 바뀝니다.
+
+마감 전에 시험하려면 IDENTIFY `capabilities`로 미리 켤 수 있습니다(Discord는 이 옵션이 임시라고 밝혔습니다).
+
+```rust
+use discordrs::bitfield::gateway_capabilities;
+
+let client = Client::builder(token, intents)
+    .gateway_capabilities(gateway_capabilities::CHANNEL_OBFUSCATION)
+    .event_handler(handler);
+```

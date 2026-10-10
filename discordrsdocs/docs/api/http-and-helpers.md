@@ -53,6 +53,13 @@ Raw `serde_json::Value` methods remain available for routes where Discord adds f
 - Route keys replace webhook and interaction tokens with a digest; transport errors and API/proxy error text are scrubbed of the request's token, so tokens no longer appear in REST logs, `RateLimitInfo::route`, or `DiscordError::{RateLimit, Api, Http}`.
 - Malformed wait values (`inf`, `NaN`, negative, or huge `Retry-After`/`x-ratelimit-reset-after`) are clamped instead of panicking.
 
+## Discord API Additions (3.0)
+
+- **Large bot sharding:** `CurrentUserGuildsQuery { shard: Some(n), .. }` sends the `shard` query param that `GET /users/@me/guilds` requires since 2026-09-15 for apps using large bot sharding (values `0..max_concurrency`; not the gateway shard id).
+- **Invite target users:** `CreateChannelInvite::target_user_ids` (up to 1000, mutually exclusive with a CSV upload), `add_invite_target_user(code, user_id)`, `remove_invite_target_user(code, user_id)`, `bulk_add_invite_target_users(code, &ids)`, and `bulk_delete_invite_target_users(code, &ids)` (at most 1000 IDs, checked locally).
+- **Game Stats Widgets:** `update_application_identity_profile(user_id, external_id, &body)` (`Ok(Some(profile))` on the first write, `Ok(None)` on later `204`s; `body.data` replaces the stored stats; limits checked by `UpdateApplicationIdentityProfile::validate()` before sending), `get_application_identity_profile(...)`, `get_user_application_identities(user_id)`, `get_application_identities_by_external_id(provider_type, external_id, provider_id)`, and `delete_application_identity(...)`. External IDs are percent-encoded as single path segments; `.`/`..`/empty are rejected.
+- **Social SDK lobbies and role connections:** see the Lobby API page for `get_or_create_lobby`, lobby messages, and lobby channel invites; `delete_current_user_application_role_connection(bearer_token)`.
+
 ## REST Client Configuration (`RestClient::builder`, 2.2.0)
 
 `RestClient::builder(token, application_id)` returns a `RestClientBuilder` mirroring discord.js's `RESTOptions`; `RestClient::new(...)` keeps the zero-configuration behavior:

@@ -505,6 +505,24 @@ impl Guild {
 // ---------------------------------------------------------------------------
 
 impl Channel {
+    /// Returns the channel's flags as a typed bitfield (empty when absent).
+    pub fn channel_flags(&self) -> crate::bitfield::ChannelFlags {
+        crate::bitfield::ChannelFlags::from_bits(self.flags.unwrap_or(0))
+    }
+
+    /// Returns true when Discord obfuscated this channel because the bot
+    /// cannot view it (`CHANNEL_OBFUSCATED`, gateway only).
+    ///
+    /// Only `id`, `type`, `position`, and `parent_id` are reliable on an
+    /// obfuscated channel; its name is a placeholder and its permission
+    /// overwrites are synthetic. Discord says to detect obfuscation by this
+    /// flag, never by inspecting the name. Mandatory for all bots from
+    /// 2026-11-16.
+    pub fn is_obfuscated(&self) -> bool {
+        self.channel_flags()
+            .contains(crate::bitfield::channel_flags::CHANNEL_OBFUSCATED.bits())
+    }
+
     /// Sends a plain-text message to this channel.
     pub async fn send(
         &self,

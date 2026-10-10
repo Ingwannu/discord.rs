@@ -3510,3 +3510,10 @@ async fn shared_runtime_propagates_default_allowed_mentions_to_context_and_rest(
     assert!(bare_context.default_allowed_mentions().is_none());
     assert!(bare_context.http.default_allowed_mentions().is_none());
 }
+
+#[test]
+fn client_builder_gateway_capabilities_reach_the_connection_config() {
+    let builder = super::Client::builder("token", Intents::from_bits(0))
+        .gateway_capabilities(crate::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION);
+    assert_eq!(builder.gateway_config.capability_bits(), 1 << 15);
+}

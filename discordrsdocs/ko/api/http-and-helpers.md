@@ -12,6 +12,13 @@
 - 3.0부터 route 키에서 웹훅·인터랙션 토큰을 해시값으로 바꾸고, 전송 오류와 API·프록시 오류 본문에서 요청 토큰을 지웁니다. REST 로그, `RateLimitInfo::route`, `DiscordError::{RateLimit, Api, Http}`에 토큰이 남지 않습니다. 버킷을 알기 전에 줄 서 있던 요청은 버킷 게이트로 옮겨 가서 같은 버킷의 요청과 동시에 나가지 않습니다
 - 비정상 대기값(`inf`, `NaN`, 음수, 지나치게 큰 `Retry-After`/`x-ratelimit-reset-after`)은 panic 대신 범위로 잘라 처리합니다
 
+## Discord API 추가 기능 (3.0)
+
+- **대규모 봇 샤딩:** `CurrentUserGuildsQuery { shard: Some(n), .. }`로 `shard` 쿼리 파라미터를 보냅니다. 대규모 봇 샤딩을 쓰는 앱은 2026-09-15부터 `GET /users/@me/guilds`에 이 값이 필수입니다(`0..max_concurrency`, 게이트웨이 샤드 ID와 다름).
+- **초대 대상 사용자:** `CreateChannelInvite::target_user_ids`(최대 1000, CSV 업로드와 동시 사용 불가), `add_invite_target_user(code, user_id)`, `remove_invite_target_user(code, user_id)`, `bulk_add_invite_target_users(code, &ids)`, `bulk_delete_invite_target_users(code, &ids)`(최대 1000개, 로컬에서 확인).
+- **게임 통계 위젯:** `update_application_identity_profile(user_id, external_id, &body)`(첫 기록은 `Ok(Some(profile))`, 이후 `204`는 `Ok(None)`. `body.data`는 저장된 통계를 통째로 바꾸고, 보내기 전에 `UpdateApplicationIdentityProfile::validate()`로 한도를 검사), `get_application_identity_profile(...)`, `get_user_application_identities(user_id)`, `get_application_identities_by_external_id(provider_type, external_id, provider_id)`, `delete_application_identity(...)`. 외부 ID는 경로 세그먼트 하나로 퍼센트 인코딩하며, `.`·`..`·빈 문자열은 거부합니다.
+- **Social SDK 로비와 role connection:** `get_or_create_lobby`, 로비 메시지, 로비 채널 초대(영문 Lobby API 문서 참고), `delete_current_user_application_role_connection(bearer_token)`.
+
 ## REST 클라이언트 구성 (`RestClient::builder`, 2.2.0)
 
 `RestClient::builder(token, application_id)`는 discord.js의 `RESTOptions`에 해당하는 `RestClientBuilder`를 반환합니다. `RestClient::new(...)`는 기존의 무설정 동작을 유지합니다.

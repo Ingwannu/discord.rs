@@ -16,6 +16,14 @@ The typed surface is centered on:
 
 These types are designed to replace mixed `String` / `u64` IDs and raw `Value` routing in new code.
 
+## New in 3.0 (unreleased)
+
+- `ChannelFlags` / `channel_flags::{PINNED, REQUIRE_TAG, HIDE_MEDIA_DOWNLOAD_OPTIONS, CHANNEL_OBFUSCATED, IS_SPOILER_CHANNEL}` and `Channel::channel_flags()` / `Channel::is_obfuscated()`. From 2026-11-16 Discord sends channels a bot cannot view with placeholder metadata; only `id`, `type`, `position`, and `parent_id` are reliable on them, and the flag (not the name) is the supported way to detect them.
+- `GatewayCapabilities` / `gateway_capabilities::CHANNEL_OBFUSCATION` for the IDENTIFY `capabilities` field (Discord's temporary opt-in to test obfuscation early), set through `GatewayConnectionConfig::capabilities(...)` or `ClientBuilder::gateway_capabilities(...)`.
+- `Embed::components`, `Embed::flags`, `Embed::KIND_COMPONENTS`, and `Embed::is_component_embed()` for link previews rendered from a website's Component Embed.
+- Application Identity Profile models: `ApplicationIdentity`, `ApplicationIdentities`, `ApplicationIdentityProfile`, `ApplicationIdentityProfileData`, `PrimaryProfileData`, `DynamicProfileField` (unknown field types are kept verbatim), `ProfileMedia`, `UpdateApplicationIdentityProfile` (with `validate()` for the documented limits), and `ApplicationIdentityProviderId`.
+- `CurrentUserGuildsQuery::shard`, `CreateChannelInvite::target_user_ids`, and `InviteTargetUserIds`.
+
 ## New in 2.2.0
 
 - `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.

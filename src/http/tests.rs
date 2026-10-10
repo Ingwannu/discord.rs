@@ -1194,8 +1194,18 @@ fn new_coverage_query_helpers_build_expected_paths() {
             after: Some(Snowflake::from("65")),
             limit: Some(50),
             with_counts: Some(true),
+            shard: None,
         }),
         "?before=70&after=65&limit=50&with_counts=true"
+    );
+    assert_eq!(
+        current_user_guilds_query(&CurrentUserGuildsQuery {
+            limit: Some(200),
+            shard: Some(3),
+            ..CurrentUserGuildsQuery::default()
+        }),
+        "?limit=200&shard=3",
+        "large-bot-sharding apps must be able to send the shard param"
     );
     assert_eq!(
         get_guild_query(&GetGuildQuery {
@@ -2900,6 +2910,7 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
                 after: Some(Snowflake::from("200")),
                 limit: Some(1),
                 with_counts: Some(true),
+                shard: None,
             })
             .await
             .unwrap()[0]["name"],
@@ -7844,4 +7855,387 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
     let modal: serde_json::Value =
         serde_json::from_str(&requests[3].body).expect("modal body json");
     assert!(modal["data"].get("allowed_mentions").is_none());
+}
+
+// --- Phase 1.5: Discord API changes after 2026-07-27 ---
+
+#[tokio::test]
+async fn invite_target_user_routes_have_expected_shapes() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("invite-token", 123, base_url);
+    client
+        .add_invite_target_user("abc", "10")
+        .await
+        .expect("add target user");
+    client
+        .remove_invite_target_user("abc", "11")
+        .await
+        .expect("remove target user");
+    let ids = [Snowflake::from("12"), Snowflake::from("13")];
+    client
+        .bulk_add_invite_target_users("abc", &ids)
+        .await
+        .expect("bulk add");
+    client
+        .bulk_delete_invite_target_users("abc", &ids)
+        .await
+        .expect("bulk delete");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        (requests[0].method.as_str(), requests[0].path.as_str()),
+        ("PUT", "/invites/abc/target-users/10")
+    );
+    assert_eq!(
+        (requests[1].method.as_str(), requests[1].path.as_str()),
+        ("DELETE", "/invites/abc/target-users/11")
+    );
+    assert_eq!(
+        (requests[2].method.as_str(), requests[2].path.as_str()),
+        ("POST", "/invites/abc/target-users/bulk-add")
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[2].body).expect("json"),
+        json!({ "user_ids": ["12", "13"] })
+    );
+    assert_eq!(requests[3].path, "/invites/abc/target-users/bulk-delete");
+}
+
+#[tokio::test]
+async fn invite_target_user_bulk_routes_reject_more_than_1000_ids_locally() {
+    let client = RestClient::new("bulk-limit", 123);
+    let ids = (0..1001)
+        .map(|id| Snowflake::from(id.to_string()))
+        .collect::<Vec<_>>();
+    let error = client
+        .bulk_add_invite_target_users("abc", &ids)
+        .await
+        .expect_err("1001 ids exceed Discord's cap");
+    assert!(error.to_string().contains("1000"), "{error}");
+    assert!(client
+        .add_invite_target_user("bad/code", "1")
+        .await
+        .is_err());
+}
+
+#[test]
+fn create_channel_invite_serializes_target_user_ids() {
+    let body = CreateChannelInvite {
+        target_user_ids: Some(vec![Snowflake::from("1"), Snowflake::from("2")]),
+        ..CreateChannelInvite::default()
+    };
+    let value = serde_json::to_value(&body).expect("serialize");
+    assert_eq!(value["target_user_ids"], json!(["1", "2"]));
+    let empty = serde_json::to_value(CreateChannelInvite::default()).expect("serialize");
+    assert!(empty.get("target_user_ids").is_none());
+}
+
+#[test]
+fn percent_encoding_and_external_segments_block_path_changes() {
+    use super::paths::{external_path_segment, percent_encode_component};
+
+    assert_eq!(percent_encode_component("a/b?c#d e"), "a%2Fb%3Fc%23d%20e");
+    assert_eq!(percent_encode_component("player-1_x.y"), "player-1_x.y");
+    assert_eq!(
+        external_path_segment("id", "steam:765/../x").expect("encoded"),
+        "steam%3A765%2F..%2Fx"
+    );
+    for bad in ["", ".", ".."] {
+        assert!(external_path_segment("id", bad).is_err(), "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn application_identity_profile_routes_have_expected_shapes() {
+    let profile = json!({
+        "username": "PlayerOne",
+        "metadata": { "region": "kr" },
+        "data": {
+            "primary": { "rank_name": "Gold", "total_wins": 42, "playtime_hours": 69.41 },
+            "dynamic": [
+                { "type": 1, "name": "Main", "value": "Mage" },
+                { "type": 2, "name": "KDA", "value": 3.5 },
+                { "type": 3, "name": "Badge", "value": { "url": "https://cdn.example/b.png" } }
+            ]
+        }
+    });
+    let identities = json!({
+        "identities": [
+            { "user_id": "7", "provider_type": "NONE", "provider_issued_user_id": "p/1" }
+        ]
+    });
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::CREATED, profile.clone()),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, profile.clone()),
+        PlannedResponse::json(StatusCode::OK, identities.clone()),
+        PlannedResponse::json(StatusCode::OK, identities),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("identity-token", 555, base_url);
+    let update = crate::model::UpdateApplicationIdentityProfile {
+        username: Some("PlayerOne".to_string()),
+        data: Some(crate::model::ApplicationIdentityProfileData {
+            primary: Some(crate::model::PrimaryProfileData {
+                rank_name: Some("Gold".to_string()),
+                ..Default::default()
+            }),
+            dynamic: vec![crate::model::DynamicProfileField::Number {
+                name: "KDA".to_string(),
+                value: 3.5,
+            }],
+        }),
+    };
+
+    let created = client
+        .update_application_identity_profile("7", "p/1", &update)
+        .await
+        .expect("first write");
+    let created = created.expect("201 returns the profile");
+    assert_eq!(created.username.as_deref(), Some("PlayerOne"));
+    assert_eq!(
+        created.data.as_ref().map(|data| data.dynamic.len()),
+        Some(3)
+    );
+    assert!(client
+        .update_application_identity_profile("7", "p/1", &update)
+        .await
+        .expect("second write")
+        .is_none());
+    let fetched = client
+        .get_application_identity_profile("7", "p/1")
+        .await
+        .expect("get profile");
+    assert_eq!(fetched, created);
+    let by_user = client
+        .get_user_application_identities("7")
+        .await
+        .expect("by user");
+    assert_eq!(by_user.identities[0].provider_issued_user_id, "p/1");
+    client
+        .get_application_identities_by_external_id("NONE", "p/1", Some("eu west"))
+        .await
+        .expect("by external id");
+    client
+        .delete_application_identity("7", "NONE", "p/1", None)
+        .await
+        .expect("delete");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    assert_eq!(requests[0].method, "PATCH");
+    assert_eq!(
+        requests[0].path,
+        "/applications/555/users/7/identities/p%2F1/profile"
+    );
+    let sent: serde_json::Value = serde_json::from_str(&requests[0].body).expect("json body");
+    assert_eq!(
+        sent["data"]["dynamic"][0],
+        json!({ "type": 2, "name": "KDA", "value": 3.5 })
+    );
+    assert_eq!(requests[2].method, "GET");
+    assert_eq!(requests[3].path, "/users/7/application-identities/555");
+    assert_eq!(
+        requests[4].path,
+        "/applications/555/application-identities/NONE/p%2F1?provider_id=eu+west"
+    );
+    assert_eq!(requests[5].method, "POST");
+    assert_eq!(
+        requests[5].path,
+        "/users/7/application-identities/555/NONE/p%2F1/delete"
+    );
+    assert_eq!(requests[5].body, "{}");
+}
+
+#[tokio::test]
+async fn application_identity_profile_update_enforces_documented_limits() {
+    let client = RestClient::new("identity-limits", 555);
+    let too_many = crate::model::UpdateApplicationIdentityProfile {
+        username: None,
+        data: Some(crate::model::ApplicationIdentityProfileData {
+            primary: None,
+            dynamic: (0..31)
+                .map(|index| crate::model::DynamicProfileField::Number {
+                    name: format!("f{index}"),
+                    value: 1.0,
+                })
+                .collect(),
+        }),
+    };
+    let error = client
+        .update_application_identity_profile("7", "p", &too_many)
+        .await
+        .expect_err("31 dynamic fields exceed the cap");
+    assert!(error.to_string().contains("30"), "{error}");
+
+    let long_rank = crate::model::UpdateApplicationIdentityProfile {
+        data: Some(crate::model::ApplicationIdentityProfileData {
+            primary: Some(crate::model::PrimaryProfileData {
+                rank_name: Some("r".repeat(101)),
+                ..Default::default()
+            }),
+            dynamic: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    assert!(long_rank.validate().is_err());
+
+    let oversized = crate::model::UpdateApplicationIdentityProfile {
+        data: Some(crate::model::ApplicationIdentityProfileData {
+            primary: None,
+            dynamic: (0..30)
+                .map(|index| {
+                    crate::model::DynamicProfileField::Unknown(json!({
+                        "type": 99,
+                        "name": format!("f{index}"),
+                        "value": "x".repeat(400),
+                    }))
+                })
+                .collect(),
+        }),
+        ..Default::default()
+    };
+    let error = oversized.validate().expect_err("over 10 KB serialized");
+    assert!(error.to_string().contains("10240"), "{error}");
+
+    assert!(RestClient::new("no-app", 0)
+        .get_user_application_identities("7")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes() {
+    let lobby = json!({ "id": "100", "application_id": "555", "members": [] });
+    let message = json!({
+        "id": "900", "type": 0, "content": "gg", "lobby_id": "100", "channel_id": "100",
+        "author": { "id": "7", "username": "player" },
+        "lobby_member": { "additional_name": "Captain" },
+        "flags": 0, "application_id": "555"
+    });
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::OK, lobby),
+        PlannedResponse::json(StatusCode::OK, message.clone()),
+        PlannedResponse::json(StatusCode::OK, json!([message])),
+        PlannedResponse::json(StatusCode::OK, json!({ "code": "self-code" })),
+        PlannedResponse::json(StatusCode::OK, json!({ "code": "user-code" })),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("bot-token", 555, base_url);
+    let joined = client
+        .get_or_create_lobby(
+            "bearer-1",
+            &crate::model::GetOrCreateLobby {
+                secret: "match-42".to_string(),
+                idle_timeout_seconds: Some(300),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("get or create lobby");
+    assert_eq!(joined.id, Snowflake::from("100"));
+    let sent = client
+        .send_lobby_message(
+            "bearer-1",
+            "100",
+            &crate::model::CreateLobbyMessage {
+                content: "gg".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("send lobby message");
+    assert_eq!(
+        sent.lobby_member
+            .and_then(|member| member.additional_name)
+            .as_deref(),
+        Some("Captain")
+    );
+    let history = client
+        .get_lobby_messages("bearer-1", "100", Some(20))
+        .await
+        .expect("lobby messages");
+    assert_eq!(history.len(), 1);
+    let own = client
+        .create_lobby_channel_invite_for_self("bearer-1", "100")
+        .await
+        .expect("self invite");
+    assert_eq!(own.code, "self-code");
+    let theirs = client
+        .create_lobby_channel_invite_for_user("100", "8")
+        .await
+        .expect("user invite");
+    assert_eq!(theirs.code, "user-code");
+    client
+        .delete_current_user_application_role_connection("bearer-2")
+        .await
+        .expect("delete role connection");
+    task.await.expect("server task");
+
+    let requests = captured.lock().expect("captured");
+    let shapes = requests
+        .iter()
+        .map(|request| {
+            (
+                request.method.as_str(),
+                request.path.as_str(),
+                request.header("authorization"),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shapes,
+        vec![
+            ("PUT", "/lobbies", Some("Bearer bearer-1")),
+            ("POST", "/lobbies/100/messages", Some("Bearer bearer-1")),
+            (
+                "GET",
+                "/lobbies/100/messages?limit=20",
+                Some("Bearer bearer-1")
+            ),
+            (
+                "POST",
+                "/lobbies/100/members/@me/invites",
+                Some("Bearer bearer-1")
+            ),
+            (
+                "POST",
+                "/lobbies/100/members/8/invites",
+                Some("Bot bot-token")
+            ),
+            (
+                "DELETE",
+                "/users/@me/applications/555/role-connection",
+                Some("Bearer bearer-2")
+            ),
+        ]
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[0].body).expect("json"),
+        json!({ "secret": "match-42", "idle_timeout_seconds": 300 })
+    );
+}
+
+#[tokio::test]
+async fn lobby_message_limit_is_checked_locally() {
+    let client = RestClient::new("bot-token", 555);
+    for limit in [0_u8, 201] {
+        assert!(client
+            .get_lobby_messages("bearer", "100", Some(limit))
+            .await
+            .is_err());
+    }
 }

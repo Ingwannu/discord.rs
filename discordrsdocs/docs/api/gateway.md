@@ -142,3 +142,16 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 - `2.1` surfaces gateway protocol failures (missing Hello, decode errors, terminal close codes, command-queue overflow) as `DiscordError::Gateway` instead of `DiscordError::Model`.
 - `3.0` stops a shard on Discord's non-reconnectable close codes (4004 authentication failed, 4010 invalid shard, 4011 sharding required, 4012 invalid API version, 4013 invalid intents, 4014 disallowed intents): `GatewayClient::run` returns the `DiscordError::Gateway` instead of reconnecting forever with backoff. 4007 (invalid sequence) and 4009 (session timed out) start a fresh session instead of attempting a RESUME that Discord would reject. Per-connection heartbeat and outbound tasks are stopped on every exit path.
 
+## Channel Obfuscation (3.0)
+
+From 2026-11-16 Discord dispatches channels a bot cannot view with obfuscated metadata (`CHANNEL_CREATE`, `CHANNEL_UPDATE`, and the channel list in `GUILD_CREATE`); `GET /guilds/{id}/channels` omits them. Detect them with `Channel::is_obfuscated()` (the `CHANNEL_OBFUSCATED` flag, `1 << 17`), never by name. Only `id`, `type`, `position`, and `parent_id` are reliable on such a channel, and its permission overwrites are a single synthetic `@everyone` deny. When the bot regains access, Discord sends a `CHANNEL_UPDATE` with the full channel, which replaces the cached copy.
+
+To test before the deadline, opt in through IDENTIFY `capabilities` (Discord documents this opt-in as temporary):
+
+```rust
+use discordrs::bitfield::gateway_capabilities;
+
+let client = Client::builder(token, intents)
+    .gateway_capabilities(gateway_capabilities::CHANNEL_OBFUSCATION)
+    .event_handler(handler);
+```
