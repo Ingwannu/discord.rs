@@ -1791,6 +1791,7 @@ mod tests {
             ("private\u{E000}", "contains '\\u{e000}'"),
             ("heart\u{2764}\u{FE0F}", "contains '❤'"),
             ("emoji\u{1FAE0}", "contains '\u{1FAE0}'"),
+            ("plane15\u{F0001}", "contains '\\u{f0001}'"),
             ("Éclair", "must be lowercase"),
             ("ПРИВЕТ", "must be lowercase"),
             ("ǅemal", "must be lowercase"),
