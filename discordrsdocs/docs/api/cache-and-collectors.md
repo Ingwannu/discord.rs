@@ -23,6 +23,19 @@ The managers prefer cache hits and fall back to `RestClient` fetches.
 
 Since `2.1`, GUILD_CREATE populates the channel, thread, member, user, voice-state, presence, emoji, sticker, and stage-instance caches under a single write lock; the cached `Guild` is stored with the bulk collections stripped (`Guild::without_create_collections()`) to avoid double storage. GUILD_MEMBERS_CHUNK payloads (including those collected by `Context::fetch_members(...)`) and THREAD_* events are cached too, so cache-aware managers are warm right after a guild becomes available.
 
+### READY Invalidation per Shard (3.0)
+
+All shards of a process share one cache, so a READY (a new session, not a RESUME) only drops what that shard's new session replaces — `CacheHandle::clear_shard(shard_id, shard_count)`:
+
+- single-shard bots (`shard_count <= 1`): everything, as before (`CacheHandle::clear()`)
+- otherwise: every guild-scoped entry whose guild maps to the shard by `(guild_id >> 22) % shard_count` — the guild, its channels and threads, members, roles, presences, voice states, emojis, stickers, soundboard sounds, scheduled events, stage instances, and messages of those guilds
+- shard 0 also drops DM channels and their messages, because Discord delivers DMs only to shard 0
+- users are kept: they are shared by every shard a user has guilds on, and `max_users` bounds what is left behind; messages without a guild in an uncached channel are kept too, since their owner is unknown, and age out through TTL and size caps
+
+Before 3.0 every READY cleared the whole cache, so a later shard's READY wiped the guilds of shards that were already running.
+
+The cache is updated by each shard's internal event processor, which runs independently of event handlers (see the Event Pipeline section of [Gateway](gateway.md)). A handler may therefore read state that already includes events after the one it is handling.
+
 ### Performance Characteristics
 
 The `2.1` release rewrote the cache hot paths:
@@ -49,7 +62,14 @@ Hot member, message, and presence reads have `Arc` variants (`member_arc`, `mess
 
 `CacheBackend` is the async extension trait for external member/message/presence stores. `CacheHandle` implements it for the default in-memory backend, and external stores can implement the same `Arc`-returning read shape for distributed bot deployments.
 
-Since `2.2.0`, `ClientBuilder::cache_backend(...)` registers an external `CacheBackend` (Redis, Valkey, ...) that receives the same member, message, and presence writes the in-memory cache applies for gateway events. Writes are forwarded from a spawned task per event, so a slow backend cannot stall the gateway:
+### External Cache Backend
+
+Since `2.2.0`, `ClientBuilder::cache_backend(...)` registers an external `CacheBackend` (Redis, Valkey, ...) that receives the member, message, and presence writes the in-memory cache applies for gateway events. Since 3.0:
+
+- **Ordered writes.** All shards of a client share one worker that applies writes one at a time in gateway order. (Before, each write ran in its own task, so a delayed put could land after a later delete and resurrect the entry.)
+- **Overload policy.** The worker queue holds 8,192 writes. While it is full, new writes are dropped and counted in a rate-limited warning instead of stalling gateway processing; a dropped write leaves the backend stale until the entry is written again, so give backend entries a TTL. Writes still queued when the client stops are flushed in the background.
+- **READY.** The runtime calls `CacheBackend::clear_shard_cache(shard_id, shard_count)` instead of `clear_cache()`. The default implementation clears everything only when `shard_count <= 1` and otherwise keeps entries (stale data is a smaller failure than wiping every other shard's live data); multi-shard deployments should override it with the ownership rules above. `CacheHandle` implements it with `clear_shard`.
+- **MESSAGE_UPDATE.** Discord may send partial payloads. The worker merges the fields present in the payload into the backend's stored copy (`get_message`); if the backend has none it stores the in-memory cache's merged copy, and if neither knows the message it skips the write rather than storing a partial message as complete. The in-memory merge covers every message field, including `components`, `poll`, `call`, `message_snapshots`, and `sticker_items`; an explicit `null` clears a field.
 
 ```rust
 use std::sync::Arc;
@@ -61,6 +81,8 @@ fn with_backend(token: &str, backend: Arc<dyn CacheBackend>) {
         .cache_backend(backend);
 }
 ```
+
+The in-memory cache's size and TTL limits are set with `cache_config(...)`:
 
 ```rust
 use std::time::Duration;

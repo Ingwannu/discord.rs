@@ -10,7 +10,8 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 #[cfg(feature = "sharding")]
 use tokio::task::JoinHandle;
 #[cfg(feature = "sharding")]
-use tokio::time::{sleep, Duration};
+use tokio::time::sleep;
+use tokio::time::Duration;
 
 #[cfg(feature = "sharding")]
 use super::{auto_shard_plan, ShardSupervisor};
@@ -41,6 +42,9 @@ use crate::sharding::{ShardConfig, ShardingManager};
 use crate::types::Emoji;
 #[cfg(feature = "voice")]
 use crate::voice::{AudioTrack, VoiceConnectionConfig};
+
+/// Shard pair for cache tests that model a single-shard bot.
+const SINGLE_SHARD: (u32, u32) = (0, 1);
 
 #[test]
 fn typed_event_decoder_maps_message_create() {
@@ -85,6 +89,7 @@ async fn apply_cache_updates_clears_cache_on_ready() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::Ready(ReadyEvent {
             data: ReadyPayload {
                 user: User {
@@ -138,6 +143,7 @@ async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageUpdate(MessageEvent {
             message: Message {
                 id: message_id.clone(),
@@ -170,6 +176,7 @@ async fn apply_cache_updates_ignores_partial_message_update_without_cached_messa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageUpdate(MessageEvent {
             message: Message {
                 id: message_id.clone(),
@@ -210,6 +217,7 @@ async fn apply_cache_updates_evicts_bulk_deleted_messages() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageDeleteBulk(BulkMessageDeleteEvent {
             ids: vec![first.clone(), second.clone()],
             channel_id: channel_id.clone(),
@@ -234,6 +242,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::UserUpdate(UserUpdateEvent {
             user: User {
                 id: user_id.clone(),
@@ -248,6 +257,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageCreate(MessageEvent {
             message: Message {
                 id: message_id.clone(),
@@ -273,6 +283,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::PresenceUpdate(PresenceUpdateEvent {
             user_id: Some(user_id.clone()),
             guild_id: Some(guild_id.clone()),
@@ -297,6 +308,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
                 guild_id: Some(guild_id.clone()),
@@ -326,6 +338,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
                 guild_id: Some(guild_id.clone()),
@@ -354,6 +367,7 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildSoundboardSoundCreate(crate::event::SoundboardSoundEvent {
             sound: SoundboardSound {
                 name: "one".to_string(),
@@ -374,6 +388,7 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::SoundboardSounds(crate::event::SoundboardSoundsEvent {
             guild_id: guild_id.clone(),
             soundboard_sounds: vec![SoundboardSound {
@@ -403,6 +418,7 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildSoundboardSoundDelete(crate::event::SoundboardSoundDeleteEvent {
             sound_id: second_sound_id.clone(),
             guild_id: guild_id.clone(),
@@ -429,6 +445,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
             guild_id: guild_id.clone(),
             emojis: vec![Emoji {
@@ -452,6 +469,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildStickersUpdate(GuildStickersUpdateEvent {
             guild_id: Some(guild_id.clone()),
             stickers: vec![Sticker {
@@ -473,6 +491,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildScheduledEventCreate(ScheduledEvent {
             id: Some(scheduled_event_id.clone()),
             guild_id: Some(guild_id.clone()),
@@ -494,6 +513,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::StageInstanceCreate(StageInstanceEvent {
             stage_instance: StageInstance {
                 id: stage_instance_id.clone(),
@@ -518,6 +538,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildScheduledEventDelete(ScheduledEvent {
             id: Some(scheduled_event_id.clone()),
             guild_id: Some(guild_id.clone()),
@@ -533,6 +554,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::StageInstanceDelete(StageInstanceEvent {
             stage_instance: StageInstance {
                 id: stage_instance_id.clone(),
@@ -710,53 +732,44 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    let cache = crate::cache::CacheHandle::new();
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let processor = super::spawn_gateway_event_processor(
+    let pipeline = super::spawn_event_pipeline(
         handler,
         context,
-        Arc::clone(&http),
-        cache,
         #[cfg(feature = "cache")]
         None,
-        #[cfg(feature = "voice")]
-        Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
-        #[cfg(feature = "collectors")]
-        crate::collector::CollectorHub::new(),
-        event_rx,
-        super::EventDispatchMode::Serial,
+        super::DispatchConfig::default(),
     );
+    let ingress = pipeline.ingress();
 
-    event_tx
-        .send(super::GatewayDispatch {
-            event_name: "READY".to_string(),
-            data: json!({
-                "user": {
-                    "id": "1",
-                    "username": "bot"
-                },
-                "session_id": "session",
-                "application": {
-                    "id": "42"
-                },
-                "resume_gateway_url": "wss://gateway.discord.gg"
-            }),
-        })
-        .unwrap();
-    event_tx
-        .send(super::GatewayDispatch {
-            event_name: "MESSAGE_CREATE".to_string(),
-            data: json!({
-                "id": "2",
-                "channel_id": "3",
-                "content": "hello",
-                "mentions": [],
-                "attachments": []
-            }),
-        })
-        .unwrap();
-    drop(event_tx);
-    processor.await.unwrap();
+    ingress.push(super::GatewayDispatch {
+        event_name: "READY".to_string(),
+        data: json!({
+            "user": {
+                "id": "1",
+                "username": "bot"
+            },
+            "session_id": "session",
+            "application": {
+                "id": "42"
+            },
+            "resume_gateway_url": "wss://gateway.discord.gg"
+        }),
+    });
+    ingress.push(super::GatewayDispatch {
+        event_name: "MESSAGE_CREATE".to_string(),
+        data: json!({
+            "id": "2",
+            "channel_id": "3",
+            "content": "hello",
+            "mentions": [],
+            "attachments": []
+        }),
+    });
+    drop(ingress);
+    pipeline
+        .shutdown(Duration::from_secs(5))
+        .await
+        .expect("pipeline drains cleanly");
 
     assert_eq!(http.application_id(), 42);
     assert_eq!(
@@ -818,7 +831,7 @@ async fn context_forwards_shard_commands_and_reports_missing_messenger() {
     assert!(error.to_string().contains("missing shard messenger"));
 
     let (command_tx, mut command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
-    context.gateway_commands.write().await.insert(
+    super::write_gateway_commands(&context.gateway_commands).insert(
         4,
         ShardMessenger {
             shard_id: 4,
@@ -995,7 +1008,7 @@ async fn shared_runtime_context_reuses_shared_state() {
     let runtime = super::SharedRuntime::new("token", 77, data, CacheConfig::default(), None);
     let (command_tx, _command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
 
-    runtime.gateway_commands.write().await.insert(
+    super::write_gateway_commands(&runtime.gateway_commands).insert(
         2,
         ShardMessenger {
             shard_id: 2,
@@ -1082,19 +1095,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    let cache = crate::cache::CacheHandle::new();
-
-    super::process_gateway_dispatch(
-        &handler,
-        &context,
-        &http,
-        &cache,
-        #[cfg(feature = "cache")]
-        None,
-        #[cfg(feature = "voice")]
-        &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
-        #[cfg(feature = "collectors")]
-        &crate::collector::CollectorHub::new(),
+    for dispatch in [
         super::GatewayDispatch {
             event_name: "READY".to_string(),
             data: json!({
@@ -1108,20 +1109,6 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                 }
             }),
         },
-        super::EventDispatchMode::Serial,
-    )
-    .await;
-    super::process_gateway_dispatch(
-        &handler,
-        &context,
-        &http,
-        &cache,
-        #[cfg(feature = "cache")]
-        None,
-        #[cfg(feature = "voice")]
-        &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
-        #[cfg(feature = "collectors")]
-        &crate::collector::CollectorHub::new(),
         super::GatewayDispatch {
             event_name: "GUILD_MEMBER_ADD".to_string(),
             data: json!({
@@ -1133,9 +1120,16 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                 }
             }),
         },
-        super::EventDispatchMode::Serial,
-    )
-    .await;
+    ] {
+        let event = super::process_gateway_dispatch(
+            &context,
+            #[cfg(feature = "cache")]
+            None,
+            dispatch,
+        )
+        .await;
+        handler.handle_event(context.clone(), event).await;
+    }
 
     assert_eq!(http.application_id(), 7);
     assert_eq!(
@@ -1158,6 +1152,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildCreate(GuildEvent {
             guild: crate::model::Guild {
                 id: guild_id.clone(),
@@ -1178,6 +1173,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::ChannelCreate(ChannelEvent {
             channel: crate::model::Channel {
                 id: channel_id.clone(),
@@ -1197,6 +1193,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MemberAdd(MemberEvent {
             guild_id: guild_id.clone(),
             member: Member {
@@ -1224,6 +1221,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MemberUpdate(MemberEvent {
             guild_id: guild_id.clone(),
             member: Member::default(),
@@ -1243,6 +1241,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::RoleDelete(RoleDeleteEvent {
             data: RoleDeletePayload {
                 guild_id: guild_id.clone(),
@@ -1256,6 +1255,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MemberRemove(MemberRemoveEvent {
             data: MemberRemovePayload {
                 guild_id: guild_id.clone(),
@@ -1274,6 +1274,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     let interaction_channel_id = Snowflake::from("104");
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::InteractionCreate(crate::event::InteractionEvent {
             interaction: Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
@@ -1300,6 +1301,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::ChannelDelete(ChannelEvent {
             channel: crate::model::Channel {
                 id: channel_id.clone(),
@@ -1313,6 +1315,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildDelete(GuildDeleteEvent {
             data: GuildDeletePayload {
                 id: guild_id.clone(),
@@ -1490,8 +1493,11 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         },
     ];
 
+    let context = pipeline_test_context(SINGLE_SHARD);
     for event in events {
-        super::apply_cache_updates(&cache, &event).await;
+        super::apply_cache_updates(&cache, SINGLE_SHARD, &event).await;
+        // The default EventHandler hooks accept every variant as no-ops.
+        NoopEventHandler.handle_event(context.clone(), event).await;
     }
 
     assert_eq!(cache.guild(&guild_id).await.unwrap().name, "guild");
@@ -1965,6 +1971,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::RoleCreate(RoleEvent {
             guild_id: guild_id.clone(),
             role: Role {
@@ -1983,6 +1990,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::RoleUpdate(RoleEvent {
             guild_id: guild_id.clone(),
             role: Role {
@@ -2001,6 +2009,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageCreate(MessageEvent {
             message: Message {
                 id: message_id.clone(),
@@ -2024,6 +2033,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::MessageDelete(MessageDeleteEvent {
             data: MessageDeletePayload {
                 id: message_id.clone(),
@@ -2039,6 +2049,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     let missing_channel_id = Snowflake::from("704");
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::InteractionCreate(crate::event::InteractionEvent {
             interaction: Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
@@ -2223,7 +2234,7 @@ async fn apply_cache_updates_ignores_non_component_interactions() {
     )
     .expect("ping interaction should decode");
 
-    super::apply_cache_updates(&cache, &event).await;
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &event).await;
 
     assert!(cache.channels().await.is_empty());
     assert!(cache.guilds().await.is_empty());
@@ -2263,10 +2274,10 @@ fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
     let merged = super::merge_message_update(
         cached,
         partial,
-        &json!({
+        &super::MessageUpdateFields::from_raw(&json!({
             "content": "after",
             "pinned": false
-        }),
+        })),
     );
 
     assert_eq!(merged.content, "after");
@@ -2366,7 +2377,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
     let merged = super::merge_message_update(
         cached,
         partial,
-        &json!({
+        &super::MessageUpdateFields::from_raw(&json!({
             "guild_id": "21",
             "author": { "id": "6", "username": "eve" },
             "member": { "nick": "eve-nick" },
@@ -2378,7 +2389,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
             "flags": 0,
             "embeds": [{ "title": "new" }],
             "reactions": [{ "count": 9, "me": false }]
-        }),
+        })),
     );
 
     assert_eq!(merged.guild_id, Some(Snowflake::from("21")));
@@ -2444,8 +2455,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    let cache = crate::cache::CacheHandle::new();
-    let collectors = crate::collector::CollectorHub::new();
+    let collectors = context.collectors().clone();
     let mut message_collector = collectors
         .message_collector()
         .timeout(std::time::Duration::from_secs(1));
@@ -2453,16 +2463,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         .component_collector()
         .timeout(std::time::Duration::from_secs(1));
 
-    super::process_gateway_dispatch(
-        &handler,
-        &context,
-        &http,
-        &cache,
-        #[cfg(feature = "cache")]
-        None,
-        #[cfg(feature = "voice")]
-        &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
-        &collectors,
+    for dispatch in [
         super::GatewayDispatch {
             event_name: "MESSAGE_CREATE".to_string(),
             data: json!({
@@ -2473,19 +2474,6 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                 "attachments": []
             }),
         },
-        super::EventDispatchMode::Serial,
-    )
-    .await;
-    super::process_gateway_dispatch(
-        &handler,
-        &context,
-        &http,
-        &cache,
-        #[cfg(feature = "cache")]
-        None,
-        #[cfg(feature = "voice")]
-        &Arc::new(RwLock::new(crate::voice::VoiceManager::new())),
-        &collectors,
         super::GatewayDispatch {
             event_name: "INTERACTION_CREATE".to_string(),
             data: json!({
@@ -2502,9 +2490,16 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                 }
             }),
         },
-        super::EventDispatchMode::Serial,
-    )
-    .await;
+    ] {
+        let event = super::process_gateway_dispatch(
+            &context,
+            #[cfg(feature = "cache")]
+            None,
+            dispatch,
+        )
+        .await;
+        handler.handle_event(context.clone(), event).await;
+    }
 
     assert_eq!(
         message_collector.next().await.unwrap().content,
@@ -2654,6 +2649,7 @@ async fn shard_supervisor_wait_for_shutdown_times_out() {
                 Ok(())
             }) as JoinHandle<Result<(), crate::error::DiscordError>>,
         )],
+        stop_timeout: Duration::from_secs(1),
     };
 
     let error = supervisor
@@ -2680,6 +2676,7 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
                 ))
             }),
         )],
+        stop_timeout: Duration::from_secs(1),
     };
 
     let task_error = task_error_supervisor
@@ -2691,6 +2688,7 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
     let join_error_supervisor = ShardSupervisor {
         manager,
         tasks: vec![(0, tokio::spawn(async move { panic!("boom") }))],
+        stop_timeout: Duration::from_secs(1),
     };
 
     let join_error = join_error_supervisor
@@ -2712,6 +2710,7 @@ async fn shard_supervisor_shutdown_and_wait_broadcasts_shutdown() {
     let supervisor = ShardSupervisor {
         manager,
         tasks: Vec::new(),
+        stop_timeout: Duration::from_secs(1),
     };
 
     supervisor.shutdown_and_wait().await.unwrap();
@@ -2875,14 +2874,16 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
     drop(boot_tx);
 
     super::start_gateway_shard(
-        "token".to_string(),
-        0,
-        Arc::new(NoopHandler),
-        runtime,
-        crate::ws::GatewayConnectionConfig::default(),
-        (0, 1),
-        None,
-        super::EventDispatchMode::Serial,
+        super::ShardLaunch {
+            token: "token".to_string(),
+            intents: 0,
+            handler: Arc::new(NoopHandler),
+            runtime,
+            gateway_config: crate::ws::GatewayConnectionConfig::default(),
+            shard: (0, 1),
+            presence: None,
+            dispatch: super::DispatchConfig::default(),
+        },
         super::ShardStartControl {
             supervisor_channels: Some(supervisor_channels),
             boot_gate: Some(boot_rx),
@@ -2918,6 +2919,7 @@ async fn shard_supervisor_manager_send_drain_and_wait_success_paths_work() {
             0,
             tokio::spawn(async { Ok::<(), crate::error::DiscordError>(()) }),
         )],
+        stop_timeout: Duration::from_secs(1),
     };
 
     assert!(Arc::ptr_eq(&supervisor.manager(), &manager));
@@ -2952,6 +2954,7 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
     let supervisor = ShardSupervisor {
         manager: Arc::clone(&manager),
         tasks: Vec::new(),
+        stop_timeout: Duration::from_secs(1),
     };
 
     supervisor.update_presence(1, "dnd").unwrap();
@@ -3047,6 +3050,7 @@ async fn apply_cache_updates_populates_entities_from_guild_create() {
 
     super::apply_cache_updates(
         &cache,
+        SINGLE_SHARD,
         &Event::GuildCreate(crate::event::GuildEvent {
             guild,
             raw: json!({}),
@@ -3104,7 +3108,7 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
         }),
     )
     .unwrap();
-    super::apply_cache_updates(&cache, &chunk).await;
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &chunk).await;
 
     assert!(cache
         .member(&guild_id, &Snowflake::from("9101"))
@@ -3120,7 +3124,7 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
         json!({ "id": "9102", "type": 11, "guild_id": "9100", "newly_created": true }),
     )
     .unwrap();
-    super::apply_cache_updates(&cache, &thread_create).await;
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &thread_create).await;
     assert!(cache.channel(&Snowflake::from("9102")).await.is_some());
 
     let thread_delete = decode_event(
@@ -3128,7 +3132,7 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
         json!({ "id": "9102", "type": 11, "guild_id": "9100" }),
     )
     .unwrap();
-    super::apply_cache_updates(&cache, &thread_delete).await;
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &thread_delete).await;
     assert!(cache.channel(&Snowflake::from("9102")).await.is_none());
 }
 
@@ -3159,7 +3163,7 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
         }),
     )
     .unwrap();
-    super::apply_cache_updates(&cache, &interaction).await;
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &interaction).await;
 
     let channel = cache.channel(&channel_id).await.expect("channel kept");
     assert_eq!(channel.kind, 5, "stub must not overwrite the cached type");
@@ -3170,6 +3174,13 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
 #[derive(Default)]
 struct RecordingBackend {
     calls: std::sync::Mutex<Vec<String>>,
+    /// Messages stored by `put_message`, served by `get_message`.
+    messages: std::sync::Mutex<std::collections::HashMap<(Snowflake, Snowflake), Message>>,
+    /// When set, every `put_message` waits for a permit before recording,
+    /// modelling a slow remote store.
+    put_message_gate: Option<Arc<tokio::sync::Semaphore>>,
+    /// When set, `get_message` fails like an unreachable store.
+    fail_get_message: bool,
 }
 
 #[cfg(feature = "cache")]
@@ -3180,6 +3191,14 @@ impl RecordingBackend {
 
     fn calls(&self) -> Vec<String> {
         self.calls.lock().expect("recorder mutex").clone()
+    }
+
+    fn stored_message(&self, channel_id: &str, message_id: &str) -> Option<Message> {
+        self.messages
+            .lock()
+            .expect("recorder mutex")
+            .get(&(Snowflake::from(channel_id), Snowflake::from(message_id)))
+            .cloned()
     }
 }
 
@@ -3231,16 +3250,32 @@ impl crate::cache::CacheBackend for RecordingBackend {
     }
 
     async fn put_message(&self, message: Message) -> Result<(), crate::error::DiscordError> {
+        if let Some(gate) = &self.put_message_gate {
+            gate.acquire().await.expect("gate open").forget();
+        }
         self.record(format!("put_message:{}:{}", message.channel_id, message.id));
+        self.messages
+            .lock()
+            .expect("recorder mutex")
+            .insert((message.channel_id.clone(), message.id.clone()), message);
         Ok(())
     }
 
     async fn get_message(
         &self,
-        _channel_id: &Snowflake,
-        _message_id: &Snowflake,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
     ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
-        Ok(None)
+        if self.fail_get_message {
+            return Err(crate::error::DiscordError::model("backend unreachable"));
+        }
+        Ok(self
+            .messages
+            .lock()
+            .expect("recorder mutex")
+            .get(&(channel_id.clone(), message_id.clone()))
+            .cloned()
+            .map(Arc::new))
     }
 
     async fn list_messages(
@@ -3256,6 +3291,10 @@ impl crate::cache::CacheBackend for RecordingBackend {
         message_id: &Snowflake,
     ) -> Result<(), crate::error::DiscordError> {
         self.record(format!("delete_message:{channel_id}:{message_id}"));
+        self.messages
+            .lock()
+            .expect("recorder mutex")
+            .remove(&(channel_id.clone(), message_id.clone()));
         Ok(())
     }
 
@@ -3351,6 +3390,7 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         raw: json!({}),
     });
 
+    let forwarder = super::CacheBackendForwarder::spawn(backend, 16);
     for event in [
         &member_event,
         &message_event,
@@ -3358,23 +3398,23 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         &message_delete_event,
         &member_remove_event,
     ] {
-        super::apply_cache_updates(&cache, event).await;
-        super::forward_cache_backend_updates(&backend, event)
-            .expect("event forwards a backend write")
-            .await
-            .expect("backend write task");
+        super::apply_cache_updates(&cache, SINGLE_SHARD, event).await;
+        super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
     }
 
     // Events without member/message/presence writes are not forwarded.
-    assert!(super::forward_cache_backend_updates(
-        &backend,
+    super::forward_cache_backend_updates(
+        &forwarder,
+        &cache,
+        SINGLE_SHARD,
         &Event::RoleCreate(RoleEvent {
             guild_id: Snowflake::from("1"),
             role: Role::default(),
             raw: json!({}),
         }),
     )
-    .is_none());
+    .await;
+    forwarder.flush().await;
 
     assert_eq!(
         recorder.calls(),
@@ -3443,12 +3483,15 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
         raw: json!({}),
     });
 
+    let cache = crate::cache::CacheHandle::new();
+    let forwarder = super::CacheBackendForwarder::spawn(backend, 16);
     for event in [&ready_event, &chunk_event] {
-        super::forward_cache_backend_updates(&backend, event)
-            .expect("event forwards a backend write")
-            .await
-            .expect("backend write task");
+        super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
     }
+    // The default `clear_shard_cache` keeps entries for multi-shard bots:
+    // wiping the store would erase every other shard's data.
+    super::forward_cache_backend_updates(&forwarder, &cache, (1, 2), &ready_event).await;
+    forwarder.flush().await;
 
     assert_eq!(
         recorder.calls(),
@@ -3516,4 +3559,1520 @@ fn client_builder_gateway_capabilities_reach_the_connection_config() {
     let builder = super::Client::builder("token", Intents::from_bits(0))
         .gateway_capabilities(crate::bitfield::gateway_capabilities::CHANNEL_OBFUSCATION);
     assert_eq!(builder.gateway_config.capability_bits(), 1 << 15);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: event pipeline liveness, bounds, and cache correctness.
+// ---------------------------------------------------------------------------
+
+/// A context for shard `shard` with no messengers registered yet.
+fn pipeline_test_context(shard: (u32, u32)) -> super::Context {
+    let mut context = super::Context::new(
+        Arc::new(DiscordHttpClient::new("token", 1)),
+        Arc::new(RwLock::new(super::TypeMap::new())),
+    );
+    context.shard_id = shard.0;
+    context.shard_count = shard.1;
+    context
+}
+
+/// Registers a messenger for `shard_id` and returns the receiving end of its
+/// gateway command queue.
+fn attach_test_messenger(
+    context: &super::Context,
+    shard_id: u32,
+) -> mpsc::Receiver<GatewayCommand> {
+    let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+    super::write_gateway_commands(&context.gateway_commands).insert(
+        shard_id,
+        ShardMessenger {
+            shard_id,
+            command_tx,
+        },
+    );
+    command_rx
+}
+
+fn message_create_dispatch(id: &str, content: &str) -> super::GatewayDispatch {
+    super::GatewayDispatch {
+        event_name: "MESSAGE_CREATE".to_string(),
+        data: json!({
+            "id": id,
+            "channel_id": "500",
+            "content": content,
+            "mentions": [],
+            "attachments": []
+        }),
+    }
+}
+
+fn members_chunk_dispatch(
+    guild_id: &str,
+    nonce: &str,
+    chunk_index: u64,
+    chunk_count: u64,
+    user_id: &str,
+) -> super::GatewayDispatch {
+    super::GatewayDispatch {
+        event_name: "GUILD_MEMBERS_CHUNK".to_string(),
+        data: json!({
+            "guild_id": guild_id,
+            "members": [{ "user": { "id": user_id, "username": format!("user-{user_id}") } }],
+            "chunk_index": chunk_index,
+            "chunk_count": chunk_count,
+            "nonce": nonce
+        }),
+    }
+}
+
+/// Waits (bounded) until the internal processor cached message `id` from
+/// [`message_create_dispatch`].
+async fn wait_for_cached_message(cache: &crate::cache::CacheHandle, id: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if cache
+                .message(&Snowflake::from("500"), &Snowflake::from(id))
+                .await
+                .is_some()
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("message {id} never reached the cache"));
+}
+
+fn ready_dispatch_event() -> Event {
+    Event::Ready(ReadyEvent {
+        data: ReadyPayload {
+            user: User {
+                id: Snowflake::from("2"),
+                username: "bot".to_string(),
+                ..User::default()
+            },
+            session_id: "session".to_string(),
+            application: None,
+            resume_gateway_url: None,
+        },
+        raw: json!({ "session_id": "session" }),
+    })
+}
+
+#[tokio::test]
+async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
+    struct FetchingHandler {
+        results: mpsc::UnboundedSender<Result<Vec<String>, String>>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for FetchingHandler {
+        async fn message_create(&self, ctx: super::Context, _message: Message) {
+            let result = ctx
+                .fetch_members_with_timeout("42", None, None, Duration::from_secs(5))
+                .await
+                .map(|members| {
+                    members
+                        .into_iter()
+                        .filter_map(|member| member.user.map(|user| user.id.to_string()))
+                        .collect()
+                })
+                .map_err(|error| error.to_string());
+            let _ = self.results.send(result);
+        }
+    }
+
+    let context = pipeline_test_context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let (results_tx, mut results_rx) = mpsc::unbounded_channel();
+    let dispatch = super::DispatchConfig::default();
+    assert_eq!(dispatch.mode, super::EventDispatchMode::Serial);
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(FetchingHandler {
+            results: results_tx,
+        }),
+        context.clone(),
+        #[cfg(feature = "cache")]
+        None,
+        dispatch,
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "fetch"));
+
+    let nonce = match tokio::time::timeout(Duration::from_secs(5), commands.recv()).await {
+        Ok(Some(GatewayCommand::RequestGuildMembers(request))) => {
+            request.nonce.expect("fetch_members sets a nonce")
+        }
+        other => panic!("expected a member request, got {other:?}"),
+    };
+    // The handler is still awaiting fetch_members. Before the fix these
+    // chunks queued behind it, so the fetch could only time out.
+    ingress.push(members_chunk_dispatch("42", &nonce, 0, 2, "7"));
+    ingress.push(members_chunk_dispatch("42", &nonce, 1, 2, "8"));
+
+    let result = tokio::time::timeout(Duration::from_secs(10), results_rx.recv())
+        .await
+        .expect("handler finished")
+        .expect("handler reported a result");
+    assert_eq!(result, Ok(vec!["7".to_string(), "8".to_string()]));
+    assert!(context
+        .cache
+        .member(&Snowflake::from("42"), &Snowflake::from("8"))
+        .await
+        .is_some());
+    assert!(super::lock_member_chunk_waiters(&context.member_chunk_waiters).is_empty());
+
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[cfg(feature = "collectors")]
+#[tokio::test]
+async fn serial_handler_can_await_a_collector_for_later_events() {
+    struct CollectingHandler {
+        subscribed: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        collected: mpsc::UnboundedSender<Option<String>>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for CollectingHandler {
+        async fn message_create(&self, ctx: super::Context, message: Message) {
+            if message.content != "first" {
+                return;
+            }
+            let mut collector = ctx
+                .collectors()
+                .message_collector()
+                .timeout(std::time::Duration::from_secs(5));
+            if let Some(subscribed) = self.subscribed.lock().unwrap().take() {
+                let _ = subscribed.send(());
+            }
+            let next = collector.next().await.map(|message| message.content);
+            let _ = self.collected.send(next);
+        }
+    }
+
+    let context = pipeline_test_context((0, 1));
+    let (subscribed_tx, subscribed_rx) = tokio::sync::oneshot::channel();
+    let (collected_tx, mut collected_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(CollectingHandler {
+            subscribed: std::sync::Mutex::new(Some(subscribed_tx)),
+            collected: collected_tx,
+        }),
+        context,
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "first"));
+    tokio::time::timeout(Duration::from_secs(5), subscribed_rx)
+        .await
+        .expect("handler subscribed")
+        .unwrap();
+    ingress.push(message_create_dispatch("2", "second"));
+
+    let collected = tokio::time::timeout(Duration::from_secs(10), collected_rx.recv())
+        .await
+        .expect("handler finished")
+        .expect("handler reported");
+    assert_eq!(collected.as_deref(), Some("second"));
+
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+/// Shared observations of the gated handlers below.
+#[derive(Default)]
+struct HandlerProbe {
+    in_flight: std::sync::atomic::AtomicUsize,
+    max_in_flight: std::sync::atomic::AtomicUsize,
+    finished: std::sync::Mutex<Vec<String>>,
+}
+
+impl HandlerProbe {
+    fn enter(&self) {
+        let now = self
+            .in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        self.max_in_flight
+            .fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn exit(&self, content: String) {
+        self.finished.lock().unwrap().push(content);
+        self.in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn max_in_flight(&self) -> usize {
+        self.max_in_flight.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn finished(&self) -> Vec<String> {
+        self.finished.lock().unwrap().clone()
+    }
+}
+
+/// Reports each started call, then blocks every call whose content is in
+/// `gated` (or every call when `gated` is empty) on `gate`.
+struct GatedHandler {
+    probe: Arc<HandlerProbe>,
+    started: mpsc::UnboundedSender<String>,
+    gate: Arc<tokio::sync::Semaphore>,
+    gated: Vec<&'static str>,
+}
+
+#[async_trait]
+impl super::EventHandler for GatedHandler {
+    async fn message_create(&self, _ctx: super::Context, message: Message) {
+        self.probe.enter();
+        let _ = self.started.send(message.content.clone());
+        if self.gated.is_empty() || self.gated.contains(&message.content.as_str()) {
+            self.gate.acquire().await.expect("gate open").forget();
+        }
+        tokio::task::yield_now().await;
+        self.probe.exit(message.content);
+    }
+}
+
+async fn next_started(started: &mut mpsc::UnboundedReceiver<String>) -> String {
+    tokio::time::timeout(Duration::from_secs(5), started.recv())
+        .await
+        .expect("a handler call started")
+        .expect("handler alive")
+}
+
+#[tokio::test]
+async fn serial_mode_runs_one_handler_at_a_time_while_internal_processing_runs_ahead() {
+    let probe = Arc::new(HandlerProbe::default());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let context = pipeline_test_context((0, 1));
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(GatedHandler {
+            probe: Arc::clone(&probe),
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: vec!["first"],
+        }),
+        context.clone(),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    for (id, content) in [("1", "first"), ("2", "second"), ("3", "third")] {
+        ingress.push(message_create_dispatch(id, content));
+    }
+
+    assert_eq!(next_started(&mut started_rx).await, "first");
+    // The first handler is blocked, yet later events reach the cache.
+    wait_for_cached_message(&context.cache, "3").await;
+    assert!(
+        started_rx.try_recv().is_err(),
+        "Serial mode must not start the next handler while one is running"
+    );
+
+    gate.add_permits(1);
+    assert_eq!(next_started(&mut started_rx).await, "second");
+    assert_eq!(next_started(&mut started_rx).await, "third");
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+
+    assert_eq!(probe.finished(), vec!["first", "second", "third"]);
+    assert_eq!(probe.max_in_flight(), 1);
+}
+
+#[tokio::test]
+async fn concurrent_mode_caps_in_flight_handlers_per_shard() {
+    let probe = Arc::new(HandlerProbe::default());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(GatedHandler {
+            probe: Arc::clone(&probe),
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: Vec::new(),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            mode: super::EventDispatchMode::Concurrent,
+            max_concurrent_handlers: 2,
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    for id in 1..=5 {
+        ingress.push(message_create_dispatch(&id.to_string(), &format!("m{id}")));
+    }
+
+    next_started(&mut started_rx).await;
+    next_started(&mut started_rx).await;
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        started_rx.try_recv().is_err(),
+        "a third handler started while two were running"
+    );
+
+    gate.add_permits(5);
+    for _ in 0..3 {
+        next_started(&mut started_rx).await;
+    }
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+
+    assert_eq!(probe.finished().len(), 5);
+    assert_eq!(probe.max_in_flight(), 2);
+}
+
+#[tokio::test]
+async fn full_handler_queue_drops_deliveries_but_keeps_internal_state_current() {
+    let probe = Arc::new(HandlerProbe::default());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let context = pipeline_test_context((0, 1));
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(GatedHandler {
+            probe: Arc::clone(&probe),
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: vec!["m1"],
+        }),
+        context.clone(),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            queue_capacity: 2,
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "m1"));
+    assert_eq!(next_started(&mut started_rx).await, "m1");
+
+    // m1 is running; m2 and m3 fill the handler queue; m4..m6 overflow it.
+    // Each event is processed before the next is pushed, so only the
+    // handler queue (not the equally small ingress queue) overflows.
+    for id in 2..=6 {
+        let id = id.to_string();
+        ingress.push(message_create_dispatch(&id, &format!("m{id}")));
+        wait_for_cached_message(&context.cache, &id).await;
+    }
+    assert_eq!(pipeline.handler_drops.dropped(), 3);
+
+    gate.add_permits(1);
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(probe.finished(), vec!["m1", "m2", "m3"]);
+}
+
+#[tokio::test]
+async fn gateway_callback_drops_instead_of_waiting_when_the_event_queue_is_full() {
+    let probe = Arc::new(HandlerProbe::default());
+    let (started_tx, _started_rx) = mpsc::unbounded_channel();
+    let context = pipeline_test_context((0, 1));
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(GatedHandler {
+            probe: Arc::clone(&probe),
+            started: started_tx,
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            gated: vec!["never"],
+        }),
+        context.clone(),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            queue_capacity: 4,
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    // This current-thread test never yields here, so the processor cannot
+    // drain: pushes past the capacity must return immediately (the gateway
+    // read loop also handles heartbeats) and drop the event.
+    for id in 1..=10 {
+        ingress.push(message_create_dispatch(&id.to_string(), &format!("m{id}")));
+    }
+    assert_eq!(ingress.overflow.dropped(), 6);
+
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(probe.finished(), vec!["m1", "m2", "m3", "m4"]);
+    assert!(context
+        .cache
+        .message(&Snowflake::from("500"), &Snowflake::from("5"))
+        .await
+        .is_none());
+}
+
+#[tokio::test]
+async fn handler_panics_are_contained_and_later_events_still_run() {
+    struct PanickingHandler {
+        probe: Arc<HandlerProbe>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for PanickingHandler {
+        async fn message_create(&self, _ctx: super::Context, message: Message) {
+            if message.content == "boom" {
+                panic!("handler failure under test");
+            }
+            self.probe.enter();
+            self.probe.exit(message.content);
+        }
+    }
+
+    let probe = Arc::new(HandlerProbe::default());
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(PanickingHandler {
+            probe: Arc::clone(&probe),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "boom"));
+    ingress.push(message_create_dispatch("2", "after"));
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+    assert_eq!(probe.finished(), vec!["after"]);
+}
+
+#[tokio::test]
+async fn pipeline_shutdown_aborts_handlers_that_outlive_the_timeout() {
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct StuckHandler {
+        started: mpsc::UnboundedSender<()>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for StuckHandler {
+        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+            let _flag = DropFlag(Arc::clone(&self.dropped));
+            let _ = self.started.send(());
+            std::future::pending::<()>().await;
+        }
+    }
+
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(StuckHandler {
+            started: started_tx,
+            dropped: Arc::clone(&dropped),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "stuck"));
+    tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+        .await
+        .expect("handler started");
+    drop(ingress);
+
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        pipeline.shutdown(Duration::from_millis(20)),
+    )
+    .await
+    .expect("shutdown returns once the timeout expires")
+    .unwrap();
+    // Aborting is asynchronous; give the runtime a moment to drop the task.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the stuck handler was aborted, not detached");
+}
+
+#[tokio::test]
+async fn fetch_members_unregisters_its_waiter_on_timeout_cancellation_and_send_failure() {
+    let context = pipeline_test_context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let waiter_count = || super::lock_member_chunk_waiters(&context.member_chunk_waiters).len();
+
+    let error = context
+        .fetch_members_with_timeout("42", None, None, Duration::from_millis(10))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"), "{error}");
+    assert_eq!(waiter_count(), 0);
+    assert!(matches!(
+        commands.recv().await,
+        Some(GatewayCommand::RequestGuildMembers(_))
+    ));
+
+    let pending = tokio::spawn({
+        let context = context.clone();
+        async move { context.fetch_members("42", None, None).await }
+    });
+    assert!(matches!(
+        commands.recv().await,
+        Some(GatewayCommand::RequestGuildMembers(_))
+    ));
+    assert_eq!(waiter_count(), 1);
+    pending.abort();
+    assert!(pending.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        waiter_count(),
+        0,
+        "a cancelled fetch must not leak its waiter"
+    );
+
+    drop(commands);
+    let error = context.fetch_members("42", None, None).await.unwrap_err();
+    assert!(
+        error.to_string().contains("failed to send gateway command"),
+        "{error}"
+    );
+    assert_eq!(waiter_count(), 0);
+}
+
+#[tokio::test]
+async fn stopping_a_shard_fails_its_pending_fetch_members_immediately() {
+    let runtime = super::SharedRuntime::new(
+        "token",
+        1,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
+    let context = runtime.context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let registration = super::ShardRegistration {
+        shard_id: 0,
+        gateway_commands: Arc::clone(&runtime.gateway_commands),
+        member_chunk_waiters: Arc::clone(&runtime.member_chunk_waiters),
+    };
+    let pending = tokio::spawn(async move { context.fetch_members("42", None, None).await });
+    assert!(matches!(
+        commands.recv().await,
+        Some(GatewayCommand::RequestGuildMembers(_))
+    ));
+
+    drop(registration);
+    let error = tokio::time::timeout(Duration::from_secs(5), pending)
+        .await
+        .expect("fetch fails promptly instead of waiting out 60 seconds")
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("shard stopped"), "{error}");
+    assert!(super::read_gateway_commands(&runtime.gateway_commands).is_empty());
+}
+
+#[tokio::test]
+async fn guild_scoped_commands_go_to_the_shard_that_owns_the_guild() {
+    let context = pipeline_test_context((0, 2));
+    let mut shard0 = attach_test_messenger(&context, 0);
+    let mut shard1 = attach_test_messenger(&context, 1);
+    let shard1_guild = Snowflake::from(1_u64 << 22);
+
+    context
+        .request_guild_members(crate::model::RequestGuildMembers {
+            guild_id: shard1_guild.clone(),
+            query: Some(String::new()),
+            limit: Some(0),
+            presences: None,
+            user_ids: None,
+            nonce: None,
+        })
+        .await
+        .unwrap();
+    context
+        .join_voice(shard1_guild.clone(), "9", false, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        shard1.try_recv(),
+        Ok(GatewayCommand::RequestGuildMembers(request)) if request.guild_id == shard1_guild
+    ));
+    assert!(matches!(
+        shard1.try_recv(),
+        Ok(GatewayCommand::SendPayload(payload)) if payload["op"] == json!(4)
+    ));
+    assert!(shard0.try_recv().is_err());
+
+    let pending = tokio::spawn({
+        let context = context.clone();
+        let guild_id = shard1_guild.clone();
+        async move {
+            context
+                .fetch_members_with_timeout(guild_id, None, None, Duration::from_millis(50))
+                .await
+        }
+    });
+    match shard1.recv().await {
+        Some(GatewayCommand::RequestGuildMembers(request)) => {
+            assert!(request.nonce.unwrap().starts_with("drs1-"));
+        }
+        other => panic!("expected a member request on shard 1, got {other:?}"),
+    }
+    assert!(pending.await.unwrap().is_err());
+
+    // When the owning shard runs elsewhere, the context's own shard is used.
+    super::write_gateway_commands(&context.gateway_commands).remove(&1);
+    context
+        .update_voice_state(shard1_guild, None, false, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        shard0.try_recv(),
+        Ok(GatewayCommand::SendPayload(_))
+    ));
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn ready_on_one_shard_keeps_the_guilds_of_other_shards() {
+    let cache = crate::cache::CacheHandle::new();
+    // (guild_id >> 22) % 2 selects the shard.
+    let shard0_guild = (2_u64 << 22).to_string();
+    let shard1_guild = (1_u64 << 22).to_string();
+    for (guild_id, channel_id, user_id, shard) in [
+        (&shard0_guild, "10", "11", (0, 2)),
+        (&shard1_guild, "20", "21", (1, 2)),
+    ] {
+        let guild: crate::model::Guild = serde_json::from_value(json!({
+            "id": guild_id,
+            "name": "guild",
+            "channels": [{ "id": channel_id, "type": 0 }],
+            "members": [{ "user": { "id": user_id, "username": "member" }, "roles": [] }]
+        }))
+        .unwrap();
+        super::apply_cache_updates(
+            &cache,
+            shard,
+            &Event::GuildCreate(crate::event::GuildEvent {
+                guild,
+                raw: json!({}),
+            }),
+        )
+        .await;
+    }
+
+    // Shard 1 starts a new session; shard 0's guild must survive.
+    super::apply_cache_updates(&cache, (1, 2), &ready_dispatch_event()).await;
+    assert!(cache
+        .guild(&Snowflake::from(shard0_guild.as_str()))
+        .await
+        .is_some());
+    assert!(cache.channel(&Snowflake::from("10")).await.is_some());
+    assert!(cache
+        .member(
+            &Snowflake::from(shard0_guild.as_str()),
+            &Snowflake::from("11")
+        )
+        .await
+        .is_some());
+    assert!(cache
+        .guild(&Snowflake::from(shard1_guild.as_str()))
+        .await
+        .is_none());
+    assert!(cache.channel(&Snowflake::from("20")).await.is_none());
+    assert!(cache
+        .member(
+            &Snowflake::from(shard1_guild.as_str()),
+            &Snowflake::from("21")
+        )
+        .await
+        .is_none());
+    assert!(
+        cache.user(&Snowflake::from("21")).await.is_some(),
+        "users are shared by every shard"
+    );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cache_backend_writes_keep_gateway_order_when_a_put_is_slow() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let recorder = Arc::new(RecordingBackend {
+        put_message_gate: Some(Arc::clone(&gate)),
+        ..RecordingBackend::default()
+    });
+    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "MESSAGE_CREATE",
+        json!({ "id": "11", "channel_id": "10", "content": "hello" }),
+    )
+    .unwrap();
+    let delete = decode_event("MESSAGE_DELETE", json!({ "id": "11", "channel_id": "10" })).unwrap();
+
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &create).await;
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &delete).await;
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    // With a task per write, the delete ran here and the stalled put later
+    // resurrected the message.
+    assert!(
+        recorder.calls().is_empty(),
+        "the delete overtook the stalled put: {:?}",
+        recorder.calls()
+    );
+
+    gate.add_permits(1);
+    forwarder.flush().await;
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "put_message:10:11".to_string(),
+            "delete_message:10:11".to_string()
+        ]
+    );
+    assert!(recorder.stored_message("10", "11").is_none());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn full_cache_backend_queue_drops_new_writes_without_blocking() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let recorder = Arc::new(RecordingBackend {
+        put_message_gate: Some(Arc::clone(&gate)),
+        ..RecordingBackend::default()
+    });
+    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 1);
+    // Current-thread test without yields: the worker cannot drain between
+    // these calls, so only the first write fits.
+    for id in ["1", "2", "3"] {
+        forwarder.forward(super::BackendWrite::PutMessage(Box::new(Message {
+            id: Snowflake::from(id),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        })));
+    }
+    assert_eq!(forwarder.overflow.dropped(), 2);
+
+    gate.add_permits(1);
+    forwarder.flush().await;
+    assert_eq!(recorder.calls(), vec!["put_message:10:1".to_string()]);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cache_backend_message_update_merges_instead_of_overwriting_with_a_partial() {
+    let recorder = Arc::new(RecordingBackend::default());
+    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    // The in-memory cache never saw these messages: the backend's stored
+    // copy is the merge base.
+    let cache = crate::cache::CacheHandle::new();
+    let full_message = json!({
+        "id": "11",
+        "channel_id": "10",
+        "content": "before",
+        "author": { "id": "5", "username": "author" },
+        "embeds": [{ "title": "kept" }],
+        "components": [{ "type": 1, "components": [{ "type": 2, "custom_id": "go", "style": 1 }] }]
+    });
+    let create = decode_event("MESSAGE_CREATE", full_message).unwrap();
+    let partial_update = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "content": "after" }),
+    )
+    .unwrap();
+    let unknown_update = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "99", "channel_id": "10", "content": "orphan" }),
+    )
+    .unwrap();
+    for event in [&create, &partial_update, &unknown_update] {
+        super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
+    }
+    forwarder.flush().await;
+
+    let stored = recorder.stored_message("10", "11").expect("message stored");
+    assert_eq!(stored.content, "after");
+    assert_eq!(stored.author.expect("author kept").username, "author");
+    assert_eq!(stored.embeds[0].title.as_deref(), Some("kept"));
+    assert_eq!(stored.components.expect("components kept").len(), 1);
+    assert!(
+        recorder.stored_message("10", "99").is_none(),
+        "a partial update for an unknown message must not be stored as complete"
+    );
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "put_message:10:11".to_string(),
+            "put_message:10:11".to_string()
+        ]
+    );
+
+    // Backend lacks the message but the in-memory cache has it: forward the
+    // in-memory merged copy.
+    let in_memory = decode_event(
+        "MESSAGE_CREATE",
+        json!({
+            "id": "12",
+            "channel_id": "10",
+            "content": "memory",
+            "author": { "id": "6", "username": "cached" }
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &in_memory).await;
+    let memory_update = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "12", "channel_id": "10", "content": "memory-edited" }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &memory_update).await;
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &memory_update).await;
+    forwarder.flush().await;
+    let stored = recorder
+        .stored_message("10", "12")
+        .expect("in-memory copy used");
+    assert_eq!(stored.content, "memory-edited");
+    assert_eq!(stored.author.expect("author kept").username, "cached");
+}
+
+/// A MESSAGE_UPDATE payload carrying every message field Discord can send.
+fn full_message_update_payload() -> Value {
+    let mut payload = json!({
+        "id": "1",
+        "channel_id": "2",
+        "guild_id": "3",
+        "author": { "id": "4", "username": "author" },
+        "member": { "nick": "nick", "roles": ["6"] },
+        "content": "full",
+        "timestamp": "2026-10-10T00:00:00+00:00",
+        "edited_timestamp": "2026-10-10T00:01:00+00:00",
+        "mentions": [{ "id": "5", "username": "mentioned" }],
+        "mention_roles": ["6"],
+        "attachments": [{ "id": "7", "filename": "a.txt" }],
+        "type": 19,
+        "pinned": true,
+        "tts": true,
+        "flags": 4,
+        "webhook_id": "8",
+        "application_id": "9",
+        "application": { "id": "9", "name": "app" },
+        "embeds": [{ "title": "embed" }],
+        "reactions": [{ "count": 2, "me": true }],
+        "activity": { "type": 1, "party_id": "party" },
+        "mention_everyone": true
+    });
+    // Split in two so the json! macro stays under the recursion limit.
+    let rest = json!({
+        "mention_channels": [{ "id": "10", "guild_id": "3", "type": 0, "name": "general" }],
+        "sticker_items": [{ "id": "11", "name": "sticker", "format_type": 1 }],
+        "stickers": [{ "id": "12", "name": "legacy", "type": 1, "format_type": 1 }],
+        "position": 5,
+        "role_subscription_data": {
+            "role_subscription_listing_id": "13",
+            "tier_name": "gold",
+            "total_months_subscribed": 2,
+            "is_renewal": true
+        },
+        "message_reference": { "type": 0, "message_id": "14", "channel_id": "2" },
+        "message_snapshots": [{ "message": { "content": "snapshot" } }],
+        "referenced_message": { "id": "14", "channel_id": "2", "content": "parent" },
+        "interaction_metadata": { "id": "15", "type": 2, "user": { "id": "4", "username": "author" } },
+        "interaction": { "id": "15", "type": 2, "name": "cmd" },
+        "resolved": { "users": { "4": { "id": "4", "username": "author" } } },
+        "components": [{
+            "type": 1,
+            "components": [{ "type": 2, "custom_id": "button", "style": 1, "label": "Go" }]
+        }],
+        "poll": {
+            "question": { "text": "q?" },
+            "answers": [{ "answer_id": 1, "poll_media": { "text": "a" } }],
+            "allow_multiselect": true,
+            "layout_type": 1
+        },
+        "call": { "participants": ["4"], "ended_timestamp": "2026-10-10T00:02:00+00:00" },
+        "shared_client_theme": { "colors": ["ff0000"], "gradient_angle": 90, "base_mix": 50 }
+    });
+    if let (Some(fields), Value::Object(rest)) = (payload.as_object_mut(), rest) {
+        fields.extend(rest);
+    }
+    payload
+}
+
+#[test]
+fn merge_message_update_applies_every_field_present_in_the_payload() {
+    let payload = full_message_update_payload();
+    let partial: Message = serde_json::from_value(payload.clone()).unwrap();
+    let cached = Message {
+        id: Snowflake::from("1"),
+        channel_id: Snowflake::from("2"),
+        content: "stale".to_string(),
+        ..Message::default()
+    };
+
+    let merged = super::merge_message_update(
+        cached,
+        partial.clone(),
+        &super::MessageUpdateFields::from_raw(&payload),
+    );
+    // Any field the merge skipped would still hold the cached default.
+    assert_eq!(
+        serde_json::to_value(&merged).unwrap(),
+        serde_json::to_value(&partial).unwrap()
+    );
+    let serialized = serde_json::to_value(&partial).unwrap();
+    for key in payload.as_object().unwrap().keys() {
+        assert!(
+            serialized.get(key).is_some(),
+            "fixture field {key} does not survive decoding, so the check above cannot see it"
+        );
+    }
+}
+
+#[test]
+fn merge_message_update_keeps_fields_the_payload_omits() {
+    let full: Message = serde_json::from_value(full_message_update_payload()).unwrap();
+    let sparse = json!({ "id": "1", "channel_id": "2", "content": "edited", "poll": null });
+    let merged = super::merge_message_update(
+        full.clone(),
+        serde_json::from_value(sparse.clone()).unwrap(),
+        &super::MessageUpdateFields::from_raw(&sparse),
+    );
+
+    let mut expected = full;
+    expected.content = "edited".to_string();
+    // An explicit null clears the field.
+    expected.poll = None;
+    assert_eq!(
+        serde_json::to_value(&merged).unwrap(),
+        serde_json::to_value(&expected).unwrap()
+    );
+    assert!(merged.components.is_some());
+    assert!(merged.call.is_some());
+}
+
+#[test]
+fn dispatch_config_maps_modes_to_handler_permits_and_warning_thresholds() {
+    let serial = super::DispatchConfig::default();
+    assert_eq!(serial.handler_permits(), 1);
+    assert_eq!(serial.backlog_warn_threshold(), 5_000);
+
+    let concurrent = super::DispatchConfig {
+        mode: super::EventDispatchMode::Concurrent,
+        max_concurrent_handlers: 0,
+        queue_capacity: 3,
+        ..super::DispatchConfig::default()
+    };
+    assert_eq!(concurrent.handler_permits(), 1);
+    assert_eq!(concurrent.backlog_warn_threshold(), 1);
+
+    let builder = super::Client::builder("token", Intents::from_bits(0))
+        .event_dispatch(super::EventDispatchMode::Concurrent)
+        .event_queue_capacity(0)
+        .max_concurrent_handlers(0)
+        .handler_shutdown_timeout(Duration::from_millis(250));
+    assert_eq!(
+        builder.dispatch,
+        super::DispatchConfig {
+            mode: super::EventDispatchMode::Concurrent,
+            queue_capacity: 1,
+            max_concurrent_handlers: 1,
+            shutdown_timeout: Duration::from_millis(250),
+        }
+    );
+}
+
+#[test]
+fn overflow_log_reports_the_first_drop_then_rate_limits() {
+    let log = super::OverflowLog::default();
+    assert_eq!(log.record(), Some(1));
+    assert_eq!(log.record(), None);
+    assert_eq!(log.dropped(), 2);
+
+    let mut warning = super::BacklogWarning::default();
+    assert!(warning.due());
+    assert!(!warning.due());
+}
+
+/// Sets a flag when dropped, so tests can tell an aborted task from a
+/// detached one.
+struct TaskDropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for TaskDropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+async fn wait_for_flag(flag: &std::sync::atomic::AtomicBool, what: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !flag.load(std::sync::atomic::Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{what}"));
+}
+
+type FakeGatewaySocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+/// A local gateway that sends HELLO, waits for IDENTIFY, and hands each
+/// connection plus its IDENTIFY payload to `script`.
+async fn spawn_fake_gateway<F, Fut>(script: F) -> (String, JoinHandleUnit)
+where
+    F: Fn(FakeGatewaySocket, Value) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let script = Arc::new(script);
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let script = Arc::clone(&script);
+            tokio::spawn(async move {
+                let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                    return;
+                };
+                let hello = json!({ "op": 10, "d": { "heartbeat_interval": 60_000 } });
+                if socket
+                    .send(WsMessage::Text(hello.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                // Heartbeats may race IDENTIFY; skip anything but op 2.
+                let identify = loop {
+                    match socket.next().await {
+                        Some(Ok(WsMessage::Text(text))) => {
+                            let payload: Value = serde_json::from_str(&text).unwrap();
+                            if payload["op"] == json!(2) {
+                                break payload;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        _ => return,
+                    }
+                };
+                script(socket, identify).await;
+            });
+        }
+    });
+    (url, server)
+}
+
+type JoinHandleUnit = tokio::task::JoinHandle<()>;
+
+async fn send_dispatch(socket: &mut FakeGatewaySocket, sequence: u64, name: &str, data: Value) {
+    use futures_util::SinkExt;
+    let payload = json!({ "op": 0, "s": sequence, "t": name, "d": data });
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            payload.to_string().into(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn send_close(socket: &mut FakeGatewaySocket, code: u16) {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
+    let _ = socket
+        .send(tokio_tungstenite::tungstenite::Message::Close(Some(
+            CloseFrame {
+                code: CloseCode::from(code),
+                reason: "closed by test gateway".into(),
+            },
+        )))
+        .await;
+}
+
+fn fake_ready_payload() -> Value {
+    json!({
+        "v": 10,
+        "user": { "id": "1", "username": "bot" },
+        "session_id": "session",
+        "guilds": [],
+        "application": { "id": "1", "flags": 0 }
+    })
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handler() {
+    struct StuckHandler {
+        started: Arc<tokio::sync::Notify>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for StuckHandler {
+        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+            let _flag = TaskDropFlag(Arc::clone(&self.dropped));
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+        }
+    }
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler_started = Arc::clone(&started);
+    let (url, server) = spawn_fake_gateway(move |mut socket, _identify| {
+        let handler_started = Arc::clone(&handler_started);
+        async move {
+            send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+            send_dispatch(
+                &mut socket,
+                2,
+                "MESSAGE_CREATE",
+                json!({ "id": "5", "channel_id": "6", "content": "hang" }),
+            )
+            .await;
+            handler_started.notified().await;
+            send_close(&mut socket, 4004).await;
+        }
+    })
+    .await;
+
+    let runtime = super::SharedRuntime::new(
+        "token",
+        0,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
+    let shard = super::start_gateway_shard(
+        super::ShardLaunch {
+            token: "token".to_string(),
+            intents: 0,
+            handler: Arc::new(StuckHandler {
+                started,
+                dropped: Arc::clone(&dropped),
+            }),
+            runtime: runtime.clone(),
+            gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+            shard: (0, 1),
+            presence: None,
+            dispatch: super::DispatchConfig {
+                shutdown_timeout: Duration::from_millis(50),
+                ..super::DispatchConfig::default()
+            },
+        },
+        super::ShardStartControl {
+            supervisor_channels: None,
+            boot_gate: None,
+        },
+    );
+    let error = tokio::time::timeout(Duration::from_secs(10), shard)
+        .await
+        .expect("start returns promptly after the gateway stops")
+        .expect_err("a terminal close code is an error for the caller");
+
+    assert!(error.to_string().contains("4004"), "{error}");
+    wait_for_flag(&dropped, "the stuck handler was aborted, not detached").await;
+    assert!(super::read_gateway_commands(&runtime.gateway_commands).is_empty());
+    server.abort();
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shards() {
+    use futures_util::StreamExt;
+
+    let (closed_tx, mut closed_rx) = mpsc::unbounded_channel();
+    let (url, server) = spawn_fake_gateway(move |mut socket, identify| {
+        let closed_tx = closed_tx.clone();
+        async move {
+            match identify["d"]["shard"][0].as_u64() {
+                // Shard 1 is rejected outright.
+                Some(1) => send_close(&mut socket, 4004).await,
+                // Shard 0 stays healthy until the client closes it.
+                _ => {
+                    send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+                    while let Some(Ok(message)) = socket.next().await {
+                        if let tokio_tungstenite::tungstenite::Message::Close(frame) = message {
+                            let _ = closed_tx.send(frame.map(|frame| frame.reason.to_string()));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+
+    let runtime = super::SharedRuntime::new(
+        "token",
+        0,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
+    let supervisor = super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(NoopEventHandler),
+        runtime,
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards: 2,
+        boot_window_size: 2,
+        initial_delay: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            shutdown_timeout: Duration::from_millis(50),
+            ..super::DispatchConfig::default()
+        },
+    })
+    .await
+    .unwrap();
+
+    let error = tokio::time::timeout(Duration::from_secs(10), supervisor.wait())
+        .await
+        .expect("the shard 1 failure surfaces while shard 0 is still connected")
+        .expect_err("shard 1's terminal close is returned");
+    assert!(error.to_string().contains("4004"), "{error}");
+
+    let reason = tokio::time::timeout(Duration::from_secs(5), closed_rx.recv())
+        .await
+        .expect("shard 0 was shut down")
+        .expect("close observed");
+    assert_eq!(reason.as_deref(), Some("supervisor shutdown"));
+    server.abort();
+}
+
+struct NoopEventHandler;
+
+#[async_trait]
+impl super::EventHandler for NoopEventHandler {}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn shard_supervisor_wait_surfaces_a_later_failure_and_aborts_unresponsive_shards() {
+    let manager = Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(2))));
+    let runtime0 = manager
+        .lock()
+        .expect("manager mutex poisoned")
+        .prepare_runtime(0)
+        .unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&dropped));
+    let supervisor = ShardSupervisor {
+        manager: Arc::clone(&manager),
+        tasks: vec![
+            (
+                0,
+                tokio::spawn(async move {
+                    let _flag = flag;
+                    // Ignores Shutdown, like a shard stuck in a handler.
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }),
+            ),
+            (
+                1,
+                tokio::spawn(async {
+                    Err(crate::error::DiscordError::gateway(
+                        "4004 authentication failed",
+                    ))
+                }),
+            ),
+        ],
+        stop_timeout: Duration::from_millis(20),
+    };
+
+    let error = tokio::time::timeout(Duration::from_secs(5), supervisor.wait())
+        .await
+        .expect("shard 1's failure is not hidden behind the still-running shard 0")
+        .unwrap_err();
+    assert!(error.to_string().contains("4004"), "{error}");
+    assert_eq!(
+        runtime0.command_rx.try_recv().unwrap(),
+        crate::sharding::ShardIpcMessage::Shutdown
+    );
+    wait_for_flag(&dropped, "shard 0 was aborted after the stop timeout").await;
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn cancelling_shard_supervisor_wait_aborts_the_running_shards() {
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&dropped));
+    let supervisor = ShardSupervisor {
+        manager: Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(1)))),
+        tasks: vec![(
+            0,
+            tokio::spawn(async move {
+                let _flag = flag;
+                std::future::pending::<()>().await;
+                Ok(())
+            }),
+        )],
+        stop_timeout: Duration::from_secs(1),
+    };
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), supervisor.wait())
+            .await
+            .is_err()
+    );
+    wait_for_flag(&dropped, "a cancelled wait must not leave shards detached").await;
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn forward_shard_commands_waits_for_queue_space_instead_of_giving_up() {
+    let (command_tx, command_rx) = std::sync::mpsc::channel();
+    let (gateway_tx, mut gateway_rx) = mpsc::channel(1);
+    super::forward_shard_commands(command_rx, gateway_tx);
+
+    for status in ["one", "two"] {
+        command_tx
+            .send(crate::sharding::ShardIpcMessage::UpdatePresence(
+                status.to_string(),
+            ))
+            .unwrap();
+    }
+    command_tx
+        .send(crate::sharding::ShardIpcMessage::Shutdown)
+        .unwrap();
+    // Let the bridge hit the full queue before anything is consumed; the
+    // old try_send gave up here and the Shutdown was lost.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    assert!(matches!(
+        gateway_rx.recv().await,
+        Some(GatewayCommand::UpdatePresence(status)) if status == "one"
+    ));
+    assert!(matches!(
+        gateway_rx.recv().await,
+        Some(GatewayCommand::UpdatePresence(status)) if status == "two"
+    ));
+    assert!(matches!(
+        gateway_rx.recv().await,
+        Some(GatewayCommand::Shutdown)
+    ));
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cache_backend_message_update_falls_back_to_memory_when_the_backend_read_fails() {
+    let recorder = Arc::new(RecordingBackend {
+        fail_get_message: true,
+        ..RecordingBackend::default()
+    });
+    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "MESSAGE_CREATE",
+        json!({
+            "id": "11",
+            "channel_id": "10",
+            "content": "before",
+            "author": { "id": "5", "username": "author" }
+        }),
+    )
+    .unwrap();
+    let update = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "content": "after" }),
+    )
+    .unwrap();
+    for event in [&create, &update] {
+        super::apply_cache_updates(&cache, SINGLE_SHARD, event).await;
+    }
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &update).await;
+    forwarder.flush().await;
+
+    let stored = recorder
+        .stored_message("10", "11")
+        .expect("fallback stored");
+    assert_eq!(stored.content, "after");
+    assert_eq!(stored.author.expect("author kept").username, "author");
+}
+
+#[tokio::test]
+async fn ingress_counts_events_that_arrive_after_the_processor_stopped() {
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(NoopEventHandler),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    // Dropping the pipeline aborts its tasks, closing the queue.
+    drop(pipeline);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !ingress.events.is_closed() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("aborted processor closes the ingress queue");
+
+    ingress.push(message_create_dispatch("1", "late"));
+    ingress.push(message_create_dispatch("2", "late"));
+    assert_eq!(ingress.closed.dropped(), 2);
+    assert_eq!(ingress.overflow.dropped(), 0);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn client_builder_start_returns_the_gateway_error_to_its_caller() {
+    let (url, server) = spawn_fake_gateway(|mut socket, identify| async move {
+        // The builder's presence travels inside IDENTIFY.
+        assert_eq!(identify["d"]["presence"]["status"], json!("idle"));
+        send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+        send_close(&mut socket, 4014).await;
+    })
+    .await;
+    let recorder = Arc::new(RecordingBackend::default());
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(10),
+        super::Client::builder("token", Intents::from_bits(0))
+            .event_handler(NoopEventHandler)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url))
+            .presence(crate::model::UpdatePresence {
+                since: None,
+                activities: Vec::new(),
+                status: "idle".to_string(),
+                afk: false,
+            })
+            .cache_backend(recorder.clone())
+            .handler_shutdown_timeout(Duration::from_millis(50))
+            .start(),
+    )
+    .await
+    .expect("start returns once the gateway stops")
+    .expect_err("4014 is not reconnectable");
+    assert!(error.to_string().contains("4014"), "{error}");
+    server.abort();
+
+    // The READY reached the backend worker before the shard stopped; the
+    // worker flushes queued writes in the background.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while recorder.calls().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("backend saw the READY invalidation");
+    assert_eq!(recorder.calls(), vec!["clear_cache".to_string()]);
 }

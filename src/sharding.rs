@@ -437,12 +437,21 @@ impl ShardingManager {
         handle.send(message)
     }
 
+    /// Sends `message` to every registered shard runtime.
+    ///
+    /// Every shard is attempted even if some sends fail; the first failure
+    /// is returned afterwards. Stopping on the first error meant a single
+    /// already-stopped shard (whose command channel is closed) kept a
+    /// `Shutdown` from reaching all shards iterated after it.
     pub fn broadcast(&self, message: ShardIpcMessage) -> Result<(), DiscordError> {
+        let mut first_error = None;
         for handle in self.runtimes.values() {
-            handle.send(message.clone())?;
+            if let Err(error) = handle.send(message.clone()) {
+                first_error.get_or_insert(error);
+            }
         }
 
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     fn shard_info_or_error(&self, shard_id: u32) -> Result<ShardInfo, DiscordError> {
@@ -624,6 +633,29 @@ mod tests {
         assert!(missing_event
             .to_string()
             .contains("missing shard runtime for shard 9"));
+    }
+
+    #[test]
+    fn broadcast_reaches_every_live_shard_even_if_one_channel_is_closed() {
+        let mut manager = ShardingManager::new(ShardConfig::new(8));
+        let mut runtimes: Vec<_> = (0..8)
+            .map(|shard_id| Some(manager.prepare_runtime(shard_id).unwrap()))
+            .collect();
+        // Shard 0 already stopped: its command receiver is gone.
+        runtimes[0] = None;
+
+        let error = manager
+            .broadcast(ShardIpcMessage::Shutdown)
+            .expect_err("the closed shard is reported");
+        assert!(!error.to_string().is_empty());
+        for runtime in runtimes.iter().flatten() {
+            assert_eq!(
+                runtime.command_rx.try_recv().unwrap(),
+                ShardIpcMessage::Shutdown,
+                "shard {} missed the broadcast",
+                runtime.info.id
+            );
+        }
     }
 
     #[test]
