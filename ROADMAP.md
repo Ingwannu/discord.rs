@@ -150,7 +150,16 @@ operation)를 읽고, 8단계 drift CI가 같은 메타데이터를 쓴다.
 
 ## 2. 공식 API 문서 자동 동기화 CI (감사 7번)
 
-### 방향
+> **구현 상태 (2026-10-10, 8단계 일부 완료):** 아래 원래 설계와 달리 OpenAPI 스펙 대신
+> `discord-api-docs`의 `<Route>` 태그와 게이트웨이 이벤트 표를 직접 대조하는 방식으로 먼저
+> 구현했다(`ci/api_drift.py`, 파이썬 표준 라이브러리만 사용, `.github/workflows/api-drift.yml`
+> 주간 보고 전용, `ci/api-drift-allowlist.toml`에 항목별 사유 필수, PR마다 `--self-check`).
+> 첫 실행 결과는 REST 234/234, 디스패치 이벤트 79/79이고, Discord가 문서에서 지운 길드 소유
+> 경로 4개는 3.0에서 deprecated로 표시했다. OpenAPI 기반 상수·모델 필드 대조와 `RequestRoute`
+> 메타데이터 기반 대조는 아직 하지 않았다(5단계 이후). MSRV 1.88을 선언하고 CI에서 검증하며,
+> 차단 CI 작업은 Rust 1.99.0으로 고정하고 최신 stable은 비차단 canary로 확인한다.
+
+### 방향 (원래 설계)
 
 **소스는 `discord/discord-api-spec`(공식 OpenAPI 3.1)을 1차로 사용합니다.**
 `discord-api-docs` 마크다운 파싱보다 훨씬 안정적입니다. 단, preview 스펙이라 일부

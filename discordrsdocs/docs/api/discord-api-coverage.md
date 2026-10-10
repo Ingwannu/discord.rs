@@ -17,7 +17,7 @@ Audit source:
 | Gateway send events | 7 / 7 mapped | Official Gateway send-event headings map to identify, resume, heartbeat, request-guild-members, request-soundboard-sounds, request-channel-info, voice-state, and presence payload helpers or commands. |
 | Gateway receive events | 82 / 82 mapped | Official Gateway receive events (the "Receive Events" table and headings) map to `Event` decoder branches (79 dispatch names in `src/event/decode.rs`) or non-dispatch Gateway opcode handling for Hello, Reconnect, and Invalid Session. Reproduced by `ci/api_drift.py`. |
 | Official object headings | 90 / 90 mapped or intentionally dynamic | Non-example official `Object` headings map to public typed structs/enums or documented `serde_json::Value` extension points for highly variable interaction/audit metadata objects. |
-| Code coverage | 93.50% line coverage | `cargo llvm-cov --all-features --locked --summary-only` reported total line coverage of 93.50%. |
+| Code coverage | 91.2% line coverage (CI gate: 90%) | `cargo llvm-cov --all-features --locked --summary-only` on main after phase 1.5 and the phase 8 tooling (2026-10-10). The 93.50% figure recorded for 2.0 predates the 2.1/2.2 additions. |
 | Coveralls upload scope | Guarded | CI validates LCOV includes at least 30 `src` files, at least 20,000 line records, and required core files before Coveralls upload. |
 | Live DAVE/MLS smoke | Verified | The ignored live Discord voice test passed against a real voice session before this audit was recorded. |
 | Public docs coverage | Complete for crate public API | Rustdoc public-item coverage was previously driven to 100%; REST additions are documented through API guide and examples. |

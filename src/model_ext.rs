@@ -393,7 +393,12 @@ impl Guild {
         http.modify_guild(self.id.clone(), body).await
     }
 
-    /// Deletes this guild. The bot must own it.
+    /// Deletes this guild. Requires ownership, which bots no longer have.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed bot guild ownership in 2025; see RestClient::delete_guild"
+    )]
+    #[allow(deprecated)]
     pub async fn delete(&self, http: &RestClient) -> Result<(), DiscordError> {
         http.delete_guild(self.id.clone()).await
     }
@@ -474,7 +479,12 @@ impl Guild {
     }
 
     /// Sets this guild's required MFA level for moderation actions and
-    /// returns the updated level.
+    /// returns the updated level. Owner-only, so unusable by bots.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed bot guild ownership in 2025; see RestClient::modify_guild_mfa_level"
+    )]
+    #[allow(deprecated)]
     pub async fn set_mfa_level(
         &self,
         http: &RestClient,

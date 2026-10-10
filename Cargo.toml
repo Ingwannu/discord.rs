@@ -15,6 +15,10 @@ repository = "https://github.com/Ingwannu/discord.rs"
 homepage = "https://github.com/Ingwannu/discord.rs"
 keywords = ["discord", "framework", "components", "modal", "bot"]
 categories = ["api-bindings"]
+# Repository tooling and the docs site are not needed to build or use the
+# crate; shipping them only grows every download (the docs site alone holds
+# a PDF manual).
+exclude = ["ci/", ".github/", "discordrsdocs/", "docs/", "index.html"]
 
 [features]
 default = ["cache"]

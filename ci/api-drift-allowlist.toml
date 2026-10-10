@@ -239,6 +239,32 @@ path = "/invites/{invite.code}/target-users/{action}"
 evidence = ['"/invites/{code}/target-users/{action}"']
 reason = "Generic template behind the bulk-add / bulk-delete helper routes above, not a route of its own."
 
+# --- Removed guild-ownership routes (deprecated in 3.0) -----------------------
+# Discord removed guild creation by applications on 2025-07-15 and transferred
+# bot-owned guilds to users, then dropped these routes from its docs. The
+# wrappers stay for one major version with #[deprecated] so migrations get a
+# warning; remove these entries together with the wrappers.
+
+[[crate_only_route]]
+method = "POST"
+path = "/guilds"
+reason = "Deprecated create_guild: guild creation by apps was removed on 2025-07-15."
+
+[[crate_only_route]]
+method = "DELETE"
+path = "/guilds/{guild.id}"
+reason = "Deprecated delete_guild: owner-only, and bots no longer own guilds."
+
+[[crate_only_route]]
+method = "POST"
+path = "/guilds/templates/{template.code}"
+reason = "Deprecated create_guild_from_template: shares the removed guild-creation capability."
+
+[[crate_only_route]]
+method = "POST"
+path = "/guilds/{guild.id}/mfa"
+reason = "Deprecated modify_guild_mfa_level: owner-only, and bots no longer own guilds."
+
 # --- OAuth2 token endpoints ---------------------------------------------------
 
 [[crate_only_route]]

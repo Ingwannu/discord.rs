@@ -26,9 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Application Identity Profile API (Game Stats Widgets): typed models, `UpdateApplicationIdentityProfile::validate()`, and five REST helpers; caller-supplied external IDs are percent-encoded as single path segments.
 - Social SDK routes missing from the 2026-05-02 audit: `get_or_create_lobby` (`PUT /lobbies`), `send_lobby_message`, `get_lobby_messages`, `create_lobby_channel_invite_for_self`, `create_lobby_channel_invite_for_user`, and `delete_current_user_application_role_connection`.
 - REST route coverage re-audited against discord-api-docs `3714862` (2026-10-09): 234 / 234 method + path routes mapped.
+- Minimum supported Rust version declared as 1.88 (`rust-version`, all features) and verified in CI by building and testing default and all features on that toolchain.
+- Weekly, report-only Discord API drift check (`ci/api_drift.py`, `api-drift` workflow): compares discord-api-docs REST routes and Gateway receive events with the crate in both directions and keeps a single `api-drift` issue up to date; it never fails CI. Helper-built routes are listed in `ci/api-drift-allowlist.toml` with a reason each, and every PR runs `--self-check` against the source.
 
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
+- CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
+- The published crate excludes `ci/`, `.github/`, `discordrsdocs/`, and `docs/`.
+
+### Deprecated
+- `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.
 
 ## 2.2.0 - 2026-07-27
 

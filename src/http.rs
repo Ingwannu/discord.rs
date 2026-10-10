@@ -3086,8 +3086,15 @@ impl RestClient {
         }
     }
 
-    /// Creates a guild via `POST /guilds`. Only usable by bots in fewer
-    /// than 10 guilds.
+    /// Creates a guild via `POST /guilds`.
+    ///
+    /// Discord stopped allowing applications to create guilds on 2025-07-15
+    /// and removed the route from its docs; kept only so 3.0 migrations get
+    /// a deprecation warning instead of a missing method.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
+    )]
     pub async fn create_guild(
         &self,
         body: &crate::model::CreateGuild,
@@ -3096,8 +3103,13 @@ impl RestClient {
             .await
     }
 
-    /// Deletes a guild via `DELETE /guilds/{id}`. The bot must own the
-    /// guild.
+    /// Deletes a guild via `DELETE /guilds/{id}`. Requires guild ownership,
+    /// which bots lost when Discord transferred bot-owned guilds to users in
+    /// 2025.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
+    )]
     pub async fn delete_guild(&self, guild_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -3108,7 +3120,12 @@ impl RestClient {
     }
 
     /// Creates a guild from a guild template via
-    /// `POST /guilds/templates/{code}`.
+    /// `POST /guilds/templates/{code}`, which shares the removed
+    /// guild-creation capability.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
+    )]
     pub async fn create_guild_from_template(
         &self,
         template_code: &str,
@@ -3125,7 +3142,12 @@ impl RestClient {
     }
 
     /// Sets the guild's required MFA level for moderation actions via
-    /// `POST /guilds/{id}/mfa` and returns the updated level.
+    /// `POST /guilds/{id}/mfa` and returns the updated level. Owner-only,
+    /// so unusable by bots since bot-owned guilds were transferred in 2025.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
+    )]
     pub async fn modify_guild_mfa_level(
         &self,
         guild_id: impl Into<Snowflake>,

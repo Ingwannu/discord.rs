@@ -7439,6 +7439,7 @@ async fn rate_limit_retry_uses_retry_after_header_for_non_json_bodies() {
 }
 
 #[tokio::test]
+#[allow(deprecated)] // Routes Discord removed in 2025; the wrappers stay deprecated for 3.0.
 async fn new_guild_lifecycle_routes_have_expected_shapes() {
     let (base_url, captured, task) = spawn_test_server(vec![
         PlannedResponse::json(StatusCode::CREATED, guild_payload("1", "created")),
