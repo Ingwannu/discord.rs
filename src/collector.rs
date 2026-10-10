@@ -13,7 +13,9 @@ use tokio::time;
 #[cfg(feature = "collectors")]
 use crate::event::{Event, ReactionEvent};
 #[cfg(feature = "collectors")]
-use crate::model::{ComponentInteraction, Interaction, Message, ModalSubmitInteraction, Snowflake};
+use crate::model::{
+    Channel, ComponentInteraction, Interaction, Message, ModalSubmitInteraction, Snowflake,
+};
 #[cfg(feature = "collectors")]
 use crate::types::Emoji;
 
@@ -130,7 +132,8 @@ fn request_stop(stop_tx: &watch::Sender<Option<String>>, reason: String) {
 ///
 /// Size the capacity for your event volume and check `lagged_events()` when
 /// exact results matter: a reaction collector that lagged may have missed
-/// adds (undercount) or, with `dispose(true)`, removals (overcount).
+/// adds (undercount), removals with `dispose(true)` (overcount), or the
+/// deletion event that should have ended it.
 pub struct CollectorHub {
     sender: broadcast::Sender<Event>,
 }
@@ -386,18 +389,36 @@ impl<L: CollectorLogic> CollectorCore<L> {
         let deadline = self.deadline;
         let idle_deadline = self.idle_deadline;
 
+        // A window that expired while `next()` was not being polled ends
+        // collection before any event buffered in the meantime is consumed;
+        // otherwise a late event could be yielded after the deadline and even
+        // restart an already expired idle window.
+        if deadline.is_some_and(|deadline| deadline <= now) {
+            self.end_reason = Some(CollectorEndReason::Time);
+            return None;
+        }
+        if idle_deadline.is_some_and(|deadline| deadline <= now) {
+            self.end_reason = Some(CollectorEndReason::Idle);
+            return None;
+        }
+
         let receiver = &mut self.receiver;
         let logic = &mut self.logic;
         let lagged_events = &mut self.lagged_events;
         let stop_rx = &mut self.stop_rx;
 
+        // `biased` makes the precedence deterministic when several branches
+        // are ready in the same poll: stop > overall timeout > idle > events.
+        // Do not reorder: an unbiased select picks randomly and can deliver
+        // an event that arrived together with (or after) the deadline.
         let outcome = tokio::select! {
-            outcome = recv_next(receiver, logic, lagged_events) => outcome,
+            biased;
             reason = wait_for_stop(stop_rx) => {
                 NextOutcome::Ended(CollectorEndReason::User(reason))
             }
             _ = sleep_until_opt(deadline) => NextOutcome::Ended(CollectorEndReason::Time),
             _ = sleep_until_opt(idle_deadline) => NextOutcome::Ended(CollectorEndReason::Idle),
+            outcome = recv_next(receiver, logic, lagged_events) => outcome,
         };
 
         match outcome {
@@ -580,7 +601,9 @@ macro_rules! impl_extracting_collector {
             }
 
             /// Collects items until the collector ends (limit, timeout, idle,
-            /// stop, or channel close) and returns everything gathered.
+            /// stop, or channel close) and returns everything gathered. This
+            /// consumes the collector; loop over [`next`](Self::next) instead
+            /// when you also need `end_reason()` or `lagged_events()`.
             pub async fn collect(mut self) -> Vec<$item> {
                 let mut items = Vec::new();
                 while let Some(item) = self.core.next().await {
@@ -759,6 +782,13 @@ impl CollectedReaction {
 /// This is what discord.js exposes as `collector.collected` plus
 /// `collector.users` and `collector.total`. Only reactions observed while
 /// collecting are included; with `dispose(true)` removals are subtracted.
+///
+/// Two counts exist because discord.js's `total` is a counter, not a tally:
+/// [`total`](Self::total) counts every accepted add (minus applied
+/// disposals) and is what `max_items` limits, while
+/// [`reaction_count`](Self::reaction_count) is the size of the tally right
+/// now. They differ when a user removes and re-adds a reaction without
+/// `dispose(true)`.
 pub struct ReactionCollection {
     // Discord allows at most 20 distinct reactions per message, so an
     // insertion-ordered Vec with linear lookup is both simpler and faster
@@ -769,6 +799,7 @@ pub struct ReactionCollection {
     // on each event.
     user_slots: BTreeMap<Snowflake, usize>,
     total: usize,
+    reaction_count: usize,
 }
 
 #[cfg(feature = "collectors")]
@@ -795,10 +826,18 @@ impl ReactionCollection {
         self.reactions.is_empty()
     }
 
-    /// Reactions currently collected across all emojis, normal and burst
-    /// (discord.js `collector.total`).
+    /// Accepted reaction adds minus applied disposals (discord.js
+    /// `collector.total`); `max_items` compares against this. Without
+    /// `dispose(true)` it equals the number of adds collected, including a
+    /// reaction that was removed and added again.
     pub fn total(&self) -> usize {
         self.total
+    }
+
+    /// Reactions currently in the tally across all emojis, normal and burst
+    /// (the sum of every [`CollectedReaction::count`]).
+    pub fn reaction_count(&self) -> usize {
+        self.reaction_count
     }
 
     /// Distinct users holding at least one collected reaction
@@ -823,10 +862,13 @@ impl ReactionCollection {
             self.reactions.push((key, CollectedReaction::default()));
             self.reactions.len() - 1
         });
+        // discord.js increments `total` for every accepted collect, even a
+        // repeat of a reaction already in the tally.
+        self.total = self.total.saturating_add(1);
         if let Some((_, reaction)) = self.reactions.get_mut(index) {
             reaction.emoji = emoji;
             if reaction.set_mut(burst).insert(user_id.clone()) {
-                self.total = self.total.saturating_add(1);
+                self.reaction_count = self.reaction_count.saturating_add(1);
                 *self.user_slots.entry(user_id).or_insert(0) += 1;
             }
         }
@@ -852,6 +894,7 @@ impl ReactionCollection {
             self.reactions.remove(index);
         }
         self.total = self.total.saturating_sub(1);
+        self.reaction_count = self.reaction_count.saturating_sub(1);
         self.release_user(user_id);
     }
 
@@ -862,6 +905,7 @@ impl ReactionCollection {
         let (_, reaction) = self.reactions.remove(index);
         for user_id in reaction.users.iter().chain(reaction.burst_users.iter()) {
             self.total = self.total.saturating_sub(1);
+            self.reaction_count = self.reaction_count.saturating_sub(1);
             self.release_user(user_id);
         }
     }
@@ -870,6 +914,7 @@ impl ReactionCollection {
         self.reactions.clear();
         self.user_slots.clear();
         self.total = 0;
+        self.reaction_count = 0;
     }
 
     fn release_user(&mut self, user_id: &Snowflake) {
@@ -907,14 +952,21 @@ impl ReactionCollection {
 //   `#[non_exhaustive]` (a 3.0 break). Normal and burst reactions are tracked
 //   separately so removing one of the two keeps the tally right. With only a
 //   message id, channel/guild deletion is noticed only after the first
-//   reaction reveals them. A thread that disappears because its parent
-//   channel was deleted is not detected (that needs the cache).
+//   reaction reveals them. Discord sends no THREAD_DELETE for threads removed
+//   with their parent channel, and no reaction or message payload names the
+//   parent, so parent deletion is detected only when the parent is given
+//   (`parent_channel_id`) or seen in a thread event while collecting.
+//   `max_items` limits a discord.js-style counter (`total`: accepted adds
+//   minus applied disposals), kept apart from the tally size.
 
 #[cfg(feature = "collectors")]
 /// Logic behind [`ReactionCollector`].
 struct ReactionLogic {
     message_id: Snowflake,
     channel_id: Option<Snowflake>,
+    // Set when the message lives in a thread whose parent is known; Discord
+    // sends no THREAD_DELETE for threads removed with their parent channel.
+    parent_channel_id: Option<Snowflake>,
     guild_id: Option<Snowflake>,
     filter: Option<EventFilter<ReactionEvent>>,
     dispose: bool,
@@ -930,6 +982,7 @@ impl ReactionLogic {
         Self {
             message_id,
             channel_id: None,
+            parent_channel_id: None,
             guild_id: None,
             filter: None,
             dispose: false,
@@ -959,6 +1012,14 @@ impl ReactionLogic {
             self.guild_id = guild_id.cloned();
         }
         true
+    }
+
+    /// Records the parent of the message's thread from a thread payload, so
+    /// deleting that parent channel ends collection.
+    fn learn_parent(&mut self, thread: &Channel) {
+        if self.parent_channel_id.is_none() && self.channel_id.as_ref() == Some(&thread.id) {
+            self.parent_channel_id = thread.parent_id.clone();
+        }
     }
 
     fn targets_reaction(&mut self, reaction: &ReactionEvent) -> bool {
@@ -1046,10 +1107,23 @@ impl CollectorLogic for ReactionLogic {
                 event.ids.contains(&self.message_id),
                 CollectorEndReason::MessageDelete,
             ),
+            // discord.js also ends when the deleted channel is the parent of
+            // the message's thread (`channel.threads.cache.has(...)`).
             Event::ChannelDelete(event) => Self::end_if(
-                self.channel_id.as_ref() == Some(&event.channel.id),
+                self.channel_id.as_ref() == Some(&event.channel.id)
+                    || self.parent_channel_id.as_ref() == Some(&event.channel.id),
                 CollectorEndReason::ChannelDelete,
             ),
+            Event::ThreadCreate(event) | Event::ThreadUpdate(event) => {
+                self.learn_parent(&event.thread);
+                Step::Skip
+            }
+            Event::ThreadListSync(event) => {
+                for thread in &event.threads {
+                    self.learn_parent(thread);
+                }
+                Step::Skip
+            }
             Event::ThreadDelete(event) => Self::end_if(
                 self.channel_id.as_ref() == Some(&event.thread.id),
                 CollectorEndReason::ThreadDelete,
@@ -1088,20 +1162,30 @@ impl CollectorLogic for ReactionLogic {
 /// [`collected`](Self::collected) and [`collect`](Self::collect) give the
 /// tally keyed by emoji.
 ///
-/// - `max_items` counts reactions currently collected (discord.js `max`),
-///   `max_emojis` distinct emojis, `max_users` distinct users; reaching one
-///   ends collection with `Limit`, `EmojiLimit`, or `UserLimit`. A limit of 0
-///   ends collection immediately.
+/// - `max_items` limits [`ReactionCollection::total`] (discord.js `max`:
+///   every accepted add counts, disposals subtract), `max_emojis` distinct
+///   emojis, `max_users` distinct users; reaching one ends collection with
+///   `Limit`, `EmojiLimit`, or `UserLimit`. A limit of 0 ends collection
+///   immediately, as for the other collectors; discord.js instead treats 0
+///   as "no limit", which here means not calling the method.
 /// - With [`dispose(true)`](Self::dispose), `MESSAGE_REACTION_REMOVE`,
 ///   `MESSAGE_REACTION_REMOVE_ALL`, and `MESSAGE_REACTION_REMOVE_EMOJI`
 ///   update the tally; otherwise the tally only grows.
 /// - Deleting the message (alone or in bulk), its channel or thread, or
 ///   removing the bot from its guild ends collection with
 ///   `MessageDelete` / `ChannelDelete` / `ThreadDelete` / `GuildDelete`.
+///   For a message in a thread, deleting the thread's parent channel ends
+///   collection only once the parent is known
+///   ([`parent_channel_id`](Self::parent_channel_id) or a thread event seen
+///   while collecting).
+/// - Precedence when several things are ready at once: stop, then the
+///   overall timeout, then idle, then events. An expired window is never
+///   revived by an event that was buffered while `next()` was not polled.
 ///
 /// Reactions added before the collector was created are not included, and
-/// events lost to broadcast lag are not recovered; see [`CollectorHub`].
-/// Needs the `GUILD_MESSAGE_REACTIONS` (or `DIRECT_MESSAGE_REACTIONS`) intent.
+/// events lost to broadcast lag (including deletion events) are not
+/// recovered; see [`CollectorHub`]. Needs the `GUILD_MESSAGE_REACTIONS` (or
+/// `DIRECT_MESSAGE_REACTIONS`) intent.
 pub struct ReactionCollector {
     core: CollectorCore<ReactionLogic>,
 }
@@ -1131,8 +1215,10 @@ impl ReactionCollector {
         self
     }
 
-    /// Ends with [`CollectorEndReason::Limit`] once this many reactions are
-    /// collected (normal and burst; disposed reactions no longer count).
+    /// Ends with [`CollectorEndReason::Limit`] once
+    /// [`ReactionCollection::total`] reaches this value: every accepted add
+    /// counts (normal or burst, even re-adding a removed reaction), and with
+    /// `dispose(true)` applied removals subtract, as in discord.js.
     pub fn max_items(mut self, max_items: usize) -> Self {
         self.core.logic.max_items = Some(max_items);
         self
@@ -1159,6 +1245,17 @@ impl ReactionCollector {
         self
     }
 
+    /// Parent channel of the thread holding the message, so deleting the
+    /// parent ends collection. Discord sends no `THREAD_DELETE` for threads
+    /// removed together with their parent, and neither `Message` nor reaction
+    /// events carry the parent; without this call it is only learned from a
+    /// `THREAD_CREATE` / `THREAD_UPDATE` / `THREAD_LIST_SYNC` for the thread
+    /// seen while collecting.
+    pub fn parent_channel_id(mut self, parent_channel_id: impl Into<Snowflake>) -> Self {
+        self.core.logic.parent_channel_id = Some(parent_channel_id.into());
+        self
+    }
+
     /// Guild holding the message, so removal from it ends collection before
     /// the first reaction arrives.
     pub fn guild_id(mut self, guild_id: impl Into<Snowflake>) -> Self {
@@ -1178,6 +1275,10 @@ impl ReactionCollector {
 
     /// Collects until the collector ends and returns the final tally keyed by
     /// emoji (the discord.js `awaitReactions` result).
+    ///
+    /// This consumes the collector, so `end_reason()` and `lagged_events()`
+    /// are no longer reachable; drive [`next`](Self::next) in a loop and read
+    /// [`collected`](Self::collected) instead when you need them.
     pub async fn collect(mut self) -> ReactionCollection {
         while self.core.next().await.is_some() {}
         self.core.logic.collected
@@ -2438,6 +2539,205 @@ mod tests {
         );
         assert_eq!(EmojiKey::from_emoji(&Emoji::default()), None);
         assert_ne!(EmojiKey::unicode("❤"), EmojiKey::unicode("❤\u{fe0f}"));
+    }
+
+    // ---- review fixes: deadline precedence, discord.js `total`, parents ----
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_idle_window_is_not_revived_by_events_buffered_between_next_calls() {
+        // Unbiased selection used to pick the buffered event about a quarter
+        // of the time; repeat so a regression shows up deterministically.
+        for _ in 0..100 {
+            let hub = CollectorHub::new();
+            let mut collector = hub.message_collector().idle(Duration::from_secs(1));
+            hub.publish(message_create("1", "first"));
+            assert!(collector.next().await.is_some());
+
+            time::sleep(Duration::from_secs(2)).await;
+            hub.publish(message_create("2", "late"));
+
+            assert!(collector.next().await.is_none());
+            assert_eq!(collector.end_reason(), Some(CollectorEndReason::Idle));
+            assert_eq!(collector.received_count(), 1);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn expired_timeout_wins_over_events_buffered_between_next_calls() {
+        for _ in 0..100 {
+            let hub = CollectorHub::new();
+            let mut collector = hub
+                .reaction_collector(MESSAGE)
+                .timeout(Duration::from_secs(5))
+                .idle(Duration::from_secs(60));
+            hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
+            assert!(collector.next().await.is_some());
+
+            time::sleep(Duration::from_secs(6)).await;
+            hub.publish(reaction_add(MESSAGE, "2", unicode("✅")));
+
+            assert!(collector.next().await.is_none());
+            assert_eq!(collector.end_reason(), Some(CollectorEndReason::Time));
+            assert_eq!(collector.collected().total(), 1, "late add not collected");
+        }
+    }
+
+    /// Polls `future` once and reports whether it is still pending.
+    async fn poll_once<F: std::future::Future + Unpin>(future: &mut F) -> bool {
+        std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::pin::Pin::new(&mut *future).poll(cx).is_pending())
+        })
+        .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadlines_beat_events_that_become_ready_in_the_same_poll() {
+        for (window, expected) in [
+            ("timeout", CollectorEndReason::Time),
+            ("idle", CollectorEndReason::Idle),
+        ] {
+            for _ in 0..100 {
+                let hub = CollectorHub::new();
+                let collector = hub.message_collector();
+                let mut collector = if window == "timeout" {
+                    collector.timeout(Duration::from_secs(1))
+                } else {
+                    collector.idle(Duration::from_secs(1))
+                };
+                {
+                    // Start next() so the window is armed, then make the
+                    // deadline and an event ready before polling it again.
+                    let mut next = Box::pin(collector.next());
+                    assert!(poll_once(&mut next).await);
+                    hub.publish(message_create("1", "at the deadline"));
+                    time::advance(Duration::from_secs(2)).await;
+                    assert!(next.await.is_none(), "{window}");
+                }
+                assert_eq!(collector.end_reason(), Some(expected.clone()));
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stop_beats_events_that_become_ready_in_the_same_poll() {
+        for _ in 0..100 {
+            let hub = CollectorHub::new();
+            let mut collector = hub.message_collector().timeout(Duration::from_secs(10));
+            let handle = collector.stop_handle();
+            let publisher = hub.clone();
+            tokio::spawn(async move {
+                time::sleep(Duration::from_secs(1)).await;
+                publisher.publish(message_create("1", "racing the stop"));
+                handle.stop_with_reason("done");
+            });
+
+            assert!(collector.next().await.is_none());
+            assert_eq!(
+                collector.end_reason(),
+                Some(CollectorEndReason::User("done".to_string()))
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reaction_max_items_counts_every_accepted_add_like_discord_js() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .reaction_collector(MESSAGE)
+            .max_items(2)
+            .timeout(Duration::from_secs(30));
+
+        hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
+        hub.publish(reaction_remove(MESSAGE, "1", unicode("✅"), false));
+        hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
+        hub.publish(reaction_add(MESSAGE, "2", unicode("✅")));
+
+        assert!(collector.next().await.is_some());
+        assert!(collector.next().await.is_some());
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Limit));
+        assert!(collector.next().await.is_none());
+        assert_eq!(collector.received_count(), 2);
+        let collected = collector.collected();
+        assert_eq!(
+            collected.total(),
+            2,
+            "re-adding counts again without dispose"
+        );
+        assert_eq!(collected.reaction_count(), 1, "but the tally holds one");
+        assert_eq!(users_of(collected, "✅"), vec!["1"]);
+    }
+
+    fn thread_update(id: &str, parent_id: &str) -> Event {
+        decode_event(
+            "THREAD_UPDATE",
+            json!({ "id": id, "type": 11, "guild_id": GUILD, "parent_id": parent_id }),
+        )
+        .expect("thread update")
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reaction_collector_ends_when_the_threads_parent_channel_is_deleted() {
+        let hub = CollectorHub::new();
+
+        let mut explicit = hub
+            .reaction_collector(MESSAGE)
+            .channel_id(CHANNEL)
+            .parent_channel_id("5");
+        hub.publish(channel_delete("6"));
+        hub.publish(channel_delete("5"));
+        assert!(explicit.next().await.is_none());
+        assert_eq!(
+            explicit.end_reason(),
+            Some(CollectorEndReason::ChannelDelete)
+        );
+
+        // Learned from THREAD_UPDATE for the message's thread only.
+        let mut learned = hub.reaction_collector(MESSAGE).channel_id(CHANNEL);
+        hub.publish(thread_update("11", "7"));
+        hub.publish(channel_delete("7"));
+        hub.publish(thread_update(CHANNEL, "5"));
+        hub.publish(thread_update(CHANNEL, "8"));
+        hub.publish(channel_delete("8"));
+        hub.publish(channel_delete("5"));
+        assert!(learned.next().await.is_none());
+        assert_eq!(
+            learned.end_reason(),
+            Some(CollectorEndReason::ChannelDelete)
+        );
+        assert_eq!(
+            learned.lagged_events(),
+            0,
+            "the first parent stays; 7 and 8 were ignored"
+        );
+
+        // Learned from THREAD_LIST_SYNC.
+        let mut synced = hub.reaction_collector(MESSAGE).channel_id(CHANNEL);
+        hub.publish(
+            decode_event(
+                "THREAD_LIST_SYNC",
+                json!({
+                    "guild_id": GUILD,
+                    "threads": [
+                        { "id": "12", "type": 11, "parent_id": "9" },
+                        { "id": CHANNEL, "type": 11, "parent_id": "6" }
+                    ],
+                    "members": []
+                }),
+            )
+            .expect("thread list sync"),
+        );
+        hub.publish(channel_delete("6"));
+        assert!(synced.next().await.is_none());
+        assert_eq!(synced.end_reason(), Some(CollectorEndReason::ChannelDelete));
+
+        // Without parent knowledge a parent deletion cannot be matched.
+        let mut unknown = hub
+            .reaction_collector(MESSAGE)
+            .channel_id(CHANNEL)
+            .timeout(Duration::from_secs(5));
+        hub.publish(channel_delete("5"));
+        assert!(unknown.next().await.is_none());
+        assert_eq!(unknown.end_reason(), Some(CollectorEndReason::Time));
     }
 
     #[test]

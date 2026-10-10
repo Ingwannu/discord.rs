@@ -106,6 +106,9 @@ All collector types share the same control surface, mirroring discord.js's `Coll
 - `end_reason()` — why collection ended (`Limit` / `Time` / `Idle` / `User` / `ChannelDropped`, plus the reaction-only reasons below)
 - `received_count()` — how many items were collected so far
 - `lagged_events()` — how many events this collector lost to broadcast lag (see below)
+- `collect()` — drives the collector to the end and returns the results; it consumes the collector, so loop over `next()` instead when you also need `end_reason()` or `lagged_events()` afterwards
+
+When several outcomes are ready at once, the precedence is fixed since 3.0: stop, then the overall timeout, then idle, then events. A window that expired while `next()` was not being polled ends collection before any event buffered in the meantime is delivered, so a late event can neither be returned after the deadline nor restart an expired idle window.
 
 Since 3.0, `CollectorEndReason` is `#[non_exhaustive]`, so `match` on it needs a `_` arm.
 
@@ -144,21 +147,23 @@ if collector.end_reason() == Some(CollectorEndReason::Idle) {
 
 - `EmojiKey::Custom(id)` for custom emojis (keyed by id, like discord.js's `emoji.id ?? emoji.name`), `EmojiKey::Unicode(text)` for Unicode emojis. The text is compared as Discord sends it, so `"❤"` and `"❤️"` are different keys.
 - `CollectedReaction` holds `users()` (normal reactions) and `burst_users()` (super reactions) separately, because one user can hold both for the same emoji; `count()` adds them, like Discord's reaction `count`.
-- `ReactionCollection::total()`, `len()` (distinct emojis), `users()` / `user_count()` (distinct users) mirror discord.js's `collector.total`, `collected.size`, and `collector.users`.
+- `ReactionCollection::total()`, `len()` (distinct emojis), `users()` / `user_count()` (distinct users) mirror discord.js's `collector.total`, `collected.size`, and `collector.users`. Like discord.js, `total()` is a counter: every accepted add counts (even re-adding a removed reaction) and, with `dispose(true)`, applied removals subtract. `reaction_count()` is the size of the tally right now; the two differ when a user removes and re-adds a reaction without `dispose(true)`.
 
 Limits and end reasons:
 
 | Option | Counts | End reason |
 |---|---|---|
-| `max_items(n)` | reactions currently collected (discord.js `max`) | `Limit` |
+| `max_items(n)` | `total()`: accepted adds minus applied disposals (discord.js `max`) | `Limit` |
 | `max_emojis(n)` | distinct emojis | `EmojiLimit` |
 | `max_users(n)` | distinct users | `UserLimit` |
 | `timeout` / `idle` | as for every collector | `Time` / `Idle` |
 | — | the message is deleted (alone or in a bulk delete) | `MessageDelete` |
-| — | its channel / thread is deleted | `ChannelDelete` / `ThreadDelete` |
+| — | its channel / thread is deleted, or the parent channel of its thread (see below) | `ChannelDelete` / `ThreadDelete` |
 | — | the bot leaves or is removed from the guild (outages with `unavailable: true` do not count) | `GuildDelete` |
 
-A limit of `0` ends collection before waiting.
+A limit of `0` ends collection before waiting, as `max_items(0)` does on the other collectors. discord.js treats `0` as "no limit"; here that means not calling the method.
+
+For a message inside a thread, Discord sends no `THREAD_DELETE` when the thread disappears with its parent channel, and neither `Message` nor reaction events name the parent. The collector therefore ends on the parent's `CHANNEL_DELETE` only when it knows the parent: pass it with `.parent_channel_id(...)` (for example from the cached thread channel), or let the collector see a `THREAD_CREATE` / `THREAD_UPDATE` / `THREAD_LIST_SYNC` for the thread while it runs. Otherwise such a collector ends only by its timers or a stop.
 
 With `dispose(true)`, `MESSAGE_REACTION_REMOVE`, `MESSAGE_REACTION_REMOVE_ALL`, and `MESSAGE_REACTION_REMOVE_EMOJI` update the tally, and disposed reactions make room again under `max_items`. Without it the tally only grows, meaning "everyone who reacted while the collector ran". This differs from discord.js in one place: discord.js always empties its collection on `MESSAGE_REACTION_REMOVE_ALL`, while here every removal kind waits for `dispose(true)`. As in discord.js, the filter also decides which removals apply, so a filter that reads fields only present on add events (`member`, `message_author_id`) blocks every removal.
 
@@ -189,7 +194,7 @@ Reactions need the `GUILD_MESSAGE_REACTIONS` (or `DIRECT_MESSAGE_REACTIONS`) int
 
 - **No history.** A collector sees only events published after it was created. Reactions or messages that arrived earlier are not replayed; fetch them over REST if you need them.
 - **Bounded, lossy buffer.** Each subscriber can fall at most `capacity` events behind (256 by default, `CollectorHub::with_capacity(...)` to change it). The buffer holds every event type, not only the ones a collector wants, and a collector drains it only while `next()` / `collect()` is being awaited. When it falls further behind, the oldest events are dropped for that collector, the drop is added to `lagged_events()`, and collection continues from the oldest event still buffered. Publishing never blocks the gateway.
-- **Consequences for reactions.** A reaction collector that lagged may have missed adds (undercount) or, with `dispose(true)`, removals (overcount). When exact numbers matter, check `lagged_events() == 0` or re-read the message's reactions over REST at the end.
+- **Consequences for reactions.** A reaction collector that lagged may have missed adds (undercount), removals with `dispose(true)` (overcount), or the deletion event that should have ended it (it then runs until its timers or a stop). When exact numbers matter, drive `next()` yourself so you can check `lagged_events() == 0` at the end, or re-read the message's reactions over REST.
 
 ## Typical Use
 
