@@ -452,16 +452,22 @@ impl BitFieldFlags for PermissionFlags {
         (1 << 38, "SEND_MESSAGES_IN_THREADS"),
         (1 << 39, "USE_EMBEDDED_ACTIVITIES"),
         (1 << 40, "MODERATE_MEMBERS"),
-        (1 << 42, "VIEW_CREATOR_MONETIZATION_ANALYTICS"),
-        (1 << 43, "USE_SOUNDBOARD"),
-        (1 << 44, "CREATE_GUILD_EXPRESSIONS"),
-        (1 << 45, "CREATE_EVENTS"),
-        (1 << 46, "USE_EXTERNAL_SOUNDS"),
-        (1 << 47, "SEND_VOICE_MESSAGES"),
-        (1 << 48, "USE_CLYDE_AI"),
-        (1 << 49, "SET_VOICE_CHANNEL_STATUS"),
-        (1 << 50, "SEND_POLLS"),
-        (1 << 52, "USE_EXTERNAL_APPS"),
+        // Bits 41+ follow developers/topics/permissions.mdx (discord-api-docs
+        // 3714862). Until 3.0 this table was shifted by one from bit 41 up,
+        // so e.g. SEND_POLLS named bit 50 (really USE_EXTERNAL_APPS). Bit 47
+        // (the retired USE_CLYDE_AI) is no longer documented; unknown bits
+        // are still preserved by BitField.
+        (1 << 41, "VIEW_CREATOR_MONETIZATION_ANALYTICS"),
+        (1 << 42, "USE_SOUNDBOARD"),
+        (1 << 43, "CREATE_GUILD_EXPRESSIONS"),
+        (1 << 44, "CREATE_EVENTS"),
+        (1 << 45, "USE_EXTERNAL_SOUNDS"),
+        (1 << 46, "SEND_VOICE_MESSAGES"),
+        (1 << 48, "SET_VOICE_CHANNEL_STATUS"),
+        (1 << 49, "SEND_POLLS"),
+        (1 << 50, "USE_EXTERNAL_APPS"),
+        (1 << 51, "PIN_MESSAGES"),
+        (1 << 52, "BYPASS_SLOWMODE"),
     ];
 }
 
@@ -554,8 +560,29 @@ pub mod permissions {
     pub const USE_EMBEDDED_ACTIVITIES: BitField<PermissionFlags> = BitField::from_bits(1 << 39);
     /// Bit flag constant for `MODERATE_MEMBERS`.
     pub const MODERATE_MEMBERS: BitField<PermissionFlags> = BitField::from_bits(1 << 40);
-    /// Bit flag constant for `SEND_POLLS`.
-    pub const SEND_POLLS: BitField<PermissionFlags> = BitField::from_bits(1 << 50);
+    /// Bit flag constant for `VIEW_CREATOR_MONETIZATION_ANALYTICS`.
+    pub const VIEW_CREATOR_MONETIZATION_ANALYTICS: BitField<PermissionFlags> =
+        BitField::from_bits(1 << 41);
+    /// Bit flag constant for `USE_SOUNDBOARD`.
+    pub const USE_SOUNDBOARD: BitField<PermissionFlags> = BitField::from_bits(1 << 42);
+    /// Bit flag constant for `CREATE_GUILD_EXPRESSIONS`.
+    pub const CREATE_GUILD_EXPRESSIONS: BitField<PermissionFlags> = BitField::from_bits(1 << 43);
+    /// Bit flag constant for `CREATE_EVENTS`.
+    pub const CREATE_EVENTS: BitField<PermissionFlags> = BitField::from_bits(1 << 44);
+    /// Bit flag constant for `USE_EXTERNAL_SOUNDS`.
+    pub const USE_EXTERNAL_SOUNDS: BitField<PermissionFlags> = BitField::from_bits(1 << 45);
+    /// Bit flag constant for `SEND_VOICE_MESSAGES`.
+    pub const SEND_VOICE_MESSAGES: BitField<PermissionFlags> = BitField::from_bits(1 << 46);
+    /// Bit flag constant for `SET_VOICE_CHANNEL_STATUS`.
+    pub const SET_VOICE_CHANNEL_STATUS: BitField<PermissionFlags> = BitField::from_bits(1 << 48);
+    /// Bit flag constant for `SEND_POLLS` (bit 49; 2.x wrongly used bit 50).
+    pub const SEND_POLLS: BitField<PermissionFlags> = BitField::from_bits(1 << 49);
+    /// Bit flag constant for `USE_EXTERNAL_APPS`.
+    pub const USE_EXTERNAL_APPS: BitField<PermissionFlags> = BitField::from_bits(1 << 50);
+    /// Bit flag constant for `PIN_MESSAGES`.
+    pub const PIN_MESSAGES: BitField<PermissionFlags> = BitField::from_bits(1 << 51);
+    /// Bit flag constant for `BYPASS_SLOWMODE`.
+    pub const BYPASS_SLOWMODE: BitField<PermissionFlags> = BitField::from_bits(1 << 52);
 }
 
 /// Message flags.
@@ -830,5 +857,40 @@ mod tests {
         assert!(invalid_type
             .to_string()
             .contains("a bitfield encoded as a string or integer"));
+    }
+
+    #[test]
+    fn high_permission_bits_match_discord_documentation() {
+        use super::{permissions, BitFieldFlags, PermissionFlags};
+
+        // developers/topics/permissions.mdx (discord-api-docs 3714862).
+        let documented = [
+            (41, "VIEW_CREATOR_MONETIZATION_ANALYTICS"),
+            (42, "USE_SOUNDBOARD"),
+            (43, "CREATE_GUILD_EXPRESSIONS"),
+            (44, "CREATE_EVENTS"),
+            (45, "USE_EXTERNAL_SOUNDS"),
+            (46, "SEND_VOICE_MESSAGES"),
+            (48, "SET_VOICE_CHANNEL_STATUS"),
+            (49, "SEND_POLLS"),
+            (50, "USE_EXTERNAL_APPS"),
+            (51, "PIN_MESSAGES"),
+            (52, "BYPASS_SLOWMODE"),
+        ];
+        for (bit, name) in documented {
+            let entry = PermissionFlags::BITS
+                .iter()
+                .find(|(_, entry_name)| *entry_name == name)
+                .unwrap_or_else(|| panic!("{name} missing from the name table"));
+            assert_eq!(entry.0, 1_u64 << bit, "{name} must be bit {bit}");
+        }
+        assert_eq!(permissions::SEND_POLLS.bits(), 1 << 49);
+        assert_eq!(permissions::USE_EXTERNAL_APPS.bits(), 1 << 50);
+        assert_eq!(permissions::PIN_MESSAGES.bits(), 1 << 51);
+        assert_eq!(permissions::BYPASS_SLOWMODE.bits(), 1 << 52);
+        assert!(
+            !PermissionFlags::BITS.iter().any(|(bit, _)| *bit == 1 << 47),
+            "bit 47 (retired USE_CLYDE_AI) is no longer documented"
+        );
     }
 }
