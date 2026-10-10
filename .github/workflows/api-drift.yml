@@ -1,0 +1,68 @@
+# Weekly report of drift between discord/discord-api-docs and discordrs.
+#
+# Report-only by design: drift never fails this workflow, and this workflow
+# never gates PRs (Discord documenting one new field must not break unrelated
+# work). Findings go to a single issue labelled `api-drift`. The run fails
+# only when the extractor itself is broken (exit code 2) or GitHub rejects
+# the issue update, so a broken parser is loud instead of reporting "no drift".
+# Local equivalent and allowlist rules:
+# discordrsdocs/docs/guide/testing-and-coverage.md#discord-api-drift-report
+name: api-drift
+
+on:
+  schedule:
+    # Mondays 03:17 UTC (12:17 KST); off the hour to avoid the cron rush.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # One run at a time, so two runs cannot both decide to open an issue.
+  group: api-drift
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: report
+    # Forks inherit the schedule; only the upstream repository files issues.
+    if: github.repository == 'Ingwannu/discord.rs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Fetch discord-api-docs (shallow)
+        run: |
+          git clone --depth 1 --single-branch https://github.com/discord/discord-api-docs.git "$RUNNER_TEMP/discord-api-docs"
+          git -C "$RUNNER_TEMP/discord-api-docs" log -1 --format='discord-api-docs %h %cI %s'
+
+      - name: Build drift report
+        run: |
+          python3 ci/api_drift.py \
+            --docs "$RUNNER_TEMP/discord-api-docs" \
+            --output "$RUNNER_TEMP/api-drift.md" \
+            --json-output "$RUNNER_TEMP/api-drift.json"
+          cat "$RUNNER_TEMP/api-drift.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-drift-report
+          path: |
+            ${{ runner.temp }}/api-drift.md
+            ${{ runner.temp }}/api-drift.json
+          if-no-files-found: ignore
+
+      - name: Open, update, or close the api-drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 ci/drift_issue.py "$RUNNER_TEMP/api-drift.json" "$RUNNER_TEMP/api-drift.md"

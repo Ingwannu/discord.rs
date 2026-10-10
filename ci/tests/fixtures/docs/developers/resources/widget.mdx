@@ -1,0 +1,33 @@
+---
+title: Widget Resource (fixture)
+---
+
+# Widget Resource
+
+## Get Widget
+<Route method="GET">/guilds/[\{guild.id\}](/developers/resources/guild#guild-object)/widget</Route>
+
+Returns a widget.
+
+## Modify Widget
+<Route method="PATCH">/guilds/[\{guild.id\}](/developers/resources/guild#guild-object)/widget</Route>
+
+## Get Widget Message
+<Route method="GET">/channels/[\{channel.id\}](/developers/resources/channel#channel-object)/messages/[\{message.id\}](/developers/resources/message#message-object)</Route>
+
+## Execute Widget Webhook
+<Route method="POST">/webhooks/[\{webhook.id\}](/developers/resources/webhook#webhook-object)/[\{webhook.token\}](/developers/resources/webhook#webhook-object)</Route>
+
+## Get Pinned Widgets (deprecated)
+<Route method="GET">/channels/\{channel.id\}/pins</Route>
+
+## Get Sparkle
+<Route method='get'>
+  /sparkles/\{sparkle\_id\}?with_counts=true
+</Route>
+
+## Get Secret Widget
+<Route method="GET">/secret-widgets</Route>
+
+## Delete Widget
+<Route method="DELETE">/guilds/[\{guild.id\}](/developers/resources/guild#guild-object)/widget</Route>

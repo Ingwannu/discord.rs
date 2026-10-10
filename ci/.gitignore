@@ -1,0 +1,2 @@
+# Bytecode from running ci/api_drift.py and its unit tests locally.
+__pycache__/

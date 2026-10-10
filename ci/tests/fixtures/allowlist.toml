@@ -1,0 +1,28 @@
+# Fixture allowlist for ci/tests/test_api_drift.py.
+[settings]
+min_docs_routes = 1
+min_crate_routes = 1
+min_docs_events = 1
+min_crate_events = 1
+
+[[helper_route]]
+method = "POST"
+path = "/webhooks/{webhook.id}/{webhook.token}"
+functions = ["execute_widget_webhook"]
+evidence = ['"/webhooks/{id}/{token}{}"']
+reason = "Fixture: built by execute_webhook_path()."
+
+[[ignored_route]]
+method = "GET"
+path = "/secret-widgets"
+reason = "Fixture: deliberately unsupported route."
+
+[[crate_only_route]]
+method = "POST"
+path = "/oauth2/token"
+reason = "Fixture: documented as a URL table, not a Route tag."
+
+[[non_dispatch_event]]
+name = "HELLO"
+evidence = ["const OP_HELLO: u64 = 10;"]
+reason = "Fixture: opcode, not a dispatch name."

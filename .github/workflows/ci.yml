@@ -182,3 +182,24 @@ jobs:
 
       - name: Cargo clippy (default features)
         run: cargo clippy --all-targets --locked -- -D warnings
+
+  drift-tooling:
+    name: drift-tooling
+    runs-on: ubuntu-latest
+
+    # Offline checks only: the drift report itself runs weekly in
+    # api-drift.yml and never fails CI. These steps fail when the parser
+    # breaks or when ci/api-drift-allowlist.toml stops matching src/ (a
+    # renamed path helper, a new helper-built route without an entry).
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python version
+        run: python3 -c "import sys; assert sys.version_info >= (3, 11), sys.version; print(sys.version)"
+
+      - name: Drift script unit tests
+        run: python3 -m unittest discover -s ci/tests -v
+
+      - name: Allowlist matches the crate
+        run: python3 ci/api_drift.py --self-check

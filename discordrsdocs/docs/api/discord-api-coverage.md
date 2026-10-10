@@ -6,20 +6,31 @@ Audit source:
 
 - Official repository: https://github.com/discord/discord-api-docs
 - REST re-audit snapshot: `main` at `3714862` (2026-10-09); earlier object and gateway counts below are from the 2026-05-02 snapshot
-- Parsed docs: `developers/resources`, `developers/interactions`, `developers/topics`, `developers/events`, `developers/monetization`, `developers/activities`, `developers/communities`, `developers/components`, and `developers/bots`
+- Parsed docs: every `.md`/`.mdx` page under `developers/` except `developers/change-log.mdx` for REST routes (the 2026-10-10 re-audit set also covered `resources`, `interactions`, `topics`, `events`, `monetization`, `activities`, `communities`, `components`, and `bots`), and `developers/events/gateway-events.mdx` for Gateway receive events
+- Method: `ci/api_drift.py` (see "Method" below); the `api-drift` workflow re-runs it weekly against the latest docs
 
 ## Result
 
 | Area | Status | Evidence |
 | --- | --- | --- |
-| REST route shapes | 234 / 234 mapped | Every unique method + path template in the official MDX `<Route method="...">...</Route>` entries maps to a `RestClient` wrapper, helper path, or tokenized interaction/webhook helper. Matching was scripted (path literals plus nearby `Method::*`), and helper-built paths (global commands, reactions, webhook/follow-up messages, Slack/GitHub webhooks, identity profiles) were confirmed by hand. Phase 8 replaces this with route metadata checked in CI. |
+| REST route shapes | 234 / 234 mapped | Every unique method + path template in the official MDX `<Route method="...">...</Route>` entries maps to a `RestClient` wrapper: 214 through `Method::*` + path literals (or a same-function `let path = format!(..)`), 20 through path helpers listed with evidence in `ci/api-drift-allowlist.toml` (global commands, interaction callbacks, webhook execute/messages, follow-ups and `@original`, Slack/GitHub webhooks, identity profiles, invite target-user bulk actions). Reproduced by `ci/api_drift.py`. |
 | Gateway send events | 7 / 7 mapped | Official Gateway send-event headings map to identify, resume, heartbeat, request-guild-members, request-soundboard-sounds, request-channel-info, voice-state, and presence payload helpers or commands. |
-| Gateway receive events | 82 / 82 mapped | Official Gateway receive-event headings map to `Event` decoder branches or non-dispatch Gateway opcode handling for Hello, Reconnect, and Invalid Session. |
+| Gateway receive events | 82 / 82 mapped | Official Gateway receive events (the "Receive Events" table and headings) map to `Event` decoder branches (79 dispatch names in `src/event/decode.rs`) or non-dispatch Gateway opcode handling for Hello, Reconnect, and Invalid Session. Reproduced by `ci/api_drift.py`. |
 | Official object headings | 90 / 90 mapped or intentionally dynamic | Non-example official `Object` headings map to public typed structs/enums or documented `serde_json::Value` extension points for highly variable interaction/audit metadata objects. |
 | Code coverage | 93.50% line coverage | `cargo llvm-cov --all-features --locked --summary-only` reported total line coverage of 93.50%. |
 | Coveralls upload scope | Guarded | CI validates LCOV includes at least 30 `src` files, at least 20,000 line records, and required core files before Coveralls upload. |
 | Live DAVE/MLS smoke | Verified | The ignored live Discord voice test passed against a real voice session before this audit was recorded. |
 | Public docs coverage | Complete for crate public API | Rustdoc public-item coverage was previously driven to 100%; REST additions are documented through API guide and examples. |
+
+## Method
+
+The route and receive-event rows above are produced by `ci/api_drift.py` (Python standard library; full description under "Discord API Drift Report" in the [testing guide](../guide/testing-and-coverage.md)):
+
+1. Docs side: extract every `<Route method="X">path</Route>`, strip markdown links and backslashes, drop query strings, and normalize `{param}` names to `{}`, so `{channel.id}` and `{channel_id}` compare equal. Event names come from the "Receive Events" table and level-4 headings, converted the way the docs specify (`Channel Create` → `CHANNEL_CREATE`).
+2. Crate side: scan `src/http.rs`, `src/http/**/*.rs`, and `src/oauth2.rs` (test code excluded) for `Method::X` paired with a path literal, and `src/event/decode.rs` for decoder arms. Paths built by helper functions cannot be read as literals; each one is an allowlist entry with a reason, evidence strings that must exist in `src/`, and the wrapper functions that send it. CI checks that the allowlist matches the source on every PR.
+3. Compare method + path templates in both directions. Routes Discord no longer documents are reported too, not only routes the crate lacks.
+
+The first scripted run (2026-10-10, docs `3714862`) reproduced 234 / 234 and 79 / 79 dispatch events. In the other direction it found four crate routes that Discord removed from the docs on 2025-07-28 when apps lost the ability to create guilds: `POST /guilds`, `DELETE /guilds/{guild.id}`, `POST /guilds/templates/{template.code}`, and `POST /guilds/{guild.id}/mfa` (`create_guild`, `delete_guild`, `create_guild_from_template`, `modify_guild_mfa_level`, added in 2.1). They are not allowlisted, so the weekly report keeps them visible until 3.0 decides whether to deprecate or remove them.
 
 ## Boundary
 

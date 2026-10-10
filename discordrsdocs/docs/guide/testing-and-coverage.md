@@ -161,3 +161,88 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
   `llvm-tools-preview`) explicitly. Locally, `cargo +1.99.0 clippy` fails the same way if rustup
   auto-installed a bare `1.99.0`; use `rustup component add clippy --toolchain 1.99.0`.
 - The `msrv` job is separate and follows `rust-version`, not the pin.
+
+## Discord API Drift Report
+
+`ci/api_drift.py` compares the official
+[discord-api-docs](https://github.com/discord/discord-api-docs) with the crate, and
+`.github/workflows/api-drift.yml` runs it every Monday at 03:17 UTC and on manual dispatch, only
+in `Ingwannu/discord.rs`.
+
+What it compares:
+
+- **REST routes**: every `<Route method="X">path</Route>` under `developers/` (except
+  `developers/change-log.mdx`, which also quotes routes that were later removed), with markdown
+  links and backslashes stripped and `{params}` normalized to `{}`, against the
+  `Method::X` + path pairs in `src/http.rs`, `src/http/**/*.rs` (not `tests.rs`), and
+  `src/oauth2.rs`. The scanner reads `"/literal"` and `format!("/literal/{}", ..)` arguments,
+  one-hop `let path = format!(..)` bindings in the same function, and reqwest
+  `.post(format!("{}/oauth2/..", base))` calls. `#[cfg(test)]` code, comments, and literals passed
+  to other functions (for example `Some("/slack")`) never count.
+- **Gateway dispatch events**: the first table and the level-4 headings of the "Receive Events"
+  section of `developers/events/gateway-events.mdx` (`Guild Members Chunk` →
+  `GUILD_MEMBERS_CHUNK`), against the `"EVENT_NAME" =>` arms in `src/event/decode.rs`.
+- Both directions: routes/events Discord documents that the crate lacks, and crate routes/events
+  Discord no longer documents.
+
+Run it locally (Python 3.11+, standard library only):
+
+```bash
+git clone --depth 1 https://github.com/discord/discord-api-docs.git /tmp/discord-api-docs
+python3 ci/api_drift.py --docs /tmp/discord-api-docs          # markdown report on stdout
+python3 ci/api_drift.py --docs /tmp/discord-api-docs --format json
+python3 ci/api_drift.py --docs /tmp/discord-api-docs --fail-on-drift   # exit 1 on findings
+python3 ci/api_drift.py --self-check                           # what PR CI runs; no docs needed
+python3 -m unittest discover -s ci/tests -v                    # parser tests on fixture MDX/Rust
+```
+
+Exit codes: `0` report produced (drift or not), `1` findings with `--fail-on-drift`, `2` the
+extraction is broken (bad allowlist, missing docs page, or counts below the sanity floors in the
+allowlist settings). Code 2 fails the weekly run on purpose: a parser that silently found zero
+routes would otherwise report "no drift".
+
+### Allowlist
+
+Routes that are not a literal at the call site, and documented mismatches, live in
+`ci/api-drift-allowlist.toml`. Every entry needs a `reason` (15+ characters); entries without one
+are rejected, because a reasonless allowlist silently turns drift detection off.
+
+| Table | Use | Extra checks |
+| --- | --- | --- |
+| `helper_route` | documented route built by a path helper (`global_commands_path`, `webhook_message_path`, `followup_webhook_path`, `interaction_callback_path`, `identity_profile_path`, ...) | `evidence` substrings must exist in non-test `src/`; each name in `functions` must still send that method with a helper-built path |
+| `ignored_route` | documented route deliberately not wrapped | reported once Discord drops it or the crate implements it |
+| `crate_only_route` | crate route that is not a `<Route>` tag (OAuth2 token URLs) | reported once Discord documents it or the crate drops it |
+| `non_dispatch_event` | receive-event row that is an opcode (`HELLO`, `RECONNECT`, `INVALID_SESSION`) | optional `evidence` |
+| `ignored_event` / `crate_only_event` | event-name mismatches kept on purpose | same staleness checks as routes |
+
+The `drift-tooling` CI job runs the unit tests and `--self-check` on every PR. `--self-check`
+fails when the allowlist no longer describes `src/`, with a message naming the entry to edit:
+
+- *evidence `...` no longer appears in src/*: a path helper changed its format string or was
+  renamed; update `evidence`.
+- *`fn x` no longer sends Method::Y with a helper-built path*: the wrapper was renamed (for
+  example a `_typed` suffix removed) or now uses a literal; update `functions`, or delete the
+  entry if the route is now a literal.
+- *unmapped helper-built call*: a new wrapper passes a helper-built path; add its function to the
+  matching `helper_route` (or a new entry), so the weekly report does not list the route as
+  missing.
+
+### Weekly issue
+
+The workflow writes the report to the run summary and an `api-drift-report` artifact, then
+`ci/drift_issue.py` maintains **one** issue labelled `api-drift`:
+
+- It only touches issues whose body carries the `<!-- api-drift-report -->` marker, never an issue
+  a person labelled by hand.
+- Drift: update the oldest open managed issue (or open one); add a comment only when the findings
+  fingerprint changes, so unchanged drift does not notify anyone weekly. Newer managed duplicates
+  are closed.
+- No drift: close the managed issue with a comment. The next drift opens a new issue.
+- The workflow has `contents: read` and `issues: write` only, and drift never fails it or any PR.
+
+Offline dry run of the issue step:
+`echo '[]' > /tmp/issues.json && python3 ci/drift_issue.py report.json report.md --dry-run --issues-json /tmp/issues.json`.
+
+The workflow YAML was checked with `actionlint` 1.7.12 (including its shellcheck pass on `run:`
+scripts) and by running each step's commands locally in order with `RUNNER_TEMP` and
+`GITHUB_STEP_SUMMARY` set.

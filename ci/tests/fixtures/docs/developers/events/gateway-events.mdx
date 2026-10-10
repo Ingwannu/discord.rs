@@ -1,0 +1,52 @@
+# Gateway Events (fixture)
+
+## Send Events
+
+| Name                     | Description |
+|--------------------------|-------------|
+| [Identify](#identify)    | Triggers the initial handshake |
+
+#### Identify
+
+## Receive Events
+
+Receive events are sent by Discord.
+
+| Name                                                        | Description |
+|-------------------------------------------------------------|-------------|
+| [Hello](/developers/events/gateway-events#hello)             | Heartbeat interval |
+| [Ready](/developers/events/gateway-events#ready)             | Initial state |
+| [Message Create](/developers/events/gateway-events#message-create) | Message was created |
+| [Guild Members Chunk](/developers/events/gateway-events#guild-members-chunk) | Chunk |
+| [Voice Channel Effect Send](/developers/events/gateway-events#voice-channel-effect-send) | Effect |
+
+#### Hello
+
+###### Hello Structure
+
+| Field              | Type    | Description |
+|--------------------|---------|-------------|
+| heartbeat_interval | integer | Interval    |
+
+#### Ready
+
+#### Message Create
+
+#### Guild Members Chunk
+
+#### Shiny New Event
+
+Documented with a heading but forgotten in the table above.
+
+#### Client Status Object
+
+```json
+| not_an_event | table row inside a code fence |
+#### Not A Heading In Code
+```
+
+#### Voice Channel Effect Send
+
+## Other Section
+
+#### Not A Receive Event
