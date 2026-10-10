@@ -61,6 +61,25 @@ fn code_block_content_can_be_defused() {
     );
 }
 
+/// Deviation 4: discord.js replaces each ```` ``` ```` once, so a run of
+/// four or more backticks still contains a closing fence.
+#[test]
+fn backtick_runs_of_any_length_cannot_close_a_code_block() {
+    // discord.js 0.6.2: "````" -> "`\u{200b}```" (a fence remains)
+    assert_eq!(clean_code_block_content("```"), "`\u{200b}``");
+    assert_eq!(clean_code_block_content("````"), "`\u{200b}``\u{200b}`");
+    assert_eq!(clean_code_block_content("``x``"), "``x``");
+    for run in 3..=10 {
+        let untrusted = format!("a{}rm -rf /", "`".repeat(run));
+        let cleaned = clean_code_block_content(&untrusted);
+        assert!(!cleaned.contains("```"), "run of {run}: {cleaned:?}");
+        assert_eq!(cleaned.matches('`').count(), run, "backticks are kept");
+        assert!(cleaned.starts_with('a') && cleaned.ends_with("rm -rf /"));
+        let block = code_block(cleaned).to_string();
+        assert_eq!(block.matches("```").count(), 2, "only the wrapper's fences");
+    }
+}
+
 #[test]
 fn headings_have_three_levels() {
     assert_eq!(heading("a", HeadingLevel::One).to_string(), "# a");
@@ -548,6 +567,28 @@ fn quote_escapes_match_discord_js_dev_line() {
         escape_markdown("> **q**\n>>> b", EscapeMarkdownOptions::all()),
         "\\> \\*\\*q\\*\\*\n\\>>> b"
     );
+}
+
+/// discord.js regexes use ECMAScript `\s`: U+FEFF is whitespace, U+0085
+/// is not (Rust's `char::is_whitespace` says the opposite).
+#[test]
+fn whitespace_follows_ecmascript_not_rust() {
+    let options = EscapeMarkdownOptions::default();
+    // U+FEFF ends the URL, so the italics after it are escaped.
+    assert_eq!(
+        escape_markdown("http://a\u{feff}_b_", options),
+        "http://a\u{feff}\\_b\\_"
+    );
+    // U+0085 does not end it.
+    assert_eq!(
+        escape_markdown("http://a\u{0085}_b_", options),
+        "http://a\u{0085}_b_"
+    );
+    assert_eq!(escape_quote("\u{feff}> quote"), "\u{feff}\\> quote");
+    assert_eq!(escape_quote(">\u{feff}x"), "\\>\u{feff}x");
+    assert_eq!(escape_quote("\u{0085}> quote"), "\u{0085}> quote");
+    assert_eq!(escape_quote(">\u{0085}x"), ">\u{0085}x");
+    assert_eq!(escape_block_quote("\u{a0}>>> x"), "\u{a0}\\>>> x");
 }
 
 #[test]

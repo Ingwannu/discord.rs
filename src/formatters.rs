@@ -33,10 +33,13 @@
 //! - 다른 대안 대신 이 방식을 선택한 이유: 의존성을 늘리지 않으면서 단계별
 //!   상호작용(`***`의 토글 등)까지 같은 결과를 낸다. (2)는 bold만 끈 경우처럼
 //!   옵션 조합에서 discord.js와 다른 결과를 낸다.
-//! - 장점, 단점 및 영향: 정규식의 명백한 버그 세 가지는 따르지 않는다. 같은 줄의
-//!   `<:` 뒤 모든 `_`를 건너뛰는 대신 실제 커스텀 이모지 이름만 보호하고,
-//!   `<https://...>` 안의 `_`도 보호하며, 마스킹 링크는 줄마다 첫 하나가 아니라
-//!   전부 이스케이프한다. 그 밖의 입력은 discord.js와 같은 문자열을 낸다.
+//! - 장점, 단점 및 영향: discord.js의 명백한 버그 네 가지는 따르지 않는다.
+//!   같은 줄의 `<:` 뒤 모든 `_`를 건너뛰는 대신 실제 커스텀 이모지 이름만
+//!   보호하고, `<https://...>` 안의 `_`도 보호하며, 마스킹 링크는 줄마다 첫
+//!   하나가 아니라 전부 이스케이프하고, `clean_code_block_content`는 네 개
+//!   이상의 백틱에서도 닫는 펜스가 남지 않게 끊는다. 공백·줄바꿈 판정은
+//!   ECMAScript `\s`/LineTerminator 정의를 따른다(U+FEFF 포함, U+0085 제외).
+//!   그 밖의 입력은 discord.js와 같은 문자열을 낸다.
 //! ```
 
 use std::borrow::Cow;
@@ -913,10 +916,42 @@ public_escaper!(
     escape_block_quote => block_quote_pass
 );
 
-/// Replaces ```` ``` ```` with ```` `\u{200b}`` ```` so untrusted text
-/// cannot close a [`code_block`] (discord.js `cleanCodeBlockContent`).
+/// Breaks every run of three or more backticks with U+200B so untrusted
+/// text cannot close a [`code_block`] (discord.js `cleanCodeBlockContent`).
+///
+/// A run of exactly three becomes ```` `\u{200b}`` ```` as in discord.js.
+/// discord.js replaces each ```` ``` ```` only once, so a run of four
+/// leaves ```` `\u{200b}``` ```` with a closing fence in it; here a zero
+/// width space follows the first backtick and then every second one, so no
+/// three backticks stay adjacent.
 pub fn clean_code_block_content(text: &str) -> Cow<'_, str> {
-    replace_all(text, "```", "`\u{200b}``").map_or(Cow::Borrowed(text), Cow::Owned)
+    let bytes = text.as_bytes();
+    let mut edits = Edits::new(text);
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'`' {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while bytes.get(index) == Some(&b'`') {
+            index += 1;
+        }
+        let run = index - start;
+        if run >= 3 {
+            let mut broken = String::with_capacity(run * 4);
+            broken.push('`');
+            let mut remaining = run - 1;
+            while remaining > 0 {
+                let take = remaining.min(2);
+                broken.push('\u{200b}');
+                broken.push_str(&"``"[..take]);
+                remaining -= take;
+            }
+            edits.replace(start, index, &broken);
+        }
+    }
+    edits.finish().map_or(Cow::Borrowed(text), Cow::Owned)
 }
 
 /// Accumulates edits over `text`, copying untouched stretches once.
@@ -1176,7 +1211,7 @@ fn protected_spans(text: &str, shield: Shield) -> Vec<bool> {
             // `<[^\s:]+:\/[^\s>]*`: protection starts after the `:/`.
             let colon = text[open + 1..]
                 .char_indices()
-                .find(|&(_, ch)| ch == ':' || ch.is_whitespace())
+                .find(|&(_, ch)| ch == ':' || is_js_whitespace(ch))
                 .filter(|&(position, ch)| ch == ':' && position > 0)
                 .map(|(position, _)| open + 1 + position);
             if let Some(colon) = colon.filter(|&colon| text[colon..].starts_with(":/")) {
@@ -1198,7 +1233,7 @@ fn protected_spans(text: &str, shield: Shield) -> Vec<bool> {
 fn token_end(text: &str, from: usize, stop_at_angle: bool) -> usize {
     text[from..]
         .char_indices()
-        .find(|&(_, ch)| ch.is_whitespace() || (stop_at_angle && ch == '>'))
+        .find(|&(_, ch)| is_js_whitespace(ch) || (stop_at_angle && ch == '>'))
         .map_or(text.len(), |(position, _)| from + position)
 }
 
@@ -1221,19 +1256,36 @@ fn emoji_name_span(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
     (name_len > 0 && emoji_id_tail(bytes, name_end)).then_some((name_start, name_end))
 }
 
+/// ECMAScript `\s`: WhiteSpace (TAB, VT, FF, U+FEFF, and the Zs spaces)
+/// plus LineTerminator. The ports use this instead of
+/// `char::is_whitespace`, which also counts U+0085 but not U+FEFF, so URL
+/// ends and quote markers fall where discord.js puts them.
+fn is_js_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\t' | '\u{b}' | '\u{c}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}'
+    ) || is_js_line_terminator(ch)
+}
+
+/// ECMAScript LineTerminator: where multiline `^` matches and `.` stops.
+fn is_js_line_terminator(ch: char) -> bool {
+    matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
 /// Byte offsets where a line starts (JavaScript's multiline `^`: the input
-/// start and after `\n`, `\r`, U+2028, U+2029).
+/// start and after every line terminator).
 fn line_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
     std::iter::once(0).chain(
         text.char_indices()
-            .filter(|&(_, ch)| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+            .filter(|&(_, ch)| is_js_line_terminator(ch))
             .map(|(position, ch)| position + ch.len_utf8()),
     )
 }
 
 fn line_end(text: &str, start: usize) -> usize {
     text[start..]
-        .find(['\n', '\r', '\u{2028}', '\u{2029}'])
+        .find(is_js_line_terminator)
         .map_or(text.len(), |position| start + position)
 }
 
@@ -1353,14 +1405,14 @@ fn quote_marker_pass(text: &str, marker: &str) -> Option<String> {
         let end = line_end(text, start);
         let indent = text[start..end]
             .char_indices()
-            .find(|&(_, ch)| !ch.is_whitespace())
+            .find(|&(_, ch)| !is_js_whitespace(ch))
             .map_or(end - start, |(position, _)| position);
         let at = start + indent;
         // The whitespace after the marker may be the line break itself.
         let followed_by_space = text[at..]
             .strip_prefix(marker)
             .and_then(|rest| rest.chars().next())
-            .is_some_and(char::is_whitespace);
+            .is_some_and(is_js_whitespace);
         if followed_by_space {
             edits.insert(at, "\\");
         }

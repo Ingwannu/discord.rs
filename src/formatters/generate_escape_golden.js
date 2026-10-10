@@ -19,7 +19,11 @@ const inputs = [
   "mix `code **not bold**` **bold**", "line1\nline2 *a*\n- item\n# head\n1. x\n[l](u)",
   "\r\n- crlf item\r\n# h", "tab\t*x*", "a_b_c_d", "_a_b_", "**a**b**", "*a**b*", "__a__b__",
   "`a``b```c````d", "x ``` y ``` z", "x ``` y", "`a` b `c", "``a` b`", "**`x`**", "~~||x||~~",
-  "*_*_", "_*_*", "**__**__", "a - item # h", "  * # x", "*  ##  y",
+  "*_*_", "_*_*", "**__**__", "a\u2028- item\u2029# h", "  * # x", "*  ##  y",
+  // ECMAScript \s differs from Rust's char::is_whitespace (U+FEFF in, U+0085 out).
+  "http://a\ufeff_b_", "http://a\u0085_b_", "http://a\u00a0_b_", "http://a\u3000_b_",
+  "http://a\u2028_b_", "http://a\u000b_b_", "<https://a\ufeff_b>", "https://x.y/\u2003*a*",
+  "a\u0085*b*", "\ufeff# heading", "\u3000- item", "x\u0085- y\u2029- z",
 ];
 const options = [
   {},

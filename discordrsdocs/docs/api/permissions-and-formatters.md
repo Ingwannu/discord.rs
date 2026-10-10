@@ -2,7 +2,7 @@
 
 Two pure, dependency-free modules added in 3.0 (unreleased):
 
-- `discordrs::permissions` — the discord.js `channel.permissionsFor(member)` / `member.permissions` equivalent.
+- `discordrs::permissions` — effective channel and guild permissions, the usable-permission counterpart of discord.js `channel.permissionsFor(member)` / `member.permissions`.
 - `discordrs::formatters` — the `@discordjs/formatters` equivalent: mentions, timestamps, markdown styles, lists, `escape_markdown`, and `clean_content`.
 
 ## Permission computation
@@ -19,7 +19,11 @@ The calculation follows Discord's documented algorithm ([Permissions](https://do
    - Threads use the parent channel's overwrites. `SEND_MESSAGES` is not inherited, so it is removed, and `SEND_MESSAGES_IN_THREADS` gates the four permissions above instead.
    - In voice and stage channels, without `CONNECT` the member loses `MANAGE_CHANNELS`.
 
-Not modeled, because Discord does not document them as permission bits: private-thread membership, visibility from being connected to a voice channel, other "such as" consequences of a missing `CONNECT`, and `SEND_POLLS` / `SEND_VOICE_MESSAGES` without `SEND_MESSAGES`. Bits that do not apply to a channel type (for example `CONNECT` in a text channel) are kept, as in discord.js.
+Not modeled, because Discord does not document them as permission bits: private-thread visibility (Discord requires thread membership or `MANAGE_THREADS`), archived or locked thread state, visibility from being connected to a voice channel, other "such as" consequences of a missing `CONNECT`, and `SEND_POLLS` / `SEND_VOICE_MESSAGES` without `SEND_MESSAGES`. Bits that do not apply to a channel type (for example `CONNECT` in a text channel) are kept, as in discord.js.
+
+### Relation to discord.js
+
+Steps 4 and 5 make the result an effective-permission projection, not a bit-for-bit port. discord.js `GuildChannel.permissionsFor()` returns the overwrite calculation alone (no timeout, no implicit rules), `ThreadChannel.permissionsFor()` simply returns the parent's result, and `GuildMember.permissions` uses roles and ownership only. Those discord.js values are available as `ComputedPermissions::raw`; `ComputedPermissions::permissions` is what the member can actually use.
 
 ### From models
 
@@ -27,9 +31,12 @@ Not modeled, because Discord does not document them as permission bits: private-
 use std::time::SystemTime;
 use discordrs::bitfield::permissions;
 use discordrs::model::{Channel, Guild, Member};
-use discordrs::permissions::{permissions_for, ChannelPermissions, PermissionDataError};
+use discordrs::permissions::{permissions_for, PermissionDataError};
 
-fn can_send(
+/// Whether the member holds the send permission bit. This is not "can send":
+/// a private thread also needs thread membership or MANAGE_THREADS, and an
+/// archived or locked thread has its own rules.
+fn has_send_permission(
     guild: &Guild,
     member: &Member,
     channel: &Channel,
@@ -46,14 +53,18 @@ fn can_send(
 }
 ```
 
+Check thread membership (or `MANAGE_THREADS`) for private threads and the thread's `thread_metadata` (archived, locked) separately; they are not permission bits.
+
 `channel.permissions_for(&guild, &member, parent)` and `member.guild_permissions(&guild)` are the same calls with the current time. `guild_permissions(guild, member, now)` returns guild-level permissions.
 
-Roles are resolved from `guild.roles`. Anything missing is a typed `PermissionDataError` that names the object: `MissingRole` (the `@everyone` role when `role_id == guild_id`), `MissingRolePermissions`, `MissingGuildOwner`, `MissingMemberUser` (message `member` objects have no `user`; copy `message.author` into it), `MissingParentChannel`, `MissingPermissionOverwrites` (partial channels such as interaction `resolved` entries), `NotGuildChannel`, `GuildMismatch`, `ParentMismatch`, `InvalidParentChannel`, and `InvalidTimestamp`. `PermissionDataError` converts into `DiscordError::Model` for `?`.
+Roles are resolved from `guild.roles`. Owners and administrators are answered as soon as that is known: the owner needs no roles, and a member with `ADMINISTRATOR` on `@everyone` or on any resolvable role needs no other roles; neither needs overwrites, a thread parent, or a valid timeout. Contradictions are still errors for everyone: a DM, a channel or parent from another guild, a parent that is not the thread's `parent_id`, or a parent that cannot hold threads (voice, stage, category, directory, or another thread; parents of channel types the crate does not know are accepted as given).
+
+Otherwise anything missing is a typed `PermissionDataError` that names the object: `MissingRole` (the `@everyone` role when `role_id == guild_id`), `MissingRolePermissions`, `MissingGuildOwner`, `MissingMemberUser` (message `member` objects have no `user`; copy `message.author` into it), `MissingParentChannel`, `MissingPermissionOverwrites` (partial channels such as interaction `resolved` entries), `NotGuildChannel`, `GuildMismatch`, `ParentMismatch`, `InvalidParentChannel`, and `InvalidTimestamp`. `PermissionDataError` converts into `DiscordError::Model` for `?`.
 
 ### Results
 
 - `ChannelPermissions::Known(ComputedPermissions)` or `ChannelPermissions::Obfuscated`.
-- `ComputedPermissions { permissions, source, timeout_applied }`, where `source` is `PermissionSource::{Owner, Administrator, Computed}`.
+- `ComputedPermissions { permissions, raw, source, timeout_applied }`: `permissions` is effective, `raw` is the discord.js-equivalent value before the timeout and implicit rules, and `source` is `PermissionSource::{Owner, Administrator, Computed}`.
 - `ComputedPermissions::has(required)` and `missing(required)` accept `Permissions` values (`permissions::SEND_MESSAGES | permissions::ATTACH_FILES`) or raw bits. Owners and administrators pass every check, including permissions newer than the crate.
 - `ChannelPermissions::has(required)` returns `Option<bool>`: `None` means unknown.
 
@@ -81,7 +92,7 @@ async fn check(
 }
 ```
 
-`cached_permissions_for` and `cached_guild_permissions` read the guild (for `owner_id`), the member, the channel, a thread's parent, and every role through `CacheHandle`'s public read API. Roles come from the role store, which role update events refresh, not from the cached guild's `roles` list (a GUILD_CREATE snapshot). Missing data is reported (`MissingGuild`, `MissingMember`, `MissingChannel`, `MissingRole`, ..., or `CacheDisabled` without the `cache` feature) instead of being filled with defaults. Each piece is a separate read, so a concurrent update can be seen half-applied.
+`cached_permissions_for` and `cached_guild_permissions` read the guild (for `owner_id`), the member, the channel, a thread's parent, and every role through `CacheHandle`'s public read API. Roles come from the role store, which role update events refresh, not from the cached guild's `roles` list (a GUILD_CREATE snapshot). Missing data the answer depends on is reported (`MissingGuild`, `MissingMember`, `MissingChannel`, `MissingRole`, ..., or `CacheDisabled` without the `cache` feature) instead of being filled with defaults. The channel itself is always required, so it can be checked against the guild; beyond that, owners and administrators need only what proves their status (for example an uncached member is fine when `@everyone` grants `ADMINISTRATOR`). Each piece is a separate read, so a concurrent update can be seen half-applied.
 
 ### Explicit inputs
 
@@ -115,9 +126,7 @@ fn example(overwrites: &[PermissionOverwrite]) {
 
 `ChannelPermissionInput::from_channel(guild_id, &channel, parent)` builds the channel side from a `Channel` with the same validation as `permissions_for`.
 
-### Note on `ALL_PERMISSIONS`
-
-Owners and administrators receive `discordrs::permissions::ALL_PERMISSIONS`, built from Discord's permission table (bits 0–46 and 48–52). It is not `Permissions::all()`, because the crate's `PermissionFlags` name table is shifted by one from bit 41 upward and lacks `PIN_MESSAGES` (51).
+Owners and administrators receive `Permissions::all()` (every bit in Discord's table: 0–46 and 48–52), and `has(...)` treats them as holding permissions newer than the crate too.
 
 ## Formatters
 
@@ -149,7 +158,7 @@ assert_eq!(line, "**_<@80351110224678912>_** joined <t:1618953630:R>");
 | `channel_link`, `dm_channel_link`, `message_link`, `dm_message_link` | `https://discord.com/channels/...` |
 | `unordered_list(&items)`, `ordered_list(&items, start)`, `*_nested(&[ListItem])` | `- a`, `1. a` (indented sub-lists) |
 
-`TimestampStyle` covers all nine documented styles: `t`, `T`, `d`, `D`, `f`, `F`, `s`, `S`, `R`. Ordered lists repeat the start number on every item, as in discord.js; Discord renumbers them when rendering. `clean_code_block_content(text)` keeps untrusted text from closing a code block.
+`TimestampStyle` covers all nine documented styles: `t`, `T`, `d`, `D`, `f`, `F`, `s`, `S`, `R`. Ordered lists repeat the start number on every item, as in discord.js; Discord renumbers them when rendering. `clean_code_block_content(text)` breaks every run of three or more backticks with U+200B, so untrusted text cannot close a code block.
 
 ### `escape_markdown`
 
@@ -168,11 +177,12 @@ assert_eq!(escape_markdown("**a** ```**b**```", keep_code), "\\*\\*a\\*\\* ```**
 
 `EscapeMarkdownOptions::default()` matches the published `@discordjs/formatters` 0.6.2 (discord.js v14): code blocks, inline code, bold, italic, underline, strikethrough, spoiler, and backslashes on; headings, bulleted and numbered lists, masked links, quotes, and block quotes off. `EscapeMarkdownOptions::all()` turns everything on; each option has a chainable setter. The individual escapers (`escape_bold`, `escape_italic`, `escape_heading`, ...) are public too.
 
-The output matches discord.js 0.6.2 for every case in the committed golden corpus (`src/formatters/escape_golden.json`, 1,710 option combinations plus 1,080 single-escaper cases, generated from the published package). Three discord.js regex bugs are deliberately not reproduced:
+The output matches discord.js 0.6.2 for every case in the committed golden corpus (`src/formatters/escape_golden.json`, 1,938 option combinations plus 1,224 single-escaper cases over 102 inputs, generated from the published package). Whitespace and line breaks follow ECMAScript's `\s` and line terminators like the original regexes (U+FEFF is whitespace, U+0085 is not). Four discord.js bugs are deliberately not reproduced:
 
 - discord.js leaves every `_` after a `<:` on the same line unescaped; only names inside real `<:name:id>` tags are protected here.
 - discord.js escapes `_` inside `<scheme:/...>` autolinks (a one-character-scheme typo) while protecting `*`; both are protected here.
 - discord.js escapes only the first masked link on a line; every one is escaped here.
+- discord.js `cleanCodeBlockContent` replaces each ```` ``` ```` once, leaving a closing fence in runs of four or more backticks; `clean_code_block_content` breaks every run.
 
 ### `clean_content`
 

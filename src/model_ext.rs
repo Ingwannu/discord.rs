@@ -721,9 +721,11 @@ impl User {
 // ---------------------------------------------------------------------------
 
 impl Channel {
-    /// Permissions of `member` in this channel, like discord.js
-    /// `channel.permissionsFor(member)`. `parent` is required when this is a
-    /// thread. The timeout is checked against the current time; use
+    /// Effective permissions of `member` in this channel. discord.js
+    /// `channel.permissionsFor(member)` stops at the overwrite calculation,
+    /// which is kept in `ComputedPermissions::raw`. `parent` is required when
+    /// this is a thread (unless the member is owner or administrator). The
+    /// timeout is checked against the current time; use
     /// [`crate::permissions::permissions_for`] to pass one explicitly.
     pub fn permissions_for(
         &self,
@@ -743,9 +745,9 @@ impl Channel {
 }
 
 impl Member {
-    /// Guild-level permissions of this member, like discord.js
-    /// `member.permissions`, with the timeout checked against the current
-    /// time.
+    /// Guild-level permissions of this member: discord.js
+    /// `member.permissions` in `ComputedPermissions::raw`, and with an active
+    /// timeout (checked against the current time) applied in `permissions`.
     pub fn guild_permissions(
         &self,
         guild: &Guild,

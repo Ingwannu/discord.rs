@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::{
     cached_guild_permissions, cached_permissions_for, guild_permissions, parse_timestamp,
     permissions_for, ChannelClass, ChannelPermissionInput, ChannelPermissions, ComputedPermissions,
-    MemberPermissionInput, PermissionDataError, PermissionSource, ALL_PERMISSIONS,
+    MemberPermissionInput, PermissionDataError, PermissionSource,
 };
 use crate::bitfield::{permissions as p, Permissions};
 use crate::cache::CacheHandle;
@@ -108,7 +108,8 @@ fn owner_gets_everything_despite_overwrites_and_timeout() {
     let overwrites = [member_overwrite(OWNER, none(), p::VIEW_CHANNEL)];
 
     let computed = known(input.in_channel(&text(&overwrites)));
-    assert_eq!(computed.permissions, ALL_PERMISSIONS);
+    assert_eq!(computed.permissions, Permissions::all());
+    assert_eq!(computed.raw, Permissions::all());
     assert_eq!(computed.source, PermissionSource::Owner);
     assert!(!computed.timeout_applied);
     assert_eq!(input.guild_permissions().source, PermissionSource::Owner);
@@ -126,10 +127,10 @@ fn administrator_role_bypasses_overwrites_and_timeout() {
     ];
 
     let computed = known(input.in_channel(&text(&overwrites)));
-    assert_eq!(computed.permissions, ALL_PERMISSIONS);
+    assert_eq!(computed.permissions, Permissions::all());
     assert_eq!(computed.source, PermissionSource::Administrator);
     assert!(!computed.timeout_applied);
-    assert_eq!(input.guild_permissions().permissions, ALL_PERMISSIONS);
+    assert_eq!(input.guild_permissions().permissions, Permissions::all());
 }
 
 #[test]
@@ -156,17 +157,15 @@ fn bypass_has_every_permission_including_unknown_bits() {
     assert!(computed.has(p::SEND_POLLS | p::MANAGE_THREADS));
     assert!(computed.has(1u64 << 60));
     assert!(computed.missing(1u64 << 60).is_empty());
-    assert_eq!(computed.bits(), ALL_PERMISSIONS.bits());
+    assert_eq!(computed.bits(), Permissions::all().bits());
 }
 
 #[test]
-fn all_permissions_matches_discord_table() {
-    let all = ALL_PERMISSIONS.bits();
-    assert_eq!(all.count_ones(), 52);
-    assert_eq!(all & (1 << 47), 0, "bit 47 is unassigned");
-    assert_ne!(all & (1 << 51), 0, "PIN_MESSAGES");
-    assert_ne!(all & (1 << 52), 0, "BYPASS_SLOWMODE");
-    assert_eq!(all >> 53, 0);
+fn bypass_grants_every_documented_permission() {
+    // Discord's table: bits 0-46 and 48-52 (bit 47 is retired).
+    let all = Permissions::all().bits();
+    assert_eq!(all, ((1u64 << 47) - 1) | (0b11111u64 << 48));
+    assert!(Permissions::all().contains(p::PIN_MESSAGES.bits() | p::BYPASS_SLOWMODE.bits()));
 }
 
 // ---------------------------------------------------------------------------
@@ -370,6 +369,11 @@ fn text_channel_without_send_messages_drops_send_dependent_permissions() {
         p::VIEW_CHANNEL | p::ADD_REACTIONS | p::SEND_POLLS,
         "only the four documented permissions depend on SEND_MESSAGES"
     );
+    assert_eq!(
+        computed.raw,
+        everyone - p::SEND_MESSAGES,
+        "raw skips implicit rules"
+    );
 }
 
 #[test]
@@ -436,6 +440,8 @@ fn threads_use_parent_overwrites_and_send_messages_in_threads() {
         "SEND_MESSAGES is not inherited"
     );
     assert!(computed.has(p::SEND_MESSAGES_IN_THREADS | p::ATTACH_FILES));
+    // discord.js ThreadChannel.permissionsFor() answers from the parent.
+    assert!(computed.raw.contains(p::SEND_MESSAGES.bits()));
 }
 
 #[test]
@@ -478,6 +484,9 @@ fn active_timeout_keeps_only_view_and_history() {
         p::VIEW_CHANNEL | p::READ_MESSAGE_HISTORY
     );
     assert!(guild_level.timeout_applied);
+    assert!(guild_level
+        .raw
+        .contains(p::KICK_MEMBERS.bits() | p::ADD_REACTIONS.bits()));
 
     let channel = known(input.in_channel(&text(&[member_overwrite(
         MEMBER,
@@ -1263,10 +1272,21 @@ async fn cached_permissions_report_each_missing_piece() {
     let member = sf(MEMBER);
 
     assert_eq!(
-        cached_permissions_for(&cache, &sf(999), &member, &sf(500), now())
+        cached_guild_permissions(&cache, &sf(999), &member, now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingGuild { guild_id: sf(999) }
+    );
+    // Channel 500 belongs to guild 100: a contradiction, reported first.
+    assert_eq!(
+        cached_permissions_for(&cache, &sf(999), &member, &sf(500), now())
+            .await
+            .unwrap_err(),
+        PermissionDataError::GuildMismatch {
+            channel_id: sf(500),
+            expected: sf(999),
+            found: guild.clone()
+        }
     );
     assert_eq!(
         cached_permissions_for(&cache, &guild, &sf(OTHER_MEMBER), &sf(500), now())
@@ -1370,6 +1390,12 @@ async fn cached_permissions_need_the_cache_feature() {
             .unwrap_err(),
         PermissionDataError::CacheDisabled
     );
+    assert_eq!(
+        cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+            .await
+            .unwrap_err(),
+        PermissionDataError::CacheDisabled
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1402,4 +1428,214 @@ fn channel_and_member_delegates_compute_permissions() {
         userless.guild_permissions(&guild_model()).unwrap_err(),
         PermissionDataError::MissingMemberUser
     );
+}
+
+// ---------------------------------------------------------------------------
+// Owners and administrators need only the data that proves their status
+// ---------------------------------------------------------------------------
+
+fn owner_member() -> Member {
+    Member {
+        user: Some(user(OWNER)),
+        roles: vec![sf(ROLE_A), sf(ROLE_C)],
+        ..Member::default()
+    }
+}
+
+#[test]
+fn known_owner_needs_no_roles_overwrites_parent_or_timeout() {
+    let mut guild = guild_model();
+    guild.roles.clear();
+    let mut member = owner_member();
+    member.communication_disabled_until = Some("not a timestamp".to_string());
+
+    let guild_level = guild_permissions(&guild, &member, now()).unwrap();
+    assert_eq!(guild_level.source, PermissionSource::Owner);
+
+    let mut partial = channel_model(500, TEXT, vec![]);
+    partial.permission_overwrites = None;
+    let outcome = permissions_for(&guild, &member, &partial, None, now()).unwrap();
+    assert_eq!(
+        outcome.known().map(|c| c.source),
+        Some(PermissionSource::Owner)
+    );
+
+    let thread = thread_model(600, 500);
+    let outcome = permissions_for(&guild, &member, &thread, None, now()).unwrap();
+    assert_eq!(
+        outcome.known().map(|c| c.source),
+        Some(PermissionSource::Owner)
+    );
+}
+
+#[test]
+fn owner_still_gets_contradiction_errors() {
+    let member = owner_member();
+    let mut foreign = channel_model(500, TEXT, vec![]);
+    foreign.guild_id = Some(sf(999));
+    assert!(matches!(
+        permissions_for(&guild_model(), &member, &foreign, None, now()),
+        Err(PermissionDataError::GuildMismatch { .. })
+    ));
+
+    let dm = channel_model(501, 1, vec![]);
+    assert!(matches!(
+        permissions_for(&guild_model(), &member, &dm, None, now()),
+        Err(PermissionDataError::NotGuildChannel { .. })
+    ));
+
+    let thread = thread_model(600, 500);
+    let wrong_parent = channel_model(502, TEXT, vec![]);
+    assert!(matches!(
+        permissions_for(&guild_model(), &member, &thread, Some(&wrong_parent), now()),
+        Err(PermissionDataError::ParentMismatch { .. })
+    ));
+    let voice_parent = channel_model(500, VOICE, vec![]);
+    assert!(matches!(
+        permissions_for(&guild_model(), &member, &thread, Some(&voice_parent), now()),
+        Err(PermissionDataError::InvalidParentChannel { .. })
+    ));
+}
+
+#[test]
+fn administrator_on_everyone_skips_missing_member_roles() {
+    let mut guild = guild_model();
+    guild.roles[0] = role(GUILD, p::ADMINISTRATOR);
+    let mut member = member_model();
+    member.roles.push(sf(ROLE_C)); // not in guild.roles
+    member.communication_disabled_until = Some("garbage".to_string());
+
+    let computed = guild_permissions(&guild, &member, now()).unwrap();
+    assert_eq!(computed.source, PermissionSource::Administrator);
+
+    let mut partial = channel_model(500, TEXT, vec![]);
+    partial.permission_overwrites = None;
+    assert_eq!(
+        permissions_for(&guild, &member, &partial, None, now())
+            .unwrap()
+            .known()
+            .map(|c| c.source),
+        Some(PermissionSource::Administrator)
+    );
+}
+
+#[test]
+fn administrator_role_skips_other_missing_data() {
+    let mut guild = guild_model();
+    guild.roles.retain(|role| role.id != sf(GUILD));
+    guild.roles[0] = role(ROLE_A, p::ADMINISTRATOR);
+    guild.owner_id = None;
+    let mut member = member_model();
+    member.user = None;
+    member.roles.push(sf(ROLE_C));
+    let computed = guild_permissions(&guild, &member, now()).unwrap();
+    assert_eq!(computed.source, PermissionSource::Administrator);
+}
+
+#[test]
+fn without_admin_the_first_missing_piece_is_reported() {
+    let mut guild = guild_model();
+    guild.owner_id = None;
+    let mut member = member_model();
+    member.user = None;
+    assert_eq!(
+        guild_permissions(&guild, &member, now()).unwrap_err(),
+        PermissionDataError::MissingMemberUser
+    );
+    member.user = Some(user(MEMBER));
+    assert_eq!(
+        guild_permissions(&guild, &member, now()).unwrap_err(),
+        PermissionDataError::MissingGuildOwner {
+            guild_id: sf(GUILD)
+        }
+    );
+}
+
+#[test]
+fn thread_parents_must_be_able_to_hold_threads() {
+    let guild = sf(GUILD);
+    let thread = thread_model(600, 500);
+    for kind in [VOICE, 13, CATEGORY, 14] {
+        let parent = channel_model(500, kind, vec![]);
+        assert_eq!(
+            ChannelPermissionInput::from_channel(&guild, &thread, Some(&parent)).unwrap_err(),
+            PermissionDataError::InvalidParentChannel {
+                thread_id: sf(600),
+                parent_id: sf(500),
+                kind
+            },
+            "parent type {kind}"
+        );
+    }
+    // Text, announcement, forum, media, and types this crate does not know.
+    for kind in [TEXT, 5, 15, 16, 99] {
+        let parent = channel_model(500, kind, vec![]);
+        assert!(
+            ChannelPermissionInput::from_channel(&guild, &thread, Some(&parent)).is_ok(),
+            "parent type {kind}"
+        );
+    }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cached_owner_needs_no_member_roles_or_overwrites() {
+    let cache = CacheHandle::new();
+    cache
+        .upsert_guild(Guild {
+            roles: Vec::new(),
+            ..guild_model()
+        })
+        .await;
+    let mut partial = channel_model(500, TEXT, vec![]);
+    partial.permission_overwrites = None;
+    cache.upsert_channel(partial).await;
+    cache.upsert_channel(thread_model(600, 555)).await;
+
+    let guild_level = cached_guild_permissions(&cache, &sf(GUILD), &sf(OWNER), now())
+        .await
+        .unwrap();
+    assert_eq!(guild_level.source, PermissionSource::Owner);
+    for channel in [500, 600] {
+        let outcome = cached_permissions_for(&cache, &sf(GUILD), &sf(OWNER), &sf(channel), now())
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.known().map(|c| c.source),
+            Some(PermissionSource::Owner)
+        );
+    }
+    // The channel itself is still required to check it belongs to the guild.
+    assert_eq!(
+        cached_permissions_for(&cache, &sf(GUILD), &sf(OWNER), &sf(777), now())
+            .await
+            .unwrap_err(),
+        PermissionDataError::MissingChannel {
+            channel_id: sf(777)
+        }
+    );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn cached_administrator_skips_missing_member_and_roles() {
+    let cache = CacheHandle::new();
+    cache
+        .upsert_role(sf(GUILD), role(GUILD, p::ADMINISTRATOR))
+        .await;
+    // No guild object, no member: @everyone alone proves ADMINISTRATOR.
+    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+        .await
+        .unwrap();
+    assert_eq!(computed.source, PermissionSource::Administrator);
+
+    let cache = populated_cache().await;
+    cache
+        .upsert_role(sf(GUILD), role(ROLE_A, p::ADMINISTRATOR))
+        .await;
+    cache.remove_role(&sf(GUILD), &sf(ROLE_B)).await;
+    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+        .await
+        .unwrap();
+    assert_eq!(computed.source, PermissionSource::Administrator);
 }
