@@ -819,20 +819,16 @@ impl ReactionCollection {
     }
 
     fn insert(&mut self, key: EmojiKey, emoji: Emoji, user_id: Snowflake, burst: bool) {
-        let index = match self.position(&key) {
-            Some(index) => index,
-            None => {
-                self.reactions.push((key, CollectedReaction::default()));
-                self.reactions.len() - 1
+        let index = self.position(&key).unwrap_or_else(|| {
+            self.reactions.push((key, CollectedReaction::default()));
+            self.reactions.len() - 1
+        });
+        if let Some((_, reaction)) = self.reactions.get_mut(index) {
+            reaction.emoji = emoji;
+            if reaction.set_mut(burst).insert(user_id.clone()) {
+                self.total = self.total.saturating_add(1);
+                *self.user_slots.entry(user_id).or_insert(0) += 1;
             }
-        };
-        let Some((_, reaction)) = self.reactions.get_mut(index) else {
-            return;
-        };
-        reaction.emoji = emoji;
-        if reaction.set_mut(burst).insert(user_id.clone()) {
-            self.total = self.total.saturating_add(1);
-            *self.user_slots.entry(user_id).or_insert(0) += 1;
         }
     }
 
@@ -840,14 +836,19 @@ impl ReactionCollection {
         let Some(index) = self.position(key) else {
             return;
         };
-        let Some((_, reaction)) = self.reactions.get_mut(index) else {
-            return;
-        };
-        if !reaction.set_mut(burst).remove(user_id) {
+        let removed = self
+            .reactions
+            .get_mut(index)
+            .is_some_and(|(_, reaction)| reaction.set_mut(burst).remove(user_id));
+        if !removed {
             return;
         }
         // discord.js drops the emoji from `collected` once its count hits 0.
-        if reaction.count() == 0 {
+        if self
+            .reactions
+            .get(index)
+            .is_some_and(|(_, reaction)| reaction.count() == 0)
+        {
             self.reactions.remove(index);
         }
         self.total = self.total.saturating_sub(1);
@@ -2383,6 +2384,14 @@ mod tests {
         let started = time::Instant::now();
         assert!(reset.next().await.is_none());
         assert_eq!(started.elapsed(), Duration::from_secs(10));
+
+        let mut handle_stop = hub.reaction_collector(MESSAGE);
+        handle_stop.stop_handle().stop();
+        assert!(handle_stop.next().await.is_none());
+        assert_eq!(
+            handle_stop.end_reason(),
+            Some(CollectorEndReason::User("user".to_string()))
+        );
 
         let mut user_stop = hub.reaction_collector(MESSAGE);
         user_stop.stop();

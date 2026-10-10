@@ -88,22 +88,26 @@ Main types:
 - `InteractionCollector`
 - `ComponentCollector`
 - `ModalCollector`
+- `ReactionCollector`, with `ReactionCollection`, `CollectedReaction`, and `EmojiKey` for its results
 
 Collectors subscribe to typed `Event` values and let handlers wait for the next matching runtime event.
 
 ### Collector Controls (2.2.0)
 
-All four collector types share the same control surface, mirroring discord.js's `Collector`:
+All collector types share the same control surface, mirroring discord.js's `Collector`:
 
-- `filter(...)` — uniform across message, interaction, component, and modal collectors; non-matching items do not count toward `max_items` and do not reset the idle window
+- `filter(...)` — uniform across collectors; non-matching items do not count toward `max_items` and do not reset the idle window
 - `timeout(Duration)` — overall collection window (`CollectorEndReason::Time`)
 - `idle(Duration)` — separate idle window that ends collection when no matching item arrives in time (`CollectorEndReason::Idle`)
 - `max_items(n)` — ends with `CollectorEndReason::Limit`
 - `stop()` / `stop_with_reason(...)` — explicit stop, recording `"user"` or a custom reason (`CollectorEndReason::User(reason)`)
 - `stop_handle()` — cloneable `CollectorStopHandle` for stopping from another task; an in-flight `next()` ends with `None`
-- `reset_timer()` — restarts the overall timeout window
-- `end_reason()` — why collection ended (`Limit` / `Time` / `Idle` / `User` / `ChannelDropped`)
+- `reset_timer()` — restarts the overall timeout and idle windows
+- `end_reason()` — why collection ended (`Limit` / `Time` / `Idle` / `User` / `ChannelDropped`, plus the reaction-only reasons below)
 - `received_count()` — how many items were collected so far
+- `lagged_events()` — how many events this collector lost to broadcast lag (see below)
+
+Since 3.0, `CollectorEndReason` is `#[non_exhaustive]`, so `match` on it needs a `_` arm.
 
 ```rust
 use std::time::Duration;
@@ -129,8 +133,66 @@ if collector.end_reason() == Some(CollectorEndReason::Idle) {
 }
 ```
 
+### Reaction Collector (3.0)
+
+`ReactionCollector` is the equivalent of discord.js's `message.createReactionCollector()` / `awaitReactions()`. It is always bound to one message:
+
+- `ctx.collectors().reaction_collector(message_id)` — only the message id is known; the channel and guild are learned from the first reaction event
+- `ctx.collectors().reaction_collector_for_message(&message)` — takes the channel and guild from the `Message`, so deleting them ends collection right away (or set them with `.channel_id(...)` / `.guild_id(...)`)
+
+`next()` yields each `MESSAGE_REACTION_ADD` (`ReactionEvent`) that passes the filter. `collected()` returns the running tally, and `collect()` waits for the end and returns the final `ReactionCollection`, keyed by `EmojiKey` in first-collected order:
+
+- `EmojiKey::Custom(id)` for custom emojis (keyed by id, like discord.js's `emoji.id ?? emoji.name`), `EmojiKey::Unicode(text)` for Unicode emojis. The text is compared as Discord sends it, so `"❤"` and `"❤️"` are different keys.
+- `CollectedReaction` holds `users()` (normal reactions) and `burst_users()` (super reactions) separately, because one user can hold both for the same emoji; `count()` adds them, like Discord's reaction `count`.
+- `ReactionCollection::total()`, `len()` (distinct emojis), `users()` / `user_count()` (distinct users) mirror discord.js's `collector.total`, `collected.size`, and `collector.users`.
+
+Limits and end reasons:
+
+| Option | Counts | End reason |
+|---|---|---|
+| `max_items(n)` | reactions currently collected (discord.js `max`) | `Limit` |
+| `max_emojis(n)` | distinct emojis | `EmojiLimit` |
+| `max_users(n)` | distinct users | `UserLimit` |
+| `timeout` / `idle` | as for every collector | `Time` / `Idle` |
+| — | the message is deleted (alone or in a bulk delete) | `MessageDelete` |
+| — | its channel / thread is deleted | `ChannelDelete` / `ThreadDelete` |
+| — | the bot leaves or is removed from the guild (outages with `unavailable: true` do not count) | `GuildDelete` |
+
+A limit of `0` ends collection before waiting.
+
+With `dispose(true)`, `MESSAGE_REACTION_REMOVE`, `MESSAGE_REACTION_REMOVE_ALL`, and `MESSAGE_REACTION_REMOVE_EMOJI` update the tally, and disposed reactions make room again under `max_items`. Without it the tally only grows, meaning "everyone who reacted while the collector ran". This differs from discord.js in one place: discord.js always empties its collection on `MESSAGE_REACTION_REMOVE_ALL`, while here every removal kind waits for `dispose(true)`. As in discord.js, the filter also decides which removals apply, so a filter that reads fields only present on add events (`member`, `message_author_id`) blocks every removal.
+
+```rust
+use std::time::Duration;
+use discordrs::EmojiKey;
+
+// Poll: count ✅ / ❌ for 60 seconds, ignoring the bot's own reactions.
+// `bot_user_id: Snowflake` is the bot's own id, for example saved from READY.
+let tally = ctx
+    .collectors()
+    .reaction_collector_for_message(&poll_message)
+    .filter(move |reaction| reaction.user_id.as_ref() != Some(&bot_user_id))
+    .dispose(true)
+    .timeout(Duration::from_secs(60))
+    .collect()
+    .await;
+
+let yes = tally.get(&EmojiKey::unicode("✅")).map_or(0, |r| r.count());
+let no = tally.get(&EmojiKey::unicode("❌")).map_or(0, |r| r.count());
+```
+
+Reactions need the `GUILD_MESSAGE_REACTIONS` (or `DIRECT_MESSAGE_REACTIONS`) intent.
+
+### Delivery, Lag, and Loss
+
+`CollectorHub` is a `tokio::sync::broadcast` channel. The client publishes every dispatched event to it after updating the cache, and each collector has its own subscription:
+
+- **No history.** A collector sees only events published after it was created. Reactions or messages that arrived earlier are not replayed; fetch them over REST if you need them.
+- **Bounded, lossy buffer.** Each subscriber can fall at most `capacity` events behind (256 by default, `CollectorHub::with_capacity(...)` to change it). The buffer holds every event type, not only the ones a collector wants, and a collector drains it only while `next()` / `collect()` is being awaited. When it falls further behind, the oldest events are dropped for that collector, the drop is added to `lagged_events()`, and collection continues from the oldest event still buffered. Publishing never blocks the gateway.
+- **Consequences for reactions.** A reaction collector that lagged may have missed adds (undercount) or, with `dispose(true)`, removals (overcount). When exact numbers matter, check `lagged_events() == 0` or re-read the message's reactions over REST at the end.
+
 ## Typical Use
 
 - cache for hot-path lookups
-- collectors for button, modal, or follow-up message flows
+- collectors for button, modal, reaction, or follow-up message flows
 - both together for stateful multi-step bots
