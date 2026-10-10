@@ -21,11 +21,16 @@ pub use crate::gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
 pub use crate::gateway::{Client, Context, EventDispatchMode, EventHandler, ShardMessenger};
 pub use crate::helpers::{
+    launch_activity, respond_to_interaction, respond_with_message, send_message,
+};
+// Deprecated in 3.0 in favour of `InteractionResponder`; kept so existing
+// prelude users keep compiling (with a deprecation warning at the call site).
+#[allow(deprecated)]
+pub use crate::helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
     delete_original_response, edit_followup_response, edit_original_response, followup_message,
-    get_original_response, launch_activity, respond_to_interaction,
-    respond_with_autocomplete_choices, respond_with_message, respond_with_modal_typed,
-    send_message, update_interaction_message,
+    get_original_response, respond_with_autocomplete_choices, respond_with_modal_typed,
+    update_interaction_message,
 };
 pub use crate::http::{FileAttachment, FileUpload, RestClient};
 pub use crate::model::{
@@ -66,7 +71,10 @@ pub use crate::oauth2::{
     OAuth2TokenResponse,
 };
 pub use crate::permissions::{ChannelPermissions, ComputedPermissions, PermissionDataError};
-pub use crate::response::{InteractionResponseBuilder, MessageBuilder};
+pub use crate::response::{
+    AutocompleteChoice, InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
+    InteractionResponsePhase, MessageBuilder,
+};
 #[cfg(feature = "voice")]
 pub use crate::voice::{
     AudioTrack, VoiceConnectionConfig, VoiceEncryptionMode, VoiceGatewayCommand, VoiceManager,
@@ -127,5 +135,21 @@ mod tests {
         let _authorization = AuthorizationInformation::default();
         let _allowed_mentions = AllowedMentions::default();
         let _reaction_count_details = ReactionCountDetails::default();
+    }
+
+    #[test]
+    fn prelude_surfaces_the_interaction_responder() {
+        use crate::prelude::*;
+
+        // Generic over the trait from the prelude, so `prelude::*` is enough
+        // to call responder methods on any interaction variant.
+        fn phase_of<R: InteractionResponder>(responder: &R) -> InteractionResponsePhase {
+            responder.response_phase()
+        }
+
+        let command = crate::model::ChatInputCommandInteraction::default();
+        assert_eq!(phase_of(&command), InteractionResponsePhase::Unacknowledged);
+        let _reply = InteractionReplyData::from("hi").ephemeral();
+        let _choice = AutocompleteChoice::new("name", "value");
     }
 }

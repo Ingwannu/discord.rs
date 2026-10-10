@@ -1,3 +1,27 @@
+//! Convenience helpers for channel messages, interaction responses, and
+//! follow-ups.
+//!
+//! Interaction helpers come in two kinds:
+//!
+//! - **State-aware** helpers take an [`InteractionContextData`] and delegate
+//!   to its response methods (the same ones [`InteractionResponder`] uses),
+//!   so they claim and settle the interaction's shared response state. Most
+//!   are deprecated in favour of calling those methods directly.
+//! - **Stateless** helpers take only an interaction id and token. They cannot
+//!   see the shared response state of a parsed interaction, so nothing stops
+//!   a double response and a parsed interaction does not learn about what
+//!   they sent. Use them with raw handlers ([`InteractionContext`]) or when
+//!   only the id and token are available; with a parsed interaction prefer
+//!   [`InteractionResponder`]. Mixing both kinds on one interaction is not
+//!   coordinated.
+//!
+//! There is deliberately no global interaction registry that stateless
+//! helpers could consult: it would need eviction rules and still could not
+//! see responses sent by other processes.
+//!
+//! [`InteractionResponder`]: crate::response::InteractionResponder
+//! [`InteractionContext`]: crate::parsers::InteractionContext
+
 use serde_json::Value;
 
 use crate::builders::{create_container, ComponentsV2Message, ContainerBuilder, ModalBuilder};
@@ -8,8 +32,12 @@ use crate::model::{
     ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
     InteractionContextData, Message, Snowflake,
 };
+use crate::response::InteractionReplyData;
 use crate::types::ButtonConfig;
 
+/// Interaction callback type `PONG` (1): the answer to Discord's endpoint
+/// ping. It never acknowledges an interaction.
+pub const INTERACTION_RESPONSE_PONG: u8 = 1;
 /// Public constant for `INTERACTION_RESPONSE_CHANNEL_MESSAGE`.
 pub const INTERACTION_RESPONSE_CHANNEL_MESSAGE: u8 = 4;
 /// Public constant for `INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE`.
@@ -91,7 +119,11 @@ pub async fn send_to_channel(
     send_container_message(http, channel_id, container).await
 }
 
-/// Provides the `respond_with_container` helper.
+/// Replies (type 4) with a Components V2 container.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -111,39 +143,48 @@ pub async fn respond_with_container(
         .await
 }
 
-/// Provides the `respond_to_interaction` helper.
+/// Sends an arbitrary initial response callback.
+///
+/// State-aware: delegates to [`InteractionContextData::create_response`], so
+/// the callback claims and settles the interaction's shared response state.
 pub async fn respond_to_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     response: InteractionCallbackResponse,
 ) -> Result<(), DiscordError> {
-    http.create_interaction_response_typed(context.id.clone(), &context.token, &response)
-        .await
+    context.create_response(http, &response).await
 }
 
-/// Provides the `respond_with_message` helper.
+/// Replies (type 4) with a message, optionally ephemeral.
+///
+/// State-aware: delegates to [`InteractionContextData::reply`]. Prefer
+/// `reply`/`reply_ephemeral` on the interaction; this helper will be
+/// deprecated once the bundled examples have moved off it.
 pub async fn respond_with_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    mut message: CreateMessage,
+    message: CreateMessage,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    if ephemeral {
-        message.flags = Some(message.flags.unwrap_or(0) | (1 << 6));
-    }
-
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_CHANNEL_MESSAGE,
-            data: Some(serde_json::to_value(message)?),
-        },
-    )
-    .await
+    context.reply(http, reply_data(message, ephemeral)).await
 }
 
-/// Provides the `respond_component_with_container` helper.
+/// Converts a `CreateMessage` into reply data, adding the ephemeral flag.
+fn reply_data(message: CreateMessage, ephemeral: bool) -> InteractionReplyData {
+    let data = InteractionReplyData::from(message);
+    if ephemeral {
+        data.ephemeral()
+    } else {
+        data
+    }
+}
+
+/// Replies (type 4) to a component interaction with a Components V2
+/// container.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -163,7 +204,11 @@ pub async fn respond_component_with_container(
         .await
 }
 
-/// Provides the `respond_modal_with_container` helper.
+/// Replies (type 4) to a modal submission with a Components V2 container.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_modal_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -183,7 +228,14 @@ pub async fn respond_modal_with_container(
         .await
 }
 
-/// Provides the `followup_with_container` helper.
+/// Sends a Components V2 container as a follow-up, using the application id
+/// configured on `http`.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder). Unlike
+/// [`InteractionContextData::follow_up`] it does not check that the
+/// interaction was acknowledged.
 pub async fn followup_with_container(
     http: &DiscordHttpClient,
     interaction_token: &str,
@@ -197,91 +249,100 @@ pub async fn followup_with_container(
         .await
 }
 
-/// Provides the `followup_message` helper.
+/// Sends a follow-up message, optionally ephemeral.
+///
+/// State-aware: delegates to [`InteractionContextData::follow_up`], so it
+/// waits for an in-flight initial response and fails locally when the
+/// interaction is not acknowledged.
+#[deprecated(
+    since = "3.0.0",
+    note = "use `follow_up`/`follow_up_ephemeral` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn followup_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    mut message: CreateMessage,
+    message: CreateMessage,
     ephemeral: bool,
 ) -> Result<Message, DiscordError> {
-    if ephemeral {
-        message.flags = Some(message.flags.unwrap_or(0) | (1 << 6));
-    }
-
-    http.create_followup_message_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-        &message,
-    )
-    .await
+    context
+        .follow_up(http, reply_data(message, ephemeral))
+        .await
 }
 
-/// Provides the `get_original_response` helper.
+/// Fetches the original response.
+///
+/// State-aware: delegates to [`InteractionContextData::fetch_reply`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `fetch_reply` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn get_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
 ) -> Result<Message, DiscordError> {
-    http.get_original_interaction_response_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-    )
-    .await
+    context.fetch_reply(http).await
 }
 
-/// Provides the `edit_original_response` helper.
+/// Edits the original response.
+///
+/// State-aware: delegates to [`InteractionContextData::edit_reply`], so it
+/// fails locally when the interaction is not acknowledged and promotes a
+/// deferred response to replied.
+#[deprecated(
+    since = "3.0.0",
+    note = "use `edit_reply` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn edit_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
-    http.edit_original_interaction_response_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-        &message,
-    )
-    .await
+    context.edit_reply(http, message).await
 }
 
-/// Provides the `delete_original_response` helper.
+/// Deletes the original response.
+///
+/// State-aware: delegates to [`InteractionContextData::delete_reply`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `delete_reply` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn delete_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
 ) -> Result<(), DiscordError> {
-    http.delete_original_interaction_response_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-    )
-    .await
+    context.delete_reply(http).await
 }
 
-/// Provides the `delete_followup_response` helper.
+/// Deletes a follow-up message.
+///
+/// State-aware: delegates to [`InteractionContextData::delete_follow_up`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `delete_follow_up` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn delete_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     message_id: &str,
 ) -> Result<(), DiscordError> {
-    http.delete_followup_message_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-        message_id,
-    )
-    .await
+    context.delete_follow_up(http, message_id).await
 }
 
-/// Provides the `edit_followup_response` helper.
+/// Edits a follow-up message.
+///
+/// State-aware: delegates to [`InteractionContextData::edit_follow_up`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `edit_follow_up` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn edit_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     message_id: &str,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
-    http.edit_followup_message_with_application_id(
-        context.application_id.as_str(),
-        &context.token,
-        message_id,
-        &message,
-    )
-    .await
+    context.edit_follow_up(http, message_id, message).await
 }
 
 /// Provides the `edit_message_with_container` helper.
@@ -295,7 +356,11 @@ pub async fn edit_message_with_container(
     http.edit_message_json(channel_id, message_id, &body).await
 }
 
-/// Provides the `update_component_with_container` helper.
+/// Updates the component's message (type 7) with a Components V2 container.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn update_component_with_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -312,7 +377,11 @@ pub async fn update_component_with_container(
         .await
 }
 
-/// Provides the `respond_with_modal` helper.
+/// Opens a modal (type 9).
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_modal(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -328,104 +397,117 @@ pub async fn respond_with_modal(
         .await
 }
 
-/// Provides the `respond_with_modal_typed` helper.
+/// Opens a modal (type 9).
+///
+/// State-aware: delegates to [`InteractionContextData::show_modal`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `show_modal` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn respond_with_modal_typed(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     modal: ModalBuilder,
 ) -> Result<(), DiscordError> {
-    respond_with_modal(http, context.id.as_str(), &context.token, modal).await
+    context.show_modal(http, modal).await
 }
 
-/// Provides the `defer_interaction` helper.
+/// Defers the reply (type 5), optionally with an ephemeral loading state.
+///
+/// State-aware: delegates to [`InteractionContextData::defer`] or
+/// [`InteractionContextData::defer_ephemeral`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `defer`/`defer_ephemeral` on the interaction (InteractionResponder) or InteractionContextData"
+)]
 pub async fn defer_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let mut flags: u64 = 0;
     if ephemeral {
-        flags |= 1 << 6;
+        context.defer_ephemeral(http).await
+    } else {
+        context.defer(http).await
     }
-
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
-            data: Some(serde_json::json!({ "flags": flags })),
-        },
-    )
-    .await
 }
 
-/// Provides the `defer_update_interaction` helper.
+/// Acknowledges a component or modal interaction without a visible
+/// response (type 6).
+///
+/// State-aware: delegates to [`InteractionContextData::defer_update`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `defer_update` on ComponentInteraction/ModalSubmitInteraction or InteractionContextData"
+)]
 pub async fn defer_update_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
 ) -> Result<(), DiscordError> {
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
-            data: None,
-        },
-    )
-    .await
+    context.defer_update(http).await
 }
 
-/// Provides the `update_interaction_message` helper.
+/// Updates the component's message (type 7).
+///
+/// State-aware: delegates to [`InteractionContextData::update_message`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `update_message` on ComponentInteraction/ModalSubmitInteraction or InteractionContextData"
+)]
 pub async fn update_interaction_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     message: CreateMessage,
 ) -> Result<(), DiscordError> {
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
-            data: Some(serde_json::to_value(message)?),
-        },
-    )
-    .await
+    context.update_message(http, message).await
 }
 
-/// Provides the `respond_with_autocomplete_choices` helper.
+/// Sends autocomplete choices (type 8).
+///
+/// State-aware: sends through [`InteractionContextData::create_response`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use `respond_autocomplete` on AutocompleteInteraction or InteractionContextData"
+)]
 pub async fn respond_with_autocomplete_choices(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     choices: Vec<ApplicationCommandOptionChoice>,
 ) -> Result<(), DiscordError> {
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
-            data: Some(serde_json::json!({ "choices": choices })),
-        },
-    )
-    .await
+    context
+        .create_response(
+            http,
+            &InteractionCallbackResponse {
+                kind: INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+                data: Some(serde_json::json!({ "choices": choices })),
+            },
+        )
+        .await
 }
 
-/// Provides the `launch_activity` helper.
+/// Launches the application's activity (type 12).
+///
+/// State-aware: sends through [`InteractionContextData::create_response`].
 pub async fn launch_activity(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
 ) -> Result<(), DiscordError> {
-    respond_to_interaction(
-        http,
-        context,
-        InteractionCallbackResponse {
-            kind: INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
-            data: None,
-        },
-    )
-    .await
+    context
+        .create_response(
+            http,
+            &InteractionCallbackResponse {
+                kind: INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+                data: None,
+            },
+        )
+        .await
 }
 
-/// Provides the `defer_and_followup_container` helper.
+/// Defers (type 5), then sends a Components V2 container as a follow-up.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn defer_and_followup_container(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -459,7 +541,11 @@ pub async fn send_components_v2(
     http.send_message_json(channel_id, &body).await
 }
 
-/// Provides the `respond_with_components_v2` helper.
+/// Replies (type 4) with a Components V2 message.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_components_v2(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -479,7 +565,12 @@ pub async fn respond_with_components_v2(
         .await
 }
 
-/// Provides the `respond_component_with_components_v2` helper.
+/// Replies (type 4) to a component interaction with a Components V2
+/// message.
+///
+/// **Stateless:** takes only the interaction id and token, so it cannot see
+/// or update the shared response state of a parsed interaction. With a parsed
+/// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_components_v2(
     http: &DiscordHttpClient,
     interaction_id: &str,
@@ -499,7 +590,9 @@ pub async fn respond_component_with_components_v2(
         .await
 }
 
+// The deprecated helpers stay covered until they are removed.
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use serde_json::json;
 
@@ -525,6 +618,7 @@ mod tests {
         ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
         InteractionContextData, Snowflake,
     };
+    use crate::response::AckKind;
 
     fn sample_http(application_id: u64) -> DiscordHttpClient {
         DiscordHttpClient::new("test-token", application_id)
@@ -537,6 +631,12 @@ mod tests {
             token: token.to_string(),
             ..InteractionContextData::default()
         }
+    }
+
+    /// Marks the context acknowledged, as a delivered initial response would.
+    fn acknowledged(context: InteractionContextData) -> InteractionContextData {
+        assert!(context.response_state.commit_inline(AckKind::Replied));
+        context
     }
 
     fn sample_container() -> ContainerBuilder {
@@ -743,9 +843,9 @@ mod tests {
     async fn followup_helpers_validate_application_id_and_path_segments_before_network() {
         let http_without_application_id = sample_http(0);
         let http = sample_http(123);
-        let zero_application_context = sample_context("0", "followup-token");
-        let bad_token_context = sample_context("456", "bad/token");
-        let good_context = sample_context("456", "followup-token");
+        let zero_application_context = acknowledged(sample_context("0", "followup-token"));
+        let bad_token_context = acknowledged(sample_context("456", "bad/token"));
+        let good_context = acknowledged(sample_context("456", "followup-token"));
 
         assert_model_error_contains(
             followup_with_container(
@@ -800,5 +900,74 @@ mod tests {
                 .unwrap_err(),
             "message_id",
         );
+    }
+
+    #[tokio::test]
+    async fn context_helpers_share_the_interaction_response_state() {
+        let http = sample_http(123);
+
+        // A locally rejected initial response rolls the shared state back.
+        let context = sample_context("456", "bad/token");
+        assert_model_error_contains(
+            respond_with_message(&http, &context, sample_message(), false)
+                .await
+                .unwrap_err(),
+            "interaction_token",
+        );
+        assert!(!context.is_acknowledged());
+
+        // Follow-ups and original-response edits fail before acknowledgement,
+        // exactly like the responder methods they delegate to.
+        assert_model_error_contains(
+            followup_message(&http, &context, sample_message(), true)
+                .await
+                .unwrap_err(),
+            "has not been acknowledged",
+        );
+        assert_model_error_contains(
+            edit_original_response(&http, &context, sample_message())
+                .await
+                .unwrap_err(),
+            "has not been acknowledged",
+        );
+
+        // Once a clone acknowledged the interaction, every initial-response
+        // helper refuses locally instead of sending a second response.
+        let clone = context.clone();
+        assert!(clone.response_state.commit_inline(AckKind::Deferred));
+        for error in [
+            respond_with_message(&http, &context, sample_message(), true)
+                .await
+                .unwrap_err(),
+            respond_to_interaction(
+                &http,
+                &context,
+                InteractionCallbackResponse {
+                    kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
+                    data: None,
+                },
+            )
+            .await
+            .unwrap_err(),
+            respond_with_modal_typed(&http, &context, sample_modal())
+                .await
+                .unwrap_err(),
+            defer_interaction(&http, &context, false).await.unwrap_err(),
+            defer_update_interaction(&http, &context).await.unwrap_err(),
+            update_interaction_message(&http, &context, sample_message())
+                .await
+                .unwrap_err(),
+            respond_with_autocomplete_choices(
+                &http,
+                &context,
+                vec![ApplicationCommandOptionChoice::new("One", "1")],
+            )
+            .await
+            .unwrap_err(),
+            launch_activity(&http, &context).await.unwrap_err(),
+        ] {
+            assert_model_error_contains(error, "already acknowledged");
+        }
+        assert!(context.is_deferred());
     }
 }

@@ -166,7 +166,10 @@ pub use permissions::{
     ChannelClass, ChannelPermissionInput, ChannelPermissions, ComputedPermissions,
     MemberPermissionInput, PermissionDataError, PermissionSource,
 };
-pub use response::{InteractionResponseBuilder, MessageBuilder};
+pub use response::{
+    AutocompleteChoice, InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
+    InteractionResponsePhase, InteractionResponseState, MessageBuilder,
+};
 #[cfg(feature = "sharding")]
 pub use sharding::{
     ShardConfig, ShardInfo, ShardIpcMessage, ShardRuntimeState, ShardRuntimeStatus,
@@ -230,14 +233,19 @@ pub use constants::{
 pub use http::{DiscordHttpClient, FileAttachment, FileUpload, RestClient};
 
 pub use helpers::{
-    defer_and_followup_container, defer_interaction, defer_update_interaction,
-    delete_followup_response, delete_original_response, edit_followup_response,
-    edit_message_with_container, edit_original_response, followup_message, followup_with_container,
-    get_original_response, launch_activity, respond_component_with_components_v2,
-    respond_component_with_container, respond_modal_with_container, respond_to_interaction,
-    respond_with_autocomplete_choices, respond_with_components_v2, respond_with_container,
-    respond_with_message, respond_with_modal, respond_with_modal_typed, send_components_v2,
+    defer_and_followup_container, edit_message_with_container, followup_with_container,
+    launch_activity, respond_component_with_components_v2, respond_component_with_container,
+    respond_modal_with_container, respond_to_interaction, respond_with_components_v2,
+    respond_with_container, respond_with_message, respond_with_modal, send_components_v2,
     send_container_message, send_message, send_to_channel, update_component_with_container,
+};
+// Deprecated in 3.0 in favour of `InteractionResponder`; re-exported so
+// existing imports keep compiling (with a deprecation warning at the call site).
+#[allow(deprecated)]
+pub use helpers::{
+    defer_interaction, defer_update_interaction, delete_followup_response,
+    delete_original_response, edit_followup_response, edit_original_response, followup_message,
+    get_original_response, respond_with_autocomplete_choices, respond_with_modal_typed,
     update_interaction_message,
 };
 

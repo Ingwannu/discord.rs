@@ -57,16 +57,82 @@ pub enum RawInteraction {
     ModalSubmit(V2ModalSubmission),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 /// Typed Discord API object for `InteractionContext`.
+///
+/// The raw-handler context carries no shared response state: helpers that
+/// take its id and token are stateless (see [`crate::helpers`]).
 pub struct InteractionContext {
     pub id: String,
+    /// Interaction token. Redacted from `Debug` output, including inside
+    /// [`Self::raw`].
     pub token: String,
     pub application_id: String,
     pub guild_id: Option<String>,
     pub channel_id: Option<String>,
     pub user_id: Option<String>,
+    /// Full interaction payload as received, including the token.
     pub raw: Value,
+}
+
+/// Prints every field with the token replaced by `[redacted]`, both the
+/// `token` field and every `token` key inside `raw`.
+///
+/// Raw handlers commonly log the context with `{:?}`; the token would let
+/// anyone who reads those logs answer or edit the interaction for 15 minutes.
+impl std::fmt::Debug for InteractionContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            id,
+            token: _,
+            application_id,
+            guild_id,
+            channel_id,
+            user_id,
+            raw,
+        } = self;
+        f.debug_struct("InteractionContext")
+            .field("id", id)
+            .field("token", &format_args!("[redacted]"))
+            .field("application_id", application_id)
+            .field("guild_id", guild_id)
+            .field("channel_id", channel_id)
+            .field("user_id", user_id)
+            .field("raw", &RedactTokens(raw))
+            .finish()
+    }
+}
+
+/// `Debug` view of a JSON value that prints `[redacted]` for the value of
+/// every object key named `token`, at any depth.
+///
+/// Walks the value instead of cloning and editing it, so formatting a large
+/// payload allocates nothing extra. Only the key name is matched: Discord
+/// interaction payloads carry the interaction token at the top level, and a
+/// nested `token` key is never useful in a log either.
+struct RedactTokens<'a>(&'a Value);
+
+impl std::fmt::Debug for RedactTokens<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Value::Object(object) => {
+                let mut map = f.debug_map();
+                for (key, value) in object {
+                    if key == "token" {
+                        map.entry(key, &format_args!("[redacted]"));
+                    } else {
+                        map.entry(key, &RedactTokens(value));
+                    }
+                }
+                map.finish()
+            }
+            Value::Array(values) => f
+                .debug_list()
+                .entries(values.iter().map(RedactTokens))
+                .finish(),
+            scalar => scalar.fmt(f),
+        }
+    }
 }
 
 /// Provides the `parse_interaction_context` helper.
@@ -269,12 +335,13 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::{
         parse_interaction, parse_interaction_context, parse_raw_interaction, RawInteraction,
     };
     use crate::model::Interaction;
+    use crate::response::AckKind;
 
     #[test]
     fn parse_raw_interaction_supports_autocomplete() {
@@ -765,18 +832,81 @@ mod tests {
         // Clones (e.g. one handed to a handler, one kept by a collector)
         // must observe the same acknowledgement state.
         let clone = interaction.clone();
-        interaction
+        assert!(interaction
             .context()
             .response_state
-            .acknowledge(crate::model::InteractionResponseState::DEFERRED)
-            .unwrap();
+            .commit_inline(AckKind::Deferred));
         assert!(clone.is_acknowledged());
         assert!(clone.is_deferred());
         assert!(clone
             .context()
             .response_state
-            .acknowledge(crate::model::InteractionResponseState::REPLIED)
+            .begin(AckKind::Replied)
             .is_err());
+    }
+
+    const SECRET_TOKEN: &str = "aW50ZXJhY3Rpb246c2VjcmV0LXRva2Vu";
+
+    fn payload_with_secret_token(kind: u8, data: Value) -> Value {
+        json!({
+            "id": "1",
+            "application_id": "2",
+            "token": SECRET_TOKEN,
+            "type": kind,
+            "guild_id": "3",
+            "member": { "user": { "id": "5", "username": "debug-user" } },
+            "data": data
+        })
+    }
+
+    fn assert_redacted(debug: String) {
+        assert!(
+            !debug.contains(SECRET_TOKEN),
+            "token leaked into Debug output: {debug}"
+        );
+        assert!(debug.contains("[redacted]"), "{debug}");
+    }
+
+    #[test]
+    fn typed_interaction_debug_output_never_contains_the_token() {
+        let payloads = [
+            payload_with_secret_token(2, json!({ "id": "3", "name": "deploy", "type": 1 })),
+            payload_with_secret_token(3, json!({ "custom_id": "ok", "component_type": 2 })),
+            payload_with_secret_token(4, json!({ "id": "3", "name": "deploy", "type": 1 })),
+            payload_with_secret_token(5, json!({ "custom_id": "modal", "components": [] })),
+            payload_with_secret_token(42, json!({ "opaque": true })),
+        ];
+        for payload in payloads {
+            let interaction = parse_interaction(&payload).unwrap();
+            assert_redacted(format!("{interaction:?}"));
+            assert_redacted(format!("{interaction:#?}"));
+            let context = interaction.context();
+            assert_redacted(format!("{context:?}"));
+            // The rest of the context stays useful for debugging.
+            let debug = format!("{context:?}");
+            assert!(debug.contains("debug-user"), "{debug}");
+            assert!(debug.contains("Unacknowledged"), "{debug}");
+            assert_eq!(context.token, SECRET_TOKEN);
+        }
+    }
+
+    #[test]
+    fn raw_interaction_context_debug_redacts_the_token_and_raw_payload() {
+        let mut payload =
+            payload_with_secret_token(3, json!({ "custom_id": "ok", "component_type": 2 }));
+        payload["message"] = json!({ "id": "9", "nested": [{ "token": SECRET_TOKEN }] });
+        let context = parse_interaction_context(&payload).unwrap();
+
+        let debug = format!("{context:?}");
+        assert_redacted(debug.clone());
+        assert_redacted(format!("{context:#?}"));
+        assert!(debug.contains("custom_id"), "{debug}");
+        assert!(debug.contains("debug-user"), "{debug}");
+        assert_eq!(context.token, SECRET_TOKEN);
+        assert_eq!(context.raw["token"], json!(SECRET_TOKEN));
+
+        let raw = parse_raw_interaction(&payload).unwrap();
+        assert!(!format!("{raw:?}").contains(SECRET_TOKEN));
     }
 
     #[test]

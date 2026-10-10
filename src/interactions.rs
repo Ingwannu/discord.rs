@@ -10,14 +10,19 @@ use axum::{
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tracing::warn;
 
 use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
-use crate::model::{ApplicationCommandOptionChoice, Interaction, InteractionContextData};
+use crate::model::{
+    ApplicationCommandOptionChoice, Interaction, InteractionContextData, InteractionResponseState,
+    Snowflake,
+};
 use crate::parsers::{
     parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
     InteractionContext, RawInteraction,
 };
+use crate::response::AckKind;
 use crate::types::invalid_data_error;
 
 /// Typed Discord API enum for `InteractionResponse`.
@@ -42,6 +47,26 @@ pub enum InteractionResponse {
     Raw(Value),
 }
 
+impl InteractionResponse {
+    /// Acknowledgement Discord records when it accepts this response, or
+    /// `None` for `Pong` and raw payloads without a numeric `type`.
+    fn ack_kind(&self) -> Option<AckKind> {
+        match self {
+            Self::Pong => None,
+            Self::DeferredMessage | Self::DeferredUpdate => Some(AckKind::Deferred),
+            Self::ChannelMessage(_)
+            | Self::AutocompleteResult(_)
+            | Self::Modal(_)
+            | Self::UpdateMessage(_)
+            | Self::LaunchActivity => Some(AckKind::Replied),
+            Self::Raw(payload) => payload
+                .get("type")
+                .and_then(value_to_u8)
+                .and_then(AckKind::for_callback_type),
+        }
+    }
+}
+
 /// Trait for `InteractionHandler` behavior.
 #[async_trait]
 pub trait InteractionHandler: Send + Sync {
@@ -54,6 +79,13 @@ pub trait InteractionHandler: Send + Sync {
 }
 
 /// Trait for `TypedInteractionHandler` behavior.
+///
+/// The `ctx` and `interaction` passed to the handler share one response
+/// state with each other and with every clone made from them. When the
+/// handler returns an initial response, the endpoint records it in that
+/// state before answering Discord, so a clone kept by a spawned task sees the
+/// interaction as acknowledged and can call `follow_up` or `edit_reply` over
+/// REST afterwards.
 #[async_trait]
 pub trait TypedInteractionHandler: Send + Sync {
     /// Handles one verified typed Discord interaction.
@@ -364,10 +396,44 @@ where
         }
     };
     let context: InteractionContextData = interaction.context().clone();
+    let interaction_id = context.id.clone();
+    let response_state = context.response_state.clone();
 
     let response = state.handler.handle_typed(context, interaction).await;
+    record_inline_response(&response_state, &interaction_id, &response);
     let response_payload = interaction_response_payload(response);
     (StatusCode::OK, Json(response_payload)).into_response()
+}
+
+/// Records the handler's inline response in the shared response state, the
+/// same state the REST response methods use (see the decision log in
+/// `response.rs`).
+///
+/// The inline response is the body of Discord's own request, so there is no
+/// delivery outcome to wait for: the state moves straight to acknowledged.
+/// A follow-up sent by a retained clone in the moment between this call and
+/// Discord reading the body can still be rejected by Discord.
+///
+/// When the handler already responded over REST (or such a response is in
+/// flight), the payload is still returned unchanged — Discord's request must
+/// be answered — but the state keeps describing the REST response and a
+/// warning is logged, because Discord accepts only one initial response.
+fn record_inline_response(
+    state: &InteractionResponseState,
+    interaction_id: &Snowflake,
+    response: &InteractionResponse,
+) {
+    let Some(kind) = response.ack_kind() else {
+        return;
+    };
+    if !state.commit_inline(kind) {
+        warn!(
+            interaction_id = %interaction_id,
+            phase = ?state.phase(),
+            "interaction handler returned an inline initial response after responding over REST; \
+             Discord accepts only one initial response"
+        );
+    }
 }
 
 /// Provides the `try_typed_interactions_endpoint` helper.
@@ -409,16 +475,21 @@ where
 mod tests {
     use super::{
         current_unix_timestamp, decode_verifying_key, handle_interactions_request,
-        handle_typed_interactions_request, interaction_response_payload, try_interactions_endpoint,
-        try_typed_interactions_endpoint, verify_discord_request_signature_at_time,
-        verify_discord_signature, verify_signature_with_key_at_time, InteractionHandler,
-        InteractionResponse, InteractionsState, TypedInteractionHandler,
-        SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
+        handle_typed_interactions_request, interaction_response_payload, record_inline_response,
+        try_interactions_endpoint, try_typed_interactions_endpoint,
+        verify_discord_request_signature_at_time, verify_discord_signature,
+        verify_signature_with_key_at_time, InteractionHandler, InteractionResponse,
+        InteractionsState, TypedInteractionHandler, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
     use crate::builders::ModalBuilder;
+    use crate::framework::{AppContext, AppFramework};
+    use crate::http::RestClient;
     use crate::model::ApplicationCommandOptionChoice;
-    use crate::model::{Interaction, InteractionContextData};
+    use crate::model::{Interaction, InteractionContextData, InteractionResponseState, Snowflake};
     use crate::parsers::{InteractionContext, RawInteraction};
+    use crate::response::{
+        AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
+    };
     use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Bytes},
@@ -1128,5 +1199,203 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(matches!(records[0].1, Interaction::Component(_)));
         assert!(matches!(records[1].1, Interaction::Unknown { .. }));
+    }
+
+    #[test]
+    fn inline_responses_record_the_matching_phase() {
+        let cases = [
+            (
+                InteractionResponse::Pong,
+                InteractionResponsePhase::Unacknowledged,
+            ),
+            (
+                InteractionResponse::ChannelMessage(json!({ "content": "hi" })),
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::DeferredMessage,
+                InteractionResponsePhase::Deferred,
+            ),
+            (
+                InteractionResponse::DeferredUpdate,
+                InteractionResponsePhase::Deferred,
+            ),
+            (
+                InteractionResponse::AutocompleteResult(Vec::new()),
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::Modal(ModalBuilder::new("m", "M")),
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::UpdateMessage(json!({ "content": "new" })),
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::LaunchActivity,
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::Raw(json!({ "type": 6 })),
+                InteractionResponsePhase::Deferred,
+            ),
+            (
+                InteractionResponse::Raw(json!({ "type": 4, "data": {} })),
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                InteractionResponse::Raw(json!({ "type": 1 })),
+                InteractionResponsePhase::Unacknowledged,
+            ),
+            (
+                InteractionResponse::Raw(Value::Null),
+                InteractionResponsePhase::Unacknowledged,
+            ),
+        ];
+        for (response, expected) in cases {
+            let state = InteractionResponseState::new();
+            record_inline_response(&state, &Snowflake::from("1"), &response);
+            assert_eq!(state.phase(), expected);
+        }
+    }
+
+    #[test]
+    fn inline_response_after_a_rest_response_keeps_the_rest_state() {
+        let state = InteractionResponseState::new();
+        state
+            .begin(AckKind::Deferred)
+            .unwrap()
+            .settle(CallbackOutcome::Accepted);
+        record_inline_response(
+            &state,
+            &Snowflake::from("1"),
+            &InteractionResponse::ChannelMessage(json!({ "content": "late" })),
+        );
+        assert!(state.is_deferred());
+
+        let in_flight = InteractionResponseState::new();
+        let _claim = in_flight.begin(AckKind::Replied).unwrap();
+        record_inline_response(
+            &in_flight,
+            &Snowflake::from("1"),
+            &InteractionResponse::DeferredMessage,
+        );
+        assert_eq!(in_flight.phase(), InteractionResponsePhase::InFlight);
+    }
+
+    fn command_body(token: &str) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "id": "100",
+            "application_id": "200",
+            "token": token,
+            "type": 2,
+            "user": { "id": "500", "username": "tester" },
+            "data": { "id": "600", "name": "slow", "type": 1 }
+        }))
+        .unwrap()
+    }
+
+    /// Regression: the typed endpoint answered inline without recording it,
+    /// so a context retained by a spawned task still looked unacknowledged
+    /// and `follow_up` failed locally. The retained `AppContext` must now see
+    /// the deferral and pass the local check (the bad token then stops the
+    /// request before the network).
+    #[tokio::test]
+    async fn typed_endpoint_marks_retained_framework_contexts_acknowledged() {
+        let retained: Arc<Mutex<Option<AppContext>>> = Arc::default();
+        let framework = AppFramework::builder()
+            .command("slow", {
+                let retained = Arc::clone(&retained);
+                move |ctx: AppContext| {
+                    *retained.lock().unwrap() = Some(ctx);
+                    async { InteractionResponse::DeferredMessage }
+                }
+            })
+            .build();
+        let body = command_body("bad/token");
+
+        let response = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key: test_signing_key().verifying_key(),
+                handler: framework,
+            }),
+            signed_headers_for_body(&body),
+            Bytes::from(body),
+        )
+        .await;
+        assert_eq!(json_response(response).await, json!({ "type": 5 }));
+
+        let ctx = retained.lock().unwrap().take().expect("route ran");
+        assert!(ctx.is_deferred());
+        assert!(ctx.interaction.is_deferred());
+        let error = ctx
+            .follow_up(&RestClient::new("bot-token", 200), "done")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("interaction_token"),
+            "follow-up should pass the acknowledgement check: {error}"
+        );
+    }
+
+    #[derive(Clone)]
+    struct RestThenInlineHandler;
+
+    #[async_trait]
+    impl TypedInteractionHandler for RestThenInlineHandler {
+        async fn handle_typed(
+            &self,
+            ctx: InteractionContextData,
+            _interaction: Interaction,
+        ) -> InteractionResponse {
+            // Stands in for a successful `ctx.defer(&http)` over REST.
+            ctx.response_state
+                .begin(AckKind::Deferred)
+                .unwrap()
+                .settle(CallbackOutcome::Accepted);
+            InteractionResponse::ChannelMessage(json!({ "content": "inline" }))
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_endpoint_still_answers_when_the_handler_responded_over_rest() {
+        let body = command_body("token");
+        let response = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key: test_signing_key().verifying_key(),
+                handler: RestThenInlineHandler,
+            }),
+            signed_headers_for_body(&body),
+            Bytes::from(body),
+        )
+        .await;
+        assert_eq!(
+            json_response(response).await,
+            json!({ "type": 4, "data": { "content": "inline" } })
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_endpoint_records_raw_responses_for_the_handler_context() {
+        let handler = RecordingTypedHandler {
+            response: json!({ "type": 4, "data": { "content": "typed ok" } }),
+            ..Default::default()
+        };
+        let body = command_body("token");
+        handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key: test_signing_key().verifying_key(),
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&body),
+            Bytes::from(body),
+        )
+        .await;
+
+        let records = handler.records.lock().unwrap();
+        let (ctx, interaction) = &records[0];
+        assert!(ctx.is_replied());
+        assert!(interaction.is_replied());
     }
 }

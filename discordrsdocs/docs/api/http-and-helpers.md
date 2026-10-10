@@ -88,12 +88,12 @@ let rest = RestClient::builder("bot-token", 0)
 - `retry_non_idempotent_requests(true)` (3.0, default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. Enable it only when a duplicated mutation is acceptable for every request the client makes.
 - `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
 
-## Interaction Response API (`InteractionResponder`, 2.2.0)
+## Interaction Response API (`InteractionResponder`, 2.2.0; response state 3.0)
 
-`discordrs::response::InteractionResponder` puts the discord.js responder methods on every responding-capable interaction variant. Import the trait so the methods resolve:
+`discordrs::response::InteractionResponder` puts the discord.js responder methods on every responding-capable interaction variant (and on `AppContext`). It is in `discordrs::prelude`; import the trait so the methods resolve:
 
 ```rust
-use discordrs::response::InteractionResponder;
+use discordrs::prelude::*; // or: use discordrs::response::InteractionResponder;
 
 // command: ChatInputCommandInteraction (also works on context-menu,
 // component, and modal-submit interactions)
@@ -105,9 +105,50 @@ command.edit_reply(&rest, "done!").await?;
 let followup = command.follow_up(&rest, "extra detail").await?;
 ```
 
-The full surface: `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `show_modal(ModalBuilder)`, plus `defer_update`/`update_message` on component and modal-submit interactions and `respond_autocomplete(Vec<AutocompleteChoice>)` on autocomplete interactions. `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
+The full surface: `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `edit_follow_up`, `delete_follow_up`, `show_modal(ModalBuilder)`, plus `defer_update`/`update_message` on component and modal-submit interactions and `respond_autocomplete(Vec<AutocompleteChoice>)` on autocomplete interactions. `InteractionContextData::create_response(&rest, &InteractionCallbackResponse)` sends any other callback type (for example `LAUNCH_ACTIVITY`) through the same state.
 
-The acknowledgement state is created at parse time and shared atomically across clones of one interaction: double replies and follow-ups before acknowledgement fail locally with an "already acknowledged" error, deferred interactions promote to replied on `edit_reply`, and the state slot is claimed before the HTTP call with rollback on transport failure. `is_replied()`, `is_deferred()`, and `is_acknowledged()` report the current state.
+Every async trait method returns a `Send` future, also through a generic `R: InteractionResponder`, so a responder call can be moved into `tokio::spawn`:
+
+```rust
+fn spawn_follow_up<R>(interaction: R, rest: RestClient) -> tokio::task::JoinHandle<()>
+where
+    R: InteractionResponder + Send + 'static,
+{
+    tokio::spawn(async move {
+        let _ = interaction.follow_up(&rest, "background work finished").await;
+    })
+}
+```
+
+### Reply data
+
+`InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`. It carries every field that interaction responses accept: `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `poll` (3.0; 2.2.0 dropped `poll`). `CreateMessage` fields that exist only for channel messages (`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`) are not carried, because Discord's interaction bodies have no such fields.
+
+### Shared response state
+
+Each parsed interaction owns one `InteractionResponseState`, shared by every clone (handler, collector, spawned task). Its phase (`response_phase()`, `InteractionResponsePhase`) is one of:
+
+| Phase | Meaning | Initial response | `follow_up` / `edit_reply` / `delete_reply` |
+|---|---|---|---|
+| `Unacknowledged` | Nothing sent, or Discord rejected the last attempt | allowed | fail locally |
+| `InFlight` | An initial response is being sent | fails locally | **wait** for the outcome |
+| `Deferred` / `Replied` | Discord accepted the response | fails locally | allowed |
+| `Uncertain` | The outcome was lost (timeout, 5xx, failed response read, or the sending future was dropped) | allowed (safe retry) | passed to Discord |
+
+- The slot moves to `Deferred`/`Replied` only after Discord accepts the callback, so a follow-up from another clone can no longer race ahead of the reply.
+- A 4xx, a 429, local validation, or a connection that was never established rolls back to `Unacknowledged`, so the reply can be retried.
+- A timeout, 5xx, failed response read, or cancellation leaves `Uncertain`. Retrying the initial response is safe: if the earlier attempt landed, Discord answers error 40060 ("already acknowledged") and the state becomes acknowledged without a second response. A successful `edit_reply`, `fetch_reply`, or `delete_reply` also settles it.
+- `is_replied()`, `is_deferred()`, and `is_acknowledged()` report only what Discord confirmed; they are false while `InFlight` or `Uncertain`.
+- `edit_reply` on a deferred interaction promotes it to replied, as in discord.js.
+- The typed HTTP interactions endpoint records the inline response a handler returns in the same state, so a retained clone can `follow_up` after the endpoint answered.
+
+The state is local to the process. A context rebuilt from storage with serde starts `Unacknowledged`; send follow-ups for it with the `RestClient` methods (`create_followup_message_with_application_id`, ...) instead.
+
+### Helper functions: state-aware and stateless
+
+The `discordrs::helpers` functions that take an `InteractionContextData` now delegate to the methods above, so they share the response state. Those with a direct responder equivalent are deprecated in 3.0: `defer_interaction`, `defer_update_interaction`, `update_interaction_message`, `respond_with_modal_typed`, `respond_with_autocomplete_choices`, `followup_message`, `get_original_response`, `edit_original_response`, `delete_original_response`, `edit_followup_response`, and `delete_followup_response`. `respond_with_message` (use `reply`/`reply_ephemeral`), `respond_to_interaction` (`create_response`), and `launch_activity` stay without a deprecation for now.
+
+The helpers that take only an interaction id and token are **stateless**: `respond_with_container`, `respond_component_with_container`, `respond_modal_with_container`, `respond_with_components_v2`, `respond_component_with_components_v2`, `update_component_with_container`, `respond_with_modal`, `followup_with_container`, and `defer_and_followup_container`. They cannot see a parsed interaction's state, so nothing stops a double response and the interaction does not learn what they sent. Use them with raw handlers (`InteractionContext`) or when only the id and token are available, and do not mix them with responder methods on one interaction.
 
 ## Entity Convenience Methods (`model_ext`, 2.2.0)
 

@@ -12,6 +12,7 @@ use serde_json::json;
 use crate::{
     interactions::{InteractionResponse, TypedInteractionHandler},
     model::{Interaction, InteractionContextData, Snowflake},
+    response::InteractionResponder,
 };
 
 /// Boxed future returned by application framework route handlers.
@@ -31,6 +32,12 @@ pub enum RouteKey {
 }
 
 /// Owned context passed to a matched application route.
+///
+/// Implements [`InteractionResponder`], so a route can respond over REST and
+/// keep (or move into a spawned task) a clone to send follow-ups later. All
+/// clones share one response state with the interaction: once the endpoint
+/// returns the route's inline response, `follow_up` and `edit_reply` on a
+/// retained clone are accepted. `Debug` output never contains the token.
 #[derive(Clone, Debug)]
 pub struct AppContext {
     /// Parsed interaction context, including user/member and installation data.
@@ -51,6 +58,12 @@ impl AppContext {
                 .and_then(|member| member.user.as_ref())
                 .map(|user| &user.id)
         })
+    }
+}
+
+impl InteractionResponder for AppContext {
+    fn responder_context(&self) -> &InteractionContextData {
+        &self.context
     }
 }
 
@@ -90,11 +103,16 @@ where
 /// The framework is intentionally small: it composes typed interactions,
 /// per-route guards, and per-user cooldowns without replacing lower-level
 /// `RestClient`, Gateway, or signed endpoint APIs.
+///
+/// Cloning is cheap and clones share routes and cooldown state. The typed
+/// endpoint constructors require `Clone` handlers, so this is what lets an
+/// `AppFramework` be passed to [`crate::try_typed_interactions_endpoint`].
+#[derive(Clone)]
 pub struct AppFramework {
     routes: HashMap<RouteKey, Arc<dyn AppRouteHandler>>,
     guards: Vec<Arc<dyn AppGuard>>,
     cooldowns: HashMap<RouteKey, Duration>,
-    cooldown_state: Mutex<HashMap<(RouteKey, Snowflake), Instant>>,
+    cooldown_state: Arc<Mutex<HashMap<(RouteKey, Snowflake), Instant>>>,
     fallback: Arc<dyn AppRouteHandler>,
 }
 
@@ -111,6 +129,10 @@ impl AppFramework {
     }
 
     /// Dispatches a typed interaction through guards, cooldowns, and route handlers.
+    ///
+    /// Returns the route's inline response without sending it. Through the
+    /// typed interactions endpoint, the endpoint sends it and records it in
+    /// the interaction's shared response state.
     pub async fn dispatch(
         &self,
         context: InteractionContextData,
@@ -249,7 +271,7 @@ impl AppFrameworkBuilder {
             routes: self.routes,
             guards: self.guards,
             cooldowns: self.cooldowns,
-            cooldown_state: Mutex::new(HashMap::new()),
+            cooldown_state: Arc::new(Mutex::new(HashMap::new())),
             fallback: self.fallback.unwrap_or_else(|| {
                 Arc::new(|_ctx: AppContext| async {
                     InteractionResponse::ChannelMessage(json!({
@@ -548,5 +570,64 @@ mod tests {
             }
             _ => panic!("unexpected fallback response"),
         }
+    }
+
+    #[test]
+    fn app_framework_is_accepted_by_the_typed_endpoint_and_clones_share_cooldowns() {
+        let framework = AppFramework::builder()
+            .command("limited", |_ctx| async {
+                InteractionResponse::ChannelMessage(json!({ "content": "ok" }))
+            })
+            .cooldown(
+                RouteKey::Command("limited".to_string()),
+                Duration::from_secs(30),
+            )
+            .build();
+        let clone = framework.clone();
+
+        let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(
+            crate::interactions::try_typed_interactions_endpoint(public_key, clone.clone()).is_ok()
+        );
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let (ctx, interaction) = command("limited", "13");
+        assert!(matches!(
+            runtime.block_on(framework.dispatch(ctx, interaction)),
+            InteractionResponse::ChannelMessage(value) if value["content"] == json!("ok")
+        ));
+        let (ctx, interaction) = command("limited", "13");
+        assert!(matches!(
+            runtime.block_on(clone.dispatch(ctx, interaction)),
+            InteractionResponse::ChannelMessage(value)
+                if value["content"] == json!("This action is on cooldown.")
+        ));
+    }
+
+    #[tokio::test]
+    async fn app_context_responds_through_the_shared_state_and_hides_the_token() {
+        let (context, interaction) = command("inspect", "14");
+        let context = InteractionContextData {
+            token: "app-context-secret-token".to_string(),
+            ..context
+        };
+        let ctx = AppContext {
+            context,
+            interaction,
+            route: RouteKey::Command("inspect".to_string()),
+        };
+
+        let debug = format!("{ctx:?}");
+        assert!(!debug.contains("app-context-secret-token"), "{debug}");
+        assert!(debug.contains("[redacted]"), "{debug}");
+
+        assert!(!ctx.is_acknowledged());
+        let error = ctx
+            .follow_up(&crate::http::RestClient::new("bot-token", 2), "early")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("has not been acknowledged"));
     }
 }
