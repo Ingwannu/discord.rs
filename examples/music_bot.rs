@@ -14,7 +14,9 @@
 //! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a
 //! stalled stream), the bot stops the track instead of waiting forever. This
 //! works even while FFmpeg is stuck mid-read, because the player reads its
-//! input on a separate task and handles `stop()` immediately.
+//! input on a separate task and handles `stop()` as soon as it arrives.
+//! `AudioPlayer::shutdown` then waits until the connection got its silence
+//! tail and every player task has finished.
 
 #[cfg(all(feature = "gateway", feature = "voice", feature = "voice-encode"))]
 mod bot {
@@ -142,10 +144,16 @@ mod bot {
             }
         }
 
-        // Let the trailing silence frames flush before tearing down.
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        subscription.unsubscribe();
-        Ok(())
+        // Waits (at most about a quarter second) for the connection's silence
+        // tail and speaking-off, then for every player task to finish.
+        player.shutdown().await;
+        drop(subscription);
+        // Shutdown released the player's reference to the connection, so it
+        // can be closed now.
+        match Arc::try_unwrap(handle) {
+            Ok(handle) => handle.close().await,
+            Err(_) => Ok(()),
+        }
     }
 
     #[async_trait]

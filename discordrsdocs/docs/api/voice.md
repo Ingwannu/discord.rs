@@ -21,7 +21,8 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 - `connect_voice_runtime(...)`: connects the voice websocket, performs UDP discovery, selects protocol, and waits for session description.
 - `recv_raw_udp_packet(...)`: receives raw UDP packets with parsed RTP metadata.
 - `recv_voice_packet(...)`: returns transport-decrypted Opus frames for non-DAVE sessions.
-- `send_opus_frame(...)`: sends an already-encoded Opus frame as an encrypted RTP-size packet with managed sequence, timestamp, and nonce state.
+- `send_opus_frame(...)`: sends an already-encoded Opus frame as an encrypted RTP-size packet with managed sequence, timestamp, and nonce state. The sequence number and timestamp advance only once the datagram is sent, so a failed or cancelled send leaves no hole; every attempt uses a fresh nonce.
+- `send_opus_frame_after_gap(...)`: the same for a frame that follows media that was never transmitted (for example frames a player dropped while the connection lagged); the RTP timestamp moves across the gap while the sequence stays contiguous.
 - `play_opus_frames(...)`: sends a small iterator of encoded Opus frames with simple duration pacing and speaking on/off commands.
 - `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`: behind `voice-encode`, encode 48 kHz stereo 20 ms PCM frames with `opus-rs` Audio mode before calling the existing Opus playback path.
 - `VoiceOpusDecoder`: decodes Opus frames to interleaved `i16` PCM, using 48 kHz stereo by default for Discord voice.
@@ -68,36 +69,67 @@ async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::
         }
     }
 
-    subscription.unsubscribe();
-    handle.close().await
+    // Waits for the silence tail, speaking off, and every player task.
+    player.shutdown().await;
+    drop(subscription);
+    match Arc::try_unwrap(handle) {
+        Ok(handle) => handle.close().await,
+        Err(_) => Ok(()),
+    }
 }
 ```
 
-- `player.play/pause/unpause/stop` drive the state machine; `player.state()` and `player.state_watch()` observe it.
-- `TrackEnd { reason }` carries a `TrackEndReason` (`Finished`, `Stopped`, `Error(...)`), and five silence frames plus speaking-flag handling flush at track end.
+- `player.play/pause/unpause/stop` drive the state machine; `player.state()` and `player.state_watch()` observe it. A command returning `Ok` means it was queued for the player's control task, which applies it as soon as it arrives; watch the state or events for the outcome.
+- `TrackEnd { reason }` carries a `TrackEndReason` (`Finished`, `Stopped`, `Error(...)`). A track that ends before producing any audio emits `TrackEnd` without `TrackStart`.
 - `NoSubscriberBehavior::{Pause, Play, Stop}` (in `AudioPlayerOptions`) chooses what happens while no connection is subscribed; the default `Pause` matches discord.js.
-- `AudioResource::volume()` returns a live `VolumeControl` that can be adjusted during playback; `AudioInput::file(...)`, `raw_pcm(...)`, `ffmpeg_with_binary(...)`, and `ffmpeg_with_args(...)` cover non-URL sources.
-- Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the player.
+- `AudioResource::volume()` returns a live `VolumeControl`. The volume is applied when the player encodes a frame, so a change affects the next frame encoded; up to three frames already queued for a lagging connection keep their old volume. `AudioInput::file(...)`, `raw_pcm(...)`, `ffmpeg_with_binary(...)`, and `ffmpeg_with_args(...)` cover non-URL sources.
+- Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the connection (see below).
 - `AudioResource::next_pcm_frame()` is cancel safe: dropping the future mid-frame (for example as a losing `tokio::select!` branch) keeps the PCM already read, and the next call completes the same frame.
-- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`). It also shows a start watchdog that calls `stop()` when FFmpeg produces no audio in time.
+- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`). It also shows a start watchdog that calls `stop()` when FFmpeg produces no audio in time, and a clean `shutdown()`.
 
-### Stalls, Backpressure, and Shutdown (3.0)
+### Real-Time Delivery, Stalls, and Shutdown (3.0)
 
-A player is one control task, plus one reader task per loaded resource and one worker task per subscribed connection. The control task never waits on audio input or on a connection, so a stalled FFmpeg stream or a slow voice connection cannot hold up the player.
+A player is one control task, plus one reader task per loaded resource and one task per subscribed connection. The control task never waits on audio input or on a connection, so a stalled FFmpeg stream or a slow voice connection cannot hold up commands or other connections.
+
+**Sources.** The reader decodes at most 5 frames (100 ms) ahead, plus the frame it is reading; while (re)buffering the player additionally holds the 3 frames it is waiting for. When the buffer is full the reader waits, which backpressures FFmpeg through its stdout pipe (for example while paused).
 
 | Situation | Behavior |
 |---|---|
-| `stop()`, `pause()`, `unpause()`, `play()` replacing a track, unsubscribing | Applied as soon as the command arrives, independent of the 20 ms tick and of any stalled read or send. Stopping or replacing drops the resource right away, which kills an FFmpeg process. |
-| Source slower than real time (underrun) | The reader decodes up to 5 frames (100 ms) ahead. When no frame is ready on a tick, the tick sends nothing; the player stays `Buffering`/`Playing` and plays the audio once it arrives. Nothing is skipped. |
-| Player paused | The reader stops once its 5-frame buffer is full, which backpressures FFmpeg through its stdout pipe. Buffered frames are kept for `unpause()`. |
-| One connection slower than real time | Each connection has a 5-frame (100 ms) queue. When it is full, the newest frames for that connection are dropped, and a `subscribed connection is not keeping up` warning is logged once per episode. Queued frames stay in order, and other connections and commands are unaffected. A connection that recovers first plays up to 100 ms of older audio. |
-| Speaking updates for a lagging connection | Never dropped. The latest state waits until the queue has room, and frames for that connection are dropped meanwhile so that none overtakes it. |
-| Unsubscribe | Frames still queued for that connection are discarded and an in-flight `send_opus_packet` is cancelled, so a stalled connection is released at once. |
-| Every `AudioPlayer` handle and `PlayerSubscription` dropped | The control task exits and aborts the reader and connection tasks, even mid-read or mid-send. No task, FFmpeg process, or sink outlives the player. |
+| Track start | The player stays `Buffering` until 3 frames (60 ms) are buffered or the input has ended, then emits `Playing` and `TrackStart`. |
+| Source slower than real time (underrun) | A tick without a frame sends nothing. After 3 such ticks in a row, the player goes back to `Buffering` and every connection gets its silence tail and speaking off. It resumes (`Playing`, no second `TrackStart`) once 3 frames are buffered again or the input ends. Audio is delayed, never skipped. |
+| `stop()` or `play()` replacing a track | The input's reader is cancelled and the resource dropped shortly after (an FFmpeg process is killed). Audio still queued for each connection is discarded, and an in-flight send of it is cancelled, *before* `TrackEnd` is published, so a connection that recovers later never plays the old track. A packet already handed to the network cannot be recalled. |
+| `pause()` | Flushes like `stop()`: queued audio is discarded and each connection gets its silence tail. The resource's own read-ahead is kept, so `unpause()` continues from the next unread frame. |
+| End of track (finished or failed) | Audio already queued for a connection still plays out (within its deadline), then the silence tail. |
+
+**Connections.** Each connection has a 3-frame queue and its own task:
+
+| Rule | Behavior |
+|---|---|
+| Deadlines | A queued frame must start sending within 60 ms of being produced or it expires; a send that takes longer than 60 ms counts as stalled and is cancelled. No frame reaches a connection more than 120 ms after it was produced. |
+| Full queue | The *oldest* frame is dropped. A `subscribed connection is not keeping up` warning is logged once per episode, and `subscribed connection caught up` (with the number dropped) when it recovers. Other connections are unaffected. |
+| Pacing | After a send completes, the next one starts no sooner than 10 ms later, so a connection recovering from a stall catches up at about twice real time instead of bursting its backlog. |
+| RTP timeline | Frames that are not transmitted (dropped, expired, failed, cancelled, or underrun ticks) are reported to the next frame as `VoiceFrameTiming::gap`. `VoiceRuntimeHandle` moves the RTP timestamp across the gap (RFC 7587 timestamps count 48 kHz sampling time) while the sequence number stays contiguous. The silence tail starts a new segment with no gap. |
+| Silence tail | When a connection's audio stops (stop, pause, end of track, underrun, unsubscribe, shutdown), it gets five Opus silence frames at 20 ms intervals, then speaking off, as Discord recommends. The tail is state owned by the connection's task, not queued audio, so a lagging connection still gets it after it recovers. New audio supersedes a tail that has not been sent yet. |
+| Speaking | Coalesced: the connection eventually sees the latest state (`true` before the first frame of a stretch of audio, `false` after its tail). It is not a log of every transition. |
+
+**Detaching and shutting down.**
+
+| Situation | Behavior |
+|---|---|
+| Unsubscribe | Queued audio is discarded. The connection's task sends the silence tail and speaking off within a 200 ms grace period; if the connection is still stalled then, the task cancels the pending send, clears speaking anyway, and exits. |
+| `AudioPlayer::shutdown().await` | Stops the track (`TrackEnd { reason: Stopped }`), gives every connection the same 200 ms grace, cancels whatever is still stalled, and returns once the control task, every reader, and every connection task have finished: within about 240 ms even if the input and all connections are stalled. A task blocked in synchronous code cannot be cancelled; it is logged and abandoned after that bound. Afterwards every command fails. |
+| Every handle and subscription dropped | The same cleanup runs in the background, but nothing reports when it is done. Use `shutdown()` when completion matters. |
 | A `VoiceFrameSink` panics | That connection is detached (logged as an error); playback continues for the others. |
 | An `AudioInput` reader panics | The track ends with `TrackEndReason::Error("... audio source reader stopped unexpectedly")`; the player keeps working. |
 
-Volume changes are applied when a frame is transmitted, not when it is read ahead, so `VolumeControl::set` still takes effect on the next 20 ms frame.
+### Custom `VoiceFrameSink` implementations
+
+`send_opus_packet(opus_frame, timing)` receives a `VoiceFrameTiming { duration, gap }`. An RTP sender should move its timestamp by `gap` before the frame. The player relies on this contract:
+
+- Calls for one subscription never overlap; each subscription has its own task.
+- Return `Ok` only if the frame was transmitted. After an error or a cancellation, the frame's media time is included in the next frame's `gap`.
+- The send future may be dropped before it completes: after 60 ms (stalled), when playback is stopped, paused, or replaced, when new audio supersedes a pending silence frame, and when the close grace period ends. A dropped send must leave the sink usable, and should transmit the frame entirely or not at all. `VoiceRuntimeHandle` does this: its sequence number and timestamp advance only after the datagram is sent, and each attempt uses a fresh encryption nonce.
+- `update_speaking(false)` is also called from a destructor when a subscription's task is cancelled, so it must not block or panic.
 
 ### Without `voice-encode`
 

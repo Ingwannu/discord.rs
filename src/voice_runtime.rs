@@ -669,12 +669,33 @@ impl VoiceOutboundRtpState {
         mode: &VoiceEncryptionMode,
         secret_key: &[u8],
     ) -> Result<VoiceOutboundPacket, DiscordError> {
+        let packet = self.seal_packet(opus_frame, Duration::ZERO, mode, secret_key)?;
+        self.commit_packet(Duration::ZERO, duration);
+        Ok(packet)
+    }
+
+    /// Encrypts a packet stamped `gap` after the current timestamp.
+    ///
+    /// Sealing consumes a nonce but not the sequence number or timestamp;
+    /// [`Self::commit_packet`] advances those once the packet was really
+    /// sent. A packet that is sealed but never sent therefore leaves no hole
+    /// in the sequence or the media timeline, while its nonce is never used
+    /// again: reusing a nonce for a different payload would break the AEAD.
+    fn seal_packet(
+        &mut self,
+        opus_frame: &[u8],
+        gap: Duration,
+        mode: &VoiceEncryptionMode,
+        secret_key: &[u8],
+    ) -> Result<VoiceOutboundPacket, DiscordError> {
         if opus_frame.is_empty() {
             return Err(invalid_data_error("opus frame must not be empty"));
         }
 
         let sequence = self.sequence;
-        let timestamp = self.timestamp;
+        let timestamp = self
+            .timestamp
+            .wrapping_add(gap_increment(self.sample_rate, gap));
         let nonce_suffix = self.nonce_suffix.to_be_bytes();
         let packet = encrypt_transport_payload(
             VoiceOutboundEncryptParams {
@@ -688,13 +709,8 @@ impl VoiceOutboundRtpState {
             mode,
             secret_key,
         )?;
-        let rtp = parse_rtp_header(&packet)?;
-
-        self.sequence = self.sequence.wrapping_add(1);
-        self.timestamp = self
-            .timestamp
-            .wrapping_add(timestamp_increment(self.sample_rate, duration));
         self.nonce_suffix = self.nonce_suffix.wrapping_add(1);
+        let rtp = parse_rtp_header(&packet)?;
 
         Ok(VoiceOutboundPacket {
             rtp,
@@ -702,6 +718,16 @@ impl VoiceOutboundRtpState {
             opus_frame: opus_frame.to_vec(),
             bytes: packet,
         })
+    }
+
+    /// Records a sent packet that followed `gap` of untransmitted media and
+    /// carried `duration` of audio.
+    fn commit_packet(&mut self, gap: Duration, duration: Duration) {
+        self.sequence = self.sequence.wrapping_add(1);
+        self.timestamp = self
+            .timestamp
+            .wrapping_add(gap_increment(self.sample_rate, gap))
+            .wrapping_add(timestamp_increment(self.sample_rate, duration));
     }
 }
 
@@ -1249,12 +1275,36 @@ impl VoiceRuntimeHandle {
         opus_frame: &[u8],
         duration: Duration,
     ) -> Result<VoiceOutboundPacket, DiscordError> {
-        self.send_opus_payload(opus_frame, duration, false).await
+        self.send_opus_payload(opus_frame, Duration::ZERO, duration, false)
+            .await
+    }
+
+    /// Like [`Self::send_opus_frame`], for a frame that follows `gap` of
+    /// media that was never transmitted, such as frames an audio player
+    /// dropped while this connection lagged.
+    ///
+    /// The RTP timestamp moves across the gap, because RFC 7587 timestamps
+    /// count 48 kHz sampling time, while the sequence number and nonce
+    /// advance by one as for any packet.
+    ///
+    /// Like `send_opus_frame`, this is cancel safe for the RTP state: the
+    /// sequence number and timestamp only advance once the datagram has been
+    /// sent, so a send that fails or is dropped before completing leaves no
+    /// hole in either. Each attempt still uses up a fresh nonce.
+    pub async fn send_opus_frame_after_gap(
+        &self,
+        opus_frame: &[u8],
+        duration: Duration,
+        gap: Duration,
+    ) -> Result<VoiceOutboundPacket, DiscordError> {
+        self.send_opus_payload(opus_frame, gap, duration, false)
+            .await
     }
 
     async fn send_opus_payload(
         &self,
         opus_payload: &[u8],
+        gap: Duration,
         duration: Duration,
         requires_dave: bool,
     ) -> Result<VoiceOutboundPacket, DiscordError> {
@@ -1275,16 +1325,20 @@ impl VoiceRuntimeHandle {
             ));
         }
 
-        let packet = {
-            let mut outbound_rtp = self.outbound_rtp.lock().await;
-            outbound_rtp.build_packet(
-                opus_payload,
-                duration,
-                &session_description.mode,
-                &session_description.secret_key,
-            )?
-        };
+        // The RTP state stays locked across the UDP send and is committed
+        // only after it. `UdpSocket::send` is cancel safe (a cancelled send
+        // transmitted nothing), so a failed or cancelled send leaves the
+        // sequence and timeline untouched, and concurrent senders cannot
+        // reorder packets.
+        let mut outbound_rtp = self.outbound_rtp.lock().await;
+        let packet = outbound_rtp.seal_packet(
+            opus_payload,
+            gap,
+            &session_description.mode,
+            &session_description.secret_key,
+        )?;
         self.udp_socket.send(&packet.bytes).await?;
+        outbound_rtp.commit_packet(gap, duration);
         Ok(packet)
     }
 
@@ -1299,7 +1353,8 @@ impl VoiceRuntimeHandle {
         E: VoiceDaveFrameEncryptor + ?Sized,
     {
         let encrypted = encryptor.encrypt_opus(opus_frame)?;
-        self.send_opus_payload(&encrypted, duration, true).await
+        self.send_opus_payload(&encrypted, Duration::ZERO, duration, true)
+            .await
     }
 
     #[cfg(feature = "voice-encode")]
@@ -1843,6 +1898,16 @@ fn build_rtp_header(sequence: u16, timestamp: u32, ssrc: u32, payload_type: u8) 
     packet
 }
 
+/// Like `timestamp_increment`, but a zero gap adds nothing (the frame
+/// increment rounds up to at least one sample).
+fn gap_increment(sample_rate: u32, gap: Duration) -> u32 {
+    if gap.is_zero() {
+        0
+    } else {
+        timestamp_increment(sample_rate, gap)
+    }
+}
+
 fn timestamp_increment(sample_rate: u32, duration: Duration) -> u32 {
     let nanos = duration.as_nanos();
     let samples = (u128::from(sample_rate) * nanos) / 1_000_000_000;
@@ -1940,6 +2005,7 @@ async fn wait_for_voice_opcode(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use aes_gcm::aead::{AeadInPlace, KeyInit};
     use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
@@ -1955,10 +2021,10 @@ mod tests {
 
     use super::{
         build_heartbeat_payload, build_identify_payload, connect, decrypt_transport_payload,
-        next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header, parse_uleb128,
-        read_hello_interval, select_encryption_mode, update_state, voice_heartbeat_ack_timeout,
-        voice_stage_timeout, VoiceDaveState, VoiceOpusDecoder, VoiceOutboundRtpState,
-        VoiceRuntimeConfig, VoiceRuntimeState, VoiceSessionDescription,
+        gap_increment, next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header,
+        parse_uleb128, read_hello_interval, select_encryption_mode, update_state,
+        voice_heartbeat_ack_timeout, voice_stage_timeout, VoiceDaveState, VoiceOpusDecoder,
+        VoiceOutboundRtpState, VoiceRuntimeConfig, VoiceRuntimeState, VoiceSessionDescription,
     };
     #[cfg(feature = "voice-encode")]
     use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
@@ -2289,6 +2355,52 @@ mod tests {
     }
 
     #[test]
+    fn voice_outbound_rtp_state_commits_only_sent_packets_and_moves_across_gaps() {
+        let secret_key = [7_u8; 32];
+        let mode = VoiceEncryptionMode::aead_aes256_gcm_rtpsize();
+        let frame = Duration::from_millis(20);
+        let mut state = VoiceOutboundRtpState::with_counters(42, 10, 1_000, 5);
+
+        // A sealed packet that is never sent uses up its nonce only.
+        let unsent = state
+            .seal_packet(&[1, 2, 3], Duration::ZERO, &mode, &secret_key)
+            .unwrap();
+        assert_eq!(
+            (
+                unsent.rtp.sequence,
+                unsent.rtp.timestamp,
+                unsent.nonce_suffix
+            ),
+            (10, 1_000, [0, 0, 0, 5])
+        );
+        assert_eq!(
+            (state.sequence, state.timestamp, state.nonce_suffix),
+            (10, 1_000, 6)
+        );
+
+        // The next packet follows 40 ms of untransmitted media: its timestamp
+        // jumps over the gap while the sequence stays contiguous, and its
+        // nonce is fresh.
+        let after_gap = state
+            .seal_packet(&[1, 2, 3], frame * 2, &mode, &secret_key)
+            .unwrap();
+        assert_eq!(
+            (
+                after_gap.rtp.sequence,
+                after_gap.rtp.timestamp,
+                after_gap.nonce_suffix
+            ),
+            (10, 1_000 + 1_920, [0, 0, 0, 6])
+        );
+        state.commit_packet(frame * 2, frame);
+        assert_eq!(
+            (state.sequence, state.timestamp, state.nonce_suffix),
+            (11, 1_000 + 1_920 + 960, 7)
+        );
+        assert_eq!(gap_increment(48_000, Duration::ZERO), 0);
+    }
+
+    #[test]
     fn voice_outbound_rtp_state_supports_xchacha_and_rejects_empty_frames() {
         let secret_key = [9_u8; 32];
         let opus_frame = [0x11, 0x22, 0x33, 0x44];
@@ -2485,8 +2597,9 @@ mod tests {
 
     #[tokio::test]
     async fn voice_runtime_connects_and_completes_handshake() {
-        let udp_listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let udp_listener = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let udp_port = udp_listener.local_addr().unwrap().port();
+        let media_listener = Arc::clone(&udp_listener);
 
         let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let ws_port = tcp_listener.local_addr().unwrap().port();
@@ -2653,6 +2766,29 @@ mod tests {
             .set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)
             .unwrap();
         speaking_rx.await.unwrap();
+
+        // Sent frames advance the RTP timeline by their duration, and a
+        // frame sent after a gap moves the timestamp across the gap while
+        // the sequence stays contiguous.
+        let frame = Duration::from_millis(20);
+        let first = handle.send_opus_frame(&[1, 2, 3], frame).await.unwrap();
+        let second = handle
+            .send_opus_frame_after_gap(&[4, 5, 6], frame, frame * 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            (second.rtp.sequence, second.rtp.timestamp),
+            (
+                first.rtp.sequence.wrapping_add(1),
+                first.rtp.timestamp.wrapping_add(960 * 4)
+            )
+        );
+        let mut datagram = [0_u8; 128];
+        for expected in [&first, &second] {
+            let (received, _) = media_listener.recv_from(&mut datagram).await.unwrap();
+            assert_eq!(&datagram[..received], expected.bytes.as_slice());
+        }
+
         handle.close().await.unwrap();
         server.await.unwrap();
     }
