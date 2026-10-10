@@ -15,6 +15,7 @@ pub use crate::command::{
 pub use crate::constants::{button_style, gateway_intents, text_input_style};
 pub use crate::error::DiscordError;
 pub use crate::event::Event;
+pub use crate::formatters::{MentionResolver, TimestampStyle};
 #[cfg(all(feature = "gateway", feature = "sharding"))]
 pub use crate::gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
@@ -64,6 +65,7 @@ pub use crate::oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,
 };
+pub use crate::permissions::{ChannelPermissions, ComputedPermissions, PermissionDataError};
 pub use crate::response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "voice")]
 pub use crate::voice::{

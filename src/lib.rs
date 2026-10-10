@@ -22,6 +22,9 @@ pub mod constants;
 pub mod error;
 /// Typed Discord Gateway event payloads and dispatch decoding.
 pub mod event;
+/// Message formatting helpers with `@discordjs/formatters` parity: mentions,
+/// timestamps, markdown styles, lists, `escape_markdown`, and `clean_content`.
+pub mod formatters;
 #[cfg(feature = "interactions")]
 /// High-level typed interaction application framework.
 pub mod framework;
@@ -40,6 +43,9 @@ pub mod model_ext;
 pub mod oauth2;
 /// Parsers for Discord interaction and modal payloads.
 pub mod parsers;
+/// Channel and guild permission computation (discord.js `permissionsFor`)
+/// over explicit data, models, or the cache.
+pub mod permissions;
 /// Commonly used discord.rs types re-exported for application code.
 pub mod prelude;
 /// Interaction response and message response builders.
@@ -91,6 +97,10 @@ pub use event::{
     ThreadMemberUpdateEvent, ThreadMembersUpdateEvent, UserUpdateEvent, VoiceChannelEffectEvent,
     VoiceChannelStartTimeUpdateEvent, VoiceChannelStatusUpdateEvent, VoiceServerEvent,
     VoiceStateEvent,
+};
+pub use formatters::{
+    EscapeMarkdownOptions, GuildNavigation, HeadingLevel, ListItem, MentionKind, MentionResolver,
+    SlashCommandMention, Timestamp, TimestampStyle,
 };
 #[cfg(feature = "interactions")]
 pub use framework::{
@@ -151,6 +161,10 @@ pub use model::{
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,
+};
+pub use permissions::{
+    ChannelClass, ChannelPermissionInput, ChannelPermissions, ComputedPermissions,
+    MemberPermissionInput, PermissionDataError, PermissionSource,
 };
 pub use response::{InteractionResponseBuilder, MessageBuilder};
 #[cfg(feature = "sharding")]

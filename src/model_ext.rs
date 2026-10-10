@@ -1,7 +1,9 @@
 //! discord.js-style convenience methods on model entities.
 //!
 //! Every method takes a `&RestClient` explicitly, so entities remain plain
-//! data and can be freely cloned, cached, and sent between tasks.
+//! data and can be freely cloned, cached, and sent between tasks. The
+//! permission and formatting helpers near the end are pure and delegate to
+//! [`crate::permissions`] and [`crate::formatters`].
 //!
 //! ```ignore
 //! message.reply(&http, "hi").await?;
@@ -710,6 +712,66 @@ impl User {
     pub fn display_avatar_url(&self, size: Option<u16>) -> String {
         self.avatar_url(size)
             .unwrap_or_else(|| self.default_avatar_url())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Permissions and formatting (thin delegates; tested in `permissions` and
+// `formatters`)
+// ---------------------------------------------------------------------------
+
+impl Channel {
+    /// Permissions of `member` in this channel, like discord.js
+    /// `channel.permissionsFor(member)`. `parent` is required when this is a
+    /// thread. The timeout is checked against the current time; use
+    /// [`crate::permissions::permissions_for`] to pass one explicitly.
+    pub fn permissions_for(
+        &self,
+        guild: &Guild,
+        member: &Member,
+        parent: Option<&Channel>,
+    ) -> Result<crate::permissions::ChannelPermissions, crate::permissions::PermissionDataError>
+    {
+        crate::permissions::permissions_for(
+            guild,
+            member,
+            self,
+            parent,
+            std::time::SystemTime::now(),
+        )
+    }
+}
+
+impl Member {
+    /// Guild-level permissions of this member, like discord.js
+    /// `member.permissions`, with the timeout checked against the current
+    /// time.
+    pub fn guild_permissions(
+        &self,
+        guild: &Guild,
+    ) -> Result<crate::permissions::ComputedPermissions, crate::permissions::PermissionDataError>
+    {
+        crate::permissions::guild_permissions(guild, self, std::time::SystemTime::now())
+    }
+
+    /// Returns the `<@id>` mention for this member, or `None` when the
+    /// payload has no user object.
+    pub fn mention(&self) -> Option<String> {
+        self.user
+            .as_ref()
+            .map(|user| crate::formatters::user_mention(&user.id).to_string())
+    }
+}
+
+impl Message {
+    /// This message's content with mentions replaced by names from
+    /// `resolver`, like discord.js `message.cleanContent`; see
+    /// [`crate::formatters::clean_content`].
+    pub fn clean_content<R>(&self, resolver: &R) -> std::borrow::Cow<'_, str>
+    where
+        R: crate::formatters::MentionResolver + ?Sized,
+    {
+        crate::formatters::clean_content(&self.content, resolver)
     }
 }
 

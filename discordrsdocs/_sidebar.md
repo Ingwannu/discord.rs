@@ -14,6 +14,7 @@
   - [Commands](#/docs/api/commands)
   - [Gateway](#/docs/api/gateway)
   - [Cache and Collectors](#/docs/api/cache-and-collectors)
+  - [Permissions and Formatters](#/docs/api/permissions-and-formatters)
   - [Parsers](#/docs/api/parsers)
   - [HTTP and Helpers](#/docs/api/http-and-helpers)
   - [Discord API Coverage](#/docs/api/discord-api-coverage)

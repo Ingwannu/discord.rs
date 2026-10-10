@@ -1,0 +1,1128 @@
+//! Channel and guild permission computation — the discord.js
+//! `channel.permissionsFor(member)` / `member.permissions` equivalent.
+//!
+//! The calculation follows Discord's documented algorithm
+//! (<https://docs.discord.com/developers/topics/permissions>):
+//!
+//! 1. The guild owner has every permission.
+//! 2. Base permissions are `@everyone` OR every role the member has; a base
+//!    containing `ADMINISTRATOR` grants every permission and bypasses
+//!    overwrites.
+//! 3. Channel overwrites apply in a fixed order: the `@everyone` overwrite
+//!    (deny, then allow), all of the member's role overwrites aggregated
+//!    (deny, then allow), then the member's own overwrite (deny, then allow).
+//!    Threads use their parent channel's overwrites.
+//! 4. A member with an active timeout keeps only `VIEW_CHANNEL` and
+//!    `READ_MESSAGE_HISTORY` (owners and administrators are exempt).
+//! 5. Implicit permissions: see [`MemberPermissionInput::in_channel`].
+//!
+//! Three layers are provided:
+//!
+//! - [`MemberPermissionInput`] + [`ChannelPermissionInput`]: the pure core
+//!   over explicit, already-resolved data. It never fails.
+//! - [`guild_permissions`] / [`permissions_for`]: resolve the inputs from
+//!   [`Guild`], [`Member`], and [`Channel`] models and report missing data as
+//!   a typed [`PermissionDataError`].
+//! - [`cached_guild_permissions`] / [`cached_permissions_for`]: the same,
+//!   reading the models from a [`CacheHandle`] through its public read API.
+//!
+//! ```text
+//! [Decision Log]
+//! - 목적과 의도: discord.js permissionsFor에 해당하는 계산을 제공하되, 불완전한
+//!   데이터(가려진 채널, 캐시 누락)를 권위 있는 답으로 오인하지 않게 한다.
+//! - 기존 구현 및 제약 조건: 크레이트에는 비트 타입(`Permissions`,
+//!   `PermissionsBitField`)만 있고 계산은 없다. `PermissionFlags` 표는 비트 41
+//!   이후가 Discord 문서와 한 칸씩 어긋나 있고(`SEND_POLLS`가 1 << 50) 이
+//!   작업 범위 밖이다. 2026-11-16부터 봇이 볼 수 없는 채널은 합성된 @everyone
+//!   VIEW_CHANNEL deny 하나만 가진 채로 온다.
+//! - 검토한 주요 대안: (1) Guild/Member/Channel만 받는 함수 하나,
+//!   (2) twilight처럼 채널 종류별로 무관한 비트를 지우는 계산기,
+//!   (3) 명시적 입력의 순수 코어 + 모델 해석 계층 + 캐시 어댑터.
+//! - 선택한 방식: (3). 결과는 `ChannelPermissions::{Known, Obfuscated}`이고
+//!   누락 데이터는 `PermissionDataError`로 이름을 붙여 돌려준다.
+//! - 다른 대안 대신 이 방식을 선택한 이유: 캐시가 없는 HTTP 인터랙션 봇도
+//!   자기 데이터로 계산할 수 있어야 하고, 캐시 어댑터가 "무엇이 없는지"를
+//!   정확히 말하려면 해석 단계가 코어와 분리돼야 한다. 채널 종류별 비트 제거는
+//!   Discord가 문서화하지 않았으므로 하지 않는다(discord.js와 같음).
+//! - 장점, 단점 및 영향: 문서화된 규칙만 구현하므로 "such as"로만 언급된
+//!   암묵 규칙(CONNECT 없을 때 MANAGE_CHANNELS 외의 음성 권한 등)과 비공개
+//!   스레드 멤버십은 모델링하지 않는다. ALL은 크레이트 비트 표 대신 Discord
+//!   문서 표에서 직접 만든다.
+//! ```
+
+use std::fmt;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::bitfield::{permissions as flag, Permissions};
+use crate::cache::CacheHandle;
+use crate::error::DiscordError;
+use crate::model::{Channel, Guild, Member, PermissionOverwrite, Role, Snowflake};
+
+/// Every permission bit documented in Discord's permission table
+/// (bits 0–46 and 48–52; bit 47 is unassigned).
+///
+/// Built from Discord's table rather than [`Permissions::all()`] because the
+/// crate's `PermissionFlags` name table is shifted by one from bit 41 upward
+/// and lacks `PIN_MESSAGES` (51). Owners and administrators receive this
+/// value; [`ComputedPermissions::has`] additionally treats them as holding
+/// permissions added after this constant was written.
+pub const ALL_PERMISSIONS: Permissions =
+    Permissions::from_bits(((1u64 << 47) - 1) | (0b11111u64 << 48));
+
+/// Permissions that cannot be set in channel overwrites (no T/V/S column in
+/// Discord's table): KICK_MEMBERS, BAN_MEMBERS, ADMINISTRATOR, MANAGE_GUILD,
+/// VIEW_AUDIT_LOG, VIEW_GUILD_INSIGHTS, CHANGE_NICKNAME, MANAGE_NICKNAMES,
+/// MANAGE_GUILD_EXPRESSIONS, MODERATE_MEMBERS,
+/// VIEW_CREATOR_MONETIZATION_ANALYTICS, and CREATE_GUILD_EXPRESSIONS.
+///
+/// Losing `VIEW_CHANNEL` keeps only these. Bits this table does not know
+/// yet are dropped with the channel-scoped ones: most recent additions
+/// (`SEND_POLLS`, `PIN_MESSAGES`, `BYPASS_SLOWMODE`) are channel-scoped, and
+/// erring toward "not allowed" fails safe. Add new guild-wide bits here.
+const GUILD_WIDE: u64 = flag::KICK_MEMBERS.bits()
+    | flag::BAN_MEMBERS.bits()
+    | flag::ADMINISTRATOR.bits()
+    | flag::MANAGE_GUILD.bits()
+    | flag::VIEW_AUDIT_LOG.bits()
+    | flag::VIEW_GUILD_INSIGHTS.bits()
+    | flag::CHANGE_NICKNAME.bits()
+    | flag::MANAGE_NICKNAMES.bits()
+    | flag::MANAGE_EMOJIS_AND_STICKERS.bits()
+    | flag::MODERATE_MEMBERS.bits()
+    | (1 << 41)
+    | (1 << 43);
+
+/// What a timed-out member keeps.
+const TIMEOUT_ALLOWED: u64 = flag::VIEW_CHANNEL.bits() | flag::READ_MESSAGE_HISTORY.bits();
+
+/// Implicitly denied when the member cannot send messages (Discord lists
+/// exactly these four).
+const SEND_DEPENDENT: u64 = flag::MENTION_EVERYONE.bits()
+    | flag::SEND_TTS_MESSAGES.bits()
+    | flag::ATTACH_FILES.bits()
+    | flag::EMBED_LINKS.bits();
+
+/// `PermissionOverwrite::kind` values.
+const OVERWRITE_ROLE: u8 = 0;
+const OVERWRITE_MEMBER: u8 = 1;
+
+/// Why a [`ComputedPermissions`] holds what it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PermissionSource {
+    /// The member owns the guild: every permission, overwrites and timeouts
+    /// ignored.
+    Owner,
+    /// A base role grants `ADMINISTRATOR`: every permission, overwrites and
+    /// timeouts ignored.
+    Administrator,
+    /// Computed from roles (and, for a channel, overwrites, timeout, and
+    /// implicit rules).
+    Computed,
+}
+
+/// A fully computed permission set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ComputedPermissions {
+    /// The effective permissions. [`ALL_PERMISSIONS`] for owners and
+    /// administrators.
+    pub permissions: Permissions,
+    /// Whether this came from ownership, `ADMINISTRATOR`, or the full
+    /// calculation.
+    pub source: PermissionSource,
+    /// `true` when an active timeout restricted the result to
+    /// `VIEW_CHANNEL | READ_MESSAGE_HISTORY`.
+    pub timeout_applied: bool,
+}
+
+impl ComputedPermissions {
+    fn bypass(source: PermissionSource) -> Self {
+        Self {
+            permissions: ALL_PERMISSIONS,
+            source,
+            timeout_applied: false,
+        }
+    }
+
+    /// Returns `true` when every bit of `required` is granted. Accepts a
+    /// [`Permissions`] value (`permissions::SEND_MESSAGES | ...`) or raw
+    /// bits.
+    ///
+    /// Owners and administrators pass every check, including permissions
+    /// newer than [`ALL_PERMISSIONS`], because Discord lets them bypass all
+    /// permission checks.
+    pub fn has(&self, required: impl Into<u64>) -> bool {
+        self.is_bypass() || self.permissions.contains(required.into())
+    }
+
+    /// Returns the bits of `required` that are not granted (empty for owners
+    /// and administrators), like discord.js `permissions.missing(...)`.
+    pub fn missing(&self, required: impl Into<u64>) -> Permissions {
+        if self.is_bypass() {
+            return Permissions::default();
+        }
+        self.permissions
+            .missing(Permissions::from_bits(required.into()))
+    }
+
+    /// Raw permission bits.
+    pub fn bits(&self) -> u64 {
+        self.permissions.bits()
+    }
+
+    fn is_bypass(&self) -> bool {
+        matches!(
+            self.source,
+            PermissionSource::Owner | PermissionSource::Administrator
+        )
+    }
+}
+
+/// Result of a channel permission calculation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChannelPermissions {
+    /// The permissions are known.
+    Known(ComputedPermissions),
+    /// The channel (or a thread's parent) arrived with the
+    /// `CHANNEL_OBFUSCATED` flag, so its real overwrites are unknown and no
+    /// answer would be trustworthy.
+    ///
+    /// Discord obfuscates only channels the connected bot cannot view, so for
+    /// the bot itself this implies it lacks `VIEW_CHANNEL` there. Owners and
+    /// administrators never get this outcome: their answer does not depend on
+    /// overwrites.
+    Obfuscated,
+}
+
+impl ChannelPermissions {
+    /// The computed permissions, or `None` when they are unknown.
+    pub fn known(self) -> Option<ComputedPermissions> {
+        match self {
+            Self::Known(permissions) => Some(permissions),
+            Self::Obfuscated => None,
+        }
+    }
+
+    /// Whether the channel was obfuscated.
+    pub fn is_obfuscated(&self) -> bool {
+        matches!(self, Self::Obfuscated)
+    }
+
+    /// Three-valued check: `Some(true)`/`Some(false)` when known, `None` when
+    /// the channel is obfuscated. See [`ComputedPermissions::has`].
+    pub fn has(&self, required: impl Into<u64>) -> Option<bool> {
+        match self {
+            Self::Known(permissions) => Some(permissions.has(required)),
+            Self::Obfuscated => None,
+        }
+    }
+}
+
+/// Which implicit-permission rules a channel follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ChannelClass {
+    /// GUILD_TEXT (0), GUILD_ANNOUNCEMENT (5), GUILD_FORUM (15), and
+    /// GUILD_MEDIA (16): Discord's "T" channels.
+    Text,
+    /// GUILD_VOICE (2) and GUILD_STAGE_VOICE (13).
+    Voice,
+    /// GUILD_CATEGORY (4).
+    Category,
+    /// ANNOUNCEMENT_THREAD (10), PUBLIC_THREAD (11), PRIVATE_THREAD (12).
+    /// A thread's [`ChannelPermissionInput`] must carry its **parent's**
+    /// overwrites.
+    Thread,
+    /// GUILD_DIRECTORY (14) and channel types this crate does not know yet:
+    /// only the `VIEW_CHANNEL` rule applies.
+    Other,
+}
+
+impl ChannelClass {
+    /// Classifies a Discord channel `type`. Returns `None` for DM (1) and
+    /// group DM (3), which have no guild permissions.
+    pub fn from_channel_type(kind: u8) -> Option<Self> {
+        Some(match kind {
+            1 | 3 => return None,
+            0 | 5 | 15 | 16 => Self::Text,
+            2 | 13 => Self::Voice,
+            4 => Self::Category,
+            10..=12 => Self::Thread,
+            _ => Self::Other,
+        })
+    }
+}
+
+/// The member side of a permission calculation: guild, owner, `@everyone`,
+/// the member's roles, and their timeout. All data is explicit; nothing is
+/// read from a clock or a cache.
+///
+/// ```
+/// use discordrs::bitfield::permissions;
+/// use discordrs::model::Snowflake;
+/// use discordrs::permissions::{ChannelClass, ChannelPermissionInput, MemberPermissionInput};
+///
+/// let guild = Snowflake::from(100u64);
+/// let owner = Snowflake::from(1u64);
+/// let member = Snowflake::from(2u64);
+/// let moderators = Snowflake::from(300u64);
+///
+/// let input = MemberPermissionInput::new(&guild, &owner, &member, permissions::VIEW_CHANNEL)
+///     .role(&moderators, permissions::SEND_MESSAGES | permissions::ATTACH_FILES);
+///
+/// let channel = ChannelPermissionInput::new(ChannelClass::Text, &[]);
+/// let result = input.in_channel(&channel).known().unwrap();
+/// assert!(result.has(permissions::ATTACH_FILES));
+/// ```
+#[derive(Clone, Debug)]
+pub struct MemberPermissionInput<'a> {
+    guild_id: &'a Snowflake,
+    owner_id: &'a Snowflake,
+    member_id: &'a Snowflake,
+    everyone: Permissions,
+    roles: Vec<(&'a Snowflake, Permissions)>,
+    timed_out: bool,
+}
+
+impl<'a> MemberPermissionInput<'a> {
+    /// Starts an input for `member_id` in `guild_id` (owned by `owner_id`),
+    /// where `everyone` is the `@everyone` role's permissions.
+    pub fn new(
+        guild_id: &'a Snowflake,
+        owner_id: &'a Snowflake,
+        member_id: &'a Snowflake,
+        everyone: Permissions,
+    ) -> Self {
+        Self {
+            guild_id,
+            owner_id,
+            member_id,
+            everyone,
+            roles: Vec::new(),
+            timed_out: false,
+        }
+    }
+
+    /// Adds one of the member's roles with its guild-level permissions.
+    /// An entry for the `@everyone` role (ID equal to the guild ID) only adds
+    /// its permissions to the base; it never counts as a role overwrite.
+    pub fn role(mut self, role_id: &'a Snowflake, permissions: Permissions) -> Self {
+        self.roles.push((role_id, permissions));
+        self
+    }
+
+    /// Adds several roles; see [`MemberPermissionInput::role`].
+    pub fn roles<I>(mut self, roles: I) -> Self
+    where
+        I: IntoIterator<Item = (&'a Snowflake, Permissions)>,
+    {
+        self.roles.extend(roles);
+        self
+    }
+
+    /// Sets the member's `communication_disabled_until`. The member counts
+    /// as timed out when `until` is later than `now` (the discord.js
+    /// `isCommunicationDisabled()` rule); `now` is a parameter so the result
+    /// stays reproducible.
+    pub fn communication_disabled_until(mut self, until: SystemTime, now: SystemTime) -> Self {
+        self.timed_out = until > now;
+        self
+    }
+
+    /// Guild-level permissions (discord.js `member.permissions`): owner and
+    /// `ADMINISTRATOR` short-circuit to everything, otherwise `@everyone` OR
+    /// the roles, limited by an active timeout.
+    pub fn guild_permissions(&self) -> ComputedPermissions {
+        let base = self.base_permissions();
+        match self.bypass(base) {
+            Some(bypass) => bypass,
+            None => self.finish(base.bits()),
+        }
+    }
+
+    /// Permissions in a channel (discord.js `channel.permissionsFor(member)`).
+    ///
+    /// After overwrites and the timeout, the implicit rules Discord documents
+    /// are applied:
+    ///
+    /// - Without `VIEW_CHANNEL`, every channel-scoped permission is dropped;
+    ///   guild-wide ones such as `KICK_MEMBERS` remain, as in discord.js.
+    /// - In [`ChannelClass::Text`] and [`ChannelClass::Voice`] channels,
+    ///   without `SEND_MESSAGES` the member also loses `MENTION_EVERYONE`,
+    ///   `SEND_TTS_MESSAGES`, `ATTACH_FILES`, and `EMBED_LINKS`.
+    /// - In threads `SEND_MESSAGES` is not inherited, so it is removed, and
+    ///   `SEND_MESSAGES_IN_THREADS` takes its place in the rule above.
+    /// - In [`ChannelClass::Voice`] channels, without `CONNECT` the member
+    ///   loses `MANAGE_CHANNELS`.
+    ///
+    /// Not modeled (Discord does not document them as permission bits):
+    /// private-thread membership, voice-connection-based visibility, other
+    /// "such as" consequences of a missing `CONNECT`, and `SEND_POLLS` /
+    /// `SEND_VOICE_MESSAGES` without `SEND_MESSAGES`. Bits that do not apply
+    /// to the channel type (e.g. `CONNECT` in a text channel) are kept.
+    pub fn in_channel(&self, channel: &ChannelPermissionInput<'_>) -> ChannelPermissions {
+        let base = self.base_permissions();
+        if let Some(bypass) = self.bypass(base) {
+            return ChannelPermissions::Known(bypass);
+        }
+        if channel.obfuscated {
+            return ChannelPermissions::Obfuscated;
+        }
+
+        let overwritten = self.apply_overwrites(base, channel.overwrites);
+        let mut computed = self.finish(overwritten);
+        computed.permissions = apply_implicit(computed.permissions, channel.class);
+        ChannelPermissions::Known(computed)
+    }
+
+    fn bypass(&self, base: Permissions) -> Option<ComputedPermissions> {
+        if self.member_id == self.owner_id {
+            return Some(ComputedPermissions::bypass(PermissionSource::Owner));
+        }
+        if base.contains(flag::ADMINISTRATOR.bits()) {
+            return Some(ComputedPermissions::bypass(PermissionSource::Administrator));
+        }
+        None
+    }
+
+    fn base_permissions(&self) -> Permissions {
+        self.roles
+            .iter()
+            .fold(self.everyone, |acc, (_, permissions)| acc | *permissions)
+    }
+
+    fn has_role(&self, role_id: &Snowflake) -> bool {
+        role_id != self.guild_id && self.roles.iter().any(|(id, _)| *id == role_id)
+    }
+
+    /// Discord's `compute_overwrites`. Allow/deny pairs are aggregated per
+    /// tier, so duplicate overwrites for one target cannot reorder the tiers.
+    fn apply_overwrites(&self, base: Permissions, overwrites: &[PermissionOverwrite]) -> u64 {
+        let mut everyone = (0u64, 0u64);
+        let mut roles = (0u64, 0u64);
+        let mut member = (0u64, 0u64);
+        for overwrite in overwrites {
+            let tier = match overwrite.kind {
+                OVERWRITE_ROLE if overwrite.id == *self.guild_id => &mut everyone,
+                OVERWRITE_ROLE if self.has_role(&overwrite.id) => &mut roles,
+                OVERWRITE_MEMBER if overwrite.id == *self.member_id => &mut member,
+                // Other members' and roles' overwrites, plus overwrite types
+                // Discord has not defined, do not apply to this member.
+                _ => continue,
+            };
+            tier.0 |= overwrite.allow.map_or(0, |bits| bits.bits());
+            tier.1 |= overwrite.deny.map_or(0, |bits| bits.bits());
+        }
+
+        [everyone, roles, member]
+            .iter()
+            .fold(base.bits(), |acc, (allow, deny)| (acc & !deny) | allow)
+    }
+
+    fn finish(&self, bits: u64) -> ComputedPermissions {
+        let (bits, timeout_applied) = if self.timed_out {
+            (bits & TIMEOUT_ALLOWED, true)
+        } else {
+            (bits, false)
+        };
+        ComputedPermissions {
+            permissions: Permissions::from_bits(bits),
+            source: PermissionSource::Computed,
+            timeout_applied,
+        }
+    }
+}
+
+fn apply_implicit(permissions: Permissions, class: ChannelClass) -> Permissions {
+    let mut bits = permissions.bits();
+    if bits & flag::VIEW_CHANNEL.bits() == 0 {
+        return Permissions::from_bits(bits & GUILD_WIDE);
+    }
+
+    let send_gate = match class {
+        ChannelClass::Text | ChannelClass::Voice => Some(flag::SEND_MESSAGES.bits()),
+        ChannelClass::Thread => {
+            bits &= !flag::SEND_MESSAGES.bits();
+            Some(flag::SEND_MESSAGES_IN_THREADS.bits())
+        }
+        ChannelClass::Category | ChannelClass::Other => None,
+    };
+    if send_gate.is_some_and(|gate| bits & gate == 0) {
+        bits &= !SEND_DEPENDENT;
+    }
+
+    if class == ChannelClass::Voice && bits & flag::CONNECT.bits() == 0 {
+        bits &= !flag::MANAGE_CHANNELS.bits();
+    }
+    Permissions::from_bits(bits)
+}
+
+/// The channel side of a permission calculation.
+#[derive(Clone, Copy, Debug)]
+pub struct ChannelPermissionInput<'a> {
+    class: ChannelClass,
+    overwrites: &'a [PermissionOverwrite],
+    obfuscated: bool,
+}
+
+impl<'a> ChannelPermissionInput<'a> {
+    /// A channel of `class` with these overwrites. For
+    /// [`ChannelClass::Thread`] pass the parent channel's overwrites.
+    pub fn new(class: ChannelClass, overwrites: &'a [PermissionOverwrite]) -> Self {
+        Self {
+            class,
+            overwrites,
+            obfuscated: false,
+        }
+    }
+
+    /// Marks the channel (or a thread's parent) as obfuscated, which makes
+    /// the outcome [`ChannelPermissions::Obfuscated`] for everyone but owners
+    /// and administrators.
+    pub fn obfuscated(mut self, obfuscated: bool) -> Self {
+        self.obfuscated = obfuscated;
+        self
+    }
+
+    /// Builds the input from a channel model. `parent` is required for
+    /// threads (their overwrites live on the parent) and ignored otherwise.
+    ///
+    /// Fails, instead of guessing, when the channel is a DM, belongs to a
+    /// different guild than `guild_id`, is a thread without a matching
+    /// parent, or lacks `permission_overwrites` (partial channels such as
+    /// interaction `resolved` entries omit them). Obfuscated channels do not
+    /// need overwrites.
+    pub fn from_channel(
+        guild_id: &Snowflake,
+        channel: &'a Channel,
+        parent: Option<&'a Channel>,
+    ) -> Result<Self, PermissionDataError> {
+        let class = guild_channel_class(guild_id, channel)?;
+        if class != ChannelClass::Thread {
+            return overwrite_source(class, channel, channel.is_obfuscated());
+        }
+
+        let parent = parent.ok_or_else(|| PermissionDataError::MissingParentChannel {
+            thread_id: channel.id.clone(),
+            parent_id: channel.parent_id.clone(),
+        })?;
+        if let Some(expected) = &channel.parent_id {
+            if *expected != parent.id {
+                return Err(PermissionDataError::ParentMismatch {
+                    thread_id: channel.id.clone(),
+                    expected: expected.clone(),
+                    found: parent.id.clone(),
+                });
+            }
+        }
+        let parent_class = guild_channel_class(guild_id, parent)?;
+        if parent_class == ChannelClass::Thread {
+            return Err(PermissionDataError::InvalidParentChannel {
+                thread_id: channel.id.clone(),
+                parent_id: parent.id.clone(),
+                kind: parent.kind,
+            });
+        }
+        overwrite_source(
+            ChannelClass::Thread,
+            parent,
+            channel.is_obfuscated() || parent.is_obfuscated(),
+        )
+    }
+}
+
+fn guild_channel_class(
+    guild_id: &Snowflake,
+    channel: &Channel,
+) -> Result<ChannelClass, PermissionDataError> {
+    let class = ChannelClass::from_channel_type(channel.kind).ok_or_else(|| {
+        PermissionDataError::NotGuildChannel {
+            channel_id: channel.id.clone(),
+            kind: channel.kind,
+        }
+    })?;
+    // GUILD_CREATE channels omit `guild_id`; only a contradicting value is
+    // an error.
+    if let Some(found) = &channel.guild_id {
+        if found != guild_id {
+            return Err(PermissionDataError::GuildMismatch {
+                channel_id: channel.id.clone(),
+                expected: guild_id.clone(),
+                found: found.clone(),
+            });
+        }
+    }
+    Ok(class)
+}
+
+fn overwrite_source(
+    class: ChannelClass,
+    source: &Channel,
+    obfuscated: bool,
+) -> Result<ChannelPermissionInput<'_>, PermissionDataError> {
+    let overwrites = match (&source.permission_overwrites, obfuscated) {
+        (Some(overwrites), _) => overwrites.as_slice(),
+        (None, true) => &[],
+        (None, false) => {
+            return Err(PermissionDataError::MissingPermissionOverwrites {
+                channel_id: source.id.clone(),
+            })
+        }
+    };
+    Ok(ChannelPermissionInput::new(class, overwrites).obfuscated(obfuscated))
+}
+
+/// Data a permission calculation needed but did not get, or got in a
+/// contradictory form. Every variant names the missing object so callers
+/// can fetch it instead of acting on a guess.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PermissionDataError {
+    /// The crate was built without the `cache` feature, so the cache adapter
+    /// has nothing to read.
+    CacheDisabled,
+    /// The guild is not cached.
+    MissingGuild {
+        /// Guild that was looked up.
+        guild_id: Snowflake,
+    },
+    /// The guild object has no `owner_id`.
+    MissingGuildOwner {
+        /// Guild whose owner is unknown.
+        guild_id: Snowflake,
+    },
+    /// A role (the `@everyone` role when `role_id == guild_id`) is not
+    /// available.
+    MissingRole {
+        /// Guild the role belongs to.
+        guild_id: Snowflake,
+        /// Role that was looked up.
+        role_id: Snowflake,
+    },
+    /// A role object has no `permissions` field.
+    MissingRolePermissions {
+        /// Role without permissions.
+        role_id: Snowflake,
+    },
+    /// The member is not cached.
+    MissingMember {
+        /// Guild that was looked up.
+        guild_id: Snowflake,
+        /// User whose member object is missing.
+        user_id: Snowflake,
+    },
+    /// The member object has no `user`, so its ID (needed for the owner
+    /// check and member overwrites) is unknown. Message `member` objects are
+    /// like this; copy `message.author` into `member.user` first.
+    MissingMemberUser,
+    /// The channel is not cached.
+    MissingChannel {
+        /// Channel that was looked up.
+        channel_id: Snowflake,
+    },
+    /// A thread was given without its parent channel (or the parent is not
+    /// cached).
+    MissingParentChannel {
+        /// The thread.
+        thread_id: Snowflake,
+        /// The thread's `parent_id`, when the thread object has one.
+        parent_id: Option<Snowflake>,
+    },
+    /// The channel has no `permission_overwrites` (a partial channel).
+    MissingPermissionOverwrites {
+        /// Channel without overwrites.
+        channel_id: Snowflake,
+    },
+    /// The channel is a DM or group DM.
+    NotGuildChannel {
+        /// The channel.
+        channel_id: Snowflake,
+        /// Its Discord channel type.
+        kind: u8,
+    },
+    /// The channel belongs to another guild.
+    GuildMismatch {
+        /// The channel.
+        channel_id: Snowflake,
+        /// Guild the calculation is for.
+        expected: Snowflake,
+        /// Guild the channel says it belongs to.
+        found: Snowflake,
+    },
+    /// The supplied parent is not the thread's `parent_id`.
+    ParentMismatch {
+        /// The thread.
+        thread_id: Snowflake,
+        /// The thread's `parent_id`.
+        expected: Snowflake,
+        /// ID of the channel supplied as parent.
+        found: Snowflake,
+    },
+    /// The supplied parent cannot contain threads (it is itself a thread).
+    InvalidParentChannel {
+        /// The thread.
+        thread_id: Snowflake,
+        /// The supplied parent.
+        parent_id: Snowflake,
+        /// The parent's Discord channel type.
+        kind: u8,
+    },
+    /// `communication_disabled_until` is not an ISO 8601 timestamp.
+    InvalidTimestamp {
+        /// The unparseable value.
+        value: String,
+    },
+}
+
+impl fmt::Display for PermissionDataError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CacheDisabled => f.write_str("the `cache` feature is disabled"),
+            Self::MissingGuild { guild_id } => write!(f, "guild {guild_id} is not cached"),
+            Self::MissingGuildOwner { guild_id } => {
+                write!(f, "guild {guild_id} has no owner_id")
+            }
+            Self::MissingRole { guild_id, role_id } if guild_id == role_id => {
+                write!(f, "@everyone role of guild {guild_id} is not available")
+            }
+            Self::MissingRole { guild_id, role_id } => {
+                write!(f, "role {role_id} of guild {guild_id} is not available")
+            }
+            Self::MissingRolePermissions { role_id } => {
+                write!(f, "role {role_id} has no permissions field")
+            }
+            Self::MissingMember { guild_id, user_id } => {
+                write!(f, "member {user_id} of guild {guild_id} is not cached")
+            }
+            Self::MissingMemberUser => f.write_str("member object has no user"),
+            Self::MissingChannel { channel_id } => {
+                write!(f, "channel {channel_id} is not cached")
+            }
+            Self::MissingParentChannel {
+                thread_id,
+                parent_id: Some(parent_id),
+            } => write!(
+                f,
+                "parent channel {parent_id} of thread {thread_id} is not available"
+            ),
+            Self::MissingParentChannel {
+                thread_id,
+                parent_id: None,
+            } => write!(f, "thread {thread_id} has no parent channel"),
+            Self::MissingPermissionOverwrites { channel_id } => {
+                write!(f, "channel {channel_id} has no permission_overwrites")
+            }
+            Self::NotGuildChannel { channel_id, kind } => {
+                write!(
+                    f,
+                    "channel {channel_id} (type {kind}) is not a guild channel"
+                )
+            }
+            Self::GuildMismatch {
+                channel_id,
+                expected,
+                found,
+            } => write!(
+                f,
+                "channel {channel_id} belongs to guild {found}, not {expected}"
+            ),
+            Self::ParentMismatch {
+                thread_id,
+                expected,
+                found,
+            } => write!(
+                f,
+                "thread {thread_id} has parent {expected}, but channel {found} was supplied"
+            ),
+            Self::InvalidParentChannel {
+                thread_id,
+                parent_id,
+                kind,
+            } => write!(
+                f,
+                "channel {parent_id} (type {kind}) cannot be the parent of thread {thread_id}"
+            ),
+            Self::InvalidTimestamp { value } => {
+                write!(
+                    f,
+                    "invalid communication_disabled_until timestamp {value:?}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for PermissionDataError {}
+
+impl From<PermissionDataError> for DiscordError {
+    fn from(error: PermissionDataError) -> Self {
+        DiscordError::model(error.to_string())
+    }
+}
+
+/// Guild-level permissions of `member` (discord.js `member.permissions`),
+/// resolving roles from `guild.roles`.
+pub fn guild_permissions(
+    guild: &Guild,
+    member: &Member,
+    now: SystemTime,
+) -> Result<ComputedPermissions, PermissionDataError> {
+    let resolved = ResolvedMember::from_guild(guild, member, now)?;
+    Ok(resolved.input().guild_permissions())
+}
+
+/// Permissions of `member` in `channel` (discord.js
+/// `channel.permissionsFor(member)`), resolving roles from `guild.roles`.
+/// `parent` is required when `channel` is a thread.
+///
+/// `now` decides whether the member's timeout is active; pass
+/// `SystemTime::now()` outside tests.
+pub fn permissions_for(
+    guild: &Guild,
+    member: &Member,
+    channel: &Channel,
+    parent: Option<&Channel>,
+    now: SystemTime,
+) -> Result<ChannelPermissions, PermissionDataError> {
+    let target = ChannelPermissionInput::from_channel(&guild.id, channel, parent)?;
+    let resolved = ResolvedMember::from_guild(guild, member, now)?;
+    Ok(resolved.input().in_channel(&target))
+}
+
+/// Guild-level permissions of a cached member. See [`cached_permissions_for`]
+/// for what is read.
+pub async fn cached_guild_permissions(
+    cache: &CacheHandle,
+    guild_id: &Snowflake,
+    user_id: &Snowflake,
+    now: SystemTime,
+) -> Result<ComputedPermissions, PermissionDataError> {
+    let resolved = ResolvedMember::from_cache(cache, guild_id, user_id, now).await?;
+    Ok(resolved.input().guild_permissions())
+}
+
+/// Permissions of a cached member in a cached channel.
+///
+/// Reads the guild (for `owner_id`), the member, the channel, a thread's
+/// parent, and every role from the cache's role store — not from the
+/// cached guild's `roles` list, which is a GUILD_CREATE snapshot that role
+/// update events do not refresh. Each piece is a separate cache read, so a
+/// concurrent update can be observed half-applied, exactly as when reading
+/// the cache field by field. Anything missing is reported as a
+/// [`PermissionDataError`]; nothing is filled in with defaults.
+pub async fn cached_permissions_for(
+    cache: &CacheHandle,
+    guild_id: &Snowflake,
+    user_id: &Snowflake,
+    channel_id: &Snowflake,
+    now: SystemTime,
+) -> Result<ChannelPermissions, PermissionDataError> {
+    let resolved = ResolvedMember::from_cache(cache, guild_id, user_id, now).await?;
+    let channel =
+        cache
+            .channel(channel_id)
+            .await
+            .ok_or_else(|| PermissionDataError::MissingChannel {
+                channel_id: channel_id.clone(),
+            })?;
+    let parent = match (&channel.parent_id, channel.is_thread()) {
+        (Some(parent_id), true) => Some(cache.channel(parent_id).await.ok_or_else(|| {
+            PermissionDataError::MissingParentChannel {
+                thread_id: channel.id.clone(),
+                parent_id: Some(parent_id.clone()),
+            }
+        })?),
+        _ => None,
+    };
+    let target = ChannelPermissionInput::from_channel(guild_id, &channel, parent.as_ref())?;
+    Ok(resolved.input().in_channel(&target))
+}
+
+/// Owned member-side data, resolved from models or the cache.
+struct ResolvedMember {
+    guild_id: Snowflake,
+    owner_id: Snowflake,
+    user_id: Snowflake,
+    everyone: Permissions,
+    roles: Vec<(Snowflake, Permissions)>,
+    timeout: Option<SystemTime>,
+    now: SystemTime,
+}
+
+impl ResolvedMember {
+    fn from_guild(
+        guild: &Guild,
+        member: &Member,
+        now: SystemTime,
+    ) -> Result<Self, PermissionDataError> {
+        let find = |role_id: &Snowflake| {
+            guild
+                .roles
+                .iter()
+                .find(|role| role.id == *role_id)
+                .ok_or_else(|| PermissionDataError::MissingRole {
+                    guild_id: guild.id.clone(),
+                    role_id: role_id.clone(),
+                })
+                .and_then(role_permissions)
+        };
+        let user_id = member
+            .user
+            .as_ref()
+            .map(|user| &user.id)
+            .ok_or(PermissionDataError::MissingMemberUser)?;
+        let everyone = find(&guild.id)?;
+        let roles = member_role_ids(&guild.id, member)
+            .map(|role_id| Ok((role_id.clone(), find(role_id)?)))
+            .collect::<Result<_, PermissionDataError>>()?;
+        Self::assemble(guild, user_id, member, everyone, roles, now)
+    }
+
+    async fn from_cache(
+        cache: &CacheHandle,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+        now: SystemTime,
+    ) -> Result<Self, PermissionDataError> {
+        if !cache.is_enabled() {
+            return Err(PermissionDataError::CacheDisabled);
+        }
+        let guild =
+            cache
+                .guild(guild_id)
+                .await
+                .ok_or_else(|| PermissionDataError::MissingGuild {
+                    guild_id: guild_id.clone(),
+                })?;
+        let member = cache.member(guild_id, user_id).await.ok_or_else(|| {
+            PermissionDataError::MissingMember {
+                guild_id: guild_id.clone(),
+                user_id: user_id.clone(),
+            }
+        })?;
+
+        let everyone = cached_role(cache, guild_id, guild_id).await?;
+        let mut roles = Vec::with_capacity(member.roles.len());
+        for role_id in member_role_ids(guild_id, &member) {
+            roles.push((
+                role_id.clone(),
+                cached_role(cache, guild_id, role_id).await?,
+            ));
+        }
+
+        // The cache key is the user ID, so a member stored without its
+        // `user` object (possible through `upsert_member`) is still usable.
+        Self::assemble(&guild, user_id, &member, everyone, roles, now)
+    }
+
+    fn assemble(
+        guild: &Guild,
+        user_id: &Snowflake,
+        member: &Member,
+        everyone: Permissions,
+        roles: Vec<(Snowflake, Permissions)>,
+        now: SystemTime,
+    ) -> Result<Self, PermissionDataError> {
+        let owner_id =
+            guild
+                .owner_id
+                .clone()
+                .ok_or_else(|| PermissionDataError::MissingGuildOwner {
+                    guild_id: guild.id.clone(),
+                })?;
+        let timeout = member
+            .communication_disabled_until
+            .as_deref()
+            .map(|value| {
+                parse_timestamp(value).ok_or_else(|| PermissionDataError::InvalidTimestamp {
+                    value: value.to_string(),
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            guild_id: guild.id.clone(),
+            owner_id,
+            user_id: user_id.clone(),
+            everyone,
+            roles,
+            timeout,
+            now,
+        })
+    }
+
+    fn input(&self) -> MemberPermissionInput<'_> {
+        let input = MemberPermissionInput::new(
+            &self.guild_id,
+            &self.owner_id,
+            &self.user_id,
+            self.everyone,
+        )
+        .roles(
+            self.roles
+                .iter()
+                .map(|(id, permissions)| (id, *permissions)),
+        );
+        match self.timeout {
+            Some(until) => input.communication_disabled_until(until, self.now),
+            None => input,
+        }
+    }
+}
+
+/// The member's role IDs without `@everyone`, which Discord never lists but
+/// a hand-built member might.
+fn member_role_ids<'m>(
+    guild_id: &'m Snowflake,
+    member: &'m Member,
+) -> impl Iterator<Item = &'m Snowflake> + 'm {
+    member
+        .roles
+        .iter()
+        .filter(move |role_id| *role_id != guild_id)
+}
+
+fn role_permissions(role: &Role) -> Result<Permissions, PermissionDataError> {
+    role.permissions
+        .map(|bits| Permissions::from_bits(bits.bits()))
+        .ok_or_else(|| PermissionDataError::MissingRolePermissions {
+            role_id: role.id.clone(),
+        })
+}
+
+async fn cached_role(
+    cache: &CacheHandle,
+    guild_id: &Snowflake,
+    role_id: &Snowflake,
+) -> Result<Permissions, PermissionDataError> {
+    let role =
+        cache
+            .role(guild_id, role_id)
+            .await
+            .ok_or_else(|| PermissionDataError::MissingRole {
+                guild_id: guild_id.clone(),
+                role_id: role_id.clone(),
+            })?;
+    role_permissions(&role)
+}
+
+/// Parses the ISO 8601 / RFC 3339 timestamps Discord sends
+/// (`2026-05-01T00:00:00+00:00`, `...00.000000+00:00`, `...Z`).
+///
+/// Hand-written because the crate has no date dependency and only needs an
+/// instant to compare against `now`. Accepts `T`/`t`/space as separator,
+/// `Z`/`z` or `±HH:MM`/`±HHMM` offsets, up to nanosecond fractions, and a
+/// leap second `:60`. Returns `None` for anything else.
+pub(crate) fn parse_timestamp(value: &str) -> Option<SystemTime> {
+    let bytes = value.as_bytes();
+    let number = |range: std::ops::Range<usize>| -> Option<i64> {
+        let digits = bytes.get(range)?;
+        if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(
+            digits
+                .iter()
+                .fold(0i64, |acc, digit| acc * 10 + i64::from(digit - b'0')),
+        )
+    };
+    let expect =
+        |index: usize, allowed: &[u8]| bytes.get(index).is_some_and(|b| allowed.contains(b));
+
+    if !(expect(4, b"-")
+        && expect(7, b"-")
+        && expect(10, b"Tt ")
+        && expect(13, b":")
+        && expect(16, b":"))
+    {
+        return None;
+    }
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    if !(1..=12).contains(&month)
+        || day < 1
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+
+    let mut index = 19;
+    let mut nanos = 0u32;
+    if expect(index, b".") {
+        let start = index + 1;
+        let end = start
+            + bytes[start..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+        if end == start {
+            return None;
+        }
+        for (position, digit) in bytes[start..end].iter().take(9).enumerate() {
+            nanos += u32::from(digit - b'0') * 10u32.pow(8 - position as u32);
+        }
+        index = end;
+    }
+
+    let offset_seconds = match bytes.get(index)? {
+        b'Z' | b'z' if index + 1 == bytes.len() => 0,
+        sign @ (b'+' | b'-') => {
+            let rest = &value[index + 1..];
+            let (hours, minutes) = match rest.len() {
+                5 if rest.as_bytes().get(2) == Some(&b':') => {
+                    (number(index + 1..index + 3)?, number(index + 4..index + 6)?)
+                }
+                4 => (number(index + 1..index + 3)?, number(index + 3..index + 5)?),
+                _ => return None,
+            };
+            if hours > 23 || minutes > 59 {
+                return None;
+            }
+            let magnitude = hours * 3600 + minutes * 60;
+            if *sign == b'-' {
+                -magnitude
+            } else {
+                magnitude
+            }
+        }
+        _ => return None,
+    };
+
+    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second
+        - offset_seconds;
+    let whole = Duration::from_secs(seconds.unsigned_abs());
+    let instant = if seconds >= 0 {
+        UNIX_EPOCH.checked_add(whole)?
+    } else {
+        UNIX_EPOCH.checked_sub(whole)?
+    };
+    instant.checked_add(Duration::from_nanos(u64::from(nanos)))
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
+/// `days_from_civil`).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_index = (month + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+#[cfg(test)]
+mod tests;

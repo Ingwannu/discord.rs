@@ -24,6 +24,27 @@ These types are designed to replace mixed `String` / `u64` IDs and raw `Value` r
 - Application Identity Profile models: `ApplicationIdentity`, `ApplicationIdentities`, `ApplicationIdentityProfile`, `ApplicationIdentityProfileData`, `PrimaryProfileData`, `DynamicProfileField` (unknown field types are kept verbatim), `ProfileMedia`, `UpdateApplicationIdentityProfile` (with `validate()` for the documented limits), and `ApplicationIdentityProviderId`.
 - `CurrentUserGuildsQuery::shard`, `CreateChannelInvite::target_user_ids`, and `InviteTargetUserIds`.
 
+### Permission computation (`discordrs::permissions`)
+
+The discord.js `channel.permissionsFor(member)` equivalent, following Discord's documented algorithm (owner, `ADMINISTRATOR`, overwrite order, timeouts, implicit `VIEW_CHANNEL` / `SEND_MESSAGES` / `CONNECT` rules, threads using the parent's overwrites). Details: [Permissions and Formatters](#/docs/api/permissions-and-formatters).
+
+- `permissions_for(guild, member, channel, parent, now)` and `guild_permissions(guild, member, now)` over models; `Channel::permissions_for(...)` and `Member::guild_permissions(...)` use the current time.
+- `cached_permissions_for(...)` / `cached_guild_permissions(...)` read a `CacheHandle` and report exactly what is missing.
+- `MemberPermissionInput` + `ChannelPermissionInput` (with `ChannelClass`): the pure core over explicit data.
+- Results: `ChannelPermissions::{Known, Obfuscated}` and `ComputedPermissions` (`permissions`, `source: PermissionSource`, `timeout_applied`, `has(...)`, `missing(...)`). Obfuscated channels are never guessed.
+- `PermissionDataError` names the missing or contradictory object (`MissingRole`, `MissingParentChannel`, `MissingPermissionOverwrites`, `GuildMismatch`, `InvalidTimestamp`, ...).
+- `ALL_PERMISSIONS`: every bit in Discord's permission table. The existing `PermissionFlags` name table is shifted by one from bit 41 upward and lacks `PIN_MESSAGES`; the calculation does not depend on it.
+
+### Formatters (`discordrs::formatters`)
+
+`@discordjs/formatters` parity. Formatters take and return `impl Display`; text transforms return `Cow<str>`.
+
+- Mentions and links: `user_mention`, `channel_mention`, `role_mention`, `linked_role_mention`, `game_profile_mention`, `slash_command_mention(...)` (`SlashCommandMention`), `custom_emoji`, `animated_emoji`, `GuildNavigation`, `hyperlink`, `hyperlink_with_title`, `hide_link_embed`, `channel_link`, `message_link` (and `dm_` variants).
+- Timestamps: `timestamp(secs).style(TimestampStyle::RelativeTime)`, `Timestamp::from(SystemTime)`; `TimestampStyle` has all nine documented styles (`t T d D f F s S R`).
+- Markdown: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`, `inline_code`, `code_block`, `code_block_with_language`, `quote`, `block_quote`, `heading` (`HeadingLevel`), `subtext`, `unordered_list`, `ordered_list`, and nested variants with `ListItem`.
+- `escape_markdown(text, EscapeMarkdownOptions)` plus the individual escapers, matching discord.js 0.6.2 on a committed golden corpus; `clean_code_block_content`.
+- `clean_content(text, &resolver)` with a `MentionResolver` (trait or closure; `MentionKind`); `Message::clean_content(...)` and `Member::mention()` delegate to it.
+
 ## New in 2.2.0
 
 - `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.
