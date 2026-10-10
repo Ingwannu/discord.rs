@@ -90,61 +90,62 @@ operation)를 읽고, 8단계 drift CI가 같은 메타데이터를 쓴다.
 
 ---
 
-## 1. 서브커맨드 중첩 검증 — 남은 엣지 케이스
+## 1. 서브커맨드 중첩 검증 — 7단계 구현 결과 (2026-10-10)
 
-### 현재 구현 범위 (`src/command.rs`의 `validate_option`)
+7단계에서 아래 1–8을 `src/command.rs`에 구현했다. 기준 문서는 discord-api-docs `3714862`(2026-10-09)이며,
+이 설계 노트를 처음 쓴 뒤 문서가 바뀐 두 가지를 반영했다.
 
-- 이름/설명 길이(코드포인트 기준), 소문자·공백 금지
-- 레벨당 옵션 ≤ 25, 초이스 ≤ 25, 초이스 이름 ≤ 100자
-- 서브커맨드 그룹은 서브커맨드만 포함 가능, 서브커맨드 아래 그룹/서브커맨드 중첩 금지(깊이 3 강제)
-- 일반 타입 옵션은 하위 옵션 보유 금지
+- **합산 한도는 8000자.** 현행 문서: "Slash commands can have a maximum of 8000 characters for combined
+  name, description, and value properties ... only the longest localization for each field (including the
+  default value) is counted". 처음 노트에 적었던 4000은 낡은 값이다.
+- **이름 정규식은 `^[-_\u02BC\p{L}\p{N}\p{sc=Deva}\p{sc=Thai}]{1,32}$`.** ASCII `'`는 #7303이 문서에
+  잘못 넣었던 것이고, PR #8567(2026-08-27)이 Discord 코드 기준인 U+02BC(ʼ)로 바로잡았다.
 
-### 미구현 엣지와 구현 방향
+### 구현된 규칙 (`SlashCommandBuilder::validate`, `CommandOptionBuilder::validate`)
 
-1. **서브커맨드와 일반 옵션의 혼재 금지.** 같은 레벨에 `SUB_COMMAND`/`SUB_COMMAND_GROUP`과
-   일반 옵션(STRING 등)이 섞이면 Discord가 400을 반환합니다. `CommandBuilder::validate`의
-   최상위 루프와 `validate_option`의 그룹 분기에서 "하나라도 서브커맨드류가 있으면 전부
-   서브커맨드류"를 검사합니다.
+한도 상수와 로케일 표는 공개 모듈 `discordrs::command::limits`에 출처 주석과 함께 모았다.
 
-2. **required 옵션 순서.** `required: true` 옵션은 optional 옵션보다 앞에 와야 합니다.
-   각 중첩 레벨별로 독립적으로 검사합니다(서브커맨드 내부도 동일 규칙).
+1. **혼재 금지.** 같은 레벨에 `SUB_COMMAND`/`SUB_COMMAND_GROUP`과 일반 옵션이 섞이면 거부(모든 레벨).
+2. **required 순서.** required 옵션은 optional 옵션보다 앞에 둔다. 레벨별로 검사하며, `required`가 적용되지
+   않는 서브커맨드는 제외한다.
+3. **레벨 내 이름 유일성.** 기본 이름 중복을 거부한다. 현지화 이름은 같은 레벨 다른 옵션의 기본 이름,
+   같은 로케일의 다른 현지화 이름과 겹치면 거부한다. 기본값과 같은 현지화는 Discord가 무시하므로 허용한다.
+4. **커맨드 전체 8000자.** 커맨드와 옵션 트리 전체의 name/description, 초이스 name, 문자열 초이스 value를
+   필드별 최장 변형(기본값 포함)으로 합산한다.
+5. **초이스/자동완성.** 초이스는 STRING/INTEGER/NUMBER에만, `autocomplete: true`와 동시 지정 금지,
+   최대 25개, 이름 1–100자, 문자열 value 100자 이하.
+6. **범위.** `min_value ≤ max_value`, `min_length` 0–6000, `max_length` 1–6000, `min_length ≤ max_length`.
+   비어 있지 않은 `channel_types`는 CHANNEL 옵션에만 허용한다.
+7. **현지화.** 커맨드·옵션·초이스 현지화의 로케일 키를 Discord 32개 로케일 표와 대조하고(ASCII 대소문자
+   무시), 값에는 원래 필드 규칙(이름 규칙, 설명 1–100자, 초이스 이름 1–100자)을 적용한다. 엔트리 포인트
+   커맨드는 길이와 로케일만 검사한다.
+8. **이름 문자 집합.** 표준 라이브러리만 쓴다. 확실히 거부되는 문자만 거부한다: `[A-Za-z0-9_-]` 밖의
+   ASCII, 공백·제어 문자, 구두점·기호·이모지·사용자 정의 영역 블록의 문자. 영숫자와 데바나가리·타이 블록은
+   통과하고, 그 밖의 코드포인트(컴파일러 유니코드 표가 아직 모르는 신규 문자 포함)도 통과시킨다. 그래서
+   결과가 Rust 버전(1.88 = Unicode 16, 1.99 = Unicode 17)에 따라 달라지지 않는다. 소문자 규칙은
+   `to_lowercase()` 결과가 자기 자신이 아닌 문자를 거부한다.
 
-3. **레벨 내 이름 유일성.** 같은 레벨의 옵션 이름 중복은 400입니다. `HashSet`으로 레벨별
-   검사하고, `name_localizations`의 로케일별 값 충돌도 같은 레벨에서 함께 검사합니다.
+### 일부러 느슨하게 둔 부분 (불확실하면 허용)
 
-4. **커맨드 전체 4000 코드포인트 합산 제한.** 커맨드의 `name` + `description` + 옵션 트리
-   전체의 name/description/choice name/string choice value를 합산해 4000자를 넘으면
-   등록이 거부됩니다. 재귀 누적 함수를 추가하되, 로컬라이제이션이 있으면 **로케일별
-   대체값 중 최대 길이**를 기준으로 계산합니다(Discord의 계산 방식).
-
-5. **초이스/자동완성 정합성.** `autocomplete: true`와 `choices` 동시 지정 금지, 초이스는
-   STRING/INTEGER/NUMBER 타입에만 허용, 문자열 초이스 value ≤ 100자.
-
-6. **범위 파라미터 정합성.** `min_value ≤ max_value`, `min_length`는 0..=6000,
-   `max_length`는 1..=6000, `min_length ≤ max_length`. `channel_types`는 CHANNEL
-   타입 옵션에만 허용.
-
-7. **로컬라이제이션 값 검증.** `name_localizations`의 각 값에도 본 이름과 동일한 규칙
-   (1..=32자, 소문자, 공백 금지)을, `description_localizations`에는 1..=100자를 적용합니다.
-   로케일 키는 Discord가 지원하는 로케일 목록과 대조합니다(상수 테이블로 관리).
-
-8. **이름 정규식 완전 구현.** 공식 규칙은
-   `^[-_'\p{L}\p{N}\p{sc=Deva}\p{sc=Thai}]{1,32}$` (chat input은 소문자 강제)입니다.
-   현재는 공백·대문자만 검사합니다. 유니코드 프로퍼티 검사가 필요하므로 경량 크레이트
-   (`unicode-properties` 계열) 도입 또는 보수적 부분 검사 유지를 선택해야 합니다.
+- 현지화 이름 충돌은 레벨 단위로만 본다. 문서의 "of that command"를 커맨드 전체로 읽을 근거가 확인되지 않았다.
+- 숫자 초이스 value는 합산에 넣지 않는다. 문서가 숫자의 계산 방식을 정의하지 않는다.
+- 다음은 검사하지 않는다: 로케일 키 대소문자, `channel_types` 값 자체와 빈 목록, `autocomplete`·
+  `min/max_value`·`min/max_length`의 옵션 타입 제한과 ±2^53 범위, 초이스 value 타입과 옵션 타입의 일치,
+  초이스 이름 중복, 컨텍스트 메뉴 커맨드의 빈 설명.
+- 문자 집합 검사는 Discord가 거부하는 일부 문자(결합 악센트 U+0301, 목록 밖 기호, 단다 U+0964/U+0965,
+  Other_Alphabetic 기호 U+24B6 등)를 통과시킨다. 이 경우 Discord가 등록 시 오류를 낸다.
 
 ### 주의점
 
 - **로컬 검증은 Discord보다 엄격하면 안 됩니다.** 과잉 차단은 실제로는 등록 가능한
   커맨드를 막는 버그입니다. 규칙이 불확실하면 통과시키는 것이 원칙입니다 — 로컬 검증은
   fail-fast 편의 기능이지 게이트가 아닙니다.
-- Discord가 한도를 상향하면 로컬 검증이 신규 기능을 막게 됩니다. 한도 상수를 한 곳
-  (`limits` 모듈)에 모으고 각 상수에 공식 문서 출처를 주석으로 남깁니다.
-- 기존 계약 유지: `validate()`는 `&self`, `build()`는 계속 무검증. 기존 사용자 코드를
-  깨는 변경 금지.
-- 길이는 전부 코드포인트(`chars().count()`) 기준 — 현행 `ensure_len`과 동일 기준 유지.
-- 테스트는 경계값(정확히 25개 / 4000자 / 100자), 멀티바이트 문자열, 로케일 케이스를
-  반드시 포함합니다.
+- Discord가 한도를 상향하면 `limits` 모듈 한 곳만 고칩니다. 로케일 표는 Discord가 로케일을
+  추가하면 갱신해야 합니다(그 전까지 새 로케일은 `validate()`에서만 실패하고 `build()`는 영향 없음).
+- 기존 계약 유지: `validate()`는 `&self`, `build()`는 계속 무검증.
+- 길이는 전부 코드포인트(`chars().count()`) 기준.
+- 테스트는 경계값(정확히 25개 / 8000자 / 100자), 멀티바이트 문자열, 로케일, 컴파일러 유니코드
+  버전에 따라 분류가 달라지는 신규 문자(U+088F, U+1E6C0)를 포함합니다.
 
 ---
 

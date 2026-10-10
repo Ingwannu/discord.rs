@@ -1176,6 +1176,8 @@ async fn collect_clicks(ctx: &discordrs::Context) {
         Some(CollectorEndReason::Idle) => println!("idle window elapsed"),
         Some(CollectorEndReason::User(reason)) => println!("stopped: {reason}"),
         Some(CollectorEndReason::ChannelDropped) => println!("hub dropped"),
+        // `CollectorEndReason` is `#[non_exhaustive]` (reaction collectors add more).
+        Some(other) => println!("ended: {other:?}"),
         None => println!("still collecting"),
     }
     println!("received {} items", collector.received_count());
