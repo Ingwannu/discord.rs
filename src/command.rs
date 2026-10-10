@@ -158,27 +158,36 @@ pub(crate) mod validation {
 
     // Decision log: chat-input name check without a Unicode crate.
     // - Purpose: catch names Discord rejects with
-    //   `^[-_ʼ\p{L}\p{N}\p{sc=Deva}\p{sc=Thai}]{1,32}$` plus "use the
+    //   `^[-_\u02BC\p{L}\p{N}\p{sc=Deva}\p{sc=Thai}]{1,32}$` plus "use the
     //   lowercase variant of any letter that has one".
-    // - Constraint: std has no General_Category or Script lookup, and local
-    //   validation must never be stricter than Discord.
-    // - Alternatives: the `regex` crate (exact match, but a large new
-    //   dependency for one check); a general-category crate plus hand-written
-    //   script ranges; a std-only superset check.
-    // - Chosen: std-only. Allowed = '-', '_', `char::is_alphanumeric`
-    //   (Alphabetic ∪ Numeric, a superset of \p{L} ∪ \p{N} that also covers
-    //   U+02BC), plus the whole Devanagari and Thai blocks (a superset of
-    //   sc=Deva / sc=Thai). Lowercase = `to_lowercase()` maps the char to
-    //   itself, which is the docs' "has a lowercase variant" rule.
-    // - Why: every name the regex accepts passes, and the realistic mistakes
-    //   (spaces, punctuation, emoji, ASCII apostrophe, uppercase in any
-    //   script) are still caught, with no dependency or MSRV cost.
-    // - Trade-offs: a few characters Discord rejects pass locally (combining
-    //   marks that are Alphabetic but not \p{L}, danda U+0964/U+0965), which
-    //   Discord then reports. ASCII `'` is rejected on purpose: discord-api-docs
-    //   PR #8567 (2026-08-27) states Discord's code accepts only U+02BC; the
-    //   roadmap's regex predates that fix. Rust's Unicode tables may differ
-    //   slightly from Discord's for brand-new characters.
+    // - Constraint: std has no General_Category or Script lookup, local
+    //   validation must never be stricter than Discord, and std's Unicode
+    //   tables change with the compiler (Rust 1.88 = Unicode 16, 1.99 =
+    //   Unicode 17), so "not alphanumeric" also covers code points the
+    //   compiler simply does not know yet (U+088F, U+1E6C0 on 1.88).
+    // - Alternatives: the `regex` crate (exact, but a large dependency for
+    //   one check and still tied to its own Unicode version); a
+    //   general-category crate; rejecting everything not alphanumeric (an
+    //   earlier version of this code, stricter than Discord on older
+    //   compilers); rejecting only characters known to be disallowed.
+    // - Chosen: reject only what is known to be disallowed: ASCII outside
+    //   `[A-Za-z0-9_-]`, White_Space and control characters, and a fixed list
+    //   of punctuation / symbol / emoji / private-use blocks whose every
+    //   non-alphanumeric character is disallowed and whose free slots are
+    //   reserved for more of the same. Alphanumerics and the Devanagari and
+    //   Thai blocks always pass; any other code point passes because it may
+    //   be a letter in a newer Unicode version. Lowercase = `to_lowercase()`
+    //   maps the char to itself, the docs' "has a lowercase variant" rule.
+    // - Why: the realistic mistakes (spaces, punctuation, emoji, ASCII
+    //   apostrophe, uppercase) are still caught, and whether a character is
+    //   rejected no longer depends on the compiler's Unicode version.
+    // - Trade-offs: other characters Discord rejects pass locally and Discord
+    //   reports them (combining accents such as U+0301, symbols outside the
+    //   listed blocks, danda U+0964/U+0965, Other_Alphabetic symbols such as
+    //   U+24B6). A brand-new cased letter is rejected as uppercase only on
+    //   compilers whose tables know it; Discord rejects it either way. ASCII
+    //   `'` is rejected on purpose: discord-api-docs PR #8567 (2026-08-27)
+    //   says Discord's code accepts only U+02BC.
 
     /// Devanagari (U+0900-U+097F, Vedic Extensions, Devanagari Extended and
     /// Extended-A) and Thai (U+0E00-U+0E7F) blocks, covering Discord's
@@ -194,8 +203,44 @@ pub(crate) mod validation {
         )
     }
 
-    fn is_allowed_name_char(ch: char) -> bool {
-        ch == '-' || ch == '_' || ch.is_alphanumeric() || is_devanagari_or_thai(ch)
+    /// Blocks in which every character that is not alphanumeric is
+    /// punctuation, a symbol, an emoji, a variation selector, or private use
+    /// (all outside Discord's set), and whose unassigned slots Unicode keeps
+    /// for more of the same. Their letters and digits (`ª`, `²`, `❶`, `々`,
+    /// ...) are long-assigned, so `is_alphanumeric` admits them first on
+    /// every supported compiler.
+    fn is_in_non_letter_block(ch: char) -> bool {
+        matches!(
+            ch,
+            // Latin-1 punctuation and symbols, multiplication and division signs.
+            '\u{00A0}'..='\u{00BF}' | '\u{00D7}' | '\u{00F7}'
+                // General Punctuation, Currency Symbols.
+                | '\u{2000}'..='\u{206F}' | '\u{20A0}'..='\u{20CF}'
+                // Arrows, Mathematical Operators, Miscellaneous Technical.
+                | '\u{2190}'..='\u{23FF}'
+                // Box Drawing through Dingbats.
+                | '\u{2500}'..='\u{27BF}'
+                // CJK Symbols and Punctuation.
+                | '\u{3000}'..='\u{303F}'
+                // Private Use Area, Variation Selectors.
+                | '\u{E000}'..='\u{F8FF}' | '\u{FE00}'..='\u{FE0F}'
+                // Mahjong Tiles through Symbols and Pictographs Extended-A.
+                | '\u{1F000}'..='\u{1FAFF}'
+                // Supplementary Private Use Areas and their noncharacters.
+                | '\u{F0000}'..='\u{10FFFF}'
+        )
+    }
+
+    /// Whether `ch` is certainly outside Discord's name character set.
+    /// Unknown code points are not rejected (see the decision log above).
+    fn is_rejected_name_char(ch: char) -> bool {
+        if ch.is_ascii() {
+            return !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+        }
+        if ch.is_alphanumeric() || is_devanagari_or_thai(ch) {
+            return false;
+        }
+        ch.is_whitespace() || ch.is_control() || is_in_non_letter_block(ch)
     }
 
     fn has_lowercase_variant(ch: char) -> bool {
@@ -212,7 +257,7 @@ pub(crate) mod validation {
                 "{field} must not contain spaces, got \"{value}\""
             )));
         }
-        if let Some(ch) = value.chars().find(|ch| !is_allowed_name_char(*ch)) {
+        if let Some(ch) = value.chars().find(|ch| is_rejected_name_char(*ch)) {
             let hint = if ch == '\'' {
                 "; use \u{02BC} (U+02BC MODIFIER LETTER APOSTROPHE) instead of '"
             } else {
@@ -266,10 +311,9 @@ pub(crate) mod validation {
 //   types or numeric bounds.
 // - Why: undercounting or skipping a rule only means Discord reports the
 //   error instead of us; overcounting would break valid commands.
-// - Trade-offs: option and choice localizations and `channel_types` are not
-//   modeled on `ApplicationCommandOption` yet, so the helpers below are wired
-//   with `None` for options; passing the real maps is a one-line change per
-//   call site once the model gains those fields.
+// - Trade-offs: some commands Discord rejects pass locally and fail at
+//   registration instead. Channel type values in `channel_types` are not
+//   checked against a list, so new channel types never fail locally.
 
 /// How a command kind's names are checked.
 #[derive(Clone, Copy)]
@@ -342,15 +386,16 @@ fn localized_char_count(default: &str, localizations: Option<&HashMap<String, St
 /// properties" without defining how numbers count, and undercounting can only
 /// make local validation more lenient than Discord, never stricter.
 fn option_char_count(option: &ApplicationCommandOption) -> usize {
-    // `ApplicationCommandOption` and choices carry no localization maps yet,
-    // so their defaults are their longest variants.
-    let own =
-        localized_char_count(&option.name, None) + localized_char_count(&option.description, None);
+    let own = localized_char_count(&option.name, option.name_localizations.as_ref())
+        + localized_char_count(
+            &option.description,
+            option.description_localizations.as_ref(),
+        );
     let choices: usize = option
         .choices
         .iter()
         .map(|choice| {
-            localized_char_count(&choice.name, None)
+            localized_char_count(&choice.name, choice.name_localizations.as_ref())
                 + choice
                     .value
                     .as_str()
@@ -450,11 +495,9 @@ fn validate_option_level(
         }
     }
 
-    // Options have no `name_localizations` field yet; pass them here once
-    // `ApplicationCommandOption` gains one.
     let names: Vec<(&str, Option<&HashMap<String, String>>)> = options
         .iter()
-        .map(|option| (option.name.as_str(), None))
+        .map(|option| (option.name.as_str(), option.name_localizations.as_ref()))
         .collect();
     ensure_unique_option_names(level, &names)?;
 
@@ -497,6 +540,19 @@ fn validate_option_constraints(option: &ApplicationCommandOption) -> Result<(), 
             1,
             limits::MAX_CHOICE_NAME_LENGTH,
         )?;
+        for (locale, localized) in sorted_entries(choice.name_localizations.as_ref()) {
+            let field = format!(
+                "option \"{name}\" choice \"{}\" name_localizations",
+                choice.name
+            );
+            validation::ensure_locale(&field, locale)?;
+            validation::ensure_len(
+                &format!("{field}[{locale}]"),
+                localized,
+                1,
+                limits::MAX_CHOICE_NAME_LENGTH,
+            )?;
+        }
         if let Some(value) = choice.value.as_str() {
             validation::ensure_max_len(
                 &format!("option \"{name}\" choice \"{}\" value", choice.name),
@@ -550,7 +606,24 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         1,
         limits::MAX_DESCRIPTION_LENGTH,
     )?;
+    validate_localizations(
+        &format!("option \"{name}\""),
+        NameRule::ChatInput,
+        option.name_localizations.as_ref(),
+        option.description_localizations.as_ref(),
+    )?;
     validate_option_constraints(option)?;
+    // An empty list asks for nothing, so only a non-empty one is rejected.
+    if option
+        .channel_types
+        .as_ref()
+        .is_some_and(|channel_types| !channel_types.is_empty())
+        && option.kind != option_type::CHANNEL
+    {
+        return Err(DiscordError::model(format!(
+            "option \"{name}\" sets channel_types, which only CHANNEL options accept"
+        )));
+    }
     if let Some(file_types) = &option.file_types {
         if option.kind != option_type::ATTACHMENT {
             return Err(DiscordError::model(format!(
@@ -790,6 +863,58 @@ impl CommandOptionBuilder {
         self
     }
 
+    /// Adds a localized name for `locale`, under the same rules as the name.
+    pub fn name_localization(mut self, locale: &str, name: &str) -> Self {
+        self.inner
+            .name_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), name.to_string());
+        self
+    }
+
+    /// Adds a localized description for `locale` (1-100 characters).
+    pub fn description_localization(mut self, locale: &str, description: &str) -> Self {
+        self.inner
+            .description_localizations
+            .get_or_insert_with(HashMap::new)
+            .insert(locale.to_string(), description.to_string());
+        self
+    }
+
+    /// Adds a choice whose name is localized per locale key, for example
+    /// `[("de", "Rot"), ("fr", "Rouge")]`.
+    pub fn localized_choice<I, L, N>(
+        mut self,
+        name: &str,
+        value: impl Serialize,
+        name_localizations: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (L, N)>,
+        L: Into<String>,
+        N: Into<String>,
+    {
+        let mut choice = ApplicationCommandOptionChoice::new(name, value);
+        choice.name_localizations = Some(
+            name_localizations
+                .into_iter()
+                .map(|(locale, localized)| (locale.into(), localized.into()))
+                .collect(),
+        );
+        self.inner.choices.push(choice);
+        self
+    }
+
+    /// Restricts a `CHANNEL` option to these channel types (raw values, for
+    /// example `0` for guild text and `2` for guild voice).
+    pub fn channel_types<I>(mut self, channel_types: I) -> Self
+    where
+        I: IntoIterator<Item = u8>,
+    {
+        self.inner.channel_types = Some(channel_types.into_iter().collect());
+        self
+    }
+
     /// Restricts an `ATTACHMENT` option to file types: preset groups
     /// (`"image"`, `"video"`, `"audio"`) or dot-prefixed extensions
     /// (`".pdf"`), max 10.
@@ -984,11 +1109,12 @@ impl SlashCommandBuilder {
     /// consuming the builder.
     ///
     /// Checks names (character set, lowercase), descriptions, localizations
-    /// (locale keys and values), and for every option level: at most 25
-    /// options, no subcommands mixed with regular options, required options
-    /// first, unique names, choices (count, types, lengths, not with
-    /// autocomplete), value/length ranges, and the per-command character
-    /// total. Limits live in [`limits`]. Validation is deliberately never
+    /// of the command, its options, and choices (locale keys and values),
+    /// and for every option level: at most 25 options, no subcommands mixed
+    /// with regular options, required options first, unique names (localized
+    /// ones too), choices (count, types, lengths, not with autocomplete),
+    /// value/length ranges, `channel_types` only on `CHANNEL` options, and
+    /// the per-command character total. Limits live in [`limits`]. Validation is deliberately never
     /// stricter than Discord, so passing it does not guarantee Discord
     /// accepts the command.
     pub fn validate(&self) -> Result<(), DiscordError> {
@@ -1657,6 +1783,14 @@ mod tests {
             ("a/b", "contains '/'"),
             ("fire🔥", "contains '🔥'"),
             ("tab\tname", "contains '\\t'"),
+            ("ellipsis…", "contains '…'"),
+            ("price€", "contains '€'"),
+            ("a×b", "contains '×'"),
+            ("zero\u{200D}width", "contains '\\u{200d}'"),
+            ("ideographic\u{3000}space", "contains '\\u{3000}'"),
+            ("private\u{E000}", "contains '\\u{e000}'"),
+            ("heart\u{2764}\u{FE0F}", "contains '❤'"),
+            ("emoji\u{1FAE0}", "contains '\u{1FAE0}'"),
             ("Éclair", "must be lowercase"),
             ("ПРИВЕТ", "must be lowercase"),
             ("ǅemal", "must be lowercase"),
@@ -1672,6 +1806,24 @@ mod tests {
             CommandOptionBuilder::string("why?", "desc").try_build(),
             "option \"why?\" name contains '?'",
         );
+    }
+
+    #[test]
+    fn names_do_not_depend_on_the_compilers_unicode_version() {
+        // U+088F and U+1E6C0 are uncased letters (Lo) added in Unicode 17:
+        // unknown to Rust 1.88's tables, letters on Rust 1.99. Both must pass
+        // on every supported compiler, because unknown code points are not
+        // rejected.
+        for name in ["a\u{088F}", "\u{1E6C0}b", "\u{088F}\u{1E6C0}"] {
+            SlashCommandBuilder::new(name, "desc")
+                .validate()
+                .unwrap_or_else(|err| panic!("{name:?} should be valid: {err}"));
+        }
+        // Known residual: characters outside the rejected classes pass locally
+        // even when Discord rejects them, e.g. a combining accent.
+        SlashCommandBuilder::new("e\u{0301}", "desc")
+            .validate()
+            .expect("unclassified characters are left to Discord");
     }
 
     #[test]
@@ -2014,9 +2166,9 @@ mod tests {
         );
     }
 
-    /// Builds a command whose counted total is exactly `8000 + extra`
-    /// characters, mixing ASCII and multibyte text.
-    fn command_with_total(extra: usize) -> SlashCommandBuilder {
+    /// Builds a command whose first two options count 7937 characters
+    /// (mixing ASCII and multibyte text), followed by `last`.
+    fn command_with(last: CommandOptionBuilder) -> SlashCommandBuilder {
         // name 4 + description 100 = 104
         let mut command = SlashCommandBuilder::new("poll", &"d".repeat(100));
         // Each full option: name 32 + description 100 + 25 choices x (100 + 100)
@@ -2031,10 +2183,14 @@ mod tests {
         for index in 0..13 {
             partial = partial.choice(&format!("{index:0>100}"), "x".repeat(100));
         }
-        command = command.option(partial);
-        // Third option: integer choice values are not counted, so only the
-        // name (1), description (3 + extra), and choice name (59) count -> 8000.
-        command.option(
+        command.option(partial).option(last)
+    }
+
+    /// Builds a command whose counted total is exactly `8000 + extra`.
+    fn command_with_total(extra: usize) -> SlashCommandBuilder {
+        // Integer choice values are not counted, so only the name (1),
+        // description (3 + extra), and choice name (59) count -> 8000.
+        command_with(
             CommandOptionBuilder::integer("c", &"z".repeat(3 + extra)).choice(&"q".repeat(59), 1),
         )
     }
@@ -2097,5 +2253,161 @@ mod tests {
             .try_build()
             .expect("context-menu names may contain spaces and capitals");
         assert_eq!(quote.kind, command_type::MESSAGE);
+    }
+
+    #[test]
+    fn command_total_length_counts_option_and_choice_localizations() {
+        let last = || CommandOptionBuilder::integer("c", "zzz");
+        command_with(
+            last()
+                .description_localization("de", "yyy")
+                .localized_choice(&"q".repeat(59), 1, [("de", "r".repeat(59))]),
+        )
+        .validate()
+        .expect("localizations as long as their defaults add nothing");
+        expect_model_error(
+            command_with(
+                last()
+                    .name_localization("de", "cc")
+                    .choice(&"q".repeat(59), 1),
+            )
+            .try_build(),
+            "total 8001 characters",
+        );
+        expect_model_error(
+            command_with(last().localized_choice(&"q".repeat(59), 1, [("de", "r".repeat(60))]))
+                .try_build(),
+            "total 8001 characters",
+        );
+    }
+
+    #[test]
+    fn option_and_choice_localizations_follow_field_rules() {
+        let option = CommandOptionBuilder::string("color", "Pick a color")
+            .name_localization("de", "farbe")
+            .description_localization("de", &"ä".repeat(100))
+            .localized_choice("Red", "red", [("de", "Rot"), ("fr", "Rouge")]);
+        option.clone().validate().expect("valid localizations");
+        let value = serde_json::to_value(option.build()).expect("json");
+        assert_eq!(value["name_localizations"]["de"], json!("farbe"));
+        assert_eq!(
+            value["choices"][0]["name_localizations"]["fr"],
+            json!("Rouge")
+        );
+
+        let plain = serde_json::to_value(
+            CommandOptionBuilder::string("color", "desc")
+                .choice("Red", "red")
+                .build(),
+        )
+        .expect("json");
+        assert!(plain.get("name_localizations").is_none());
+        assert!(plain.get("description_localizations").is_none());
+        assert!(plain.get("channel_types").is_none());
+        assert!(plain["choices"][0].get("name_localizations").is_none());
+
+        let decoded: crate::model::ApplicationCommandOption = serde_json::from_value(json!({
+            "type": 3,
+            "name": "color",
+            "description": "desc",
+            "name_localizations": null,
+            "choices": [{ "name": "Red", "value": "red", "name_localizations": { "de": "Rot" } }]
+        }))
+        .expect("decodes Discord's shape");
+        assert!(decoded.name_localizations.is_none());
+        assert_eq!(
+            decoded.choices[0]
+                .name_localizations
+                .as_ref()
+                .and_then(|names| names.get("de"))
+                .map(String::as_str),
+            Some("Rot")
+        );
+
+        expect_model_error(
+            CommandOptionBuilder::string("color", "desc")
+                .name_localization("de", "Farbe")
+                .try_build(),
+            "option \"color\" name_localizations[de] must be lowercase",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("color", "desc")
+                .name_localization("xx", "farbe")
+                .try_build(),
+            "option \"color\" name_localizations uses unsupported locale \"xx\"",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("color", "desc")
+                .description_localization("de", &"ä".repeat(101))
+                .try_build(),
+            "option \"color\" description_localizations[de] must be 1-100 characters, got 101",
+        );
+        CommandOptionBuilder::string("color", "desc")
+            .localized_choice("Red", "red", [("de", "r".repeat(100))])
+            .validate()
+            .expect("100-character localized choice name");
+        expect_model_error(
+            CommandOptionBuilder::string("color", "desc")
+                .localized_choice("Red", "red", [("de", "r".repeat(101))])
+                .try_build(),
+            "option \"color\" choice \"Red\" name_localizations[de] must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("color", "desc")
+                .localized_choice("Red", "red", [("zz", "rot")])
+                .try_build(),
+            "option \"color\" choice \"Red\" name_localizations uses unsupported locale \"zz\"",
+        );
+    }
+
+    #[test]
+    fn localized_option_names_must_not_collide_through_the_builders() {
+        expect_model_error(
+            SlashCommandBuilder::new("mod", "desc")
+                .option(CommandOptionBuilder::user("target", "d").name_localization("de", "reason"))
+                .string_option("reason", "d", false)
+                .try_build(),
+            "command option \"target\" name_localizations[de] \"reason\" collides",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("mod", "desc")
+                .subcommand(
+                    sub("ban")
+                        .option(
+                            CommandOptionBuilder::user("target", "d")
+                                .name_localization("de", "ziel"),
+                        )
+                        .option(
+                            CommandOptionBuilder::string("reason", "d")
+                                .name_localization("de", "ziel"),
+                        ),
+                )
+                .try_build(),
+            "option \"ban\" option \"reason\" name_localizations[de] \"ziel\" collides",
+        );
+        SlashCommandBuilder::new("mod", "desc")
+            .option(CommandOptionBuilder::user("target", "d").name_localization("de", "ziel"))
+            .option(CommandOptionBuilder::string("reason", "d").name_localization("fr", "ziel"))
+            .validate()
+            .expect("the same localized name in different locales does not collide");
+    }
+
+    #[test]
+    fn channel_types_are_only_accepted_on_channel_options() {
+        let option = CommandOptionBuilder::channel("where", "Target channel").channel_types([0, 2]);
+        option.clone().validate().expect("CHANNEL option");
+        let value = serde_json::to_value(option.build()).expect("json");
+        assert_eq!(value["channel_types"], json!([0, 2]));
+
+        expect_model_error(
+            CommandOptionBuilder::string("where", "desc")
+                .channel_types([0])
+                .try_build(),
+            "option \"where\" sets channel_types, which only CHANNEL options accept",
+        );
+        CommandOptionBuilder::string("where", "desc")
+            .channel_types([])
+            .validate()
+            .expect("an empty list restricts nothing");
     }
 }

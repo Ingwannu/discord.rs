@@ -1598,6 +1598,9 @@ pub struct SearchGuildMessagesQuery {
 /// Typed Discord API object for `ApplicationCommandOptionChoice`.
 pub struct ApplicationCommandOptionChoice {
     pub name: String,
+    /// Localized `name` per locale key, 1-100 characters each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub value: serde_json::Value,
 }
@@ -1607,6 +1610,7 @@ impl ApplicationCommandOptionChoice {
     pub fn new(name: impl Into<String>, value: impl Serialize) -> Self {
         Self {
             name: name.into(),
+            name_localizations: None,
             value: serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
         }
     }
@@ -1618,6 +1622,7 @@ impl ApplicationCommandOptionChoice {
     ) -> Result<Self, serde_json::Error> {
         Ok(Self {
             name: name.into(),
+            name_localizations: None,
             value: serde_json::to_value(value)?,
         })
     }
@@ -1991,8 +1996,14 @@ pub struct ApplicationCommandOption {
     #[serde(rename = "type")]
     pub kind: u8,
     pub name: String,
+    /// Localized `name` per locale key; same rules as `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_localizations: Option<HashMap<String, String>>,
     #[serde(default)]
     pub description: String,
+    /// Localized `description` per locale key, 1-100 characters each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_localizations: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2014,6 +2025,9 @@ pub struct ApplicationCommandOption {
     /// (max 10). Discord checks only the file name, not the contents.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_types: Option<Vec<String>>,
+    /// Channel types a `CHANNEL` option offers (raw channel type values).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_types: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

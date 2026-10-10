@@ -530,6 +530,7 @@ mod tests {
         let payload = interaction_response_payload(InteractionResponse::AutocompleteResult(vec![
             ApplicationCommandOptionChoice {
                 name: "Support".to_string(),
+                name_localizations: None,
                 value: Value::String("support".to_string()),
             },
         ]));
