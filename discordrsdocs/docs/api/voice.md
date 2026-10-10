@@ -31,9 +31,9 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 - `get_current_user_voice_state(...)`, `get_user_voice_state(...)`, `modify_current_user_voice_state_from_request(...)`, and `modify_user_voice_state_from_request(...)`: typed Voice Resource REST helpers for stage voice-state reads and moderation updates.
 - `discordrs::voice::player::{AudioPlayer, AudioResource, AudioInput, NoSubscriberBehavior}`: the `2.2.0` discord.js-style playback pipeline (see below).
 
-## Audio Playback Pipeline (2.2.0)
+## Audio Playback Pipeline
 
-`discordrs::voice::player` mirrors `@discordjs/voice`: `AudioInput` produces PCM (FFmpeg process spawn, raw PCM readers, or files), `AudioResource` chunks it into 20ms frames with live volume control and silence padding, and `AudioPlayer` runs the `Idle`/`Buffering`/`Playing`/`Paused`/`AutoPaused` state machine with watch-based state and broadcast events. Opus encoding sits behind `voice-encode`.
+`discordrs::voice::player` mirrors `@discordjs/voice`: `AudioInput` produces PCM (FFmpeg process spawn, raw PCM readers, or files), `AudioResource` chunks it into 20ms frames with live volume control and silence padding, and `AudioPlayer` runs the `Idle`/`Buffering`/`Playing`/`Paused`/`AutoPaused` state machine with watch-based state and broadcast events. Opus encoding sits behind `voice-encode`; without it `AudioPlayer::play` returns an error (see [Without `voice-encode`](#without-voice-encode)).
 
 ```rust
 use std::sync::Arc;
@@ -78,7 +78,30 @@ async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::
 - `NoSubscriberBehavior::{Pause, Play, Stop}` (in `AudioPlayerOptions`) chooses what happens while no connection is subscribed; the default `Pause` matches discord.js.
 - `AudioResource::volume()` returns a live `VolumeControl` that can be adjusted during playback; `AudioInput::file(...)`, `raw_pcm(...)`, `ffmpeg_with_binary(...)`, and `ffmpeg_with_args(...)` cover non-URL sources.
 - Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the player.
-- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`).
+- `AudioResource::next_pcm_frame()` is cancel safe: dropping the future mid-frame (for example as a losing `tokio::select!` branch) keeps the PCM already read, and the next call completes the same frame.
+- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`). It also shows a start watchdog that calls `stop()` when FFmpeg produces no audio in time.
+
+### Stalls, Backpressure, and Shutdown (3.0)
+
+A player is one control task, plus one reader task per loaded resource and one worker task per subscribed connection. The control task never waits on audio input or on a connection, so a stalled FFmpeg stream or a slow voice connection cannot hold up the player.
+
+| Situation | Behavior |
+|---|---|
+| `stop()`, `pause()`, `unpause()`, `play()` replacing a track, unsubscribing | Applied as soon as the command arrives, independent of the 20 ms tick and of any stalled read or send. Stopping or replacing drops the resource right away, which kills an FFmpeg process. |
+| Source slower than real time (underrun) | The reader decodes up to 5 frames (100 ms) ahead. When no frame is ready on a tick, the tick sends nothing; the player stays `Buffering`/`Playing` and plays the audio once it arrives. Nothing is skipped. |
+| Player paused | The reader stops once its 5-frame buffer is full, which backpressures FFmpeg through its stdout pipe. Buffered frames are kept for `unpause()`. |
+| One connection slower than real time | Each connection has a 5-frame (100 ms) queue. When it is full, the newest frames for that connection are dropped, and a `subscribed connection is not keeping up` warning is logged once per episode. Queued frames stay in order, and other connections and commands are unaffected. A connection that recovers first plays up to 100 ms of older audio. |
+| Speaking updates for a lagging connection | Never dropped. The latest state waits until the queue has room, and frames for that connection are dropped meanwhile so that none overtakes it. |
+| Unsubscribe | Frames still queued for that connection are discarded and an in-flight `send_opus_packet` is cancelled, so a stalled connection is released at once. |
+| Every `AudioPlayer` handle and `PlayerSubscription` dropped | The control task exits and aborts the reader and connection tasks, even mid-read or mid-send. No task, FFmpeg process, or sink outlives the player. |
+| A `VoiceFrameSink` panics | That connection is detached (logged as an error); playback continues for the others. |
+| An `AudioInput` reader panics | The track ends with `TrackEndReason::Error("... audio source reader stopped unexpectedly")`; the player keeps working. |
+
+Volume changes are applied when a frame is transmitted, not when it is read ahead, so `VolumeControl::set` still takes effect on the next 20 ms frame.
+
+### Without `voice-encode`
+
+Building with `voice` but without `voice-encode` keeps the whole player API available, so code compiles the same either way. However, `AudioPlayer::play` returns `DiscordError::Voice` ("`AudioPlayer::play` requires the `voice-encode` feature ...") and drops the resource instead of accepting it. Before 3.0 the player silently advanced through the track while transmitting nothing.
 
 ## Example
 

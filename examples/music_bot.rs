@@ -10,10 +10,16 @@
 //! - `MUSIC_INPUT` — URL or file path passed to FFmpeg
 //!
 //! Requires an `ffmpeg` binary on `PATH`.
+//!
+//! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a
+//! stalled stream), the bot stops the track instead of waiting forever. This
+//! works even while FFmpeg is stuck mid-read, because the player reads its
+//! input on a separate task and handles `stop()` immediately.
 
 #[cfg(all(feature = "gateway", feature = "voice", feature = "voice-encode"))]
 mod bot {
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use async_trait::async_trait;
     use discordrs::voice::player::{
@@ -23,6 +29,10 @@ mod bot {
         gateway_intents, Client, Context, DiscordError, EventHandler, ReadyPayload, Snowflake,
         VoiceRuntimeConfig, VoiceServerUpdate, VoiceState,
     };
+
+    /// How long FFmpeg may take to produce the first frame before the bot
+    /// gives up on the input.
+    const START_TIMEOUT: Duration = Duration::from_secs(15);
 
     #[derive(Default)]
     struct SessionState {
@@ -102,21 +112,38 @@ mod bot {
         let mut events = player.events();
         player.play(resource)?;
 
-        while let Ok(event) = events.recv().await {
-            match event {
-                AudioPlayerEvent::StateChange { old, new } => {
-                    println!("player state: {old:?} -> {new:?}");
-                }
-                AudioPlayerEvent::TrackStart => println!("track started"),
-                AudioPlayerEvent::TrackEnd { reason } => {
-                    println!("track ended: {reason:?}");
-                    break;
+        // A watchdog for inputs that never start. `stop()` takes effect even
+        // while the player's read from FFmpeg is stalled, and dropping the
+        // resource kills the FFmpeg process.
+        let mut start_timeout = std::pin::pin!(tokio::time::sleep(START_TIMEOUT));
+        let mut started = false;
+
+        loop {
+            tokio::select! {
+                event = events.recv() => match event {
+                    Ok(AudioPlayerEvent::StateChange { old, new }) => {
+                        println!("player state: {old:?} -> {new:?}");
+                    }
+                    Ok(AudioPlayerEvent::TrackStart) => {
+                        started = true;
+                        println!("track started");
+                    }
+                    Ok(AudioPlayerEvent::TrackEnd { reason }) => {
+                        println!("track ended: {reason:?}");
+                        break;
+                    }
+                    Err(_) => break,
+                },
+                () = &mut start_timeout, if !started => {
+                    eprintln!("no audio from {input} after {START_TIMEOUT:?}; stopping");
+                    started = true;
+                    player.stop()?;
                 }
             }
         }
 
         // Let the trailing silence frames flush before tearing down.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         subscription.unsubscribe();
         Ok(())
     }
