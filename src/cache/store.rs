@@ -402,15 +402,31 @@ pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: &Snowfla
 }
 
 pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) {
+    evict_guilds_matching(store, |stored_guild_id| stored_guild_id == guild_id);
+}
+
+/// Removes every guild-scoped entry whose guild satisfies `evict`, in one
+/// pass over each store.
+///
+/// Shard invalidation evicts thousands of guilds at once; calling
+/// [`evict_guild_entries`] per guild would rescan every member and message
+/// map once per guild (O(guilds × entries)) while holding the write lock.
+/// Keying the scan on a predicate keeps both callers on one implementation.
+/// Users are intentionally untouched: they are global, not guild-scoped.
+pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&Snowflake) -> bool) {
     let removed_channel_ids: HashSet<_> = store
         .channels
         .iter()
-        .filter(|(_, channel)| channel.guild_id.as_ref() == Some(guild_id))
+        .filter(|(_, channel)| channel.guild_id.as_ref().is_some_and(&evict))
         .map(|(channel_id, _)| channel_id.clone())
         .collect();
 
-    store.guilds.remove(guild_id);
-    store.guild_order.remove(guild_id);
+    store
+        .guilds
+        .retain(|stored_guild_id, _| !evict(stored_guild_id));
+    store
+        .guild_order
+        .retain(|stored_guild_id| !evict(stored_guild_id));
     for channel_id in &removed_channel_ids {
         store.channels.remove(channel_id);
         store.channel_order.remove(channel_id);
@@ -418,7 +434,7 @@ pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) 
     let removed_member_keys: Vec<_> = store
         .members
         .keys()
-        .filter(|(stored_guild_id, _)| stored_guild_id == guild_id)
+        .filter(|(stored_guild_id, _)| evict(stored_guild_id))
         .cloned()
         .collect();
     for key in removed_member_keys {
@@ -429,7 +445,7 @@ pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) 
         .iter()
         .filter(|((stored_channel_id, _), message)| {
             removed_channel_ids.contains(stored_channel_id)
-                || message.as_ref().guild_id.as_ref() == Some(guild_id)
+                || message.as_ref().guild_id.as_ref().is_some_and(&evict)
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -438,55 +454,77 @@ pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) 
     }
     store
         .roles
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .role_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .presences
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .presence_seen
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .presence_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .voice_states
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .voice_state_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .soundboard_sounds
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .soundboard_sound_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .emojis
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .emoji_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .stickers
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .sticker_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .scheduled_events
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .scheduled_event_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
     store
         .stage_instances
-        .retain(|(stored_guild_id, _), _| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _), _| !evict(stored_guild_id));
     store
         .stage_instance_order
-        .retain(|(stored_guild_id, _)| stored_guild_id != guild_id);
+        .retain(|(stored_guild_id, _)| !evict(stored_guild_id));
+}
+
+/// Evicts the entries a new session on `shard_id` (of `shard_count > 1`)
+/// replaces; see [`super::CacheHandle::clear_shard`] for the contract.
+pub(super) fn evict_shard_entries(store: &mut CacheStore, shard_id: u32, shard_count: u32) {
+    evict_guilds_matching(store, |guild_id| {
+        super::shard_for_guild_id(guild_id, shard_count) == Some(shard_id)
+    });
+
+    // Discord delivers direct messages only to shard 0, so DM channels (the
+    // only cached channels without a guild) and their messages belong to it.
+    if shard_id == 0 {
+        let dm_channel_ids: Vec<_> = store
+            .channels
+            .iter()
+            .filter(|(_, channel)| channel.guild_id.is_none())
+            .map(|(channel_id, _)| channel_id.clone())
+            .collect();
+        for channel_id in dm_channel_ids {
+            evict_channel_entries(store, &channel_id);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -28,10 +28,22 @@ mod store;
 #[cfg(feature = "cache")]
 use store::{
     enforce_channel_limit, enforce_guild_limit, enforce_member_limit, enforce_message_limits,
-    evict_channel_entries, evict_guild_entries, insert_member_entry, insert_message_entry,
-    maybe_prune_expired, ordered_overflow_keys, prune_expired, remember_key, remove_member_key,
-    remove_message_key, remove_presence_key, seen_expired, CacheStore,
+    evict_channel_entries, evict_guild_entries, evict_shard_entries, insert_member_entry,
+    insert_message_entry, maybe_prune_expired, ordered_overflow_keys, prune_expired, remember_key,
+    remove_member_key, remove_message_key, remove_presence_key, seen_expired, CacheStore,
 };
+
+/// Discord's guild-to-shard formula, `(guild_id >> 22) % shard_count`.
+///
+/// Lives here rather than in `sharding` because the cache needs it without
+/// the `sharding` feature: every gateway shard's READY scopes its cache
+/// invalidation with it. Returns `None` for non-numeric IDs so callers keep
+/// such entries instead of guessing an owner.
+#[cfg(any(feature = "cache", feature = "gateway"))]
+pub(crate) fn shard_for_guild_id(guild_id: &Snowflake, shard_count: u32) -> Option<u32> {
+    let raw_id = guild_id.as_u64()?;
+    Some(((raw_id >> 22) % u64::from(shard_count.max(1))) as u32)
+}
 
 #[derive(Clone, Default)]
 /// Typed Discord API object for `CacheHandle`.
@@ -103,6 +115,40 @@ impl CacheHandle {
 
     #[cfg(not(feature = "cache"))]
     pub async fn clear(&self) {}
+
+    /// Drops the cached state that a new gateway session on shard
+    /// `shard_id` of `shard_count` replaces. The runtime calls this on every
+    /// READY (not on RESUMED, which replays missed events instead).
+    ///
+    /// All shards of a process share one cache, so a READY must not wipe
+    /// guilds that other shards are still serving:
+    ///
+    /// - `shard_count <= 1`: the shard owns everything, so this is
+    ///   [`CacheHandle::clear`].
+    /// - otherwise: every guild-scoped entry (guild, channels, threads,
+    ///   members, roles, presences, voice states, emojis, stickers,
+    ///   soundboard sounds, scheduled events, stage instances, and messages
+    ///   of those guilds) whose guild maps to `shard_id` by
+    ///   `(guild_id >> 22) % shard_count` is removed. Shard 0 additionally
+    ///   drops DM channels and their messages, because Discord delivers DMs
+    ///   only to shard 0.
+    /// - Users are kept: they are shared by every shard a user has guilds
+    ///   on, and the `max_users` LRU cap bounds what is left behind.
+    ///   Messages without a guild whose channel is not cached are kept too,
+    ///   since their owner cannot be determined; TTL and size caps age them
+    ///   out.
+    #[cfg(feature = "cache")]
+    pub async fn clear_shard(&self, shard_id: u32, shard_count: u32) {
+        if shard_count <= 1 {
+            self.clear().await;
+            return;
+        }
+        let mut store = self.store.write().await;
+        evict_shard_entries(&mut store, shard_id, shard_count);
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn clear_shard(&self, _shard_id: u32, _shard_count: u32) {}
 
     #[cfg(feature = "cache")]
     pub async fn purge_expired(&self) {
@@ -1379,6 +1425,284 @@ mod tests {
     };
     #[cfg(feature = "gateway")]
     use crate::http::DiscordHttpClient;
+
+    /// Fills every guild-scoped store for `guild_id`, using IDs derived from
+    /// `base` so several guilds can coexist.
+    async fn populate_guild_entries(cache: &CacheHandle, guild_id: &Snowflake, base: u64) {
+        let id = |offset: u64| Snowflake::from(base + offset);
+        cache
+            .upsert_guild(Guild {
+                id: guild_id.clone(),
+                name: format!("guild-{base}"),
+                ..Guild::default()
+            })
+            .await;
+        cache
+            .upsert_channel(Channel {
+                id: id(1),
+                guild_id: Some(guild_id.clone()),
+                ..Channel::default()
+            })
+            .await;
+        // Messages fetched over REST carry no guild_id; the cached channel
+        // ties this one to the guild.
+        cache
+            .upsert_message(Message {
+                id: id(2),
+                channel_id: id(1),
+                ..Message::default()
+            })
+            .await;
+        cache
+            .upsert_user(User {
+                id: id(3),
+                username: format!("user-{base}"),
+                ..User::default()
+            })
+            .await;
+        cache
+            .upsert_member(
+                guild_id.clone(),
+                id(3),
+                crate::model::Member {
+                    user: Some(User {
+                        id: id(3),
+                        ..User::default()
+                    }),
+                    ..crate::model::Member::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_role(
+                guild_id.clone(),
+                Role {
+                    id: id(4),
+                    ..Role::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_presence(
+                guild_id.clone(),
+                id(3),
+                Presence {
+                    user_id: Some(id(3)),
+                    ..Presence::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_voice_state(
+                guild_id.clone(),
+                id(3),
+                VoiceState {
+                    guild_id: Some(guild_id.clone()),
+                    channel_id: Some(id(1)),
+                    user_id: Some(id(3)),
+                    ..VoiceState::default()
+                },
+            )
+            .await;
+        cache
+            .upsert_soundboard_sound(
+                guild_id.clone(),
+                SoundboardSound {
+                    sound_id: id(5),
+                    ..SoundboardSound::default()
+                },
+            )
+            .await;
+        cache
+            .replace_emojis(
+                guild_id.clone(),
+                vec![Emoji {
+                    id: Some((base + 6).to_string()),
+                    ..Emoji::default()
+                }],
+            )
+            .await;
+        cache
+            .replace_stickers(
+                guild_id.clone(),
+                vec![Sticker {
+                    id: id(7),
+                    ..Sticker::default()
+                }],
+            )
+            .await;
+        cache
+            .upsert_scheduled_event(ScheduledEvent {
+                id: Some(id(8)),
+                guild_id: Some(guild_id.clone()),
+                ..ScheduledEvent::default()
+            })
+            .await;
+        cache
+            .upsert_stage_instance(StageInstance {
+                id: id(9),
+                guild_id: guild_id.clone(),
+                channel_id: id(1),
+                ..StageInstance::default()
+            })
+            .await;
+        // A gateway message whose channel is not cached is still tied to
+        // the guild by its guild_id.
+        cache
+            .upsert_message(Message {
+                id: id(11),
+                channel_id: id(10),
+                guild_id: Some(guild_id.clone()),
+                ..Message::default()
+            })
+            .await;
+    }
+
+    /// Asserts whether every entry written by [`populate_guild_entries`]
+    /// (except the global user) is still cached.
+    async fn assert_guild_entries(
+        cache: &CacheHandle,
+        guild_id: &Snowflake,
+        base: u64,
+        present: bool,
+    ) {
+        let id = |offset: u64| Snowflake::from(base + offset);
+        let found = [
+            ("guild", cache.guild(guild_id).await.is_some()),
+            ("channel", cache.channel(&id(1)).await.is_some()),
+            (
+                "channel message",
+                cache.message(&id(1), &id(2)).await.is_some(),
+            ),
+            ("member", cache.member(guild_id, &id(3)).await.is_some()),
+            ("role", cache.role(guild_id, &id(4)).await.is_some()),
+            ("presence", cache.presence(guild_id, &id(3)).await.is_some()),
+            (
+                "voice state",
+                cache.voice_state(guild_id, &id(3)).await.is_some(),
+            ),
+            (
+                "soundboard sound",
+                cache.soundboard_sound(guild_id, &id(5)).await.is_some(),
+            ),
+            ("emoji", cache.emoji(guild_id, &id(6)).await.is_some()),
+            ("sticker", cache.sticker(guild_id, &id(7)).await.is_some()),
+            (
+                "scheduled event",
+                cache.scheduled_event(guild_id, &id(8)).await.is_some(),
+            ),
+            (
+                "stage instance",
+                cache.stage_instance(guild_id, &id(9)).await.is_some(),
+            ),
+            (
+                "guild message",
+                cache.message(&id(10), &id(11)).await.is_some(),
+            ),
+        ];
+        for (entry, is_cached) in found {
+            assert_eq!(
+                is_cached, present,
+                "{entry} of guild {guild_id} cached={is_cached}, expected {present}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_shard_evicts_only_entries_owned_by_that_shard() {
+        let cache = CacheHandle::with_config(CacheConfig::unbounded());
+        // (guild_id >> 22) % 2 picks the shard.
+        let shard0_guild = Snowflake::from(2_u64 << 22);
+        let shard1_guild = Snowflake::from(1_u64 << 22);
+        let unparsable_guild = Snowflake::from("not-a-snowflake");
+        populate_guild_entries(&cache, &shard0_guild, 100).await;
+        populate_guild_entries(&cache, &shard1_guild, 200).await;
+        populate_guild_entries(&cache, &unparsable_guild, 300).await;
+
+        let dm_channel = Snowflake::from(900_u64);
+        cache
+            .upsert_channel(Channel {
+                id: dm_channel.clone(),
+                kind: 1,
+                ..Channel::default()
+            })
+            .await;
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from(901_u64),
+                channel_id: dm_channel.clone(),
+                ..Message::default()
+            })
+            .await;
+        // No guild_id and an uncached channel: the owner is unknown.
+        let unknown_owner_channel = Snowflake::from(902_u64);
+        cache
+            .upsert_message(Message {
+                id: Snowflake::from(903_u64),
+                channel_id: unknown_owner_channel.clone(),
+                ..Message::default()
+            })
+            .await;
+
+        // A later shard's READY must not wipe the guilds of other shards.
+        cache.clear_shard(1, 2).await;
+        assert_guild_entries(&cache, &shard1_guild, 200, false).await;
+        assert_guild_entries(&cache, &shard0_guild, 100, true).await;
+        assert_guild_entries(&cache, &unparsable_guild, 300, true).await;
+        assert!(
+            cache.channel(&dm_channel).await.is_some(),
+            "DMs belong to shard 0"
+        );
+        assert!(
+            cache.user(&Snowflake::from(203_u64)).await.is_some(),
+            "users are global and survive a shard's READY"
+        );
+
+        cache.clear_shard(0, 2).await;
+        assert_guild_entries(&cache, &shard0_guild, 100, false).await;
+        assert_guild_entries(&cache, &unparsable_guild, 300, true).await;
+        assert!(cache.channel(&dm_channel).await.is_none());
+        assert!(cache
+            .message(&dm_channel, &Snowflake::from(901_u64))
+            .await
+            .is_none());
+        assert!(cache
+            .message(&unknown_owner_channel, &Snowflake::from(903_u64))
+            .await
+            .is_some());
+        assert_eq!(cache.users().await.len(), 3);
+
+        // A single-shard bot owns everything: READY is a full clear.
+        cache.clear_shard(0, 1).await;
+        assert!(cache.guilds().await.is_empty());
+        assert!(cache.users().await.is_empty());
+        assert!(cache.channels().await.is_empty());
+        assert!(cache
+            .message(&unknown_owner_channel, &Snowflake::from(903_u64))
+            .await
+            .is_none());
+
+        // The CacheBackend entry point applies the same scoping.
+        populate_guild_entries(&cache, &shard0_guild, 100).await;
+        populate_guild_entries(&cache, &shard1_guild, 200).await;
+        cache.clear_shard_cache(0, 2).await.unwrap();
+        assert_guild_entries(&cache, &shard0_guild, 100, false).await;
+        assert_guild_entries(&cache, &shard1_guild, 200, true).await;
+    }
+
+    #[test]
+    fn shard_for_guild_id_follows_discords_formula() {
+        assert_eq!(
+            super::shard_for_guild_id(&Snowflake::from(41_771_983_423_143_937_u64), 4),
+            Some(((41_771_983_423_143_937_u64 >> 22) % 4) as u32)
+        );
+        assert_eq!(
+            super::shard_for_guild_id(&Snowflake::from(1_u64 << 22), 0),
+            Some(0),
+            "a zero shard count is treated as one shard"
+        );
+        assert_eq!(super::shard_for_guild_id(&Snowflake::from("x"), 2), None);
+    }
 
     #[tokio::test]
     async fn cache_handle_tracks_create_and_delete_flows() {

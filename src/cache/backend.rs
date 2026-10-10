@@ -17,6 +17,31 @@ use super::CacheHandle;
 pub trait CacheBackend: Send + Sync {
     async fn clear_cache(&self) -> Result<(), DiscordError>;
 
+    /// Drops the entries owned by gateway shard `shard_id` of `shard_count`.
+    /// The gateway runtime calls this when that shard starts a new session
+    /// (READY), instead of [`CacheBackend::clear_cache`], because one shard's
+    /// new session must not erase data other shards (or other processes
+    /// sharing the store) are still serving.
+    ///
+    /// Ownership follows [`CacheHandle::clear_shard`]: a guild belongs to
+    /// shard `(guild_id >> 22) % shard_count`, DMs belong to shard 0, and
+    /// users are global.
+    ///
+    /// The default implementation clears everything for single-shard bots
+    /// (`shard_count <= 1`, where the shard owns every entry) and keeps all
+    /// entries otherwise: a stale entry is a smaller failure than wiping the
+    /// live data of every other shard. Multi-shard deployments should
+    /// override it to delete the members, presences, and messages of the
+    /// shard's guilds.
+    async fn clear_shard_cache(&self, shard_id: u32, shard_count: u32) -> Result<(), DiscordError> {
+        let _ = shard_id;
+        if shard_count <= 1 {
+            self.clear_cache().await
+        } else {
+            Ok(())
+        }
+    }
+
     async fn purge_expired_entries(&self) -> Result<(), DiscordError>;
 
     async fn put_member(
@@ -88,6 +113,11 @@ pub trait CacheBackend: Send + Sync {
 impl CacheBackend for CacheHandle {
     async fn clear_cache(&self) -> Result<(), DiscordError> {
         self.clear().await;
+        Ok(())
+    }
+
+    async fn clear_shard_cache(&self, shard_id: u32, shard_count: u32) -> Result<(), DiscordError> {
+        self.clear_shard(shard_id, shard_count).await;
         Ok(())
     }
 
