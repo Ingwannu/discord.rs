@@ -1405,7 +1405,8 @@ fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
 ```
 
 - `use_client(reqwest::Client)` is the escape hatch for a fully custom client; it supersedes `connect_timeout`, `request_timeout`, and `proxy`.
-- `rate_limit_callback(...)` fires on every 429 with a `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent.
+- `rate_limit_callback(...)` fires on every 429 with a `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
+- `retry_non_idempotent_requests(true)` (default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. By default only GET/HEAD/OPTIONS/PUT/DELETE and `POST /channels/{id}/messages` with `nonce` + `enforce_nonce: true` (within 60 seconds of the first attempt) are replayed, because Discord may already have applied an ambiguous failure; 429s are always retried, and connection failures are retried for every method unless `use_client(...)` supplied the client (its redirect policy is unknown).
 - `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
 
 ## 9. Control the Active Shard from `Context`

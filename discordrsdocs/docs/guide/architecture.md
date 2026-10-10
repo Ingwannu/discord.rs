@@ -57,9 +57,11 @@ flowchart LR
 - `src/command.rs`: typed slash/user/message command builders
 - `src/gateway/`: websocket runtime, heartbeat/resume, typed event dispatch
 - `src/http.rs`: `RestClient` and compatibility `DiscordHttpClient`
-- `src/http_body.rs`: JSON/multipart request-body serialization and response-body parsing helpers
-- `src/http_paths.rs`: REST path, query-string, token-segment, and route-key helpers shared by `RestClient` and tests
-- `src/http_rate_limit.rs`: REST route/bucket/global rate-limit state and stale bucket cleanup
+- `src/http/body.rs`: JSON/multipart request-body serialization, response-body parsing, and nonce-deduplication detection used by the retry policy
+- `src/http/paths.rs`: REST path and query-string helpers, plus `RequestRoute` — the per-request metadata (diagnostic-safe rate-limit key, major-parameter scope, recognized operation) that bucket scoping and the replay policy read instead of re-parsing strings — and the token helpers (`route_token`, `scrub_token`, `redact_path_tokens`)
+- `src/http/rate_limit.rs`: REST bucket/global rate-limit state (bucket hash scoped by major parameter), safe wait-duration conversion, and stale bucket cleanup
+- `src/http/client_config.rs`: `RestClientBuilder` options, including the opt-in `retry_non_idempotent_requests` policy; managed clients disable redirects so connect failures prove a request was never sent
+- `src/http.rs` transport loop: `ReplayPolicy` (always / within the 60s nonce window / never) decides which ambiguous failures may be replayed; `acquire_route_gate` re-checks the bucket key after locking so queued requests follow a newly learned bucket
 - `src/cache.rs`: cache handle and manager types; in-memory storage is enabled by default and can be disabled with `default-features = false`
 - `src/collector.rs`: opt-in async collectors
 - `src/parsers/`: raw + typed interaction parsing helpers

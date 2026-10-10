@@ -29,6 +29,27 @@ pub(crate) enum RequestBody {
     },
 }
 
+impl RequestBody {
+    /// Returns true when the payload asks Discord to deduplicate it: a
+    /// message create with a non-null `nonce` and `enforce_nonce: true`.
+    /// Discord then returns the original message for a repeated nonce
+    /// instead of creating a second one, which makes the POST safe to replay.
+    pub(crate) fn enforces_nonce(&self) -> bool {
+        let payload = match self {
+            Self::Json(payload)
+            | Self::Multipart {
+                payload_json: payload,
+                ..
+            } => payload,
+            Self::NamedFileMultipart { .. }
+            | Self::PayloadAndNamedFileMultipart { .. }
+            | Self::StickerMultipart { .. } => return false,
+        };
+        payload.get("enforce_nonce").and_then(Value::as_bool) == Some(true)
+            && payload.get("nonce").is_some_and(|nonce| !nonce.is_null())
+    }
+}
+
 pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(
     body: &T,
 ) -> Result<Value, DiscordError> {

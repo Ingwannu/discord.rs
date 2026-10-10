@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (3.0.0)
+
+2.1.0 and 2.2.0 were never published to crates.io and already change public types relative to 2.0.2, so the next release is 3.0.0. The phased plan is in `ROADMAP.md`.
+
+### Fixed
+- **REST retries no longer duplicate mutations.** 5xx responses, timeouts, and failed response reads are retried only for requests that are safe to repeat: GET, HEAD, OPTIONS, PUT, and DELETE, plus `POST /channels/{id}/messages` with `nonce` + `enforce_nonce: true` (the only route Discord deduplicates), and that one only within 60 seconds of the first attempt, because Discord's nonce check covers just "the past few minutes". Previously a POST whose response was lost was sent again, which could post the same message twice. 429s are always retried; connection failures are retried for every method only on clients built by this crate (see below).
+- **No redirects on the managed transport.** Clients from `RestClient::new` and `RestClientBuilder::build` no longer follow redirects, so a connect failure proves the request was never delivered. With `RestClientBuilder::use_client(...)` the redirect policy is unknown, so POST/PATCH are not retried after connect failures.
+- **Rate-limit buckets respect major parameters.** A learned `x-ratelimit-bucket` hash is combined with the route's channel/guild/webhook/interaction-token scope before it blocks requests, so a 429 in one channel no longer stalls requests to other channels that report the same hash. Requests are serialized per resolved bucket, and a request that queued before its bucket was known moves to the bucket's gate instead of running beside it. A shorter concurrent observation no longer cuts an outstanding block short.
+- **Tokens stay out of REST diagnostics.** Rate-limit route keys digest webhook and interaction tokens; transport errors and API/proxy error text are scrubbed of the exact request token; `HttpError` additionally redacts tokenized URL paths. `RateLimitInfo::route`, `DiscordError::RateLimit`, `DiscordError::Api`, `DiscordError::Http`, and REST log lines no longer contain tokens. (`Debug` output of interaction contexts and OAuth2 error bodies are scheduled for phase 3; see `ROADMAP.md`.)
+- **Malformed wait headers cannot panic.** `inf`, `NaN`, negative, or huge `Retry-After`/`x-ratelimit-reset-after` values are clamped instead of reaching `Duration::from_secs_f64`.
+- **Terminal gateway close codes stop the shard.** 4004 and 4010–4014 make `GatewayClient::run` return `DiscordError::Gateway` instead of reconnecting forever, including closes received before HELLO; 4007 and 4009 start a fresh session instead of a doomed RESUME. Per-connection heartbeat and outbound tasks are aborted on every exit path of a connection attempt, including cancellation during the shutdown flush. (Prompt shutdown of a whole multi-shard client is phase 2 work.)
+
+### Added
+- `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
+
+### Changed
+- The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
+
 ## 2.2.0 - 2026-07-27
 
 High-level framework release: the discord.js-style ergonomics layer. Where 2.1.0 closed protocol gaps, 2.2.0 closes the developer-experience gap.

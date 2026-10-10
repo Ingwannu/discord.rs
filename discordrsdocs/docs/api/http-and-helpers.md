@@ -45,6 +45,14 @@ Raw `serde_json::Value` methods remain available for routes where Discord adds f
 - 429 handling reads the `Retry-After` header and the `x-ratelimit-scope`/`x-ratelimit-global` headers, so Cloudflare-level bans with HTML bodies back off correctly
 - `HttpError` exposes `is_timeout()`, `is_connect()`, `is_body()`, and `is_retryable()`, and `DiscordError::is_retryable_transport()` classifies retry-worthy failures
 
+`3.0` makes retries and rate-limit identity safe:
+
+- 5xx responses, timeouts, and failed response reads are ambiguous — Discord may already have applied the request — so they are only retried for requests that are safe to repeat: GET, HEAD, OPTIONS, PUT, DELETE, and `POST /channels/{id}/messages` with both `nonce` and `enforce_nonce: true` (the only route Discord deduplicates), the latter only within 60 seconds of the first attempt. POST and PATCH otherwise surface the error instead of risking a duplicate message, channel, or invite. 429s are always retried. `RestClientBuilder::retry_non_idempotent_requests(true)` restores replaying every method.
+- The managed transport (`RestClient::new`, `RestClientBuilder::build`) does not follow redirects, so a connect failure proves nothing was sent and is retried for every method. A client supplied through `use_client(...)` may follow redirects, so POST/PATCH are not retried after connect failures there.
+- A learned `x-ratelimit-bucket` hash is combined with the route's major parameters (channel, guild, webhook, or interaction token) before it blocks requests, because Discord's bucket hash excludes them; two channels that report the same hash no longer block each other. Requests are serialized per resolved bucket, and requests that queued before the bucket was known move to the bucket's gate.
+- Route keys replace webhook and interaction tokens with a digest; transport errors and API/proxy error text are scrubbed of the request's token, so tokens no longer appear in REST logs, `RateLimitInfo::route`, or `DiscordError::{RateLimit, Api, Http}`.
+- Malformed wait values (`inf`, `NaN`, negative, or huge `Retry-After`/`x-ratelimit-reset-after`) are clamped instead of panicking.
+
 ## REST Client Configuration (`RestClient::builder`, 2.2.0)
 
 `RestClient::builder(token, application_id)` returns a `RestClientBuilder` mirroring discord.js's `RESTOptions`; `RestClient::new(...)` keeps the zero-configuration behavior:
@@ -69,7 +77,8 @@ let rest = RestClient::builder("bot-token", 0)
 ```
 
 - `use_client(reqwest::Client)` supplies a fully custom client, superseding `connect_timeout`, `request_timeout`, and `proxy`.
-- `rate_limit_callback(...)` fires on every 429 with `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent.
+- `rate_limit_callback(...)` fires on every 429 with `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
+- `retry_non_idempotent_requests(true)` (3.0, default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. Enable it only when a duplicated mutation is acceptable for every request the client makes.
 - `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
 
 ## Interaction Response API (`InteractionResponder`, 2.2.0)

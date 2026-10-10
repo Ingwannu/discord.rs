@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased (3.0.0)
+
+- REST 5xx/timeout retries are limited to requests that are safe to repeat (GET/HEAD/OPTIONS/PUT/DELETE, and nonce-enforced channel message creates within 60 seconds); `RestClientBuilder::retry_non_idempotent_requests(true)` opts POST/PATCH back in. The managed transport no longer follows redirects.
+- Rate-limit buckets are scoped by major parameter, so one channel's 429 no longer blocks other channels sharing a bucket hash.
+- Webhook and interaction tokens are kept out of REST route keys, rate-limit callbacks, transport/API errors, and logs.
+- Malformed wait headers are clamped instead of panicking.
+- Terminal gateway close codes (4004, 4010–4014), including closes before HELLO, stop the shard with an error; 4007/4009 start a fresh session.
+
 ## 2.2.0 - 2026-07-27
 
 High-level framework release: the discord.js-style ergonomics layer. Where 2.1.0 closed protocol gaps, 2.2.0 closes the developer-experience gap.

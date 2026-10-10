@@ -166,6 +166,15 @@ impl GatewayClient {
                             self.publish_state(ShardRuntimeState::Stopped);
                             return Ok(());
                         }
+                        ReconnectAction::Fatal(error) => {
+                            // Reconnecting cannot fix bad credentials, intents,
+                            // shard settings, or API version; retrying would
+                            // only repeat the failure forever with backoff.
+                            error!("Gateway stopped: {error}");
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Stopped);
+                            return Err(error);
+                        }
                     }
                     // A healthy long-lived session or a server-directed
                     // reconnect re-dials immediately so resumes don't miss
@@ -230,6 +239,21 @@ impl GatewayClient {
             let hello = read.next().await.ok_or_else(|| {
                 crate::error::DiscordError::gateway("gateway closed before Hello")
             })??;
+            // Discord can reject a connection before HELLO (for example 4012
+            // for an invalid API version). The compression decoder ignores
+            // close frames, so classify them here; otherwise a terminal code
+            // would surface as a generic EOF and be retried forever.
+            if let WsMessage::Close(frame) = hello {
+                #[cfg(feature = "sharding")]
+                self.publish_error(terminal_close_error(frame.clone()));
+                warn!("Gateway closed before Hello: {frame:?}");
+                return match close_frame_action(frame) {
+                    action @ ReconnectAction::Fatal(_) => Ok(action),
+                    _ => Err(crate::error::DiscordError::gateway(
+                        "gateway closed before Hello",
+                    )),
+                };
+            }
             match decode_gateway_message(hello, &mut compression_decoder) {
                 Ok(Some(text)) => break text,
                 Ok(None) => continue,
@@ -292,7 +316,7 @@ impl GatewayClient {
         let ack_received = self.heartbeat_ack_received.clone();
         ack_received.store(true, Ordering::Relaxed);
 
-        let heartbeat_handle = tokio::spawn(async move {
+        let _heartbeat_task = AbortOnDrop::new(tokio::spawn(async move {
             sleep(initial_heartbeat_delay(
                 heartbeat_interval_ms,
                 rand_jitter(),
@@ -318,17 +342,17 @@ impl GatewayClient {
 
                 sleep(Duration::from_millis(heartbeat_interval_ms)).await;
             }
-        });
+        }));
 
         // Main read loop. The websocket sink lives in a worker so rate-limit
         // sleeps never block inbound frames or heartbeat ACK processing.
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
         let (outbound_error_tx, mut outbound_error_rx) = mpsc::unbounded_channel();
-        let mut outbound_handle = tokio::spawn(async move {
+        let mut outbound_task = AbortOnDrop::new(tokio::spawn(async move {
             if let Err(error) = run_gateway_outbound_worker(write, outbound_rx).await {
                 let _ = outbound_error_tx.send(error.to_string());
             }
-        });
+        }));
 
         let action = loop {
             tokio::select! {
@@ -338,12 +362,7 @@ impl GatewayClient {
                             #[cfg(feature = "sharding")]
                             self.publish_error(terminal_close_error(frame.clone()));
                             warn!("Gateway closed: {frame:?}");
-                            if is_terminal_close_frame(frame.as_ref()) {
-                                return Err(crate::error::DiscordError::gateway(
-                                    terminal_close_error(frame),
-                                ));
-                            }
-                            break ReconnectAction::Resume;
+                            break close_frame_action(frame);
                         }
                         Some(Ok(message)) => {
                             match decode_gateway_message(message, &mut compression_decoder) {
@@ -491,18 +510,22 @@ impl GatewayClient {
             }
         };
 
-        heartbeat_handle.abort();
+        // The heartbeat task is aborted when `_heartbeat_task` drops at the
+        // end of this function. Only a supervisor shutdown waits for the
+        // outbound worker, so the close frame it queued is flushed. The guard
+        // stays armed during the wait: if this future is cancelled or the
+        // flush times out, dropping the guard still aborts the worker
+        // (aborting a task that already finished is a no-op).
         if matches!(action, ReconnectAction::Shutdown) {
             drop(outbound_tx);
-            if timeout(Duration::from_secs(1), &mut outbound_handle)
-                .await
-                .is_err()
-            {
-                warn!("Gateway outbound worker did not stop after shutdown close");
-                outbound_handle.abort();
+            if let Some(outbound_handle) = outbound_task.handle_mut() {
+                if timeout(Duration::from_secs(1), outbound_handle)
+                    .await
+                    .is_err()
+                {
+                    warn!("Gateway outbound worker did not stop after shutdown close");
+                }
             }
-        } else {
-            outbound_handle.abort();
         }
         Ok(action)
     }
@@ -512,6 +535,55 @@ enum ReconnectAction {
     Resume,
     Reconnect,
     Shutdown,
+    /// The gateway rejected the connection in a way reconnecting cannot fix.
+    Fatal(crate::error::DiscordError),
+}
+
+/// Aborts a spawned per-connection task when dropped.
+///
+/// `connect_and_run` leaves through many paths — fatal closes, `?` on a
+/// failed outbound send, normal reconnects — and every one must stop the
+/// heartbeat and outbound tasks of the connection being abandoned.
+/// Tying the abort to scope exit makes that unconditional instead of
+/// relying on each path to remember it.
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortOnDrop {
+    fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self(Some(handle))
+    }
+
+    /// Borrows the handle so the caller can await it while the guard stays
+    /// armed. Never hand the handle out by value: a bare `JoinHandle`
+    /// dropped by a cancelled await detaches the task instead of stopping it.
+    fn handle_mut(&mut self) -> Option<&mut tokio::task::JoinHandle<()>> {
+        self.0.as_mut()
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Maps a gateway close frame to the next connection step, following
+/// Discord's close-code table: terminal codes stop the shard, 4007 (invalid
+/// sequence) and 4009 (session timed out) require a fresh IDENTIFY because a
+/// RESUME is guaranteed to fail, and everything else resumes.
+fn close_frame_action(frame: Option<CloseFrame>) -> ReconnectAction {
+    let code = frame.as_ref().map(|frame| u16::from(frame.code));
+    if is_terminal_close_frame(frame.as_ref()) {
+        ReconnectAction::Fatal(crate::error::DiscordError::gateway(terminal_close_error(
+            frame,
+        )))
+    } else if matches!(code, Some(4007 | 4009)) {
+        ReconnectAction::Reconnect
+    } else {
+        ReconnectAction::Resume
+    }
 }
 
 async fn recv_control_command(
@@ -744,11 +816,11 @@ mod tests {
         PRESENCE_UPDATE_LIMIT, PRESENCE_UPDATE_WINDOW,
     };
     use super::{
-        identify_payload, initial_heartbeat_delay, is_terminal_close_code, is_terminal_close_frame,
-        rand_jitter, recv_control_command, request_channel_info_payload,
+        close_frame_action, identify_payload, initial_heartbeat_delay, is_terminal_close_code,
+        is_terminal_close_frame, rand_jitter, recv_control_command, request_channel_info_payload,
         request_guild_members_payload, resume_payload, terminal_close_error,
-        update_presence_payload, voice_state_update_payload, EventCallback, GatewayClient,
-        GatewayCommand, ReconnectAction, GATEWAY_COMMAND_QUEUE_CAPACITY,
+        update_presence_payload, voice_state_update_payload, AbortOnDrop, EventCallback,
+        GatewayClient, GatewayCommand, ReconnectAction, GATEWAY_COMMAND_QUEUE_CAPACITY,
     };
     use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
     #[cfg(feature = "sharding")]
@@ -1728,6 +1800,147 @@ mod tests {
             client.sequence.load(std::sync::atomic::Ordering::Relaxed),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_terminal_close_code_instead_of_reconnecting() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.send(WsMessage::Text(
+                serde_json::json!({ "op": 10, "d": { "heartbeat_interval": 60_000 } })
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            let _identify = ws.next().await;
+            ws.send(WsMessage::Close(Some(CloseFrame {
+                code: CloseCode::from(4004),
+                reason: "Authentication failed.".into(),
+            })))
+            .await
+            .unwrap();
+            // A reconnecting client would dial again; give it the chance so
+            // the assertion below can catch a regression.
+            tokio::time::timeout(Duration::from_millis(300), listener.accept())
+                .await
+                .is_ok()
+        });
+
+        let mut client = GatewayClient::new("bad-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")));
+        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("run must return instead of retrying a terminal close")
+            .expect_err("a terminal close code is an error");
+
+        assert!(error.to_string().contains("4004"), "{error}");
+        assert!(
+            !server.await.unwrap(),
+            "the client must not reconnect after a terminal close code"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_terminal_close_received_before_hello() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.send(WsMessage::Close(Some(CloseFrame {
+                code: CloseCode::from(4012),
+                reason: "Invalid API version.".into(),
+            })))
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_millis(300), listener.accept())
+                .await
+                .is_ok()
+        });
+
+        let mut client = GatewayClient::new("token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")));
+        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("run must return on a pre-HELLO terminal close")
+            .expect_err("4012 is not reconnectable");
+        assert!(error.to_string().contains("4012"), "{error}");
+        assert!(
+            !server.await.unwrap(),
+            "no reconnect after a terminal close"
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_guard_stops_task_when_awaiting_future_is_cancelled() {
+        // Models the shutdown flush: the caller awaits the worker through
+        // the guard and is cancelled mid-wait. The worker must be aborted,
+        // not detached.
+        struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = DropFlag(Arc::clone(&dropped));
+        let mut guard = AbortOnDrop::new(tokio::spawn(async move {
+            let _flag = flag;
+            std::future::pending::<()>().await;
+        }));
+
+        let waiter = async move {
+            if let Some(handle) = guard.handle_mut() {
+                let _ = tokio::time::timeout(Duration::from_secs(60), handle).await;
+            }
+        };
+        // Cancel the waiter before its timeout elapses.
+        let _ = tokio::time::timeout(Duration::from_millis(20), waiter).await;
+
+        for _ in 0..50 {
+            if dropped.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "the worker must be aborted when its waiter is cancelled"
+        );
+    }
+
+    #[test]
+    fn close_frame_action_follows_discord_close_code_table() {
+        let frame = |code: u16| {
+            Some(CloseFrame {
+                code: CloseCode::from(code),
+                reason: "".into(),
+            })
+        };
+        for code in [4004_u16, 4010, 4011, 4012, 4013, 4014] {
+            assert!(
+                matches!(close_frame_action(frame(code)), ReconnectAction::Fatal(_)),
+                "{code}"
+            );
+        }
+        for code in [4007_u16, 4009] {
+            assert!(
+                matches!(close_frame_action(frame(code)), ReconnectAction::Reconnect),
+                "{code} requires a fresh session"
+            );
+        }
+        for code in [1000_u16, 1001, 4000, 4001, 4002, 4003, 4005, 4008] {
+            assert!(
+                matches!(close_frame_action(frame(code)), ReconnectAction::Resume),
+                "{code}"
+            );
+        }
+        assert!(matches!(close_frame_action(None), ReconnectAction::Resume));
     }
 
     #[cfg(feature = "sharding")]

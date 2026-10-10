@@ -15,10 +15,17 @@ use super::{RateLimitRouteGates, RestClient, API_BASE, DEFAULT_USER_AGENT};
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Builds the reqwest client used when the caller does not supply one.
+///
+/// Redirects are disabled: Discord's API does not redirect, and following a
+/// redirect would break the retry policy's assumption that a connect failure
+/// means the request was never delivered (the original request may have
+/// succeeded before the redirect target failed).
 pub(super) fn default_http_client() -> Client {
     match Client::builder()
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
         .timeout(DEFAULT_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
     {
         Ok(client) => client,
@@ -64,6 +71,7 @@ pub struct RestClientBuilder {
     client: Option<Client>,
     rate_limit_callback: Option<RateLimitCallback>,
     default_allowed_mentions: Option<AllowedMentions>,
+    retry_non_idempotent: bool,
 }
 
 impl RestClientBuilder {
@@ -80,6 +88,7 @@ impl RestClientBuilder {
             client: None,
             rate_limit_callback: None,
             default_allowed_mentions: None,
+            retry_non_idempotent: false,
         }
     }
 
@@ -128,6 +137,11 @@ impl RestClientBuilder {
     /// Escape hatch: use a fully custom `reqwest::Client`. Supersedes
     /// [`Self::connect_timeout`], [`Self::request_timeout`], and
     /// [`Self::proxy`].
+    ///
+    /// The client's redirect policy is unknown to this crate, so a connect
+    /// failure no longer proves the request was never delivered; POST and
+    /// PATCH requests are then not retried after connect failures either
+    /// (see [`Self::retry_non_idempotent_requests`]).
     pub fn use_client(mut self, client: Client) -> Self {
         self.client = Some(client);
         self
@@ -150,6 +164,23 @@ impl RestClientBuilder {
         self
     }
 
+    /// Allows POST and PATCH requests to be retried after a 5xx response,
+    /// a timeout, or a failed response read (default `false`).
+    ///
+    /// Those failures are ambiguous: Discord may already have applied the
+    /// request before the response was lost, so replaying a POST can create
+    /// a second message, channel, or invite. By default the client only
+    /// replays requests that are safe to repeat — GET, HEAD, OPTIONS, PUT,
+    /// DELETE, and message creates that set both `nonce` and
+    /// `enforce_nonce: true`, which Discord deduplicates — and requests that
+    /// never reached Discord (connection failures). 429 responses are always
+    /// retried because Discord did not process them. Enable this only when a
+    /// duplicated mutation is acceptable for every request the client makes.
+    pub fn retry_non_idempotent_requests(mut self, enabled: bool) -> Self {
+        self.retry_non_idempotent = enabled;
+        self
+    }
+
     /// Builds the [`RestClient`]. Fails only on an invalid proxy URL or a
     /// reqwest client-construction error.
     pub fn build(self) -> Result<RestClient, DiscordError> {
@@ -159,6 +190,7 @@ impl RestClientBuilder {
             (None, None) => API_BASE.to_string(),
         };
 
+        let managed_transport = self.client.is_none();
         let client = match self.client {
             Some(client) => {
                 if self.connect_timeout.is_some()
@@ -173,9 +205,12 @@ impl RestClientBuilder {
                 client
             }
             None => {
+                // Redirects stay disabled for the same reason as in
+                // `default_http_client`.
                 let mut builder = Client::builder()
                     .connect_timeout(self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT))
-                    .timeout(self.request_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT));
+                    .timeout(self.request_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT))
+                    .redirect(reqwest::redirect::Policy::none());
                 if let Some(proxy_url) = &self.proxy {
                     let proxy = Proxy::all(proxy_url).map_err(|error| {
                         invalid_data_error(format!("invalid proxy url {proxy_url:?}: {error}"))
@@ -201,6 +236,8 @@ impl RestClientBuilder {
                 .unwrap_or_else(|| DEFAULT_USER_AGENT.to_string()),
             default_allowed_mentions: self.default_allowed_mentions,
             rate_limit_callback: self.rate_limit_callback,
+            retry_non_idempotent: self.retry_non_idempotent,
+            managed_transport,
         })
     }
 }

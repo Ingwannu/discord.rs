@@ -6,33 +6,80 @@ use std::time::{Duration, Instant};
 use reqwest::{header::HeaderMap, StatusCode};
 
 use super::body::{header_string, parse_body_value};
+use super::paths::RequestRoute;
 
 pub(crate) const RATE_LIMIT_BUCKET_RETENTION: Duration = Duration::from_secs(60 * 60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Upper bound for any server-provided wait.
+///
+/// Waits come from headers and bodies the client does not control (Discord,
+/// Cloudflare, or a proxy in between). The cap is far above any real Discord
+/// limit, so it never shortens a legitimate wait; it only keeps
+/// `Instant + Duration` and `Duration::from_secs_f64` from panicking on
+/// absurd values such as `inf` or `1e300`.
+pub(crate) const MAX_SERVER_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Clamps a server-provided wait in seconds into `0..=MAX_SERVER_WAIT`.
+/// Returns `None` for NaN, which carries no usable information, so callers
+/// fall through to the next source instead of guessing.
+pub(crate) fn sanitize_wait_seconds(seconds: f64) -> Option<f64> {
+    (!seconds.is_nan()).then(|| seconds.clamp(0.0, MAX_SERVER_WAIT.as_secs_f64()))
+}
+
+/// Converts a server-provided wait to a `Duration` without panicking.
+/// `Duration::from_secs_f64` panics on negative, NaN, infinite, or
+/// overflowing input, and each of those is reachable from a malformed
+/// header, so every conversion of a parsed wait goes through here.
+pub(crate) fn wait_duration_from_seconds(seconds: f64) -> Option<Duration> {
+    sanitize_wait_seconds(seconds)
+        .map(|seconds| Duration::try_from_secs_f64(seconds).unwrap_or(MAX_SERVER_WAIT))
+}
+
+fn header_seconds(headers: &HeaderMap, name: &str) -> Option<f64> {
+    header_string(headers.get(name))
+        .and_then(|value| f64::from_str(value.trim()).ok())
+        .and_then(sanitize_wait_seconds)
+}
 
 /// Extracts the retry delay in seconds for a 429 response, preferring the
 /// JSON body's fractional `retry_after`, then the `Retry-After` header
 /// (integer seconds, also present on Cloudflare-level bans with non-JSON
 /// bodies), then `x-ratelimit-reset-after`, then a one-second fallback.
+/// The result is always finite and within `0..=MAX_SERVER_WAIT`.
 pub(crate) fn retry_after_seconds(headers: &HeaderMap, body: &str) -> f64 {
     let payload = parse_body_value(body.to_string());
-    if let Some(retry_after) = payload
+    payload
         .get("retry_after")
         .and_then(serde_json::Value::as_f64)
-    {
-        return retry_after.max(0.0);
+        .and_then(sanitize_wait_seconds)
+        .or_else(|| header_seconds(headers, "retry-after"))
+        .or_else(|| header_seconds(headers, "x-ratelimit-reset-after"))
+        .unwrap_or(1.0)
+}
+
+/// Returns the key requests are blocked and serialized under.
+///
+/// Once Discord has reported a bucket hash for a route, the key is the hash
+/// combined with the route's major-parameter scope, so routes that share a
+/// real bucket wait for each other while different channels, guilds, or
+/// webhooks that merely report the same hash stay independent (Discord's
+/// bucket hash excludes major parameters). Before the bucket is known the
+/// route key itself is used.
+fn bucket_block_key(route: &RequestRoute, bucket: Option<&str>) -> String {
+    match bucket {
+        Some(bucket) => format!("{bucket}@{}", route.major_scope),
+        None => route.key.clone(),
     }
-    if let Some(retry_after) =
-        header_string(headers.get("retry-after")).and_then(|value| f64::from_str(value.trim()).ok())
-    {
-        return retry_after.max(0.0);
+}
+
+/// Records `until` for `key` unless a later deadline is already recorded.
+/// Responses for one bucket can be observed out of order by concurrent
+/// requests; a shorter, older observation must never cut a 429 wait short.
+fn extend_deadline(slot: &mut Option<Instant>, until: Instant) {
+    if slot.is_none_or(|current| current < until) {
+        *slot = Some(until);
     }
-    if let Some(reset_after) = header_string(headers.get("x-ratelimit-reset-after"))
-        .and_then(|value| f64::from_str(value.trim()).ok())
-    {
-        return reset_after.max(0.0);
-    }
-    1.0
 }
 
 /// Returns true when a 429 applies to the global limit rather than a
@@ -67,7 +114,7 @@ impl RateLimitState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub(crate) fn wait_duration(&self, route_key: &str) -> Option<Duration> {
+    pub(crate) fn wait_duration(&self, route: &RequestRoute) -> Option<Duration> {
         let now = Instant::now();
         self.maybe_cleanup(now);
         if let Some(global_until) = *Self::lock(&self.global_blocked_until) {
@@ -76,10 +123,7 @@ impl RateLimitState {
             }
         }
 
-        let route_bucket_key = Self::lock(&self.route_buckets)
-            .get(route_key)
-            .cloned()
-            .unwrap_or_else(|| route_key.to_string());
+        let route_bucket_key = self.block_key_for(route);
 
         Self::lock(&self.blocked_until)
             .get(&route_bucket_key)
@@ -95,7 +139,7 @@ impl RateLimitState {
 
     pub(crate) fn observe(
         &self,
-        route_key: &str,
+        route: &RequestRoute,
         headers: &HeaderMap,
         status: StatusCode,
         body: &str,
@@ -103,42 +147,57 @@ impl RateLimitState {
         let now = Instant::now();
         self.maybe_cleanup(now);
         if let Some(bucket_id) = header_string(headers.get("x-ratelimit-bucket")) {
-            Self::lock(&self.route_buckets).insert(route_key.to_string(), bucket_id.clone());
+            Self::lock(&self.route_buckets).insert(route.key.clone(), bucket_id.clone());
             Self::lock(&self.bucket_last_seen).insert(bucket_id, now);
         }
 
         if status == StatusCode::TOO_MANY_REQUESTS {
             let retry_after = retry_after_seconds(headers, body);
-            let blocked_until = now + Duration::from_secs_f64(retry_after);
+            let blocked_until =
+                now + wait_duration_from_seconds(retry_after).unwrap_or(MAX_SERVER_WAIT);
 
             if is_global_rate_limit(headers, body) {
-                *Self::lock(&self.global_blocked_until) = Some(blocked_until);
+                extend_deadline(&mut Self::lock(&self.global_blocked_until), blocked_until);
             } else {
-                self.block_key(route_key, headers, blocked_until);
+                self.block_key(route, headers, blocked_until);
             }
             return;
         }
 
         let remaining = header_string(headers.get("x-ratelimit-remaining"))
             .and_then(|value| value.parse::<u64>().ok());
-        let reset_after = header_string(headers.get("x-ratelimit-reset-after"))
-            .and_then(|value| f64::from_str(&value).ok())
-            .map(Duration::from_secs_f64);
+        let reset_after =
+            header_seconds(headers, "x-ratelimit-reset-after").and_then(wait_duration_from_seconds);
 
         if remaining == Some(0) {
             if let Some(reset_after) = reset_after {
-                self.block_key(route_key, headers, now + reset_after);
+                self.block_key(route, headers, now + reset_after);
             }
         }
     }
 
-    fn block_key(&self, route_key: &str, headers: &HeaderMap, blocked_until: Instant) {
-        let bucket_key = header_string(headers.get("x-ratelimit-bucket"))
-            .or_else(|| Self::lock(&self.route_buckets).get(route_key).cloned())
-            .unwrap_or_else(|| route_key.to_string());
+    /// Resolves the key a request for `route` waits and serializes on;
+    /// see [`bucket_block_key`].
+    pub(crate) fn block_key_for(&self, route: &RequestRoute) -> String {
+        let bucket = Self::lock(&self.route_buckets).get(&route.key).cloned();
+        bucket_block_key(route, bucket.as_deref())
+    }
 
-        Self::lock(&self.blocked_until).insert(bucket_key.clone(), blocked_until);
-        Self::lock(&self.bucket_last_seen).insert(bucket_key, Instant::now());
+    fn block_key(&self, route: &RequestRoute, headers: &HeaderMap, blocked_until: Instant) {
+        let bucket = header_string(headers.get("x-ratelimit-bucket"))
+            .or_else(|| Self::lock(&self.route_buckets).get(&route.key).cloned());
+        if let Some(bucket) = &bucket {
+            // Retention is tracked per Discord bucket hash so stale route →
+            // bucket mappings are dropped together with their bucket.
+            Self::lock(&self.bucket_last_seen).insert(bucket.clone(), Instant::now());
+        }
+        let block_key = bucket_block_key(route, bucket.as_deref());
+        let mut blocked = Self::lock(&self.blocked_until);
+        let mut slot = blocked.get(&block_key).copied();
+        extend_deadline(&mut slot, blocked_until);
+        if let Some(until) = slot {
+            blocked.insert(block_key, until);
+        }
     }
 
     /// Runs the retention sweep at most once per [`CLEANUP_INTERVAL`].

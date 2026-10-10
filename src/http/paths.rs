@@ -469,7 +469,39 @@ pub(crate) fn is_major_parameter_segment(segments: &[&str], index: usize) -> boo
     ) || (index >= 2 && matches!(segments.get(index - 2).copied(), Some("webhooks")))
 }
 
-pub(crate) fn rate_limit_route_key(method: &Method, path: &str) -> String {
+/// Returns true for the secret token segment of a tokenized route:
+/// `webhooks/{id}/{token}/...` (webhook and interaction follow-up routes) and
+/// `interactions/{id}/{token}/callback`.
+pub(crate) fn is_token_segment(segments: &[&str], index: usize) -> bool {
+    index == 2 && matches!(segments.first().copied(), Some("webhooks" | "interactions"))
+}
+
+/// Replaces a route token with a non-reversible digest.
+///
+/// Route keys appear in logs, [`RateLimitInfo`](super::RateLimitInfo) callbacks,
+/// and `DiscordError::RateLimit`, so the raw token must never be part of them.
+/// The token cannot simply become a fixed placeholder, though: interaction
+/// follow-ups share the application id as their "webhook id", and Discord
+/// limits them per token, so a placeholder would let one interaction's 429
+/// block every other interaction. A 64-bit SipHash digest keeps per-token
+/// identity for the lifetime of the process without revealing the token.
+/// `DefaultHasher` is only stable within one build, which is all an
+/// in-memory key needs.
+fn token_digest(token: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut hasher);
+    format!(":token-{:016x}", hasher.finish())
+}
+
+/// Returns the secret token segment of a request path relative to the API
+/// base (`/webhooks/{id}/{token}/...` or `/interactions/{id}/{token}/...`).
+///
+/// The transport knows this exact string for every request it sends, so
+/// diagnostics can be scrubbed by value instead of guessing where a token
+/// sits inside an arbitrary URL.
+pub(crate) fn route_token(path: &str) -> Option<&str> {
     let segments = path
         .split('?')
         .next()
@@ -477,19 +509,166 @@ pub(crate) fn rate_limit_route_key(method: &Method, path: &str) -> String {
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
-    let normalized = segments
+    segments
+        .get(2)
+        .copied()
+        .filter(|_| is_token_segment(&segments, 2))
+}
+
+/// Replaces every occurrence of `token` in diagnostic text with `:token`.
+///
+/// Used for transport error strings (reqwest embeds the request URL) and for
+/// API or proxy error bodies, which may echo the request URI back.
+pub(crate) fn scrub_token(text: &str, token: Option<&str>) -> String {
+    match token {
+        Some(token) if !token.is_empty() => text.replace(token, ":token"),
+        _ => text.to_string(),
+    }
+}
+
+/// Returns `path` with the route token replaced by `:token`, for messages
+/// that only need to identify the route (for example reqwest error strings,
+/// which embed the full request URL).
+///
+/// This is the fallback when the token value is not known (see
+/// [`scrub_token`] for the transport path). It accepts paths that still carry
+/// an API base path (`/api/v10/...`, or any custom base) by locating the
+/// token relative to the **last** `webhooks`/`interactions` segment that is
+/// followed by at least two more segments, so a base such as
+/// `/proxy/webhooks/` cannot shift the mask onto the wrong segment.
+pub(crate) fn redact_path_tokens(path: &str) -> String {
+    let (path_part, has_query) = match path.split_once('?') {
+        Some((path_part, _)) => (path_part, true),
+        None => (path, false),
+    };
+    let leading_slash = path_part.starts_with('/');
+    let segments = path_part
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let token_index = segments
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(index, segment)| {
+            matches!(**segment, "webhooks" | "interactions") && index + 2 < segments.len()
+        })
+        .map(|(resource_index, _)| resource_index + 2);
+    let mut redacted = segments
         .iter()
         .enumerate()
         .map(|(index, segment)| {
-            if segment.chars().all(|ch| ch.is_ascii_digit())
-                && !is_major_parameter_segment(&segments, index)
-            {
-                ":id".to_string()
+            if Some(index) == token_index {
+                ":token"
             } else {
-                (*segment).to_string()
+                segment
             }
         })
         .collect::<Vec<_>>()
         .join("/");
-    format!("{method}:{normalized}")
+    if leading_slash {
+        redacted.insert(0, '/');
+    }
+    if has_query {
+        // Query strings can carry user-supplied values; they are never
+        // needed to identify a route in diagnostics.
+        redacted.push_str("?…");
+    }
+    redacted
+}
+
+/// What a request does, for policies that depend on the operation rather
+/// than on the HTTP method alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RouteOperation {
+    /// `POST /channels/{channel.id}/messages`: the one route whose
+    /// `nonce` + `enforce_nonce` contract makes a replay safe.
+    CreateChannelMessage,
+    Other,
+}
+
+/// Rate-limit and retry identity of one REST request, derived once from the
+/// method and path.
+///
+/// Execution decisions (bucket scoping, replay safety) read these fields
+/// directly instead of re-parsing a display string. Phase 8's API drift
+/// report is meant to consume the same metadata. The route token itself is
+/// deliberately not stored; see [`route_token`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RequestRoute {
+    /// `METHOD:path` with minor ids replaced by `:id`, major parameters kept
+    /// verbatim, and route tokens replaced by a digest. Safe to log.
+    pub(crate) key: String,
+    /// Major-parameter scope (for example `channels/123`,
+    /// `webhooks/1/:token-…`) that Discord's bucket hash excludes.
+    pub(crate) major_scope: String,
+    pub(crate) operation: RouteOperation,
+}
+
+impl RequestRoute {
+    pub(crate) fn new(method: &Method, path: &str) -> Self {
+        let segments = path
+            .split('?')
+            .next()
+            .unwrap_or(path)
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        let normalized = segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                if is_token_segment(&segments, index) {
+                    token_digest(segment)
+                } else if segment.chars().all(|ch| ch.is_ascii_digit())
+                    && !is_major_parameter_segment(&segments, index)
+                {
+                    ":id".to_string()
+                } else {
+                    (*segment).to_string()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut keep = vec![false; segments.len()];
+        for index in 1..segments.len() {
+            if is_token_segment(&segments, index) {
+                // A token identifies one webhook or one interaction; scoping
+                // by it errs toward independent buckets, so an unexpected
+                // shared limit costs a retried 429 instead of blocking other
+                // tokens.
+                keep[..=index].iter_mut().for_each(|keep| *keep = true);
+            } else if is_major_parameter_segment(&segments, index) {
+                keep[index - 1] = true;
+                keep[index] = true;
+            }
+        }
+        let major_scope = normalized
+            .iter()
+            .zip(&keep)
+            .filter_map(|(segment, keep)| keep.then_some(segment.as_str()))
+            .collect::<Vec<_>>()
+            .join("/");
+
+        let operation = match (method, segments.as_slice()) {
+            (&Method::POST, ["channels", channel_id, "messages"])
+                if channel_id.chars().all(|ch| ch.is_ascii_digit()) =>
+            {
+                RouteOperation::CreateChannelMessage
+            }
+            _ => RouteOperation::Other,
+        };
+
+        Self {
+            key: format!("{method}:{}", normalized.join("/")),
+            major_scope,
+            operation,
+        }
+    }
+}
+
+/// Builds the rate-limit route key; see [`RequestRoute::key`].
+#[cfg(test)]
+pub(crate) fn rate_limit_route_key(method: &Method, path: &str) -> String {
+    RequestRoute::new(method, path).key
 }

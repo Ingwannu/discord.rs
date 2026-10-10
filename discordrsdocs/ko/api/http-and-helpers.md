@@ -5,7 +5,12 @@
 - Discord REST v10 래퍼 (`RestClient`가 기본 명칭, `DiscordHttpClient`는 호환 별칭)
 - `429 Too Many Requests` 자동 재시도
 - 2.1부터 `RestClient`는 `Clone`이며, 복제본은 rate-limit 상태와 커넥션 풀, application id를 공유합니다
-- 2.1의 전송 계층은 모든 요청에 route별 직렬화 게이트를 적용하고, `Retry-After` 헤더와 `x-ratelimit-scope`/`x-ratelimit-global` 헤더를 읽으며, 5xx 응답과 일시적 전송 오류를 백오프(0.5s/1s/2s)로 재시도합니다
+- 2.1의 전송 계층은 모든 요청에 route별 직렬화 게이트를 적용하고, `Retry-After` 헤더와 `x-ratelimit-scope`/`x-ratelimit-global` 헤더를 읽으며, 일시적 오류를 백오프(0.5s/1s/2s)로 재시도합니다
+- 3.0부터 5xx 응답·타임아웃·응답 읽기 실패는 Discord가 이미 요청을 처리했을 수 있으므로, 다시 보내도 결과가 같은 요청만 재시도합니다: GET, HEAD, OPTIONS, PUT, DELETE, 그리고 `nonce`와 `enforce_nonce: true`를 함께 지정한 `POST /channels/{id}/messages`(Discord가 중복을 걸러 주는 유일한 경로)입니다. 후자는 Discord의 중복 확인 시간이 "최근 몇 분"이라서 첫 시도 후 60초 안에서만 다시 보냅니다. 그 밖의 POST·PATCH는 메시지·채널·초대가 중복 생성될 위험 대신 오류를 돌려줍니다. 429는 항상 재시도합니다. 모든 메서드를 다시 보내려면 `RestClientBuilder::retry_non_idempotent_requests(true)`를 씁니다
+- 3.0부터 이 크레이트가 만든 클라이언트(`RestClient::new`, `RestClientBuilder::build`)는 리다이렉트를 따라가지 않습니다. 그래서 연결 실패는 요청이 나가지 않았다는 증거가 되고 모든 메서드를 재시도합니다. `use_client(...)`로 넣은 클라이언트는 리다이렉트를 따라갈 수 있으므로 연결 실패 후에도 POST·PATCH는 다시 보내지 않습니다
+- 3.0부터 `x-ratelimit-bucket` 해시를 채널·서버·웹훅·인터랙션 토큰 같은 major parameter와 묶어서 제한을 겁니다. Discord의 버킷 해시에는 major parameter가 빠져 있어서, 같은 해시를 보고하는 서로 다른 채널이 이제 서로를 막지 않습니다
+- 3.0부터 route 키에서 웹훅·인터랙션 토큰을 해시값으로 바꾸고, 전송 오류와 API·프록시 오류 본문에서 요청 토큰을 지웁니다. REST 로그, `RateLimitInfo::route`, `DiscordError::{RateLimit, Api, Http}`에 토큰이 남지 않습니다. 버킷을 알기 전에 줄 서 있던 요청은 버킷 게이트로 옮겨 가서 같은 버킷의 요청과 동시에 나가지 않습니다
+- 비정상 대기값(`inf`, `NaN`, 음수, 지나치게 큰 `Retry-After`/`x-ratelimit-reset-after`)은 panic 대신 범위로 잘라 처리합니다
 
 ## REST 클라이언트 구성 (`RestClient::builder`, 2.2.0)
 
@@ -31,7 +36,8 @@ let rest = RestClient::builder("bot-token", 0)
 ```
 
 - `use_client(reqwest::Client)`는 완전 커스텀 클라이언트를 사용하는 escape hatch로, `connect_timeout`/`request_timeout`/`proxy`보다 우선합니다.
-- `rate_limit_callback(...)`은 모든 429마다 `RateLimitInfo { route, retry_after, global }`와 함께 호출됩니다 — discord.js의 `rateLimited` 이벤트에 해당합니다.
+- `rate_limit_callback(...)`은 모든 429마다 `RateLimitInfo { route, retry_after, global }`와 함께 호출됩니다 — discord.js의 `rateLimited` 이벤트에 해당합니다. `route`에는 웹훅·인터랙션 토큰이 들어가지 않습니다.
+- `retry_non_idempotent_requests(true)`(3.0, 기본값 `false`)는 5xx·타임아웃·응답 유실 뒤에도 POST·PATCH를 다시 보내게 합니다. 이 클라이언트로 보내는 모든 요청이 중복되어도 괜찮을 때만 켭니다.
 - `default_allowed_mentions(...)`는 페이로드가 `allowed_mentions`를 직접 지정하지 않은 경우에만 발신 메시지 페이로드에 주입됩니다. 게이트웨이 쪽에는 `ClientBuilder::default_allowed_mentions(...)`가 있습니다.
 
 ## 인터랙션 응답 API (`InteractionResponder`, 2.2.0)

@@ -105,3 +105,4 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 
 - 2.1부터 IDENTIFY는 Discord의 샤드당 5초 1회 제한에 맞춰 페이싱되고, 30초 미만의 짧은 세션은 즉시 재접속하는 대신 점증 백오프로 재접속하므로 INVALID_SESSION 반복 시의 재접속 루프를 방지합니다.
 - 게이트웨이 프로토콜 실패(누락된 Hello, 디코드 오류, 종료 close code, 명령 큐 오버플로)는 `DiscordError::Model`이 아니라 `DiscordError::Gateway`로 표면화됩니다.
+- 3.0부터 재접속해도 소용없는 close code(4004 인증 실패, 4010 잘못된 샤드, 4011 샤딩 필요, 4012 잘못된 API 버전, 4013 잘못된 인텐트, 4014 허용되지 않은 인텐트)를 받으면 `GatewayClient::run`이 백오프 재접속을 반복하지 않고 `DiscordError::Gateway`를 돌려주며 샤드를 멈춥니다. 4007(잘못된 시퀀스)과 4009(세션 만료)는 Discord가 거부할 RESUME 대신 새 세션으로 접속합니다. 연결별 하트비트·송신 작업은 어느 경로로 끝나든 정리됩니다.

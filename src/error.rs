@@ -14,9 +14,18 @@ pub struct HttpError {
 
 impl HttpError {
     /// Creates a `new` value.
+    ///
+    /// reqwest's message embeds the full request URL, and webhook,
+    /// interaction-callback, and follow-up URLs carry a secret token in their
+    /// path. These messages end up in logs and in user-visible errors, so the
+    /// URL is rewritten with its token segment redacted before it is stored.
     pub fn new(err: &reqwest::Error) -> Self {
+        let mut message = err.to_string();
+        if let Some(url) = err.url() {
+            message = message.replace(url.as_str(), &redact_url(url));
+        }
         Self {
-            message: err.to_string(),
+            message,
             is_timeout: err.is_timeout(),
             is_connect: err.is_connect(),
             is_body: err.is_body() || err.is_decode(),
@@ -25,6 +34,14 @@ impl HttpError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// Replaces every occurrence of a known request secret (a webhook or
+    /// interaction token) in the stored message with `:token`.
+    pub(crate) fn scrub_secret(&mut self, secret: &str) {
+        if !secret.is_empty() {
+            self.message = self.message.replace(secret, ":token");
+        }
     }
 
     /// Returns true when the request timed out.
@@ -48,6 +65,15 @@ impl HttpError {
     pub fn is_retryable(&self) -> bool {
         self.is_timeout || self.is_connect || self.is_body
     }
+}
+
+fn redact_url(url: &url::Url) -> String {
+    let origin = url.origin().ascii_serialization();
+    let path = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    };
+    format!("{origin}{}", crate::http::redact_path_tokens(&path))
 }
 
 impl fmt::Display for HttpError {

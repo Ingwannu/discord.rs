@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::{header::HeaderMap, Client, Method, StatusCode};
 use serde::{de::DeserializeOwned, Serialize};
@@ -58,11 +58,14 @@ use paths::{
     archived_threads_query, audit_log_query, bool_query, configured_application_id,
     entitlement_query, followup_webhook_path, get_guild_query, global_commands_path,
     guild_bans_query, guild_members_query, guild_prune_query, interaction_callback_path,
-    invite_query, joined_archived_threads_query, poll_answer_voters_query, rate_limit_route_key,
-    request_uses_bot_authorization, search_guild_members_query, subscription_query,
-    thread_member_query, validate_token_path_segment,
+    invite_query, joined_archived_threads_query, poll_answer_voters_query,
+    request_uses_bot_authorization, route_token, scrub_token, search_guild_members_query,
+    subscription_query, thread_member_query, validate_token_path_segment, RequestRoute,
+    RouteOperation,
 };
 use rate_limit::RateLimitState;
+
+pub(crate) use paths::redact_path_tokens;
 #[cfg(test)]
 use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
 
@@ -94,6 +97,12 @@ pub struct RestClient {
     user_agent: String,
     default_allowed_mentions: Option<AllowedMentions>,
     rate_limit_callback: Option<RateLimitCallback>,
+    /// Opt-in to replaying POST/PATCH after an ambiguous failure; see
+    /// [`RestClientBuilder::retry_non_idempotent_requests`].
+    retry_non_idempotent: bool,
+    /// True when `client` was built by this crate with redirects disabled,
+    /// which is what makes a connect failure proof that nothing was sent.
+    managed_transport: bool,
 }
 
 /// Type alias for `DiscordHttpClient`.
@@ -138,6 +147,8 @@ impl RestClient {
             user_agent: DEFAULT_USER_AGENT.to_string(),
             default_allowed_mentions: None,
             rate_limit_callback: None,
+            retry_non_idempotent: false,
+            managed_transport: true,
         }
     }
 
@@ -2662,8 +2673,9 @@ impl RestClient {
     }
 
     /// Single transport entry point: serializes same-bucket requests behind
-    /// a per-route gate, waits out known rate-limit windows, and retries
-    /// 429s, 5xx responses, and transient transport failures.
+    /// a per-bucket gate, waits out known rate-limit windows, and retries
+    /// 429s plus — when [`ReplayPolicy`] allows it — 5xx responses and
+    /// transient transport failures.
     async fn request_bytes_with_headers_authorized(
         &self,
         authorization: RequestAuthorization<'_>,
@@ -2671,60 +2683,104 @@ impl RestClient {
         path: &str,
         body: Option<RequestBody>,
     ) -> Result<RawBytesResponse, DiscordError> {
-        let route_key = rate_limit_route_key(&method, path);
-        let route_gate = self.route_gates.gate_for(&route_key);
-        let _route_permit = route_gate.lock().await;
+        let route = RequestRoute::new(&method, path);
+        let route_key = route.key.as_str();
+        let token = route_token(path);
+        let replay =
+            ReplayPolicy::for_request(&method, &route, body.as_ref(), self.retry_non_idempotent);
+        let (mut gate_key, mut _gate_permit) = self.acquire_route_gate(&route).await;
         let mut rate_limit_retries = 0;
         let mut server_error_retries = 0;
+        // When the first attempt was sent, and the error of an earlier
+        // attempt that Discord may already have applied. Every later send is
+        // a replay of that attempt and must stay within `replay`.
+        let mut first_sent_at: Option<Instant> = None;
+        let mut possibly_applied: Option<DiscordError> = None;
 
         loop {
-            while let Some(wait_duration) = self.rate_limits.wait_duration(&route_key) {
-                debug!(
-                    "waiting for rate limit on {route_key} for {:?}",
-                    wait_duration
-                );
-                sleep_for_retry_after(wait_duration.as_secs_f64()).await;
+            // A bucket learned since the gate was taken — from this request's
+            // own response or another request's — moves serialization to the
+            // bucket's gate, so requests that queued on the route gate before
+            // the bucket was known cannot run beside requests on the bucket.
+            if self.rate_limits.block_key_for(&route) != gate_key {
+                drop(_gate_permit);
+                (gate_key, _gate_permit) = self.acquire_route_gate(&route).await;
             }
 
+            while let Some(wait_duration) = self.rate_limits.wait_duration(&route) {
+                if let Some(error) = &possibly_applied {
+                    if !replay.allows_replay(first_sent_at, wait_duration) {
+                        return Err(error.clone());
+                    }
+                }
+                debug!("waiting for rate limit on {route_key} for {wait_duration:?}");
+                sleep_for_retry_after(wait_duration.as_secs_f64()).await;
+            }
+            if let Some(error) = &possibly_applied {
+                if !replay.allows_replay(first_sent_at, Duration::ZERO) {
+                    return Err(error.clone());
+                }
+            }
+
+            first_sent_at.get_or_insert_with(Instant::now);
             let response = match self
                 .request_once_bytes(authorization, method.clone(), path, body.as_ref())
                 .await
             {
                 Ok(response) => response,
-                Err(error)
-                    if error.is_retryable_transport()
-                        && server_error_retries < MAX_SERVER_ERROR_RETRIES =>
-                {
+                Err(error) => {
+                    let error = scrub_error_token(error, token);
+                    let backoff = server_error_backoff(server_error_retries + 1);
+                    // A connection that was never established cannot have
+                    // delivered the request; a timeout or a lost response may
+                    // follow a request Discord already applied.
+                    let unsent = self.connect_failure_is_unsent(&error);
+                    let retry = error.is_retryable_transport()
+                        && server_error_retries < MAX_SERVER_ERROR_RETRIES
+                        && (unsent
+                            || replay
+                                .allows_replay(first_sent_at, Duration::from_secs_f64(backoff)));
+                    if !retry {
+                        return Err(error);
+                    }
                     server_error_retries += 1;
                     warn!(
                         "transport error on {route_key}: {error}, retrying ({server_error_retries}/{MAX_SERVER_ERROR_RETRIES})"
                     );
-                    sleep_for_retry_after(server_error_backoff(server_error_retries)).await;
+                    if !unsent {
+                        possibly_applied.get_or_insert(error);
+                    }
+                    sleep_for_retry_after(backoff).await;
                     continue;
                 }
-                Err(error) => return Err(error),
             };
             let response_text = String::from_utf8_lossy(&response.body);
-            self.rate_limits.observe(
-                &route_key,
-                &response.headers,
-                response.status,
-                &response_text,
-            );
+            self.rate_limits
+                .observe(&route, &response.headers, response.status, &response_text);
 
             if response.status == StatusCode::TOO_MANY_REQUESTS {
                 let retry_after =
                     rate_limit::retry_after_seconds(&response.headers, &response_text);
                 if let Some(callback) = &self.rate_limit_callback {
                     callback(RateLimitInfo {
-                        route: route_key.clone(),
+                        route: route_key.to_string(),
                         retry_after,
                         global: rate_limit::is_global_rate_limit(&response.headers, &response_text),
                     });
                 }
 
                 if rate_limit_retries >= MAX_RATE_LIMIT_RETRIES {
-                    return Err(discord_rate_limit_error(&route_key, &response_text));
+                    return Err(discord_rate_limit_error(route_key, &response_text));
+                }
+                // Discord did not process this attempt, but an earlier
+                // ambiguous one may have been applied; waiting out the 429
+                // must not carry the replay past what `replay` allows.
+                if let Some(error) = &possibly_applied {
+                    let wait = rate_limit::wait_duration_from_seconds(retry_after)
+                        .unwrap_or(Duration::ZERO);
+                    if !replay.allows_replay(first_sent_at, wait) {
+                        return Err(error.clone());
+                    }
                 }
 
                 rate_limit_retries += 1;
@@ -2736,24 +2792,63 @@ impl RestClient {
             }
 
             if response.status.is_server_error() {
-                if server_error_retries >= MAX_SERVER_ERROR_RETRIES {
-                    return Err(discord_api_error(response.status, &response_text));
+                let error = discord_api_error(response.status, &scrub_token(&response_text, token));
+                let backoff = server_error_backoff(server_error_retries + 1);
+                // A 5xx does not prove the request was rejected; Discord may
+                // have applied it before failing.
+                if server_error_retries >= MAX_SERVER_ERROR_RETRIES
+                    || !replay.allows_replay(first_sent_at, Duration::from_secs_f64(backoff))
+                {
+                    return Err(error);
                 }
                 server_error_retries += 1;
                 warn!(
                     "received {} for {route_key}, retrying ({server_error_retries}/{MAX_SERVER_ERROR_RETRIES})",
                     response.status
                 );
-                sleep_for_retry_after(server_error_backoff(server_error_retries)).await;
+                possibly_applied.get_or_insert(error);
+                sleep_for_retry_after(backoff).await;
                 continue;
             }
 
             if !response.status.is_success() {
-                return Err(discord_api_error(response.status, &response_text));
+                return Err(discord_api_error(
+                    response.status,
+                    &scrub_token(&response_text, token),
+                ));
             }
 
             return Ok(response);
         }
+    }
+
+    /// Locks the serialization gate for `route`'s current block key.
+    ///
+    /// The key is re-checked after the lock is acquired: if Discord reported
+    /// the route's bucket while this request was queued, the request moves to
+    /// the bucket's gate instead of running beside requests already on it.
+    async fn acquire_route_gate(
+        &self,
+        route: &RequestRoute,
+    ) -> (String, tokio::sync::OwnedMutexGuard<()>) {
+        loop {
+            let key = self.rate_limits.block_key_for(route);
+            let permit = self.route_gates.gate_for(&key).lock_owned().await;
+            if self.rate_limits.block_key_for(route) == key {
+                return (key, permit);
+            }
+        }
+    }
+
+    /// Returns true when `error` proves the request never reached Discord.
+    ///
+    /// A connect failure only proves that when the transport does not follow
+    /// redirects: with redirects, the original request may have succeeded
+    /// and only the connection to the redirect target failed. The managed
+    /// clients built by this crate disable redirects; a client supplied
+    /// through [`RestClientBuilder::use_client`] carries no such guarantee.
+    fn connect_failure_is_unsent(&self, error: &DiscordError) -> bool {
+        self.managed_transport && is_connect_failure(error)
     }
 
     async fn request_once_bytes(
@@ -2981,6 +3076,84 @@ impl RestClient {
 }
 
 /// Backoff schedule for 5xx and transport retries: 0.5s, 1s, 2s.
+/// How long Discord is assumed to deduplicate an enforced message nonce.
+///
+/// Discord documents the check as covering "the past few minutes" without a
+/// number. One minute stays well inside that wording while covering the
+/// 0.5s/1s/2s server-error backoff and ordinary rate-limit waits.
+const NONCE_DEDUP_WINDOW: Duration = Duration::from_secs(60);
+
+/// Whether a request may be sent again after an attempt that Discord may
+/// already have applied (a 5xx, a timeout, or a lost response).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayPolicy {
+    /// Repeating the request cannot produce a second effect: the HTTP
+    /// methods RFC 9110 defines as idempotent, or the caller opted in with
+    /// [`RestClientBuilder::retry_non_idempotent_requests`]. A replayed
+    /// DELETE whose first attempt succeeded surfaces Discord's 404, which is
+    /// the accepted cost of retrying it.
+    Always,
+    /// A channel message create carrying `nonce` + `enforce_nonce: true`.
+    /// Discord returns the original message for a repeated nonce, but only
+    /// within its deduplication window, so the replay is bounded by
+    /// [`NONCE_DEDUP_WINDOW`] measured from the first attempt.
+    WithinNonceWindow,
+    /// POST and PATCH in general. Discord PATCH bodies usually set absolute
+    /// values, but nothing guarantees that for every route.
+    Never,
+}
+
+impl ReplayPolicy {
+    fn for_request(
+        method: &Method,
+        route: &RequestRoute,
+        body: Option<&RequestBody>,
+        retry_non_idempotent: bool,
+    ) -> Self {
+        if retry_non_idempotent
+            || matches!(
+                *method,
+                Method::GET | Method::HEAD | Method::OPTIONS | Method::PUT | Method::DELETE
+            )
+        {
+            Self::Always
+        } else if route.operation == RouteOperation::CreateChannelMessage
+            && body.is_some_and(RequestBody::enforces_nonce)
+        {
+            Self::WithinNonceWindow
+        } else {
+            Self::Never
+        }
+    }
+
+    /// Returns true when a replay that starts after `upcoming_wait` is
+    /// still allowed.
+    fn allows_replay(self, first_sent_at: Option<Instant>, upcoming_wait: Duration) -> bool {
+        match self {
+            Self::Always => true,
+            Self::WithinNonceWindow => first_sent_at.is_none_or(|sent| {
+                sent.elapsed().saturating_add(upcoming_wait) < NONCE_DEDUP_WINDOW
+            }),
+            Self::Never => false,
+        }
+    }
+}
+
+/// Removes the route token from an error produced while sending a request.
+fn scrub_error_token(error: DiscordError, token: Option<&str>) -> DiscordError {
+    match (error, token) {
+        (DiscordError::Http(mut http_error), Some(token)) => {
+            http_error.scrub_secret(token);
+            DiscordError::Http(http_error)
+        }
+        (error, _) => error,
+    }
+}
+
+fn is_connect_failure(error: &DiscordError) -> bool {
+    matches!(error, DiscordError::Http(http_error) if http_error.is_connect())
+}
+
 fn server_error_backoff(attempt: usize) -> f64 {
     0.5 * f64::from(1u32 << attempt.saturating_sub(1).min(8) as u32)
 }
@@ -3062,6 +3235,7 @@ fn discord_rate_limit_error(route: &str, body: &str) -> DiscordError {
 }
 
 async fn sleep_for_retry_after(retry_after_seconds: f64) {
-    let duration = Duration::from_secs_f64(retry_after_seconds.max(0.0));
+    let duration = rate_limit::wait_duration_from_seconds(retry_after_seconds)
+        .unwrap_or(Duration::from_secs(1));
     tokio::time::sleep(duration).await;
 }

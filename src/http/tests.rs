@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::body::{header_string, parse_body_value};
 use super::client_config::default_http_client;
+use super::paths::RequestRoute;
 use super::paths::{
     archived_threads_query, audit_log_query, configured_application_id, current_user_guilds_query,
     execute_webhook_path, followup_webhook_path, get_guild_query, global_commands_path,
@@ -46,6 +47,10 @@ use tokio::task::JoinHandle;
 #[derive(serde::Serialize)]
 struct InvalidJsonBody {
     map: HashMap<Vec<u8>, String>,
+}
+
+fn route(method: Method, path: &str) -> RequestRoute {
+    RequestRoute::new(&method, path)
 }
 
 #[derive(Debug)]
@@ -824,9 +829,125 @@ fn rate_limit_route_key_preserves_major_parameters() {
         rate_limit_route_key(&Method::GET, "/guilds/789/members/456"),
         "GET:guilds/789/members/:id"
     );
+    let webhook_key = rate_limit_route_key(&Method::GET, "/webhooks/111/222/messages/333");
+    assert!(
+        webhook_key.starts_with("GET:webhooks/111/:token-")
+            && webhook_key.ends_with("/messages/:id"),
+        "webhook token must be digested, got {webhook_key}"
+    );
+    assert!(!webhook_key.contains("/222/"));
+}
+
+#[test]
+fn rate_limit_route_key_digests_tokens_with_stable_per_token_identity() {
+    let first = rate_limit_route_key(&Method::POST, "/webhooks/1/secret-token-a?wait=true");
+    let again = rate_limit_route_key(&Method::POST, "/webhooks/1/secret-token-a");
+    let other = rate_limit_route_key(&Method::POST, "/webhooks/1/secret-token-b");
+    assert!(
+        !first.contains("secret-token-a"),
+        "token leaked into {first}"
+    );
+    assert_eq!(first, again, "the same token must map to the same key");
+    assert_ne!(first, other, "different tokens must keep separate keys");
+
+    let callback = rate_limit_route_key(
+        &Method::POST,
+        "/interactions/42/interaction-secret/callback",
+    );
+    assert!(callback.starts_with("POST:interactions/:id/:token-"));
+    assert!(callback.ends_with("/callback"));
+    assert!(!callback.contains("interaction-secret"));
+}
+
+#[test]
+fn request_route_major_scope_combines_major_names_ids_and_tokens() {
+    let scope = |method: Method, path: &str| route(method, path).major_scope;
     assert_eq!(
-        rate_limit_route_key(&Method::GET, "/webhooks/111/222/messages/333"),
-        "GET:webhooks/111/222/messages/:id"
+        scope(Method::GET, "/channels/123/messages/456"),
+        "channels/123"
+    );
+    assert_eq!(
+        scope(Method::POST, "/applications/1/guilds/2/commands/3"),
+        "applications/1/guilds/2"
+    );
+    assert_eq!(scope(Method::GET, "/users/@me"), "");
+    let webhook = scope(Method::POST, "/webhooks/9/tok");
+    assert!(webhook.starts_with("webhooks/9/:token-"), "got {webhook}");
+    assert!(!webhook.contains("tok/") && !webhook.ends_with("/tok"));
+    let callback = scope(Method::POST, "/interactions/7/tok/callback");
+    assert!(
+        callback.starts_with("interactions/:id/:token-"),
+        "got {callback}"
+    );
+}
+
+#[test]
+fn request_route_recognizes_only_channel_message_creates() {
+    use super::paths::RouteOperation;
+
+    let op = |method: Method, path: &str| route(method, path).operation;
+    assert_eq!(
+        op(Method::POST, "/channels/123/messages"),
+        RouteOperation::CreateChannelMessage
+    );
+    assert_eq!(
+        op(Method::POST, "/channels/123/messages?x=1"),
+        RouteOperation::CreateChannelMessage
+    );
+    assert_eq!(
+        op(Method::PATCH, "/channels/123/messages"),
+        RouteOperation::Other
+    );
+    assert_eq!(
+        op(Method::POST, "/channels/123/messages/9/crosspost"),
+        RouteOperation::Other
+    );
+    assert_eq!(op(Method::POST, "/webhooks/1/tok"), RouteOperation::Other);
+    assert_eq!(
+        op(Method::POST, "/webhooks/1/tok/messages"),
+        RouteOperation::Other
+    );
+}
+
+#[test]
+fn route_token_and_scrub_token_use_the_exact_request_secret() {
+    use super::paths::{route_token, scrub_token};
+
+    assert_eq!(route_token("/webhooks/1/secret?wait=true"), Some("secret"));
+    assert_eq!(route_token("/interactions/2/itok/callback"), Some("itok"));
+    assert_eq!(route_token("/channels/3/messages"), None);
+    assert_eq!(route_token("/webhooks/1"), None);
+    assert_eq!(
+        scrub_token("Unknown route /webhooks/1/secret/messages", Some("secret")),
+        "Unknown route /webhooks/1/:token/messages"
+    );
+    assert_eq!(scrub_token("unchanged", None), "unchanged");
+}
+
+#[test]
+fn redact_path_tokens_handles_api_prefix_and_query() {
+    use super::paths::redact_path_tokens;
+
+    assert_eq!(
+        redact_path_tokens("/api/v10/webhooks/1/secret/messages/@original?thread_id=5"),
+        "/api/v10/webhooks/1/:token/messages/@original?…"
+    );
+    assert_eq!(
+        redact_path_tokens("/interactions/2/secret/callback"),
+        "/interactions/2/:token/callback"
+    );
+    assert_eq!(
+        redact_path_tokens("/channels/3/messages"),
+        "/channels/3/messages"
+    );
+    assert_eq!(
+        redact_path_tokens("/channels/3/webhooks"),
+        "/channels/3/webhooks"
+    );
+    assert_eq!(
+        redact_path_tokens("/proxy/webhooks/gateway/api/v10/webhooks/1/secret"),
+        "/proxy/webhooks/gateway/api/v10/webhooks/1/:token",
+        "a custom base containing a resource word must not shift the mask"
     );
 }
 
@@ -841,22 +962,24 @@ fn rate_limit_route_key_keeps_application_and_guild_major_ids() {
 #[test]
 fn rate_limit_state_reports_wait_duration() {
     let state = RateLimitState::default();
-    state.blocked_until.lock().unwrap().insert(
-        "GET:channels/:id".to_string(),
-        Instant::now() + Duration::from_secs(1),
-    );
+    let channel = route(Method::GET, "/channels/1");
+    state
+        .blocked_until
+        .lock()
+        .unwrap()
+        .insert(channel.key.clone(), Instant::now() + Duration::from_secs(1));
 
-    assert!(state.wait_duration("GET:channels/:id").is_some());
+    assert!(state.wait_duration(&channel).is_some());
 }
 
 #[test]
 fn rate_limit_state_keeps_major_parameters_distinct() {
     let state = RateLimitState::default();
-    let blocked_route = rate_limit_route_key(&Method::GET, "/channels/123/messages/456");
-    let other_route = rate_limit_route_key(&Method::GET, "/channels/999/messages/456");
+    let blocked_route = route(Method::GET, "/channels/123/messages/456");
+    let other_route = route(Method::GET, "/channels/999/messages/456");
 
     state.blocked_until.lock().unwrap().insert(
-        blocked_route.clone(),
+        blocked_route.key.clone(),
         Instant::now() + Duration::from_secs(1),
     );
 
@@ -1107,31 +1230,40 @@ fn new_coverage_query_helpers_build_expected_paths() {
 #[test]
 fn rate_limit_state_observe_tracks_buckets_and_global_limits() {
     let state = RateLimitState::default();
-    let route_key = "POST:channels/123/messages";
+    let messages = route(Method::POST, "/channels/123/messages");
     let mut headers = HeaderMap::new();
     headers.insert("x-ratelimit-bucket", HeaderValue::from_static("bucket-42"));
     headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
     headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("0.05"));
 
-    state.observe(route_key, &headers, StatusCode::OK, "");
-    assert!(state.route_buckets.lock().unwrap().contains_key(route_key));
-    assert!(state.wait_duration(route_key).is_some());
+    state.observe(&messages, &headers, StatusCode::OK, "");
+    assert!(state
+        .route_buckets
+        .lock()
+        .unwrap()
+        .contains_key(&messages.key));
+    assert!(state.wait_duration(&messages).is_some());
 
     let global_headers = HeaderMap::new();
     state.observe(
-        route_key,
+        &messages,
         &global_headers,
         StatusCode::TOO_MANY_REQUESTS,
         r#"{"retry_after":0.05,"global":true}"#,
     );
-    assert!(state.wait_duration("GET:anything").is_some());
+    assert!(state
+        .wait_duration(&route(Method::GET, "/anything"))
+        .is_some());
 }
 
 #[test]
-fn rate_limit_state_shares_bucket_blocks_across_routes_after_429() {
+fn rate_limit_state_scopes_shared_bucket_hash_by_major_parameter() {
+    // Discord's bucket hash excludes major parameters: routes that report
+    // the same hash share a limit only within the same channel/guild/webhook.
     let state = RateLimitState::default();
-    let route_a = rate_limit_route_key(&Method::GET, "/channels/123/messages");
-    let route_b = rate_limit_route_key(&Method::POST, "/channels/456/messages");
+    let route_a = route(Method::GET, "/channels/123/messages");
+    let route_b = route(Method::POST, "/channels/123/messages");
+    let other_channel = route(Method::POST, "/channels/456/messages");
 
     let mut bucket_headers = HeaderMap::new();
     bucket_headers.insert(
@@ -1141,6 +1273,7 @@ fn rate_limit_state_shares_bucket_blocks_across_routes_after_429() {
 
     state.observe(&route_a, &bucket_headers, StatusCode::OK, "");
     state.observe(&route_b, &bucket_headers, StatusCode::OK, "");
+    state.observe(&other_channel, &bucket_headers, StatusCode::OK, "");
     state.observe(
         &route_a,
         &HeaderMap::new(),
@@ -1149,21 +1282,96 @@ fn rate_limit_state_shares_bucket_blocks_across_routes_after_429() {
     );
 
     assert!(state.wait_duration(&route_a).is_some());
-    assert!(state.wait_duration(&route_b).is_some());
+    assert!(
+        state.wait_duration(&route_b).is_some(),
+        "same bucket and channel must share the block"
+    );
+    assert!(
+        state.wait_duration(&other_channel).is_none(),
+        "another channel reporting the same hash must stay independent"
+    );
+    assert_eq!(state.block_key_for(&route_a), state.block_key_for(&route_b));
+    assert_ne!(
+        state.block_key_for(&route_a),
+        state.block_key_for(&other_channel)
+    );
+}
+
+#[test]
+fn rate_limit_state_survives_malformed_wait_values() {
+    let route = route(Method::GET, "/channels/1/messages");
+    for value in ["inf", "-inf", "NaN", "-5", "1e300"] {
+        let state = RateLimitState::default();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert(
+            "x-ratelimit-reset-after",
+            HeaderValue::from_str(value).expect("header value"),
+        );
+        state.observe(&route, &headers, StatusCode::OK, "");
+
+        let mut limited = HeaderMap::new();
+        limited.insert(
+            "retry-after",
+            HeaderValue::from_str(value).expect("header value"),
+        );
+        state.observe(
+            &route,
+            &limited,
+            StatusCode::TOO_MANY_REQUESTS,
+            "<html>banned</html>",
+        );
+        let _ = state.wait_duration(&route);
+    }
+}
+
+#[test]
+fn wait_conversion_clamps_instead_of_panicking() {
+    use super::rate_limit::{retry_after_seconds, wait_duration_from_seconds, MAX_SERVER_WAIT};
+
+    assert_eq!(wait_duration_from_seconds(f64::NAN), None);
+    assert_eq!(wait_duration_from_seconds(-1.0), Some(Duration::ZERO));
+    assert_eq!(
+        wait_duration_from_seconds(f64::INFINITY),
+        Some(MAX_SERVER_WAIT)
+    );
+    assert_eq!(wait_duration_from_seconds(1e300), Some(MAX_SERVER_WAIT));
+    assert_eq!(
+        wait_duration_from_seconds(1.5),
+        Some(Duration::from_millis(1500))
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after", HeaderValue::from_static("NaN"));
+    headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("2.5"));
+    assert_eq!(
+        retry_after_seconds(&headers, "<html></html>"),
+        2.5,
+        "a NaN source must fall through to the next one"
+    );
+    let mut infinite = HeaderMap::new();
+    infinite.insert("retry-after", HeaderValue::from_static("inf"));
+    assert_eq!(
+        retry_after_seconds(&infinite, ""),
+        MAX_SERVER_WAIT.as_secs_f64()
+    );
 }
 
 #[test]
 fn rate_limit_state_ignores_expired_route_and_global_blocks() {
     let state = RateLimitState::default();
-    state
-        .blocked_until
-        .lock()
-        .unwrap()
-        .insert("GET:channels/123/messages".to_string(), Instant::now());
+    state.blocked_until.lock().unwrap().insert(
+        route(Method::GET, "/channels/123/messages").key,
+        Instant::now(),
+    );
     *state.global_blocked_until.lock().unwrap() = Some(Instant::now());
 
-    assert!(state.wait_duration("GET:channels/123/messages").is_none());
-    assert!(state.wait_duration("GET:anything").is_none());
+    assert!(state
+        .wait_duration(&route(Method::GET, "/channels/123/messages"))
+        .is_none());
+    assert!(state
+        .wait_duration(&route(Method::GET, "/anything"))
+        .is_none());
     assert!(state.blocked_until.lock().unwrap().is_empty());
     assert!(state.global_blocked_until.lock().unwrap().is_none());
 }
@@ -1171,16 +1379,18 @@ fn rate_limit_state_ignores_expired_route_and_global_blocks() {
 #[test]
 fn rate_limit_state_cleans_stale_bucket_metadata() {
     let state = RateLimitState::default();
-    state.route_buckets.lock().unwrap().insert(
-        "GET:channels/1/messages".to_string(),
-        "bucket-old".to_string(),
-    );
+    let messages = route(Method::GET, "/channels/1/messages");
+    state
+        .route_buckets
+        .lock()
+        .unwrap()
+        .insert(messages.key.clone(), "bucket-old".to_string());
     state.bucket_last_seen.lock().unwrap().insert(
         "bucket-old".to_string(),
         Instant::now() - super::RATE_LIMIT_BUCKET_RETENTION - Duration::from_secs(1),
     );
 
-    assert!(state.wait_duration("GET:channels/1/messages").is_none());
+    assert!(state.wait_duration(&messages).is_none());
     assert!(state.route_buckets.lock().unwrap().is_empty());
     assert!(state.bucket_last_seen.lock().unwrap().is_empty());
 }
@@ -5118,9 +5328,10 @@ fn rate_limit_state_does_not_block_without_reset_after_header() {
     let mut headers = HeaderMap::new();
     headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
 
-    state.observe("GET:channels/123/messages", &headers, StatusCode::OK, "");
+    let messages = route(Method::GET, "/channels/123/messages");
+    state.observe(&messages, &headers, StatusCode::OK, "");
 
-    assert!(state.wait_duration("GET:channels/123/messages").is_none());
+    assert!(state.wait_duration(&messages).is_none());
 }
 
 #[tokio::test]
@@ -6690,7 +6901,10 @@ async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
         .unwrap_err()
     {
         DiscordError::RateLimit { route, retry_after } => {
-            assert_eq!(route, "POST:webhooks/9/token");
+            assert!(
+                route.starts_with("POST:webhooks/9/:token-") && !route.ends_with("/token"),
+                "rate-limit errors must not expose the webhook token: {route}"
+            );
             assert_eq!(retry_after, 0.0);
         }
         other => panic!("unexpected rate limit error: {other:?}"),
@@ -6807,6 +7021,391 @@ async fn server_errors_are_retried_and_then_succeed() {
     task.await.expect("server task");
 
     assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn server_errors_are_not_replayed_for_post_requests() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::text(
+        StatusCode::BAD_GATEWAY,
+        "bad gateway",
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("no-replay-token", 123, base_url);
+    let error = client
+        .create_message(
+            "9",
+            &CreateMessage {
+                content: Some("hello".to_string()),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect_err("a 502 on POST must surface instead of being replayed");
+    assert!(
+        matches!(error, DiscordError::Api { status: 502, .. }),
+        "{error:?}"
+    );
+    task.await.expect("server task");
+    assert_eq!(
+        captured.lock().expect("captured").len(),
+        1,
+        "a POST must not be sent twice after an ambiguous 5xx"
+    );
+}
+
+#[tokio::test]
+async fn server_errors_are_replayed_for_nonce_enforced_message_creates() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::BAD_GATEWAY, "bad gateway"),
+        PlannedResponse::json(StatusCode::OK, message_payload("1", "9", "hello")),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("nonce-token", 123, base_url);
+    client
+        .create_message(
+            "9",
+            &CreateMessage {
+                content: Some("hello".to_string()),
+                nonce: Some("dedupe-1".to_string()),
+                enforce_nonce: true,
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("Discord deduplicates enforced nonces, so the replay is safe");
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn server_errors_are_replayed_for_post_when_explicitly_enabled() {
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+        PlannedResponse::json(StatusCode::OK, message_payload("1", "9", "hello")),
+    ])
+    .await;
+
+    let client = RestClient::builder("opt-in-token", 123)
+        .api_base(base_url)
+        .retry_non_idempotent_requests(true)
+        .build()
+        .expect("client");
+    client
+        .create_message(
+            "9",
+            &CreateMessage {
+                content: Some("hello".to_string()),
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect("opted-in POST retry");
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[test]
+fn replay_policy_follows_method_operation_and_nonce_enforcement() {
+    use super::body::RequestBody;
+    use super::ReplayPolicy;
+
+    let policy = |method: Method, path: &str, body: Option<&RequestBody>, opt_in: bool| {
+        ReplayPolicy::for_request(&method, &route(method.clone(), path), body, opt_in)
+    };
+    for method in [
+        Method::GET,
+        Method::HEAD,
+        Method::OPTIONS,
+        Method::PUT,
+        Method::DELETE,
+    ] {
+        assert_eq!(
+            policy(method.clone(), "/channels/1", None, false),
+            ReplayPolicy::Always,
+            "{method} is idempotent"
+        );
+    }
+    let plain = RequestBody::Json(json!({ "content": "hi" }));
+    let enforced = RequestBody::Json(json!({ "nonce": "n", "enforce_nonce": true }));
+    let message_create = "/channels/1/messages";
+
+    assert_eq!(
+        policy(Method::POST, message_create, Some(&plain), false),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        policy(Method::POST, message_create, Some(&enforced), false),
+        ReplayPolicy::WithinNonceWindow
+    );
+    // Only the channel message create route implements nonce deduplication.
+    assert_eq!(
+        policy(Method::POST, "/webhooks/1/tok", Some(&enforced), false),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        policy(Method::PATCH, message_create, Some(&enforced), false),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        policy(
+            Method::POST,
+            "/channels/1/messages/2/threads",
+            Some(&enforced),
+            false
+        ),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        policy(Method::POST, message_create, Some(&plain), true),
+        ReplayPolicy::Always,
+        "the explicit opt-in replays every method"
+    );
+
+    let unenforced = RequestBody::Json(json!({ "nonce": "n", "enforce_nonce": false }));
+    let null_nonce = RequestBody::Json(json!({ "nonce": null, "enforce_nonce": true }));
+    let multipart = RequestBody::Multipart {
+        payload_json: json!({ "nonce": 5, "enforce_nonce": true }),
+        files: Vec::new(),
+    };
+    assert!(!unenforced.enforces_nonce());
+    assert!(!null_nonce.enforces_nonce());
+    assert!(multipart.enforces_nonce());
+}
+
+#[test]
+fn nonce_replays_are_bounded_by_the_deduplication_window() {
+    use super::{ReplayPolicy, NONCE_DEDUP_WINDOW};
+
+    let now = Instant::now();
+    let policy = ReplayPolicy::WithinNonceWindow;
+    assert!(policy.allows_replay(None, Duration::ZERO));
+    assert!(policy.allows_replay(Some(now), Duration::from_secs(2)));
+    assert!(
+        !policy.allows_replay(Some(now), NONCE_DEDUP_WINDOW),
+        "a wait that reaches the window must stop the replay"
+    );
+    if let Some(long_ago) = now.checked_sub(NONCE_DEDUP_WINDOW + Duration::from_secs(1)) {
+        assert!(!policy.allows_replay(Some(long_ago), Duration::ZERO));
+    }
+    assert!(ReplayPolicy::Always.allows_replay(Some(now), Duration::from_secs(86_400)));
+    assert!(!ReplayPolicy::Never.allows_replay(None, Duration::ZERO));
+}
+
+#[tokio::test]
+async fn nonce_bearing_webhook_posts_are_not_replayed() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::text(
+        StatusCode::BAD_GATEWAY,
+        "bad gateway",
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("webhook-nonce", 123, base_url);
+    client
+        .request(
+            Method::POST,
+            "/webhooks/9/webhook-secret",
+            Some(&json!({ "content": "hi", "nonce": "n", "enforce_nonce": true })),
+        )
+        .await
+        .expect_err("webhooks do not deduplicate nonces, so the 502 must surface");
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 1);
+}
+
+#[tokio::test]
+async fn long_rate_limit_after_ambiguous_attempt_stops_nonce_replay() {
+    // 502 (maybe applied) → nonce replay after backoff → 429 asking for a
+    // wait longer than Discord's dedup window → the original failure is
+    // returned instead of sleeping and replaying outside the window.
+    let (base_url, captured, task) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::BAD_GATEWAY, "bad gateway"),
+        PlannedResponse::json(
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({ "retry_after": 120.0, "global": false }),
+        ),
+    ])
+    .await;
+
+    let client = RestClient::new_with_base_url("nonce-window", 123, base_url);
+    let started = Instant::now();
+    let error = client
+        .create_message(
+            "9",
+            &CreateMessage {
+                content: Some("hello".to_string()),
+                nonce: Some("dedupe-2".to_string()),
+                enforce_nonce: true,
+                ..CreateMessage::default()
+            },
+        )
+        .await
+        .expect_err("the replay window was exceeded");
+    assert!(
+        matches!(error, DiscordError::Api { status: 502, .. }),
+        "{error:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "must not sleep out the 429"
+    );
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 2);
+}
+
+#[tokio::test]
+async fn managed_client_does_not_follow_redirects() {
+    let mut redirect = PlannedResponse::empty(StatusCode::SEE_OTHER);
+    redirect
+        .headers
+        .push(("Location".to_string(), "/elsewhere".to_string()));
+    let (base_url, captured, task) = spawn_test_server(vec![redirect]).await;
+
+    let client = RestClient::builder("redirect-token", 123)
+        .api_base(base_url)
+        .build()
+        .expect("client");
+    let error = client
+        .request(
+            Method::POST,
+            "/channels/9/messages",
+            Some(&json!({ "content": "x" })),
+        )
+        .await
+        .expect_err("a redirect is surfaced, not followed");
+    assert!(
+        matches!(error, DiscordError::Api { status: 303, .. }),
+        "{error:?}"
+    );
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 1);
+}
+
+#[tokio::test]
+async fn custom_clients_do_not_retry_post_connect_failures() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    drop(listener);
+
+    // The custom client's redirect policy is unknown, so a connect failure
+    // does not prove a POST was never delivered.
+    let client = RestClient::builder("custom-client", 123)
+        .api_base(format!("http://{address}"))
+        .use_client(reqwest::Client::new())
+        .build()
+        .expect("client");
+    let started = Instant::now();
+    let error = client
+        .request(
+            Method::POST,
+            "/channels/9/messages",
+            Some(&json!({ "content": "x" })),
+        )
+        .await
+        .expect_err("connection refused");
+    assert!(error.is_retryable_transport(), "{error:?}");
+    assert!(
+        started.elapsed() < Duration::from_millis(450),
+        "no 0.5s backoff retry may happen, took {:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn api_error_text_echoing_the_route_token_is_scrubbed() {
+    let (base_url, _captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::NOT_FOUND,
+        json!({ "code": 10015, "message": "Unknown Webhook /webhooks/9/echoed-secret" }),
+    )])
+    .await;
+
+    let client = RestClient::new_with_base_url("echo", 123, base_url);
+    let error = client
+        .execute_webhook(
+            Snowflake::from("9"),
+            "echoed-secret",
+            &json!({ "content": "x" }),
+        )
+        .await
+        .expect_err("404");
+    let text = format!("{error} {error:?}");
+    assert!(!text.contains("echoed-secret"), "token leaked: {text}");
+    assert!(text.contains("/webhooks/9/:token"), "{text}");
+    task.await.expect("server task");
+}
+
+#[tokio::test]
+async fn queued_requests_move_to_the_learned_bucket_gate() {
+    // A holds the route gate R while the bucket is unknown and B queues on
+    // R. A's response teaches bucket K; C then takes K's gate directly. When
+    // A releases R, B must notice the key changed and wait for K instead of
+    // running beside C.
+    let client = RestClient::new("gate-race", 123);
+    let messages = route(Method::POST, "/channels/1/messages");
+    let (route_gate_key, a_permit) = client.acquire_route_gate(&messages).await;
+    assert_eq!(route_gate_key, messages.key);
+
+    let b_client = client.clone();
+    let b_route = messages.clone();
+    let (b_done_tx, mut b_done_rx) = tokio::sync::oneshot::channel();
+    let b = tokio::spawn(async move {
+        let (key, permit) = b_client.acquire_route_gate(&b_route).await;
+        let _ = b_done_tx.send(key);
+        drop(permit);
+    });
+    tokio::task::yield_now().await;
+
+    let mut bucket_headers = HeaderMap::new();
+    bucket_headers.insert("x-ratelimit-bucket", HeaderValue::from_static("learned"));
+    client
+        .rate_limits
+        .observe(&messages, &bucket_headers, StatusCode::OK, "");
+    let (bucket_gate_key, c_permit) = client.acquire_route_gate(&messages).await;
+    assert_eq!(bucket_gate_key, "learned@channels/1");
+
+    drop(a_permit);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        b_done_rx.try_recv().is_err(),
+        "B must wait for the bucket gate held by C"
+    );
+
+    drop(c_permit);
+    let b_key = tokio::time::timeout(Duration::from_secs(2), b_done_rx)
+        .await
+        .expect("B acquires once C releases")
+        .expect("B reports its key");
+    assert_eq!(b_key, "learned@channels/1");
+    b.await.expect("B task");
+}
+
+#[tokio::test]
+async fn transport_error_messages_redact_route_tokens() {
+    // Bind and drop a listener to obtain a port that refuses connections,
+    // producing a reqwest connect error whose message embeds the URL.
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    drop(listener);
+
+    let error = default_http_client()
+        .post(format!(
+            "http://{address}/api/v10/webhooks/1/super-secret-token?wait=true"
+        ))
+        .send()
+        .await
+        .expect_err("connection must be refused");
+    let http_error = crate::error::HttpError::new(&error);
+    assert!(
+        !http_error.message().contains("super-secret-token"),
+        "token leaked: {}",
+        http_error.message()
+    );
+    assert!(
+        http_error.message().contains("/webhooks/1/:token"),
+        "{}",
+        http_error.message()
+    );
 }
 
 #[tokio::test]
