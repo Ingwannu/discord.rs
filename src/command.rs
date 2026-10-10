@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -9,11 +9,60 @@ use crate::model::{
     PermissionsBitField,
 };
 
+/// Discord's documented application-command limits, used by the builders'
+/// `validate()` / `try_build()`.
+///
+/// Source: <https://docs.discord.com/developers/interactions/application-commands>
+/// (command, option, and choice structures, "Application Command Naming",
+/// and the per-command character total), checked against discord-api-docs
+/// commit `3714862` (2026-10-09). Local validation is a fail-fast aid, not a
+/// gate: when Discord raises a limit, change it here and nowhere else.
+pub mod limits {
+    /// Chat-input command, subcommand, group, and option names: 1-32
+    /// characters. Context-menu names share the length limit.
+    pub const MAX_NAME_LENGTH: usize = 32;
+    /// Chat-input and entry-point command descriptions and option
+    /// descriptions: 1-100 characters.
+    pub const MAX_DESCRIPTION_LENGTH: usize = 100;
+    /// Options, subcommands, or subcommand groups per level: up to 25.
+    pub const MAX_OPTIONS: usize = 25;
+    /// Choices per `STRING` / `INTEGER` / `NUMBER` option: up to 25.
+    pub const MAX_CHOICES: usize = 25;
+    /// Choice names: 1-100 characters.
+    pub const MAX_CHOICE_NAME_LENGTH: usize = 100;
+    /// String choice values: up to 100 characters.
+    pub const MAX_CHOICE_STRING_VALUE_LENGTH: usize = 100;
+    /// Upper bound of `min_length` (0-6000) and `max_length` (1-6000) on
+    /// `STRING` options.
+    pub const MAX_STRING_OPTION_LENGTH: u16 = 6000;
+    /// Combined characters of a chat-input command's names, descriptions,
+    /// and choice values across the whole option tree. For a localized field
+    /// only its longest variant (default included) counts. The docs said
+    /// 4000 when the 3.0 roadmap was written; they now say 8000.
+    pub const MAX_COMMAND_TOTAL_LENGTH: usize = 8000;
+    /// `file_types` entries on File Upload components and `ATTACHMENT`
+    /// options: up to 10.
+    pub const MAX_FILE_TYPES: usize = 10;
+    /// Locale keys accepted in `name_localizations` and
+    /// `description_localizations`.
+    ///
+    /// Source: <https://docs.discord.com/developers/reference#locales>
+    /// (discord-api-docs `3714862`). Discord adds locales rarely; until this
+    /// table is updated a new locale fails local validation (`build()` is
+    /// unaffected).
+    pub const LOCALES: [&str; 32] = [
+        "id", "da", "de", "en-GB", "en-US", "es-ES", "es-419", "fr", "hr", "it", "lt", "hu", "nl",
+        "no", "pl", "pt-BR", "ro", "fi", "sv-SE", "vi", "tr", "cs", "el", "bg", "ru", "uk", "hi",
+        "th", "zh-CN", "ja", "zh-TW", "ko",
+    ];
+}
+
 /// Crate-internal helpers shared by the builder validation methods.
 ///
 /// Discord counts limits in Unicode codepoints, so all length checks use
 /// `chars().count()` rather than byte length.
 pub(crate) mod validation {
+    use super::limits;
     use crate::error::DiscordError;
 
     /// Number of Unicode codepoints in `value` (Discord's counting unit).
@@ -77,14 +126,8 @@ pub(crate) mod validation {
         Ok(())
     }
 
-    /// Ensures a chat-input command/option name is valid: 1-32 characters,
-    /// no spaces, no uppercase ASCII.
-    /// Discord's cap on `file_types` entries for File Upload components and
-    /// `ATTACHMENT` options.
-    pub(crate) const MAX_FILE_TYPES: usize = 10;
-
-    /// Validates a `file_types` filter: at most [`MAX_FILE_TYPES`] entries,
-    /// each a dot-prefixed extension (`.pdf`) or a preset group name
+    /// Validates a `file_types` filter: at most [`limits::MAX_FILE_TYPES`]
+    /// entries, each a dot-prefixed extension (`.pdf`) or a preset group name
     /// (`image`). Group names are not checked against a fixed list because
     /// Discord says the presets may change; only the shape is enforced, so
     /// local validation never rejects a value Discord would accept.
@@ -92,7 +135,7 @@ pub(crate) mod validation {
         field: &str,
         file_types: &[String],
     ) -> Result<(), DiscordError> {
-        ensure_max_count(field, file_types.len(), MAX_FILE_TYPES)?;
+        ensure_max_count(field, file_types.len(), limits::MAX_FILE_TYPES)?;
         for file_type in file_types {
             let valid = match file_type.strip_prefix('.') {
                 Some(extension) => !extension.is_empty() && !extension.contains(['.', '/', ' ']),
@@ -113,20 +156,388 @@ pub(crate) mod validation {
         Ok(())
     }
 
+    // Decision log: chat-input name check without a Unicode crate.
+    // - Purpose: catch names Discord rejects with
+    //   `^[-_ʼ\p{L}\p{N}\p{sc=Deva}\p{sc=Thai}]{1,32}$` plus "use the
+    //   lowercase variant of any letter that has one".
+    // - Constraint: std has no General_Category or Script lookup, and local
+    //   validation must never be stricter than Discord.
+    // - Alternatives: the `regex` crate (exact match, but a large new
+    //   dependency for one check); a general-category crate plus hand-written
+    //   script ranges; a std-only superset check.
+    // - Chosen: std-only. Allowed = '-', '_', `char::is_alphanumeric`
+    //   (Alphabetic ∪ Numeric, a superset of \p{L} ∪ \p{N} that also covers
+    //   U+02BC), plus the whole Devanagari and Thai blocks (a superset of
+    //   sc=Deva / sc=Thai). Lowercase = `to_lowercase()` maps the char to
+    //   itself, which is the docs' "has a lowercase variant" rule.
+    // - Why: every name the regex accepts passes, and the realistic mistakes
+    //   (spaces, punctuation, emoji, ASCII apostrophe, uppercase in any
+    //   script) are still caught, with no dependency or MSRV cost.
+    // - Trade-offs: a few characters Discord rejects pass locally (combining
+    //   marks that are Alphabetic but not \p{L}, danda U+0964/U+0965), which
+    //   Discord then reports. ASCII `'` is rejected on purpose: discord-api-docs
+    //   PR #8567 (2026-08-27) states Discord's code accepts only U+02BC; the
+    //   roadmap's regex predates that fix. Rust's Unicode tables may differ
+    //   slightly from Discord's for brand-new characters.
+
+    /// Devanagari (U+0900-U+097F, Vedic Extensions, Devanagari Extended and
+    /// Extended-A) and Thai (U+0E00-U+0E7F) blocks, covering Discord's
+    /// `\p{sc=Deva}` and `\p{sc=Thai}` including their combining marks.
+    fn is_devanagari_or_thai(ch: char) -> bool {
+        matches!(
+            ch,
+            '\u{0900}'..='\u{097F}'
+                | '\u{0E00}'..='\u{0E7F}'
+                | '\u{1CD0}'..='\u{1CFF}'
+                | '\u{A8E0}'..='\u{A8FF}'
+                | '\u{11B00}'..='\u{11B5F}'
+        )
+    }
+
+    fn is_allowed_name_char(ch: char) -> bool {
+        ch == '-' || ch == '_' || ch.is_alphanumeric() || is_devanagari_or_thai(ch)
+    }
+
+    fn has_lowercase_variant(ch: char) -> bool {
+        !ch.to_lowercase().eq(std::iter::once(ch))
+    }
+
+    /// Ensures a chat-input command, subcommand, or option name (or one of
+    /// its localizations) is valid: 1-32 characters from Discord's allowed
+    /// set, using lowercase variants where a letter has one.
     pub(crate) fn ensure_command_name(field: &str, value: &str) -> Result<(), DiscordError> {
-        ensure_len(field, value, 1, 32)?;
+        ensure_len(field, value, 1, limits::MAX_NAME_LENGTH)?;
         if value.contains(' ') {
             return Err(DiscordError::model(format!(
                 "{field} must not contain spaces, got \"{value}\""
             )));
         }
-        if value.chars().any(|c| c.is_ascii_uppercase()) {
+        if let Some(ch) = value.chars().find(|ch| !is_allowed_name_char(*ch)) {
+            let hint = if ch == '\'' {
+                "; use \u{02BC} (U+02BC MODIFIER LETTER APOSTROPHE) instead of '"
+            } else {
+                ""
+            };
+            return Err(DiscordError::model(format!(
+                "{field} contains {ch:?}, but only letters, numbers, '-', and '_' \
+                 are allowed, got \"{value}\"{hint}"
+            )));
+        }
+        if value.chars().any(has_lowercase_variant) {
             return Err(DiscordError::model(format!(
                 "{field} must be lowercase, got \"{value}\""
             )));
         }
         Ok(())
     }
+
+    /// Ensures `locale` is one of Discord's locale keys. Compared
+    /// ASCII-case-insensitively because it is not documented whether Discord
+    /// normalizes case, and local validation must not be stricter.
+    pub(crate) fn ensure_locale(field: &str, locale: &str) -> Result<(), DiscordError> {
+        if limits::LOCALES
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(locale))
+        {
+            Ok(())
+        } else {
+            Err(DiscordError::model(format!(
+                "{field} uses unsupported locale \"{locale}\"; see \
+                 https://docs.discord.com/developers/reference#locales"
+            )))
+        }
+    }
+}
+
+// Decision log: phase 7 chat-input validation (ROADMAP appendix 1).
+// - Purpose: fail fast on commands Discord would reject with a 400, with an
+//   error naming the field, rule, and value.
+// - Constraint: `validate(&self)` / unchecked `build()` stay as they are, and
+//   local rules must never be stricter than Discord: a false rejection blocks
+//   a command that would register.
+// - Alternatives: mirror every documented sentence as a hard rule; check only
+//   rules the docs state unambiguously and allow everything else.
+// - Chosen: the unambiguous rules only. Limits come from the current docs
+//   (`3714862`), so the per-command total is 8000, not the roadmap's 4000.
+//   Ambiguous points resolve toward allowing: localized-name uniqueness is
+//   per level rather than command-wide, numeric choice values are not
+//   counted toward the total, locale keys compare case-insensitively, and
+//   autocomplete/min_value/min_length are not restricted to their option
+//   types or numeric bounds.
+// - Why: undercounting or skipping a rule only means Discord reports the
+//   error instead of us; overcounting would break valid commands.
+// - Trade-offs: option and choice localizations and `channel_types` are not
+//   modeled on `ApplicationCommandOption` yet, so the helpers below are wired
+//   with `None` for options; passing the real maps is a one-line change per
+//   call site once the model gains those fields.
+
+/// How a command kind's names are checked.
+#[derive(Clone, Copy)]
+enum NameRule {
+    /// Chat-input names: Discord's character set and lowercase rule.
+    ChatInput,
+    /// Entry-point and context-menu names: only the 1-32 length.
+    LengthOnly,
+}
+
+impl NameRule {
+    fn check(self, field: &str, value: &str) -> Result<(), DiscordError> {
+        match self {
+            Self::ChatInput => validation::ensure_command_name(field, value),
+            Self::LengthOnly => validation::ensure_len(field, value, 1, limits::MAX_NAME_LENGTH),
+        }
+    }
+}
+
+/// Validates `name_localizations` / `description_localizations`: known
+/// locale keys, and values under the same rules as the default field
+/// ("Values follow the same restrictions as `name`/`description`").
+fn validate_localizations(
+    owner: &str,
+    rule: NameRule,
+    name_localizations: Option<&HashMap<String, String>>,
+    description_localizations: Option<&HashMap<String, String>>,
+) -> Result<(), DiscordError> {
+    for (locale, name) in sorted_entries(name_localizations) {
+        validation::ensure_locale(&format!("{owner} name_localizations"), locale)?;
+        rule.check(&format!("{owner} name_localizations[{locale}]"), name)?;
+    }
+    for (locale, description) in sorted_entries(description_localizations) {
+        validation::ensure_locale(&format!("{owner} description_localizations"), locale)?;
+        validation::ensure_len(
+            &format!("{owner} description_localizations[{locale}]"),
+            description,
+            1,
+            limits::MAX_DESCRIPTION_LENGTH,
+        )?;
+    }
+    Ok(())
+}
+
+/// Localization entries sorted by locale so the first reported error does
+/// not depend on `HashMap` iteration order.
+fn sorted_entries(map: Option<&HashMap<String, String>>) -> Vec<(&str, &str)> {
+    let mut entries: Vec<(&str, &str)> = map
+        .into_iter()
+        .flatten()
+        .map(|(locale, value)| (locale.as_str(), value.as_str()))
+        .collect();
+    entries.sort_unstable();
+    entries
+}
+
+/// Characters a field contributes to the per-command total: the longest of
+/// the default value and its localizations, as Discord counts it.
+fn localized_char_count(default: &str, localizations: Option<&HashMap<String, String>>) -> usize {
+    localizations
+        .into_iter()
+        .flat_map(HashMap::values)
+        .map(|value| validation::char_count(value))
+        .fold(validation::char_count(default), usize::max)
+}
+
+/// Characters an option subtree contributes to the per-command total.
+///
+/// Only string choice values are counted. Discord's docs say "value
+/// properties" without defining how numbers count, and undercounting can only
+/// make local validation more lenient than Discord, never stricter.
+fn option_char_count(option: &ApplicationCommandOption) -> usize {
+    // `ApplicationCommandOption` and choices carry no localization maps yet,
+    // so their defaults are their longest variants.
+    let own =
+        localized_char_count(&option.name, None) + localized_char_count(&option.description, None);
+    let choices: usize = option
+        .choices
+        .iter()
+        .map(|choice| {
+            localized_char_count(&choice.name, None)
+                + choice
+                    .value
+                    .as_str()
+                    .map(validation::char_count)
+                    .unwrap_or(0)
+        })
+        .sum();
+    let nested: usize = option.options.iter().map(option_char_count).sum();
+    own + choices + nested
+}
+
+/// Ensures option names are unique within one level, including localized
+/// names.
+///
+/// Discord: "Localized option names [...] must be distinct from all other
+/// default option names of that command, as well as all other option names
+/// within that locale on that command." Applied per level (siblings), since
+/// options in different subcommands may share default names and a
+/// command-wide reading is not confirmed; when unsure, allow.
+fn ensure_unique_option_names(
+    level: &str,
+    options: &[(&str, Option<&HashMap<String, String>>)],
+) -> Result<(), DiscordError> {
+    let mut defaults = HashSet::new();
+    for (name, _) in options {
+        if !defaults.insert(*name) {
+            return Err(DiscordError::model(format!(
+                "{level} has more than one option named \"{name}\""
+            )));
+        }
+    }
+
+    let mut localized: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for (index, (name, localizations)) in options.iter().enumerate() {
+        for (locale, localized_name) in sorted_entries(*localizations) {
+            // Discord ignores a localization identical to the default.
+            if localized_name == *name {
+                continue;
+            }
+            let clashes_with_default = options
+                .iter()
+                .enumerate()
+                .any(|(other, (other_name, _))| other != index && *other_name == localized_name);
+            let per_locale = localized.entry(locale).or_default();
+            if clashes_with_default || !per_locale.insert(localized_name) {
+                return Err(DiscordError::model(format!(
+                    "{level} option \"{name}\" name_localizations[{locale}] \
+                     \"{localized_name}\" collides with another option name"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_subcommand_like(option: &ApplicationCommandOption) -> bool {
+    option.kind == option_type::SUB_COMMAND || option.kind == option_type::SUB_COMMAND_GROUP
+}
+
+/// Validates one level of options (a command's top level or a subcommand's
+/// or group's children), then each option in it.
+fn validate_option_level(
+    level: &str,
+    options: &[ApplicationCommandOption],
+) -> Result<(), DiscordError> {
+    validation::ensure_max_count(
+        &format!("{level} options"),
+        options.len(),
+        limits::MAX_OPTIONS,
+    )?;
+
+    if options.iter().any(is_subcommand_like) {
+        if let Some(plain) = options.iter().find(|option| !is_subcommand_like(option)) {
+            return Err(DiscordError::model(format!(
+                "{level} mixes subcommands or subcommand groups with the regular \
+                 option \"{}\"; a level holds one kind or the other",
+                plain.name
+            )));
+        }
+    }
+
+    // "Required options must be listed before optional options." `required`
+    // does not apply to subcommands, so they are skipped.
+    let mut first_optional: Option<&str> = None;
+    for option in options.iter().filter(|option| !is_subcommand_like(option)) {
+        let required = option.required == Some(true);
+        match (required, first_optional) {
+            (true, Some(optional)) => {
+                return Err(DiscordError::model(format!(
+                    "{level} lists required option \"{}\" after optional option \
+                     \"{optional}\"; required options must come first",
+                    option.name
+                )));
+            }
+            (false, None) => first_optional = Some(&option.name),
+            _ => {}
+        }
+    }
+
+    // Options have no `name_localizations` field yet; pass them here once
+    // `ApplicationCommandOption` gains one.
+    let names: Vec<(&str, Option<&HashMap<String, String>>)> = options
+        .iter()
+        .map(|option| (option.name.as_str(), None))
+        .collect();
+    ensure_unique_option_names(level, &names)?;
+
+    for option in options {
+        validate_option(option)?;
+    }
+    Ok(())
+}
+
+/// Validates choices, autocomplete, and value/length ranges of one option.
+fn validate_option_constraints(option: &ApplicationCommandOption) -> Result<(), DiscordError> {
+    let name = &option.name;
+    validation::ensure_max_count(
+        &format!("option \"{name}\" choices"),
+        option.choices.len(),
+        limits::MAX_CHOICES,
+    )?;
+    if !option.choices.is_empty() {
+        if !matches!(
+            option.kind,
+            option_type::STRING | option_type::INTEGER | option_type::NUMBER
+        ) {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" of type {} has choices, which only STRING, \
+                 INTEGER, and NUMBER options accept",
+                option.kind
+            )));
+        }
+        if option.autocomplete == Some(true) {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" sets autocomplete and choices; Discord allows \
+                 only one of them"
+            )));
+        }
+    }
+    for choice in &option.choices {
+        validation::ensure_len(
+            &format!("option \"{name}\" choice name"),
+            &choice.name,
+            1,
+            limits::MAX_CHOICE_NAME_LENGTH,
+        )?;
+        if let Some(value) = choice.value.as_str() {
+            validation::ensure_max_len(
+                &format!("option \"{name}\" choice \"{}\" value", choice.name),
+                value,
+                limits::MAX_CHOICE_STRING_VALUE_LENGTH,
+            )?;
+        }
+    }
+
+    if let (Some(min), Some(max)) = (option.min_value, option.max_value) {
+        if min > max {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" min_value {min} is greater than max_value {max}"
+            )));
+        }
+    }
+    if let Some(min_length) = option.min_length {
+        if min_length > limits::MAX_STRING_OPTION_LENGTH {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" min_length must be 0-{}, got {min_length}",
+                limits::MAX_STRING_OPTION_LENGTH
+            )));
+        }
+    }
+    if let Some(max_length) = option.max_length {
+        if !(1..=limits::MAX_STRING_OPTION_LENGTH).contains(&max_length) {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" max_length must be 1-{}, got {max_length}",
+                limits::MAX_STRING_OPTION_LENGTH
+            )));
+        }
+    }
+    if let (Some(min_length), Some(max_length)) = (option.min_length, option.max_length) {
+        if min_length > max_length {
+            return Err(DiscordError::model(format!(
+                "option \"{name}\" min_length {min_length} is greater than \
+                 max_length {max_length}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Recursively validates a chat-input command option against Discord limits.
@@ -137,26 +548,9 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         &format!("option \"{name}\" description"),
         &option.description,
         1,
-        100,
+        limits::MAX_DESCRIPTION_LENGTH,
     )?;
-    validation::ensure_max_count(
-        &format!("option \"{name}\" choices"),
-        option.choices.len(),
-        25,
-    )?;
-    for choice in &option.choices {
-        validation::ensure_len(
-            &format!("option \"{name}\" choice name"),
-            &choice.name,
-            1,
-            100,
-        )?;
-    }
-    validation::ensure_max_count(
-        &format!("option \"{name}\" options"),
-        option.options.len(),
-        25,
-    )?;
+    validate_option_constraints(option)?;
     if let Some(file_types) = &option.file_types {
         if option.kind != option_type::ATTACHMENT {
             return Err(DiscordError::model(format!(
@@ -167,30 +561,32 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
     }
     match option.kind {
         option_type::SUB_COMMAND_GROUP => {
-            for nested in &option.options {
-                if nested.kind != option_type::SUB_COMMAND {
-                    return Err(DiscordError::model(format!(
-                        "subcommand group \"{name}\" may only contain subcommands, \
-                         got option \"{}\" of type {}",
-                        nested.name, nested.kind
-                    )));
-                }
-                validate_option(nested)?;
+            if let Some(nested) = option
+                .options
+                .iter()
+                .find(|nested| nested.kind != option_type::SUB_COMMAND)
+            {
+                return Err(DiscordError::model(format!(
+                    "subcommand group \"{name}\" may only contain subcommands, \
+                     got option \"{}\" of type {}",
+                    nested.name, nested.kind
+                )));
             }
+            validate_option_level(&format!("option \"{name}\""), &option.options)
         }
         option_type::SUB_COMMAND => {
-            for nested in &option.options {
-                if nested.kind == option_type::SUB_COMMAND
-                    || nested.kind == option_type::SUB_COMMAND_GROUP
-                {
-                    return Err(DiscordError::model(format!(
-                        "subcommand \"{name}\" cannot contain nested subcommand \
-                         or subcommand group \"{}\"",
-                        nested.name
-                    )));
-                }
-                validate_option(nested)?;
+            if let Some(nested) = option
+                .options
+                .iter()
+                .find(|nested| is_subcommand_like(nested))
+            {
+                return Err(DiscordError::model(format!(
+                    "subcommand \"{name}\" cannot contain nested subcommand \
+                     or subcommand group \"{}\"",
+                    nested.name
+                )));
             }
+            validate_option_level(&format!("option \"{name}\""), &option.options)
         }
         _ => {
             if !option.options.is_empty() {
@@ -199,7 +595,41 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
                     option.kind
                 )));
             }
+            Ok(())
         }
+    }
+}
+
+/// Validates a whole chat-input command definition.
+fn validate_chat_input_command(command: &CommandDefinition) -> Result<(), DiscordError> {
+    validation::ensure_command_name("command name", &command.name)?;
+    validation::ensure_len(
+        "command description",
+        &command.description,
+        1,
+        limits::MAX_DESCRIPTION_LENGTH,
+    )?;
+    validate_localizations(
+        "command",
+        NameRule::ChatInput,
+        command.name_localizations.as_ref(),
+        command.description_localizations.as_ref(),
+    )?;
+    validate_option_level("command", &command.options)?;
+
+    let total = localized_char_count(&command.name, command.name_localizations.as_ref())
+        + localized_char_count(
+            &command.description,
+            command.description_localizations.as_ref(),
+        )
+        + command.options.iter().map(option_char_count).sum::<usize>();
+    if total > limits::MAX_COMMAND_TOTAL_LENGTH {
+        return Err(DiscordError::model(format!(
+            "command \"{}\" names, descriptions, and choice values total {total} \
+             characters (longest localization per field); Discord allows at most {}",
+            command.name,
+            limits::MAX_COMMAND_TOTAL_LENGTH
+        )));
     }
     Ok(())
 }
@@ -552,14 +982,17 @@ impl SlashCommandBuilder {
 
     /// Validates the command definition against Discord's limits without
     /// consuming the builder.
+    ///
+    /// Checks names (character set, lowercase), descriptions, localizations
+    /// (locale keys and values), and for every option level: at most 25
+    /// options, no subcommands mixed with regular options, required options
+    /// first, unique names, choices (count, types, lengths, not with
+    /// autocomplete), value/length ranges, and the per-command character
+    /// total. Limits live in [`limits`]. Validation is deliberately never
+    /// stricter than Discord, so passing it does not guarantee Discord
+    /// accepts the command.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_command_name("command name", &self.inner.name)?;
-        validation::ensure_len("command description", &self.inner.description, 1, 100)?;
-        validation::ensure_max_count("command options", self.inner.options.len(), 25)?;
-        for option in &self.inner.options {
-            validate_option(option)?;
-        }
-        Ok(())
+        validate_chat_input_command(&self.inner)
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -633,8 +1066,19 @@ impl PrimaryEntryPointCommandBuilder {
     /// Validates the command definition against Discord's limits without
     /// consuming the builder.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("command name", &self.inner.name, 1, 32)?;
-        validation::ensure_len("command description", &self.inner.description, 1, 100)
+        NameRule::LengthOnly.check("command name", &self.inner.name)?;
+        validation::ensure_len(
+            "command description",
+            &self.inner.description,
+            1,
+            limits::MAX_DESCRIPTION_LENGTH,
+        )?;
+        validate_localizations(
+            "command",
+            NameRule::LengthOnly,
+            self.inner.name_localizations.as_ref(),
+            self.inner.description_localizations.as_ref(),
+        )
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -681,7 +1125,7 @@ impl UserCommandBuilder {
     /// consuming the builder. Context-menu names may contain spaces and
     /// mixed case, so only the length is checked.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("command name", &self.inner.name, 1, 32)
+        NameRule::LengthOnly.check("command name", &self.inner.name)
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -728,7 +1172,7 @@ impl MessageCommandBuilder {
     /// consuming the builder. Context-menu names may contain spaces and
     /// mixed case, so only the length is checked.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("command name", &self.inner.name, 1, 32)
+        NameRule::LengthOnly.check("command name", &self.inner.name)
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -741,11 +1185,14 @@ impl MessageCommandBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use serde_json::json;
 
     use super::{
-        command_type, option_type, CommandOptionBuilder, MessageCommandBuilder,
-        PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
+        command_type, ensure_unique_option_names, limits, option_type, CommandOptionBuilder,
+        MessageCommandBuilder, PrimaryEntryPointCommandBuilder, SlashCommandBuilder,
+        UserCommandBuilder,
     };
     use crate::model::{
         ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType,
@@ -1170,5 +1617,485 @@ mod tests {
             serde_json::to_value(CommandOptionBuilder::attachment("file", "Upload a file").build())
                 .expect("json");
         assert!(untouched.get("file_types").is_none());
+    }
+
+    // ---- phase 7: deeper chat-input validation -------------------------------
+
+    fn sub(name: &str) -> CommandOptionBuilder {
+        CommandOptionBuilder::subcommand(name, "desc")
+    }
+
+    #[test]
+    fn chat_input_names_accept_everything_discord_regex_allows() {
+        for name in [
+            "a-b_c",
+            "차단",
+            "封禁",
+            "बैन",
+            "नमस्ते",
+            "สวัสดี",
+            "donʼt",
+            "１２３",
+            "straße",
+            "ⅻ",
+            "ǆ",
+            "привет",
+        ] {
+            SlashCommandBuilder::new(name, "desc")
+                .validate()
+                .unwrap_or_else(|err| panic!("{name:?} should be valid: {err}"));
+            CommandOptionBuilder::string(name, "desc")
+                .validate()
+                .unwrap_or_else(|err| panic!("option {name:?} should be valid: {err}"));
+        }
+    }
+
+    #[test]
+    fn chat_input_names_reject_characters_and_case_discord_rejects() {
+        for (name, needle) in [
+            ("a.b", "contains '.'"),
+            ("a/b", "contains '/'"),
+            ("fire🔥", "contains '🔥'"),
+            ("tab\tname", "contains '\\t'"),
+            ("Éclair", "must be lowercase"),
+            ("ПРИВЕТ", "must be lowercase"),
+            ("ǅemal", "must be lowercase"),
+            ("ΣΊΓΜΑ", "must be lowercase"),
+        ] {
+            expect_model_error(SlashCommandBuilder::new(name, "desc").try_build(), needle);
+        }
+        expect_model_error(
+            SlashCommandBuilder::new("don't", "desc").try_build(),
+            "use \u{02BC} (U+02BC MODIFIER LETTER APOSTROPHE) instead of '",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("why?", "desc").try_build(),
+            "option \"why?\" name contains '?'",
+        );
+    }
+
+    #[test]
+    fn name_and_description_boundaries_count_codepoints() {
+        SlashCommandBuilder::new(&"가".repeat(32), &"é".repeat(100))
+            .validate()
+            .expect("32-codepoint name and 100-codepoint description");
+        expect_model_error(
+            SlashCommandBuilder::new(&"가".repeat(33), "desc").try_build(),
+            "command name must be 1-32 characters, got 33",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("", "desc").try_build(),
+            "command name must be 1-32 characters, got 0",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("x", &"é".repeat(101)).try_build(),
+            "option \"x\" description must be 1-100 characters, got 101",
+        );
+    }
+
+    #[test]
+    fn option_levels_allow_exactly_25_options() {
+        let mut command = SlashCommandBuilder::new("many", "desc");
+        let mut subcommand = sub("inner");
+        for index in 0..25 {
+            command = command.string_option(&format!("opt{index}"), "desc", false);
+            subcommand = subcommand.option(CommandOptionBuilder::string(&format!("o{index}"), "d"));
+        }
+        command.validate().expect("25 top-level options");
+        subcommand
+            .clone()
+            .validate()
+            .expect("25 subcommand options");
+
+        expect_model_error(
+            subcommand
+                .option(CommandOptionBuilder::string("o25", "d"))
+                .try_build(),
+            "option \"inner\" options must contain at most 25 items, got 26",
+        );
+    }
+
+    #[test]
+    fn subcommands_cannot_share_a_level_with_regular_options() {
+        expect_model_error(
+            SlashCommandBuilder::new("mixed", "desc")
+                .subcommand(sub("list"))
+                .string_option("query", "desc", false)
+                .try_build(),
+            "command mixes subcommands or subcommand groups with the regular option \"query\"",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("mixed", "desc")
+                .string_option("query", "desc", false)
+                .option(CommandOptionBuilder::subcommand_group("admin", "desc").option(sub("ban")))
+                .try_build(),
+            "regular option \"query\"",
+        );
+        SlashCommandBuilder::new("grouped", "desc")
+            .subcommand(sub("list"))
+            .option(CommandOptionBuilder::subcommand_group("admin", "desc").option(sub("ban")))
+            .validate()
+            .expect("subcommands and groups may share a level");
+    }
+
+    #[test]
+    fn required_options_must_come_before_optional_ones_per_level() {
+        expect_model_error(
+            SlashCommandBuilder::new("order", "desc")
+                .string_option("note", "desc", false)
+                .user_option("target", "desc", true)
+                .try_build(),
+            "command lists required option \"target\" after optional option \"note\"",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("order", "desc")
+                .option(CommandOptionBuilder::string("unset", "desc"))
+                .user_option("target", "desc", true)
+                .try_build(),
+            "after optional option \"unset\"",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("order", "desc")
+                .subcommand(
+                    sub("ban")
+                        .option(CommandOptionBuilder::integer("days", "desc"))
+                        .option(CommandOptionBuilder::user("target", "desc").required(true)),
+                )
+                .try_build(),
+            "option \"ban\" lists required option \"target\" after optional option \"days\"",
+        );
+        SlashCommandBuilder::new("order", "desc")
+            .user_option("target", "desc", true)
+            .string_option("reason", "desc", true)
+            .boolean_option("silent", "desc", false)
+            .integer_option("days", "desc", false)
+            .validate()
+            .expect("required first, then optional");
+    }
+
+    #[test]
+    fn option_names_must_be_unique_within_a_level() {
+        expect_model_error(
+            SlashCommandBuilder::new("dupe", "desc")
+                .string_option("name", "desc", false)
+                .string_option("name", "other", false)
+                .try_build(),
+            "command has more than one option named \"name\"",
+        );
+        expect_model_error(
+            CommandOptionBuilder::subcommand_group("admin", "desc")
+                .option(sub("ban"))
+                .option(sub("ban"))
+                .try_build(),
+            "option \"admin\" has more than one option named \"ban\"",
+        );
+        SlashCommandBuilder::new("mod", "desc")
+            .subcommand(sub("ban").option(CommandOptionBuilder::user("target", "d")))
+            .subcommand(sub("kick").option(CommandOptionBuilder::user("target", "d")))
+            .validate()
+            .expect("different subcommands may reuse option names");
+    }
+
+    fn localizations(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(locale, value)| (locale.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn localized_option_names_must_not_collide_within_a_level() {
+        let target_de = localizations(&[("de", "ziel"), ("fr", "cible")]);
+        let reason_de = localizations(&[("de", "grund"), ("fr", "cible")]);
+        let clash_default = localizations(&[("de", "reason")]);
+        let clash_locale = localizations(&[("de", "ziel")]);
+        let identical = localizations(&[("de", "target")]);
+
+        ensure_unique_option_names("command", &[("target", Some(&target_de)), ("reason", None)])
+            .expect("distinct localized names");
+        ensure_unique_option_names("command", &[("target", Some(&identical)), ("reason", None)])
+            .expect("a localization identical to its default is ignored");
+
+        expect_model_error(
+            ensure_unique_option_names(
+                "command",
+                &[("target", Some(&clash_default)), ("reason", None)],
+            ),
+            "command option \"target\" name_localizations[de] \"reason\" collides",
+        );
+        expect_model_error(
+            ensure_unique_option_names(
+                "command",
+                &[
+                    ("target", Some(&target_de)),
+                    ("reason", Some(&clash_locale)),
+                ],
+            ),
+            "option \"reason\" name_localizations[de] \"ziel\" collides",
+        );
+        expect_model_error(
+            ensure_unique_option_names(
+                "command",
+                &[("target", Some(&target_de)), ("reason", Some(&reason_de))],
+            ),
+            "name_localizations[fr] \"cible\" collides",
+        );
+    }
+
+    #[test]
+    fn choices_follow_type_autocomplete_and_length_rules() {
+        let mut option = CommandOptionBuilder::string("pick", "desc");
+        for index in 0..25 {
+            option = option.choice(&format!("c{index}"), format!("v{index}"));
+        }
+        option.validate().expect("exactly 25 choices");
+
+        CommandOptionBuilder::string("pick", "desc")
+            .choice(&"n".repeat(100), "é".repeat(100))
+            .validate()
+            .expect("100-character choice name and string value");
+        expect_model_error(
+            CommandOptionBuilder::string("pick", "desc")
+                .choice("long", "é".repeat(101))
+                .try_build(),
+            "option \"pick\" choice \"long\" value must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("pick", "desc")
+                .choice("", "v")
+                .try_build(),
+            "option \"pick\" choice name must be 1-100 characters, got 0",
+        );
+
+        CommandOptionBuilder::integer("count", "desc")
+            .choice("one", 1)
+            .validate()
+            .expect("integer choices");
+        CommandOptionBuilder::number("ratio", "desc")
+            .choice("half", 0.5)
+            .validate()
+            .expect("number choices");
+        expect_model_error(
+            CommandOptionBuilder::boolean("flag", "desc")
+                .choice("yes", true)
+                .try_build(),
+            "option \"flag\" of type 5 has choices, which only STRING, INTEGER, and NUMBER",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("topic", "desc")
+                .autocomplete(true)
+                .choice("a", "a")
+                .try_build(),
+            "option \"topic\" sets autocomplete and choices",
+        );
+        CommandOptionBuilder::string("topic", "desc")
+            .autocomplete(false)
+            .choice("a", "a")
+            .validate()
+            .expect("autocomplete(false) with choices is fine");
+        CommandOptionBuilder::string("topic", "desc")
+            .autocomplete(true)
+            .validate()
+            .expect("autocomplete without choices");
+    }
+
+    #[test]
+    fn value_and_length_ranges_are_checked() {
+        CommandOptionBuilder::integer("n", "desc")
+            .min_value(5.0)
+            .max_value(5.0)
+            .validate()
+            .expect("min_value == max_value");
+        expect_model_error(
+            CommandOptionBuilder::number("n", "desc")
+                .min_value(2.5)
+                .max_value(1.0)
+                .try_build(),
+            "option \"n\" min_value 2.5 is greater than max_value 1",
+        );
+        CommandOptionBuilder::string("s", "desc")
+            .min_length(0)
+            .max_length(1)
+            .validate()
+            .expect("lowest bounds");
+        CommandOptionBuilder::string("s", "desc")
+            .min_length(6000)
+            .max_length(6000)
+            .validate()
+            .expect("highest bounds");
+        expect_model_error(
+            CommandOptionBuilder::string("s", "desc")
+                .min_length(6001)
+                .try_build(),
+            "option \"s\" min_length must be 0-6000, got 6001",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("s", "desc")
+                .max_length(0)
+                .try_build(),
+            "option \"s\" max_length must be 1-6000, got 0",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("s", "desc")
+                .max_length(6001)
+                .try_build(),
+            "option \"s\" max_length must be 1-6000, got 6001",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("s", "desc")
+                .min_length(10)
+                .max_length(9)
+                .try_build(),
+            "option \"s\" min_length 10 is greater than max_length 9",
+        );
+    }
+
+    #[test]
+    fn command_localizations_use_known_locales_and_field_rules() {
+        SlashCommandBuilder::new("ban", "Ban a member")
+            .name_localization("ko", "차단")
+            .name_localization("en-us", "ban")
+            .description_localization("es-419", &"é".repeat(100))
+            .validate()
+            .expect("known locales (case-insensitive) and valid values");
+
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .name_localization("en", "ban")
+                .try_build(),
+            "command name_localizations uses unsupported locale \"en\"",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .description_localization("kr", "차단")
+                .try_build(),
+            "command description_localizations uses unsupported locale \"kr\"",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .name_localization("de", "Bannen")
+                .try_build(),
+            "command name_localizations[de] must be lowercase",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .name_localization("fr", "bannir membre")
+                .try_build(),
+            "command name_localizations[fr] must not contain spaces",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .description_localization("ja", &"説".repeat(101))
+                .try_build(),
+            "command description_localizations[ja] must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            SlashCommandBuilder::new("ban", "desc")
+                .description_localization("ja", "")
+                .try_build(),
+            "command description_localizations[ja] must be 1-100 characters, got 0",
+        );
+
+        PrimaryEntryPointCommandBuilder::new("launch", "Launch")
+            .name_localization("de", "Spiel Starten")
+            .validate()
+            .expect("entry-point names only have a length rule");
+        expect_model_error(
+            PrimaryEntryPointCommandBuilder::new("launch", "Launch")
+                .name_localization("xx", "start")
+                .try_build(),
+            "command name_localizations uses unsupported locale \"xx\"",
+        );
+        expect_model_error(
+            PrimaryEntryPointCommandBuilder::new("launch", "Launch")
+                .description_localization("de", "")
+                .try_build(),
+            "command description_localizations[de] must be 1-100 characters, got 0",
+        );
+    }
+
+    /// Builds a command whose counted total is exactly `8000 + extra`
+    /// characters, mixing ASCII and multibyte text.
+    fn command_with_total(extra: usize) -> SlashCommandBuilder {
+        // name 4 + description 100 = 104
+        let mut command = SlashCommandBuilder::new("poll", &"d".repeat(100));
+        // Each full option: name 32 + description 100 + 25 choices x (100 + 100)
+        // = 5132; the first one brings the total to 5236.
+        let mut full = CommandOptionBuilder::string(&"a".repeat(32), &"é".repeat(100));
+        for index in 0..25 {
+            full = full.choice(&format!("{index:0>100}"), "가".repeat(100));
+        }
+        command = command.option(full);
+        // Second option: name 1 + description 100 + 13 x 200 = 2701 -> 7937.
+        let mut partial = CommandOptionBuilder::string("b", &"설".repeat(100));
+        for index in 0..13 {
+            partial = partial.choice(&format!("{index:0>100}"), "x".repeat(100));
+        }
+        command = command.option(partial);
+        // Third option: integer choice values are not counted, so only the
+        // name (1), description (3 + extra), and choice name (59) count -> 8000.
+        command.option(
+            CommandOptionBuilder::integer("c", &"z".repeat(3 + extra)).choice(&"q".repeat(59), 1),
+        )
+    }
+
+    #[test]
+    fn command_total_length_allows_exactly_8000_characters() {
+        command_with_total(0)
+            .validate()
+            .expect("exactly 8000 counted characters");
+        expect_model_error(
+            command_with_total(1).try_build(),
+            "command \"poll\" names, descriptions, and choice values total 8001 characters",
+        );
+        assert_eq!(limits::MAX_COMMAND_TOTAL_LENGTH, 8000);
+    }
+
+    #[test]
+    fn command_total_length_counts_the_longest_localization_once() {
+        // Localizations no longer than the default add nothing...
+        command_with_total(0)
+            .name_localization("ko", "투표")
+            .description_localization("de", &"ü".repeat(100))
+            .description_localization("fr", &"e".repeat(99))
+            .validate()
+            .expect("max across locales, not the sum");
+        // ...a longer one replaces the default's count.
+        expect_model_error(
+            command_with_total(0)
+                .name_localization("de", "abstimmung")
+                .try_build(),
+            "total 8006 characters",
+        );
+    }
+
+    #[test]
+    fn locale_table_matches_discord_reference() {
+        assert_eq!(limits::LOCALES.len(), 32);
+        let unique: std::collections::HashSet<&str> = limits::LOCALES.iter().copied().collect();
+        assert_eq!(unique.len(), limits::LOCALES.len());
+        for locale in [
+            "en-US", "en-GB", "es-419", "pt-BR", "sv-SE", "zh-CN", "zh-TW", "ko",
+        ] {
+            assert!(limits::LOCALES.contains(&locale), "{locale}");
+        }
+    }
+
+    #[test]
+    fn try_choice_reports_serialization_errors_and_message_commands_build() {
+        let option = CommandOptionBuilder::string("pick", "desc")
+            .try_choice("a", "a")
+            .expect("string value serializes");
+        option.validate().expect("valid choice");
+
+        let unserializable = std::collections::BTreeMap::from([((1, 2), 3)]);
+        assert!(CommandOptionBuilder::integer("pick", "desc")
+            .try_choice("map", unserializable)
+            .is_err());
+
+        let quote = MessageCommandBuilder::new("Quote Message")
+            .try_build()
+            .expect("context-menu names may contain spaces and capitals");
+        assert_eq!(quote.kind, command_type::MESSAGE);
     }
 }
