@@ -1,0 +1,25 @@
+error[E0277]: the trait bound `Id<discordrs::model::marker::Guild>: Default` is not satisfied
+ --> tests/ui/guild_id_default.rs:7:5
+  |
+5 | #[derive(Default)]
+  |          ------- in this derive macro expansion
+6 | struct StoredGuild {
+7 |     id: GuildId,
+  |     ^^^^^^^^^^^ the trait `Default` is not implemented for `Id<discordrs::model::marker::Guild>`
+
+error[E0599]: no associated function or constant named `default` found for struct `Id<M>` in the current scope
+  --> tests/ui/guild_id_default.rs:11:30
+   |
+11 |     let _guild_id = GuildId::default();
+   |                              ^^^^^^^ associated function or constant not found in `Id<discordrs::model::marker::Guild>`
+   |
+note: if you're trying to build a new `Id<discordrs::model::marker::Guild>` consider using one of the following associated functions:
+      Id::<M>::try_new
+      Id::<M>::from_nonzero
+  --> src/model/id.rs
+   |
+   |     pub const fn try_new(value: u64) -> Result<Self, InvalidId> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   |     pub const fn from_nonzero(value: NonZeroU64) -> Self {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

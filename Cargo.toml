@@ -81,6 +81,11 @@ davey = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+# Compile-fail tests (tests/compile_fail.rs). Pinned exactly because 1.0.122
+# declares rust-version 1.88, our MSRV; the MSRV CI job compiles every test
+# target, so a later trybuild that raises its rust-version must be a
+# deliberate bump.
+trybuild = "=1.0.122"
 
 [[example]]
 name = "cache_bot"

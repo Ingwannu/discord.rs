@@ -45,6 +45,59 @@ Effective permissions following Discord's documented algorithm (owner, `ADMINIST
 - `escape_markdown(text, EscapeMarkdownOptions)` plus the individual escapers, matching discord.js 0.6.2 on a committed golden corpus (four documented discord.js bugs fixed); `clean_code_block_content`, which breaks every backtick run of three or more.
 - `clean_content(text, &resolver)` with a `MentionResolver` (trait or closure; `MentionKind`), matching discord.js's command-name character class exactly (Unicode 17.0 table); `Message::clean_content(...)` and `Member::mention()` delegate to it.
 
+## Typed IDs, Discriminants, and Patch Fields (3.0, unreleased)
+
+These primitives are available now, but existing models, REST methods, events, and builders still use `Snowflake`, raw `u8` codes, and `Option<Option<T>>`. Consumers migrate in phase 3 series 2–3 (IDs and discriminants) and phase 4 (patch fields). The design is in `docs/design/3.0-types-events-requests.md` in the repository.
+
+### `Id<M>` typed IDs
+
+- `Id<M>` is a nonzero `u64` snowflake tagged with a marker type, so a `ChannelId` cannot be passed where a `GuildId` is required. Use the aliases: `GuildId`, `ChannelId` (threads too), `UserId`, `RoleId`, `MessageId`, `ApplicationId`, `CommandId`, `CommandVersionId`, `InteractionId`, `WebhookId`, `EmojiId`, `AttachmentId`, `StickerId`, `StickerPackId`, `SoundboardSoundId`, `ScheduledEventId`, `StageInstanceId`, `IntegrationId`, `AuditLogEntryId`, `AutoModerationRuleId`, `ForumTagId`, `SkuId`, `EntitlementId`, `SubscriptionId`, `PromotionId`, `RoleSubscriptionListingId`, `LobbyId`, `ActivityLaunchId`, `TeamId`, `OnboardingPromptId`, `OnboardingOptionId`, and `GenericId` (kind not statically known). The markers live in `discordrs::model::marker`, and `IdMarker` is sealed. There is no `MemberId`, `PresenceId`, or `ThreadId`: members and presences are keyed by `(GuildId, UserId)`, and threads are channels.
+- An ID is `Copy` and 8 bytes, and `Option<GuildId>` is also 8 bytes.
+- Construction is explicit and checked: `GuildId::try_new(u64)`, `"123".parse::<GuildId>()`, `TryFrom<u64>`, and `TryFrom<&str>` return `InvalidId` (with `kind()`: `Zero`, `Empty`, `InvalidDigit`, `Overflow`); only `From<NonZeroU64>` is infallible. There is no `From<u64>`, no `Default`, and no conversion between markers except `erase()` (to `GenericId`) and `cast::<N>()`. `cast` only asserts that the same snowflake names another kind of resource (for example a guild's `@everyone` role); it checks nothing.
+- `get()`, `into_nonzero()`, `timestamp()` (Unix milliseconds), `Display` (canonical decimal), and `Debug` (`GuildId(123)`). Equality, ordering, and hashing use only the number, so ordering is numeric (`9 < 10`).
+- Wire format: serialized as a decimal string, which also works as a JSON object key (`HashMap<GuildId, _>`). Deserialized from a decimal string or an unsigned integer. Zero, negatives, floats, values above `u64::MAX`, whitespace, signs, and other non-digit characters are rejected. Leading zeros are accepted and dropped (`"007"` reads as 7 and writes back as `"7"`).
+
+```rust
+use discordrs::{GuildId, InvalidId};
+
+// Validate untrusted input (a slash command string option, a config file)
+// once at the boundary; rejects "0", " 1", "+1", "1.0", and so on.
+fn parse_guild(raw: &str) -> Result<GuildId, InvalidId> {
+    raw.parse()
+}
+
+fn takes_guild(guild_id: GuildId) {
+    // format!("{guild_id:?}") == "GuildId(81384788765712384)"
+    // Passing a ChannelId to this function is a compile error.
+}
+```
+
+### Values that are not snowflakes
+
+These look like IDs on the wire but are not nonzero snowflakes, so they have their own types instead of `Id<M>`:
+
+- `WidgetUserId(String)`: the anonymized widget member `id` (Discord's examples show `"0"`). It is opaque and kept exactly as received.
+- `GuildInstallOwner`: the `GUILD_INSTALL` value of `authorizing_integration_owners`. It is `BotDm` for `"0"` (the interaction came from a DM with the bot) or `Guild(GuildId)`.
+- `UploadId(u32)`: the `files[n]` index of a new upload in the same request. `0` is allowed, and it is separate from a stored `AttachmentId`.
+- `ComponentId(u32)`: the numeric component `id`. Discord treats `0` as "not set" and assigns one.
+- `PollAnswerId(u32)`: a poll `answer_id`.
+
+### Open discriminants
+
+Integer enumerations are transparent newtypes with named constants: `MessageType::REPLY`, `ComponentType::CONTAINER`, `ButtonStyle::PREMIUM`, and so on. Each type provides `new(raw)`, `get()`, and `name()`. `Debug` prints the constant name, or `Unknown(n)` for values this version does not know. Serialization uses the bare integer (`#[serde(transparent)]`). There is no `Default`. Unknown values round-trip unchanged, and a value too wide for the storage type fails to decode instead of being truncated. All types use `u8` storage except `AuditLogActionType`, which uses `u16`.
+
+Available from the crate root: `OverwriteType`, `VideoQualityMode`, `ForumSortOrder`, `ForumLayout`, `ComponentType`, `ButtonStyle`, `TextInputStyle`, `SeparatorSpacing`, `MessageType`, `MessageActivityType`, `ReactionType`, `PollLayoutType`, `InteractionType`, `InteractionResponseType`, `CommandType`, `CommandOptionType`, `CommandPermissionType`, `RoleConnectionMetadataType`, `VerificationLevel`, `DefaultMessageNotificationLevel`, `ExplicitContentFilterLevel`, `MfaLevel`, `PremiumTier`, `GuildNsfwLevel`, `ScheduledEventStatus`, `ScheduledEventEntityType`, `ScheduledEventPrivacyLevel`, `StageInstancePrivacyLevel`, `AutoModerationEventType`, `AutoModerationTriggerType`, `AutoModerationActionType`, `KeywordPresetType`, `AuditLogActionType`, `InviteType`, `InviteTargetType`, `InviteTargetUsersJobStatusType`, `WebhookType`, `StickerType`, `StickerFormatType`, `SkuType`, `SkuAccessType` (no documented values, so no names), `EntitlementType`, `EntitlementOwnerType`, `SubscriptionStatus`, `UserPremiumType`, and `ConnectionVisibility`.
+
+Seven names are still taken by their 2.x versions. Until series 3 swaps them in, the new versions are reachable only as `discordrs::model::discriminant::{ChannelType, MessageReferenceType, ApplicationIntegrationType, InteractionContextType, ApplicationCommandHandlerType, ActivityType, WebhookPayloadType}`. The new `ChannelType` includes the thread types and provides `is_thread()`, `is_voice_based()`, and `is_text_based()` (the discord.js `isTextBased()` set). These helpers classify the channel type only: they do not mean you can send messages there, because permissions, archived or locked threads, and obfuscated channels can still forbid it.
+
+### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
+
+- `Patch<T>` is `Missing` (field omitted) or `Value(T)`. `Nullable<T>` is `Null` or `Value(T)`. `NullablePatch<T>` = `Patch<Nullable<T>>` covers fields that can be omitted, cleared with `null`, or set.
+- Constructors: `Patch::missing()`, `Patch::value(v)`, and, for nullable patches only, `Patch::null()`. Writing `Patch::<bool>::null()` is a compile error. `Default` is `Missing` and does not require `T: Default`.
+- Declare struct fields as `#[serde(default, skip_serializing_if = "Patch::is_missing")]`. Both parts matter. Serializing a `Missing` that reaches the serializer is an error, never a silent `null`. Without `default`, serde reads an absent `NullablePatch` field as `null`, which would clear data.
+- Values are written untagged. A present key is read through `T`, so `null` on a `Patch<bool>` field fails to decode, while `false`, `0`, `""`, and `[]` are ordinary values.
+- Option conversions: `Patch::from(Option<T>)` maps `None` to `Missing`. `Nullable::from(Option<T>)` maps `None` to `Null`, and `Option::from(Nullable<T>)` goes back.
+
 ## New in 2.2.0
 
 - `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.

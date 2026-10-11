@@ -1,0 +1,28 @@
+error[E0308]: mismatched types
+ --> tests/ui/null_on_non_nullable_patch.rs:6:34
+  |
+6 |     let _inferred: Patch<bool> = Patch::null();
+  |                    -----------   ^^^^^^^^^^^^^ expected `Patch<bool>`, found `Patch<Nullable<_>>`
+  |                    |
+  |                    expected due to this
+  |
+  = note: expected enum `Patch<bool>`
+             found enum `Patch<Nullable<_>>`
+
+error[E0599]: no variant, associated function, or constant named `null` found for enum `Patch<bool>` in the current scope
+ --> tests/ui/null_on_non_nullable_patch.rs:7:36
+  |
+7 |     let _explicit = Patch::<bool>::null();
+  |                                    ^^^^ variant, associated function, or constant not found in `Patch<bool>`
+  |
+note: if you're trying to build a new `Patch<bool>` consider using one of the following associated functions:
+      Patch::<T>::missing
+      Patch::<T>::value
+ --> src/model/patch.rs
+  |
+  |     pub const fn missing() -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+  |     pub const fn value(value: T) -> Self {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: the variant, associated function, or constant was found for `Patch<Nullable<T>>`

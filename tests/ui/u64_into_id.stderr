@@ -1,0 +1,44 @@
+error[E0308]: mismatched types
+ --> tests/ui/u64_into_id.rs:8:17
+  |
+8 |     needs_guild(81384788765712384);
+  |     ----------- ^^^^^^^^^^^^^^^^^ expected `Id<Guild>`, found integer
+  |     |
+  |     arguments to this function are incorrect
+  |
+  = note: expected struct `Id<discordrs::model::marker::Guild>`
+               found type `{integer}`
+note: function defined here
+ --> tests/ui/u64_into_id.rs:5:4
+  |
+5 | fn needs_guild(_guild_id: GuildId) {}
+  |    ^^^^^^^^^^^ ------------------
+
+error[E0277]: the trait bound `Id<discordrs::model::marker::Guild>: From<u64>` is not satisfied
+ --> tests/ui/u64_into_id.rs:9:26
+  |
+9 |     let _from: GuildId = GuildId::from(81384788765712384_u64);
+  |                          ^^^^^^^ the trait `From<u64>` is not implemented for `Id<discordrs::model::marker::Guild>`
+  |
+help: the trait `From<u64>` is not implemented for `Id<discordrs::model::marker::Guild>`
+      but trait `From<NonZero<u64>>` is implemented for it
+ --> src/model/id.rs
+  |
+  | impl<M: IdMarker> From<NonZeroU64> for Id<M> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for that trait implementation, expected `NonZero<u64>`, found `u64`
+
+error[E0277]: the trait bound `Id<discordrs::model::marker::Guild>: From<u64>` is not satisfied
+  --> tests/ui/u64_into_id.rs:10:48
+   |
+10 |     let _into: GuildId = 81384788765712384_u64.into();
+   |                                                ^^^^ the trait `From<u64>` is not implemented for `Id<discordrs::model::marker::Guild>`
+   |
+help: the trait `From<u64>` is not implemented for `Id<discordrs::model::marker::Guild>`
+      but trait `From<NonZero<u64>>` is implemented for it
+  --> src/model/id.rs
+   |
+   | impl<M: IdMarker> From<NonZeroU64> for Id<M> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `NonZero<u64>`, found `u64`
+   = note: required for `u64` to implement `Into<Id<discordrs::model::marker::Guild>>`

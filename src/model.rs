@@ -7,6 +7,9 @@ use crate::types::Emoji;
 
 mod application_identity;
 mod channel;
+pub mod discriminant;
+mod id;
+mod patch;
 mod permissions;
 mod snowflake;
 mod thread;
@@ -22,6 +25,33 @@ pub use channel::{
     Attachment, Channel, ChannelType, CreateGuildChannel, EditChannelPermission,
     PermissionOverwrite,
 };
+// Phase 3 series 1: new typed primitives. Consumers still use `Snowflake`,
+// raw `u8` discriminants, and `Option<Option<T>>` until series 2–4 migrate
+// them; discriminants whose names are still taken by 2.x types stay under
+// `model::discriminant` (see that module's staging plan).
+pub use discriminant::{
+    AuditLogActionType, AutoModerationActionType, AutoModerationEventType,
+    AutoModerationTriggerType, ButtonStyle, CommandOptionType, CommandPermissionType, CommandType,
+    ComponentType, ConnectionVisibility, DefaultMessageNotificationLevel, EntitlementOwnerType,
+    EntitlementType, ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
+    InteractionResponseType, InteractionType, InviteTargetType, InviteTargetUsersJobStatusType,
+    InviteType, KeywordPresetType, MessageActivityType, MessageType, MfaLevel, OverwriteType,
+    PollLayoutType, PremiumTier, ReactionType, RoleConnectionMetadataType,
+    ScheduledEventEntityType, ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing,
+    SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerType,
+    SubscriptionStatus, TextInputStyle, UserPremiumType, VerificationLevel, VideoQualityMode,
+    WebhookType,
+};
+pub use id::{
+    marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,
+    ChannelId, CommandId, CommandVersionId, ComponentId, EmojiId, EntitlementId, ForumTagId,
+    GenericId, GuildId, GuildInstallOwner, Id, IdMarker, IntegrationId, InteractionId, InvalidId,
+    InvalidIdKind, LobbyId, MessageId, OnboardingOptionId, OnboardingPromptId, PollAnswerId,
+    PromotionId, RoleId, RoleSubscriptionListingId, ScheduledEventId, SkuId, SoundboardSoundId,
+    StageInstanceId, StickerId, StickerPackId, SubscriptionId, TeamId, UploadId, UserId, WebhookId,
+    WidgetUserId,
+};
+pub use patch::{Nullable, NullablePatch, Patch};
 pub use permissions::PermissionsBitField;
 pub use snowflake::Snowflake;
 pub use thread::{

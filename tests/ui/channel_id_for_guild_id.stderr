@@ -1,0 +1,30 @@
+error[E0308]: mismatched types
+  --> tests/ui/channel_id_for_guild_id.rs:11:17
+   |
+11 |     needs_guild(channel_id);
+   |     ----------- ^^^^^^^^^^ expected `Id<Guild>`, found `Id<Channel>`
+   |     |
+   |     arguments to this function are incorrect
+   |
+   = note: expected struct `Id<discordrs::model::marker::Guild>`
+              found struct `Id<discordrs::model::marker::Channel>`
+note: function defined here
+  --> tests/ui/channel_id_for_guild_id.rs:7:4
+   |
+ 7 | fn needs_guild(_guild_id: GuildId) {}
+   |    ^^^^^^^^^^^ ------------------
+
+error[E0277]: the trait bound `Id<discordrs::model::marker::Guild>: From<Id<discordrs::model::marker::Channel>>` is not satisfied
+  --> tests/ui/channel_id_for_guild_id.rs:12:42
+   |
+12 |     let _converted: GuildId = channel_id.into();
+   |                                          ^^^^ the trait `From<Id<discordrs::model::marker::Channel>>` is not implemented for `Id<discordrs::model::marker::Guild>`
+   |
+help: the trait `From<Id<discordrs::model::marker::Channel>>` is not implemented for `Id<discordrs::model::marker::Guild>`
+      but trait `From<NonZero<u64>>` is implemented for it
+  --> src/model/id.rs
+   |
+   | impl<M: IdMarker> From<NonZeroU64> for Id<M> {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: for that trait implementation, expected `NonZero<u64>`, found `Id<discordrs::model::marker::Channel>`
+   = note: required for `Id<discordrs::model::marker::Channel>` to implement `Into<Id<discordrs::model::marker::Guild>>`

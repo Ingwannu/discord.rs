@@ -158,6 +158,29 @@ pub use model::{
     UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
     Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
 };
+// Phase 3 series 1 primitives (typed IDs, open discriminants, patch fields).
+// Existing APIs keep their 2.x types until series 2–4; see
+// `model::discriminant` for the discriminants not re-exported yet.
+pub use model::{
+    ActivityLaunchId, ApplicationId, AttachmentId, AuditLogActionType, AuditLogEntryId,
+    AutoModerationActionType, AutoModerationEventType, AutoModerationRuleId,
+    AutoModerationTriggerType, ButtonStyle, ChannelId, CommandId, CommandOptionType,
+    CommandPermissionType, CommandType, CommandVersionId, ComponentId, ComponentType,
+    ConnectionVisibility, DefaultMessageNotificationLevel, EmojiId, EntitlementId,
+    EntitlementOwnerType, EntitlementType, ExplicitContentFilterLevel, ForumLayout, ForumSortOrder,
+    ForumTagId, GenericId, GuildId, GuildInstallOwner, GuildNsfwLevel, Id, IdMarker, IntegrationId,
+    InteractionId, InteractionResponseType, InteractionType, InvalidId, InvalidIdKind,
+    InviteTargetType, InviteTargetUsersJobStatusType, InviteType, KeywordPresetType, LobbyId,
+    MessageActivityType, MessageId, MessageType, MfaLevel, Nullable, NullablePatch,
+    OnboardingOptionId, OnboardingPromptId, OverwriteType, Patch, PollAnswerId, PollLayoutType,
+    PremiumTier, PromotionId, ReactionType, RoleConnectionMetadataType, RoleId,
+    RoleSubscriptionListingId, ScheduledEventEntityType, ScheduledEventId,
+    ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuId,
+    SkuType, SoundboardSoundId, StageInstanceId, StageInstancePrivacyLevel, StickerFormatType,
+    StickerId, StickerPackId, StickerType, SubscriptionId, SubscriptionStatus, TeamId,
+    TextInputStyle, UploadId, UserId, UserPremiumType, VerificationLevel, VideoQualityMode,
+    WebhookId, WebhookType, WidgetUserId,
+};
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,
