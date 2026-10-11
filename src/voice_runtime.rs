@@ -61,13 +61,19 @@ const RTP_HEADER_LEN: usize = 12;
 /// RTP counts in 32-bit words: one per CSRC, one for the extension header,
 /// and the extension's length field (RFC 3550 §5.1, §5.3.1).
 const RTP_WORD_LEN: usize = 4;
+/// The header extension's preamble: 16-bit profile plus 16-bit length in
+/// words (RFC 3550 §5.3.1).
+const RTP_EXTENSION_PREAMBLE_LEN: usize = 4;
 /// Both rtpsize AEAD modes take the 256-bit `secret_key` from
 /// SESSION_DESCRIPTION (Discord docs: Voice Connections › Transport
 /// Encryption Modes).
 const VOICE_SECRET_KEY_LEN: usize = 32;
-/// The rtpsize modes append a 32-bit nonce counter to every packet; it is
-/// copied into the last four bytes of the zeroed AEAD nonce below.
+/// The rtpsize modes append a 32-bit packet counter to every packet
+/// ("32-bit incremental integer value, appended to payload"); see
+/// [`rtpsize_nonce`] for where it goes in the AEAD nonce.
 const RTPSIZE_NONCE_SUFFIX_LEN: usize = 4;
+/// AES-256-GCM and Poly1305 both append a 16-byte tag to the ciphertext.
+const AEAD_TAG_LEN: usize = 16;
 /// AES-256-GCM nonce length.
 const AES_GCM_NONCE_LEN: usize = 12;
 /// XChaCha20-Poly1305 nonce length.
@@ -315,6 +321,12 @@ pub struct VoiceRtpHeader {
     pub sequence: u16,
     pub timestamp: u32,
     pub ssrc: u32,
+    /// Where the media payload starts once the packet is decrypted: the
+    /// fixed header, the CSRCs, and the whole header extension (preamble
+    /// and body). In the rtpsize transport modes the extension body is
+    /// encrypted together with the payload, so in the raw packet
+    /// `bytes[header_len..]` is not where the ciphertext starts when
+    /// `extension` is set.
     pub header_len: usize,
 }
 
@@ -1861,6 +1873,55 @@ fn next_voice_heartbeat_nonce(current: &mut u64) -> u64 {
     *current
 }
 
+/// Expands the 4-byte packet counter of the rtpsize modes into the AEAD
+/// nonce: the counter's big-endian bytes come FIRST, followed by zeros.
+///
+/// Discord's transport docs only say the counter is "appended to payload";
+/// the nonce layout is what compatible clients use: @discordjs/voice writes
+/// it with `nonceBuffer.writeUInt32BE(nonce, 0)` (`Networking.ts`
+/// `encryptOpusPacket`) and copies it back to offset 0 on receive
+/// (`VoiceReceiver.ts` `decrypt`), and Songbird copies it into
+/// `nonce[..4]` (`driver/crypto.rs`). The "4 least significant bytes" rule in
+/// Discord's docs belongs to DAVE's AES-128-GCM frame nonce, which `davey`
+/// handles, not to transport encryption. Changing this breaks interop in
+/// both directions; the known-answer tests pin it.
+fn rtpsize_nonce<const LEN: usize>(counter: &[u8; RTPSIZE_NONCE_SUFFIX_LEN]) -> [u8; LEN] {
+    let mut nonce = [0_u8; LEN];
+    nonce[..RTPSIZE_NONCE_SUFFIX_LEN].copy_from_slice(counter);
+    nonce
+}
+
+/// Length of the cleartext part of an rtpsize packet, which is also the
+/// AEAD additional data: the fixed header, the CSRCs and, if the X bit is
+/// set, only the 4-byte extension preamble.
+///
+/// Discord: "The RTP size variants determine the unencrypted size of the RTP
+/// header in the same way as SRTP, which considers CSRCs and (optionally) the
+/// extension preamble to be part of the unencrypted header" (Voice
+/// Connections › Transport Encryption Modes). Unlike RFC 3711 SRTP, the
+/// extension body is therefore encrypted with the payload, as in
+/// @discordjs/voice (`VoiceReceiver.ts` `parsePacket`: `headerSize += 4`) and
+/// Songbird (`decrypt_rtp_in_place`: "Discord begins encryption after the RTP
+/// extension *header*").
+fn rtpsize_cleartext_len(packet: &[u8]) -> Result<usize, DiscordError> {
+    let first = packet
+        .first()
+        .ok_or_else(|| invalid_data_error("voice RTP packet is empty"))?;
+    let csrc_len = usize::from(first & 0x0f) * RTP_WORD_LEN;
+    let preamble_len = if first & 0x10 != 0 {
+        RTP_EXTENSION_PREAMBLE_LEN
+    } else {
+        0
+    };
+    Ok(RTP_HEADER_LEN + csrc_len + preamble_len)
+}
+
+/// Authenticates and decrypts an rtpsize packet and returns its media
+/// payload (an Opus or DAVE frame) without the header extension body.
+///
+/// The AEAD boundary ([`rtpsize_cleartext_len`]) and the media offset
+/// (`rtp.header_len`) differ by the extension body, which is only readable
+/// after decryption, so it is stripped from the plaintext afterwards.
 fn decrypt_transport_payload(
     packet: &[u8],
     rtp: &VoiceRtpHeader,
@@ -1870,42 +1931,48 @@ fn decrypt_transport_payload(
     if secret_key.len() != VOICE_SECRET_KEY_LEN {
         return Err(invalid_data_error("voice secret_key must be 32 bytes"));
     }
-    if packet.len() < rtp.header_len + RTPSIZE_NONCE_SUFFIX_LEN {
+    let cleartext_len = rtpsize_cleartext_len(packet)?;
+    let extension_body_len = rtp
+        .header_len
+        .checked_sub(cleartext_len)
+        .ok_or_else(|| invalid_data_error("voice RTP header does not match the packet"))?;
+    if packet.len() < rtp.header_len + AEAD_TAG_LEN + RTPSIZE_NONCE_SUFFIX_LEN {
         return Err(invalid_data_error(
-            "voice RTP packet is missing the RTP-size nonce suffix",
+            "voice RTP packet is too short for its header, AEAD tag, and nonce counter",
         ));
     }
 
-    let nonce_suffix_offset = packet.len() - RTPSIZE_NONCE_SUFFIX_LEN;
-    let nonce_suffix = &packet[nonce_suffix_offset..];
-    let aad = &packet[..rtp.header_len];
-    let mut encrypted = packet[rtp.header_len..nonce_suffix_offset].to_vec();
+    let (sealed, nonce_suffix) = packet
+        .split_last_chunk::<RTPSIZE_NONCE_SUFFIX_LEN>()
+        .ok_or_else(|| invalid_data_error("voice RTP packet is missing its nonce counter"))?;
+    let (aad, ciphertext) = sealed.split_at(cleartext_len);
+    let mut plaintext = ciphertext.to_vec();
 
     if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
         let cipher = Aes256Gcm::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let mut nonce = [0_u8; AES_GCM_NONCE_LEN];
-        nonce[AES_GCM_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(nonce_suffix);
+        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(nonce_suffix);
         cipher
-            .decrypt_in_place(AesNonce::from_slice(&nonce), aad, &mut encrypted)
+            .decrypt_in_place(AesNonce::from_slice(&nonce), aad, &mut plaintext)
             .map_err(|_| invalid_data_error("failed to decrypt AES-GCM voice packet"))?;
-        return Ok(encrypted);
-    }
-
-    if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
+    } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
         let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let mut nonce = [0_u8; XCHACHA20_NONCE_LEN];
-        nonce[XCHACHA20_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(nonce_suffix);
+        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(nonce_suffix);
         cipher
-            .decrypt_in_place(XNonce::from_slice(&nonce), aad, &mut encrypted)
+            .decrypt_in_place(XNonce::from_slice(&nonce), aad, &mut plaintext)
             .map_err(|_| invalid_data_error("failed to decrypt XChaCha20-Poly1305 voice packet"))?;
-        return Ok(encrypted);
+    } else {
+        return Err(invalid_data_error(format!(
+            "unsupported voice encryption mode for receive: {mode:?}"
+        )));
     }
 
-    Err(invalid_data_error(format!(
-        "unsupported voice encryption mode for receive: {mode:?}"
-    )))
+    // The length check above leaves at least the extension body in the
+    // plaintext. Its elements (RFC 8285) are not media, so they never reach
+    // the Opus decoder or the DAVE frame parser.
+    plaintext.drain(..extension_body_len);
+    Ok(plaintext)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1927,6 +1994,10 @@ fn encrypt_transport_payload(
         return Err(invalid_data_error("voice secret_key must be 32 bytes"));
     }
 
+    // Outbound packets carry no CSRCs and no header extension, so the whole
+    // 12-byte header is the cleartext part and the AAD
+    // (`rtpsize_cleartext_len`). Emitting an extension would mean encrypting
+    // its body together with the payload.
     let mut packet = build_rtp_header(
         params.sequence,
         params.timestamp,
@@ -1939,17 +2010,14 @@ fn encrypt_transport_payload(
     if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
         let cipher = Aes256Gcm::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let mut nonce = [0_u8; AES_GCM_NONCE_LEN];
-        nonce[AES_GCM_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(&params.nonce_suffix);
+        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(&params.nonce_suffix);
         cipher
             .encrypt_in_place(AesNonce::from_slice(&nonce), &aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))?;
     } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
         let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let mut nonce = [0_u8; XCHACHA20_NONCE_LEN];
-        nonce[XCHACHA20_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..]
-            .copy_from_slice(&params.nonce_suffix);
+        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(&params.nonce_suffix);
         cipher
             .encrypt_in_place(XNonce::from_slice(&nonce), &aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet"))?;
@@ -2082,9 +2150,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use aes_gcm::aead::{AeadInPlace, KeyInit};
-    use aes_gcm::{Aes256Gcm, Nonce as AesNonce};
-    use chacha20poly1305::{XChaCha20Poly1305, XNonce};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::Value;
     use tokio::net::{TcpListener, UdpSocket};
@@ -2113,54 +2178,64 @@ mod tests {
         VoiceEncryptionMode, VoiceGatewayReady, VoiceSpeakingFlags, VoiceUdpDiscoveryPacket,
     };
 
-    fn encrypt_aes_rtp_packet(
-        secret_key: &[u8; 32],
-        sequence: u16,
-        timestamp: u32,
-        ssrc: u32,
-        nonce_suffix: [u8; 4],
-        opus_frame: &[u8],
-    ) -> Vec<u8> {
-        let mut packet = vec![0x80, 0x78];
-        packet.extend_from_slice(&sequence.to_be_bytes());
-        packet.extend_from_slice(&timestamp.to_be_bytes());
-        packet.extend_from_slice(&ssrc.to_be_bytes());
+    // Known-answer vectors for the rtpsize transport modes, generated by
+    // `ci/voice_transport_kat.py` outside this crate's AEAD code (Python
+    // `cryptography` for AES-256-GCM and ChaCha20-Poly1305, plus an HChaCha20
+    // checked against draft-irtf-cfrg-xchacha-03) and cross-checked byte for
+    // byte with Node's AES-256-GCM and libsodium's XChaCha20-Poly1305 called
+    // the way @discordjs/voice `encryptOpusPacket` calls them. The 32-bit
+    // counter has four distinct nonzero bytes, so placing it anywhere but the
+    // first four nonce bytes, or in the wrong byte order, changes every vector.
+    const KAT_KEY: [u8; 32] = [
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e,
+        0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d,
+        0x3e, 0x3f,
+    ];
+    /// Discord's Opus silence frame, the plaintext of every vector.
+    const KAT_OPUS: [u8; 3] = [0xf8, 0xff, 0xfe];
+    /// Outbound shape (no CSRCs, no extension): sequence 0x1234, timestamp
+    /// 0x56789abc, SSRC 0xdeadbeef, counter 0x01020304.
+    const KAT_AES_PLAIN: [u8; 35] = [
+        0x80, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xad, 0xbe, 0xef, 0x0a, 0x04, 0xd3,
+        0x9b, 0x3c, 0xe7, 0xe7, 0xb4, 0xb6, 0xac, 0x42, 0x39, 0xef, 0x6a, 0x8a, 0x81, 0xdf, 0xae,
+        0x10, 0x01, 0x02, 0x03, 0x04,
+    ];
+    const KAT_XCHACHA_PLAIN: [u8; 35] = [
+        0x80, 0x78, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xad, 0xbe, 0xef, 0xc8, 0x9f, 0xa7,
+        0x47, 0x7a, 0xc4, 0x82, 0xbb, 0x91, 0x87, 0x1c, 0x27, 0xaf, 0x5e, 0xec, 0xca, 0xc9, 0x5a,
+        0x2a, 0x01, 0x02, 0x03, 0x04,
+    ];
+    /// Inbound shape: two CSRCs (0xcafebabe, 0x0badf00d) and a one-word
+    /// RFC 8285 extension (preamble `be de 00 01`, body `10 ab 00 00`);
+    /// sequence 0x0102, timestamp 0x0a0b0c0d, SSRC 0x11223344, counter
+    /// 0xa1b2c3d4. The first 24 bytes are the cleartext AAD; the extension
+    /// body is encrypted together with the Opus frame.
+    const KAT_AES_EXTENDED: [u8; 51] = [
+        0x92, 0x78, 0x01, 0x02, 0x0a, 0x0b, 0x0c, 0x0d, 0x11, 0x22, 0x33, 0x44, 0xca, 0xfe, 0xba,
+        0xbe, 0x0b, 0xad, 0xf0, 0x0d, 0xbe, 0xde, 0x00, 0x01, 0x9b, 0xdd, 0x6d, 0xab, 0xe7, 0xda,
+        0x95, 0xc2, 0x70, 0xa0, 0x8a, 0x60, 0x87, 0x0c, 0xfe, 0x15, 0x52, 0xa6, 0x49, 0x49, 0xd1,
+        0x1a, 0x7c, 0xa1, 0xb2, 0xc3, 0xd4,
+    ];
+    const KAT_XCHACHA_EXTENDED: [u8; 51] = [
+        0x92, 0x78, 0x01, 0x02, 0x0a, 0x0b, 0x0c, 0x0d, 0x11, 0x22, 0x33, 0x44, 0xca, 0xfe, 0xba,
+        0xbe, 0x0b, 0xad, 0xf0, 0x0d, 0xbe, 0xde, 0x00, 0x01, 0x93, 0x72, 0x58, 0x88, 0x1a, 0xd7,
+        0x7e, 0xec, 0x3c, 0x20, 0x5d, 0xa8, 0x4c, 0xb6, 0xb1, 0x6e, 0x39, 0x12, 0x1a, 0x80, 0xde,
+        0x17, 0xfd, 0xa1, 0xb2, 0xc3, 0xd4,
+    ];
 
-        let cipher = Aes256Gcm::new_from_slice(secret_key).unwrap();
-        let mut nonce = [0_u8; 12];
-        nonce[8..12].copy_from_slice(&nonce_suffix);
-        let mut encrypted = opus_frame.to_vec();
-        cipher
-            .encrypt_in_place(AesNonce::from_slice(&nonce), &packet, &mut encrypted)
-            .unwrap();
-        packet.extend_from_slice(&encrypted);
-        packet.extend_from_slice(&nonce_suffix);
-        packet
-    }
-
-    fn encrypt_xchacha_rtp_packet(
-        secret_key: &[u8; 32],
-        sequence: u16,
-        timestamp: u32,
-        ssrc: u32,
-        nonce_suffix: [u8; 4],
-        opus_frame: &[u8],
-    ) -> Vec<u8> {
-        let mut packet = vec![0x80, 0x78];
-        packet.extend_from_slice(&sequence.to_be_bytes());
-        packet.extend_from_slice(&timestamp.to_be_bytes());
-        packet.extend_from_slice(&ssrc.to_be_bytes());
-
-        let cipher = XChaCha20Poly1305::new_from_slice(secret_key).unwrap();
-        let mut nonce = [0_u8; 24];
-        nonce[20..24].copy_from_slice(&nonce_suffix);
-        let mut encrypted = opus_frame.to_vec();
-        cipher
-            .encrypt_in_place(XNonce::from_slice(&nonce), &packet, &mut encrypted)
-            .unwrap();
-        packet.extend_from_slice(&encrypted);
-        packet.extend_from_slice(&nonce_suffix);
-        packet
+    fn kat_modes() -> [(VoiceEncryptionMode, &'static [u8], &'static [u8]); 2] {
+        [
+            (
+                VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                &KAT_AES_PLAIN,
+                &KAT_AES_EXTENDED,
+            ),
+            (
+                VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+                &KAT_XCHACHA_PLAIN,
+                &KAT_XCHACHA_EXTENDED,
+            ),
+        ]
     }
 
     #[test]
@@ -2383,82 +2458,90 @@ mod tests {
     }
 
     #[test]
-    fn voice_receive_decrypts_aes_gcm_rtp_size_packets() {
-        let secret_key = [7_u8; 32];
-        let opus_frame = [0xf8, 0xff, 0xfe];
-        let packet =
-            encrypt_aes_rtp_packet(&secret_key, 0x1234, 48_000, 42, [0, 0, 0, 9], &opus_frame);
+    fn voice_receive_decrypts_rtp_size_known_answer_vectors() {
+        for (mode, plain, _) in kat_modes() {
+            let rtp = parse_rtp_header(plain).unwrap();
+            assert_eq!(rtp.version, 2);
+            assert_eq!(rtp.payload_type, 120);
+            assert_eq!(rtp.sequence, 0x1234);
+            assert_eq!(rtp.timestamp, 0x5678_9abc);
+            assert_eq!(rtp.ssrc, 0xdead_beef);
+            assert_eq!(rtp.header_len, 12);
 
-        let rtp = parse_rtp_header(&packet).unwrap();
-        assert_eq!(rtp.version, 2);
-        assert_eq!(rtp.payload_type, 120);
-        assert_eq!(rtp.sequence, 0x1234);
-        assert_eq!(rtp.timestamp, 48_000);
-        assert_eq!(rtp.ssrc, 42);
-        assert_eq!(rtp.header_len, 12);
-
-        let decrypted = decrypt_transport_payload(
-            &packet,
-            &rtp,
-            &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
-            &secret_key,
-        )
-        .unwrap();
-        assert_eq!(decrypted, opus_frame);
+            let decrypted = decrypt_transport_payload(plain, &rtp, &mode, &KAT_KEY).unwrap();
+            assert_eq!(decrypted, KAT_OPUS, "{mode:?}");
+        }
     }
 
     #[test]
-    fn voice_receive_decrypts_xchacha_rtp_size_packets() {
-        let secret_key = [9_u8; 32];
-        let opus_frame = [0x11, 0x22, 0x33, 0x44];
-        let packet =
-            encrypt_xchacha_rtp_packet(&secret_key, 0x2233, 96_000, 99, [0, 0, 0, 10], &opus_frame);
+    fn voice_receive_authenticates_extension_preamble_and_decrypts_extension_body() {
+        for (mode, _, extended) in kat_modes() {
+            let rtp = parse_rtp_header(extended).unwrap();
+            assert!(rtp.extension);
+            assert_eq!(
+                (rtp.sequence, rtp.timestamp, rtp.ssrc),
+                (0x0102, 0x0a0b_0c0d, 0x1122_3344)
+            );
+            // Fixed header, two CSRCs, preamble, and the one-word body: the
+            // media payload offset once the packet is decrypted.
+            assert_eq!(rtp.header_len, 12 + 8 + 4 + 4);
 
-        let rtp = parse_rtp_header(&packet).unwrap();
-        let decrypted = decrypt_transport_payload(
-            &packet,
-            &rtp,
-            &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
-            &secret_key,
-        )
-        .unwrap();
-        assert_eq!(rtp.ssrc, 99);
-        assert_eq!(decrypted, opus_frame);
+            // The extension body is not part of the media payload.
+            let decrypted = decrypt_transport_payload(extended, &rtp, &mode, &KAT_KEY).unwrap();
+            assert_eq!(decrypted, KAT_OPUS, "{mode:?}");
+
+            // CSRCs and the preamble are authenticated (AAD), the extension
+            // body is ciphertext: flipping a bit in either must fail.
+            for index in [12, 20, 23, 24, 27] {
+                let mut tampered = extended.to_vec();
+                tampered[index] ^= 0x01;
+                let rtp = parse_rtp_header(&tampered).unwrap();
+                assert!(
+                    decrypt_transport_payload(&tampered, &rtp, &mode, &KAT_KEY).is_err(),
+                    "{mode:?}: byte {index} is not authenticated"
+                );
+            }
+        }
     }
 
     #[test]
-    fn voice_outbound_rtp_state_encrypts_and_advances_counters() {
-        let secret_key = [7_u8; 32];
-        let opus_frame = [0xf8, 0xff, 0xfe];
-        let mut state = VoiceOutboundRtpState::with_counters(42, 0x1234, 48_000, 9);
+    fn voice_receive_rejects_packets_too_short_for_tag_and_nonce() {
+        for (mode, plain, extended) in kat_modes() {
+            for packet in [plain, extended] {
+                let rtp = parse_rtp_header(packet).unwrap();
+                // Long enough for the parsed header, too short for the
+                // 16-byte tag plus the 4-byte counter.
+                let truncated = &packet[..rtp.header_len + 19];
+                let rtp = parse_rtp_header(truncated).unwrap();
+                assert!(decrypt_transport_payload(truncated, &rtp, &mode, &KAT_KEY)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("too short"));
+            }
+        }
+    }
 
-        let packet = state
-            .build_packet(
-                &opus_frame,
-                Duration::from_millis(20),
-                &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
-                &secret_key,
-            )
-            .unwrap();
+    #[test]
+    fn voice_outbound_rtp_state_matches_known_answer_vectors_and_advances_counters() {
+        for (mode, plain, _) in kat_modes() {
+            let mut state =
+                VoiceOutboundRtpState::with_counters(0xdead_beef, 0x1234, 0x5678_9abc, 0x0102_0304);
 
-        assert_eq!(packet.rtp.version, 2);
-        assert_eq!(packet.rtp.payload_type, 120);
-        assert_eq!(packet.rtp.sequence, 0x1234);
-        assert_eq!(packet.rtp.timestamp, 48_000);
-        assert_eq!(packet.rtp.ssrc, 42);
-        assert_eq!(packet.nonce_suffix, [0, 0, 0, 9]);
-        assert_eq!(state.sequence, 0x1235);
-        assert_eq!(state.timestamp, 48_960);
-        assert_eq!(state.nonce_suffix, 10);
+            let packet = state
+                .build_packet(&KAT_OPUS, Duration::from_millis(20), &mode, &KAT_KEY)
+                .unwrap();
 
-        let decrypted = decrypt_transport_payload(
-            &packet.bytes,
-            &packet.rtp,
-            &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
-            &secret_key,
-        )
-        .unwrap();
-        assert_eq!(decrypted, opus_frame);
+            assert_eq!(packet.bytes, plain, "{mode:?}");
+            assert_eq!(packet.rtp.version, 2);
+            assert_eq!(packet.rtp.payload_type, 120);
+            assert_eq!(packet.rtp.sequence, 0x1234);
+            assert_eq!(packet.rtp.timestamp, 0x5678_9abc);
+            assert_eq!(packet.rtp.ssrc, 0xdead_beef);
+            assert_eq!(packet.nonce_suffix, [0x01, 0x02, 0x03, 0x04]);
+            assert_eq!(state.sequence, 0x1235);
+            assert_eq!(state.timestamp, 0x5678_9abc + 960);
+            assert_eq!(state.nonce_suffix, 0x0102_0305);
+        }
     }
 
     #[test]
@@ -2508,7 +2591,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_outbound_rtp_state_supports_xchacha_and_rejects_empty_frames() {
+    fn voice_outbound_rtp_state_round_trips_xchacha_and_rejects_empty_frames() {
         let secret_key = [9_u8; 32];
         let opus_frame = [0x11, 0x22, 0x33, 0x44];
         let mut state = VoiceOutboundRtpState::with_counters(99, 0x2233, 96_000, 10);
@@ -2772,13 +2855,12 @@ mod tests {
             let select_protocol_payload: Value = serde_json::from_str(&select_protocol).unwrap();
             assert_eq!(select_protocol_payload["op"], serde_json::json!(1));
 
-            let secret_key = vec![7_u8; 32];
             ws.send(WsMessage::Text(
                 serde_json::json!({
                     "op": 4,
                     "d": {
                         "mode": "aead_aes256_gcm_rtpsize",
-                        "secret_key": secret_key,
+                        "secret_key": KAT_KEY.to_vec(),
                         "dave_protocol_version": 0
                     }
                 })
@@ -2788,14 +2870,9 @@ mod tests {
             .await
             .unwrap();
 
-            let raw_udp_packet = encrypt_aes_rtp_packet(
-                &[7_u8; 32],
-                0x1234,
-                42,
-                42,
-                [0, 0, 0, 1],
-                &[0xf8, 0xff, 0xfe],
-            );
+            // A packet with CSRCs and a header extension, as real voice
+            // servers send: the runtime must hand over only the Opus frame.
+            let raw_udp_packet = KAT_AES_EXTENDED;
             udp_listener
                 .send_to(&raw_udp_packet, remote_addr)
                 .await
@@ -2859,19 +2936,19 @@ mod tests {
         let raw_packet = handle.recv_raw_udp_packet(64).await.unwrap();
         assert_eq!(raw_packet.version, Some(2));
         assert_eq!(raw_packet.payload_type, Some(120));
-        assert_eq!(raw_packet.sequence, Some(0x1234));
-        assert_eq!(raw_packet.timestamp, Some(42));
-        assert_eq!(raw_packet.ssrc, Some(42));
-        assert!(raw_packet.bytes.len() > 16);
+        assert_eq!(raw_packet.sequence, Some(0x0102));
+        assert_eq!(raw_packet.timestamp, Some(0x0a0b_0c0d));
+        assert_eq!(raw_packet.ssrc, Some(0x1122_3344));
+        assert_eq!(raw_packet.bytes, KAT_AES_EXTENDED);
         let received = handle.recv_voice_packet(64).await.unwrap();
-        assert_eq!(received.rtp.ssrc, 42);
-        assert_eq!(received.opus_frame, vec![0xf8, 0xff, 0xfe]);
+        assert_eq!(received.rtp.ssrc, 0x1122_3344);
+        assert_eq!(received.opus_frame, KAT_OPUS);
         let mut decoder = VoiceOpusDecoder::discord_default().unwrap();
         let decoded = handle
             .recv_decoded_voice_packet(&mut decoder, 64)
             .await
             .unwrap();
-        assert_eq!(decoded.packet.rtp.ssrc, 42);
+        assert_eq!(decoded.packet.rtp.ssrc, 0x1122_3344);
         assert_eq!(decoded.sample_rate, 48_000);
         assert_eq!(decoded.channels, 2);
         assert_eq!(decoded.pcm.len(), decoded.samples_per_channel * 2);

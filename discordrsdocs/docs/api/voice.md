@@ -204,6 +204,15 @@ rest.modify_user_voice_state_from_request(
 .await?;
 ```
 
+## Transport Encryption
+
+`VoiceRuntimeHandle` supports the two transport modes Discord's voice gateway offers, `aead_aes256_gcm_rtpsize` (preferred when offered) and `aead_xchacha20_poly1305_rtpsize` (always offered). Both follow the same packet layout, which matches @discordjs/voice and Songbird:
+
+- **Nonce.** Every packet ends with a 32-bit counter. The AEAD nonce is that counter's four big-endian bytes followed by zeros (12 bytes for AES-256-GCM, 24 for XChaCha20-Poly1305). Discord's docs only say the counter is "appended to payload"; the "4 least significant bytes" wording on the same page describes DAVE's frame nonce, which `davey` handles, not transport encryption.
+- **Cleartext and AAD.** The fixed RTP header, the CSRCs and, when the X bit is set, only the 4-byte extension preamble are sent in the clear and authenticated as additional data. The extension body is encrypted together with the payload. After decrypting, the runtime strips the extension body, so `VoiceReceivedPacket::opus_frame` holds only the Opus (or DAVE) frame; `VoiceRtpHeader::header_len` is the media offset after decryption, not where the ciphertext starts.
+
+Before 3.0 the counter went into the last four nonce bytes and received extension bodies were treated as AAD, so packets sent to or received from real Discord voice servers failed authentication. Known-answer vectors from `ci/voice_transport_kat.py`, generated outside the crate and cross-checked against Node's AES-256-GCM and libsodium, now pin both directions. The live DAVE harness below checks MLS transitions, not transport media.
+
 ## DAVE Boundary
 
 Default `voice` can send already-encoded Opus frames, decrypt Discord voice transport encryption, and decode received Opus to PCM. It does not claim full DAVE/MLS interoperability by itself.
