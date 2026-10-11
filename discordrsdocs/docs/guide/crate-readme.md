@@ -85,7 +85,7 @@ async fn main() {
 
 ```rust
 use discordrs::{
-    button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
+    create_container, send_container_message, ButtonConfig, ButtonStyle, DiscordHttpClient,
 };
 
 async fn send_support_panel(
@@ -93,8 +93,8 @@ async fn send_support_panel(
     channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
-        ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
-        ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
+        ButtonConfig::new("ticket_open", "Open Ticket").style(ButtonStyle::PRIMARY),
+        ButtonConfig::new("ticket_status", "Check Status").style(ButtonStyle::SECONDARY),
     ];
 
     let container = create_container(

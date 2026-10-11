@@ -176,17 +176,15 @@ assert_eq!(ctx.shard_pair(), (0, 1));
 Use command builders instead of passing raw JSON command bodies.
 
 ```rust
-use discordrs::{
-    option_type, CommandOptionBuilder, PermissionsBitField, SlashCommandBuilder,
-};
+use discordrs::{CommandOptionBuilder, CommandOptionType, Permissions, SlashCommandBuilder};
 
 let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
     .string_option("topic", "Ticket topic", true)
     .option(
-        CommandOptionBuilder::new(option_type::BOOLEAN, "private", "Create as private ticket")
+        CommandOptionBuilder::new(CommandOptionType::BOOLEAN, "private", "Create as private ticket")
             .required(false),
     )
-    .default_member_permissions(PermissionsBitField(0))
+    .default_member_permissions(Permissions::from_bits(0))
     .build();
 ```
 
@@ -243,10 +241,11 @@ Guild channel reordering and OAuth2 guild joins have typed request bodies:
 use discordrs::{
     AddGroupDmRecipient, AddGuildMember, AuditLogQuery, BeginGuildPruneRequest, ChannelId,
     CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateStageInstance, DiscordHttpClient,
-    GetGuildQuery, GuildBansQuery, GuildId, GuildWidgetImageStyle, ModifyCurrentMember, ModifyGuild,
-    ModifyGuildChannelPosition, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
-    ModifyGuildRolePosition, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
-    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, UserId, WelcomeScreenChannel,
+    GetGuildQuery, GuildBansQuery, GuildId, GuildWidgetImageStyle, ModifyCurrentMember,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildMember, ModifyGuildOnboarding,
+    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
+    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, StageInstancePrivacyLevel, UserId,
+    WelcomeScreenChannel,
 };
 
 async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
@@ -439,7 +438,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
         .create_stage_instance_from_request(&CreateStageInstance {
             channel_id: channel_id,
             topic: "Town hall".to_string(),
-            privacy_level: Some(2),
+            privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
             send_start_notification: Some(true),
             guild_scheduled_event_id: None,
         })
@@ -448,7 +447,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     http.modify_stage_instance_from_request(
         stage.channel_id,
         &ModifyStageInstance {
-            privacy_level: Some(2),
+            privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
         },
     )
     .await?;
@@ -507,7 +506,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 If you want a typed message body instead of hand-written JSON, use `MessageBuilder` and `send_message`.
 
 ```rust
-use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, MessageBuilder, button_style};
+use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageBuilder};
 
 async fn send_panel(
     http: &discordrs::DiscordHttpClient,
@@ -521,7 +520,7 @@ async fn send_panel(
                     ButtonBuilder::new()
                         .custom_id("ticket_open")
                         .label("Open Ticket")
-                        .style(button_style::PRIMARY),
+                        .style(ButtonStyle::PRIMARY),
                 )
                 .build(),
         ]);
@@ -535,7 +534,7 @@ For Components V2 containers, the existing builder path still works:
 
 ```rust
 use discordrs::{
-    button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
+    create_container, send_container_message, ButtonConfig, ButtonStyle, DiscordHttpClient,
 };
 
 async fn send_support_panel(
@@ -543,8 +542,8 @@ async fn send_support_panel(
     channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
-        ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
-        ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
+        ButtonConfig::new("ticket_open", "Open Ticket").style(ButtonStyle::PRIMARY),
+        ButtonConfig::new("ticket_status", "Check Status").style(ButtonStyle::SECONDARY),
     ];
 
     let container = create_container(
@@ -626,7 +625,7 @@ async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::Discor
 Current application reads and edits are typed through `Application`, `ModifyCurrentApplication`, `ApplicationInstallParams`, and `ApplicationIntegrationTypeConfig`. The existing generic `edit_current_application(...)` helper is still available for newly released Discord fields.
 
 ```rust
-use discordrs::{ApplicationInstallParams, DiscordHttpClient, ModifyCurrentApplication, PermissionsBitField};
+use discordrs::{ApplicationInstallParams, DiscordHttpClient, ModifyCurrentApplication, Permissions};
 
 async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
     let app = http.get_current_application().await?;
@@ -636,7 +635,7 @@ async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::D
         description: Some("Support utilities".to_string()),
         install_params: Some(ApplicationInstallParams {
             scopes: vec!["bot".to_string(), "applications.commands".to_string()],
-            permissions: PermissionsBitField(2048),
+            permissions: Permissions::from_bits(2048),
         }),
         tags: Some(vec!["utility".to_string()]),
         ..ModifyCurrentApplication::default()
@@ -700,8 +699,8 @@ Channel Resource gaps are typed too:
 
 ```rust
 use discordrs::{
-    CreateChannelInvite, EditChannelPermission, FileAttachment, OverwriteTarget,
-    PermissionsBitField, SetVoiceChannelStatus,
+    CreateChannelInvite, EditChannelPermission, FileAttachment, OverwriteTarget, Permissions,
+    SetVoiceChannelStatus,
 };
 
 async fn channel_admin(
@@ -736,7 +735,7 @@ async fn channel_admin(
     let target_users_csv = http.get_invite_target_users_csv("abc123").await?;
     println!("target user csv bytes: {}", target_users_csv.len());
     let job = http.get_invite_target_users_job_status("abc123").await?;
-    println!("target user job status: {}", job.status);
+    println!("target user job status: {:?}", job.status);
 
     http.set_voice_channel_status(
         channel_id,
@@ -753,7 +752,7 @@ async fn channel_admin(
         channel_id,
         target,
         &EditChannelPermission {
-            allow: Some(PermissionsBitField(1024)),
+            allow: Some(Permissions::from_bits(1024)),
             ..EditChannelPermission::for_target(target)
         },
     )
@@ -904,9 +903,7 @@ The `discordrs::response::InteractionResponder` trait puts `reply`, `defer`, `ed
 
 ```rust
 use discordrs::response::{AutocompleteChoice, InteractionResponder};
-use discordrs::{
-    text_input_style, Context, Event, Interaction, ModalBuilder, TextInputBuilder,
-};
+use discordrs::{Context, Event, Interaction, ModalBuilder, TextInputBuilder, TextInputStyle};
 
 async fn handle(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
     let Event::InteractionCreate(event) = event else {
@@ -942,7 +939,7 @@ async fn handle(ctx: Context, event: Event) -> Result<(), discordrs::DiscordErro
                     TextInputBuilder::new(
                         "feedback_text",
                         "Your feedback",
-                        text_input_style::PARAGRAPH,
+                        TextInputStyle::PARAGRAPH,
                     ),
                 );
                 command.show_modal(&ctx.http, modal).await?;
@@ -982,7 +979,7 @@ The acknowledgement state is shared atomically across clones of one interaction 
 `create_interaction_response_with_result(...)` sends the callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource, mirroring discord.js's `withResponse: true`. Use it when you need the created message (or activity instance) immediately instead of fetching it afterwards:
 
 ```rust
-use discordrs::{DiscordHttpClient, InteractionCallbackResponse};
+use discordrs::{DiscordHttpClient, InteractionCallbackResponse, InteractionResponseType};
 
 async fn respond_and_inspect(
     http: &DiscordHttpClient,
@@ -994,7 +991,7 @@ async fn respond_and_inspect(
             interaction_id,
             interaction_token,
             &InteractionCallbackResponse {
-                kind: 4,
+                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(serde_json::json!({ "content": "Ticket created" })),
             },
         )
@@ -1362,6 +1359,7 @@ Guild lifecycle routes are typed too:
 
 ```rust
 use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::MfaLevel;
 use discordrs::DiscordHttpClient;
 
 async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
@@ -1385,8 +1383,8 @@ async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::Disc
         .await?;
 
     // POST /guilds/{id}/mfa — returns the updated level.
-    let level = http.modify_guild_mfa_level(guild.id, 1).await?;
-    println!("mfa level: {}", level.level);
+    let level = http.modify_guild_mfa_level(guild.id, MfaLevel::ELEVATED).await?;
+    println!("mfa level: {:?}", level.level);
 
     // DELETE /guilds/{id} — the bot must own the guild.
     http.delete_guild(from_template.id).await?;
@@ -1876,17 +1874,17 @@ Validation errors name the field, the limit, and the actual value, so a too-long
 
 Read-side payloads that used to be raw `serde_json::Value` are now tolerant typed structures:
 
-- `Message.components` is a `Vec<MessageComponent>` — one deliberately wide struct that covers the whole component tree (`kind` carries the raw component `type`; every known field is optional). `MessageComponent::iter()` walks the component and every nested child depth-first, and associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `CONTAINER`, ...) name the type codes:
+- `Message.components` is a `Vec<MessageComponent>` — one deliberately wide struct that covers the whole component tree (`kind` is the component `type` as a `ComponentType`; every other known field is optional). `MessageComponent::iter()` walks the component and every nested child depth-first, and the `ComponentType` constants (`ComponentType::BUTTON`, `STRING_SELECT`, `CONTAINER`, ...) name the type codes:
 
 ```rust
-use discordrs::{Message, MessageComponent};
+use discordrs::{ComponentType, Message, MessageComponent};
 
 fn find_custom_ids(message: &Message) -> Vec<String> {
     message
         .components
         .iter()
         .flat_map(|component| component.iter())
-        .filter(|component| component.kind == MessageComponent::BUTTON)
+        .filter(|component| component.kind == ComponentType::BUTTON)
         .filter_map(|component| component.custom_id.clone())
         .collect()
 }

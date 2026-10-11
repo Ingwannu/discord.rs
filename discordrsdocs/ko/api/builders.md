@@ -14,7 +14,7 @@
 ```rust
 let button = ButtonBuilder::new()
     .label("Open")
-    .style(button_style::PRIMARY)
+    .style(ButtonStyle::PRIMARY)
     .custom_id("open_ticket");
 ```
 

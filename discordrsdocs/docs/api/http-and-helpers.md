@@ -217,7 +217,7 @@ let from_template = rest
     .await?;
 
 // POST /guilds/{id}/mfa — returns the updated GuildMfaLevel.
-let level = rest.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+let level = rest.modify_guild_mfa_level(guild.id, discordrs::MfaLevel::ELEVATED).await?;
 
 // DELETE /guilds/{id} — the bot must own the guild.
 rest.delete_guild(from_template.id).await?;
@@ -253,14 +253,14 @@ let forwarded = rest
 `create_interaction_response_with_result(...)` sends the interaction callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource — mirroring discord.js's `withResponse: true` — so the created message (or activity instance) is available immediately:
 
 ```rust
-use discordrs::InteractionCallbackResponse;
+use discordrs::{InteractionCallbackResponse, InteractionResponseType};
 
 let result = rest
     .create_interaction_response_with_result(
         interaction_id,
         interaction_token,
         &InteractionCallbackResponse {
-            kind: 4,
+            kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
             data: Some(serde_json::json!({ "content": "Done" })),
         },
     )
@@ -278,7 +278,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 Current application management is typed through `Application`, `ModifyCurrentApplication`, `ApplicationInstallParams`, and `ApplicationIntegrationTypeConfig`:
 
 ```rust
-use discordrs::{ApplicationInstallParams, ModifyCurrentApplication, PermissionsBitField};
+use discordrs::{ApplicationInstallParams, ModifyCurrentApplication, Permissions};
 
 let application = rest.get_current_application().await?;
 println!("editing {}", application.name);
@@ -288,7 +288,7 @@ let updated = rest
         description: Some("Support utilities".to_string()),
         install_params: Some(ApplicationInstallParams {
             scopes: vec!["bot".to_string(), "applications.commands".to_string()],
-            permissions: PermissionsBitField(2048),
+            permissions: Permissions::from_bits(2048),
         }),
         tags: Some(vec!["utility".to_string()]),
         ..ModifyCurrentApplication::default()
@@ -520,7 +520,7 @@ use discordrs::{
     BeginGuildPruneRequest, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
     CreateStageInstance, ModifyCurrentMember, ModifyGuild, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
-    ModifyStageInstance, RoleColors, WelcomeScreenChannel,
+    ModifyStageInstance, RoleColors, StageInstancePrivacyLevel, WelcomeScreenChannel,
 };
 
 rest.modify_guild(
@@ -653,7 +653,7 @@ let stage = rest
     .create_stage_instance_from_request(&CreateStageInstance {
         channel_id,
         topic: "Town hall".to_string(),
-        privacy_level: Some(2),
+        privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
         send_start_notification: Some(true),
         guild_scheduled_event_id: None,
     })
@@ -662,7 +662,7 @@ let stage = rest
 rest.modify_stage_instance_from_request(
     stage.channel_id,
     &ModifyStageInstance {
-        privacy_level: Some(2),
+        privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
     },
 )
 .await?;
@@ -771,7 +771,7 @@ Use `FileAttachment::new("target_users.csv", b"user_id\n...")` for the `target_u
 Voice-channel status and permission overwrite updates are typed through `SetVoiceChannelStatus` and `EditChannelPermission`:
 
 ```rust
-use discordrs::{EditChannelPermission, OverwriteTarget, PermissionsBitField, SetVoiceChannelStatus};
+use discordrs::{EditChannelPermission, OverwriteTarget, Permissions, SetVoiceChannelStatus};
 
 rest
     .set_voice_channel_status(
@@ -790,7 +790,7 @@ rest
         channel_id,
         target,
         &EditChannelPermission {
-            allow: Some(PermissionsBitField(1024)),
+            allow: Some(Permissions::from_bits(1024)),
             ..EditChannelPermission::for_target(target)
         },
     )

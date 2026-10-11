@@ -12,11 +12,11 @@ The builders module gives a fluent API for Components V2 and modal payloads.
 ## Common Pattern
 
 ```rust
-use discordrs::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, button_style};
+use discordrs::{ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentsV2Message};
 
 let btn = ButtonBuilder::new()
     .label("Open")
-    .style(button_style::PRIMARY)
+    .style(ButtonStyle::PRIMARY)
     .custom_id("open_ticket");
 
 let row = ActionRowBuilder::new().add_button(btn);
@@ -45,11 +45,11 @@ let row = ActionRowBuilder::new().add_select_menu(
 ## Container Helper
 
 ```rust
-use discordrs::{create_container, ButtonConfig, button_style};
+use discordrs::{create_container, ButtonConfig, ButtonStyle};
 
 let buttons = vec![
-    ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
-    ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
+    ButtonConfig::new("ticket_open", "Open Ticket").style(ButtonStyle::PRIMARY),
+    ButtonConfig::new("ticket_status", "Check Status").style(ButtonStyle::SECONDARY),
 ];
 
 let container = create_container(

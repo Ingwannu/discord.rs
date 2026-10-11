@@ -76,7 +76,7 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
   ```rust
   let button = ButtonBuilder::new()
       .label("Click me")
-      .style(button_style::PRIMARY)
+      .style(ButtonStyle::PRIMARY)
       .custom_id("btn_1");
   let row = ActionRowBuilder::new().add_button(button);
   let message = ComponentsV2Message::new().add_action_row(row);
@@ -227,7 +227,7 @@ Re-exports parsers and provides JSON helpers:
 
 ## 6. Core Types & Constants
 
-- **Constants** (`src/constants.rs`): Component type codes, button styles, text-input styles, separator spacings, gateway opcodes.
+- **Constants** (`src/constants.rs`): gateway intents and the components-v2 message flag. Component types, button styles, text-input styles, and separator spacings are the open discriminants `ComponentType`, `ButtonStyle`, `TextInputStyle`, and `SeparatorSpacing` since 3.0.
 - **Types** (`src/types.rs`): 
   - `Error` alias, `invalid_data_error`.
   - `ButtonConfig`, `Emoji`, `SelectOption`, `MediaGalleryItem`, `MediaInfo`.

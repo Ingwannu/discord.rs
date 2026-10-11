@@ -176,7 +176,7 @@ let from_template = rest
     .await?;
 
 // POST /guilds/{id}/mfa — 갱신된 GuildMfaLevel을 반환
-let level = rest.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+let level = rest.modify_guild_mfa_level(guild.id, discordrs::MfaLevel::ELEVATED).await?;
 
 // DELETE /guilds/{id} — 봇이 길드 소유자여야 함
 rest.delete_guild(from_template.id).await?;
@@ -211,14 +211,14 @@ let forwarded = rest
 `create_interaction_response_with_result(...)`는 `with_response=true`로 인터랙션 콜백을 보내고 타입드 `InteractionCallbackResult` 리소스를 반환합니다. discord.js의 `withResponse: true`에 해당하며, 생성된 메시지를 즉시 확인할 수 있습니다.
 
 ```rust
-use discordrs::InteractionCallbackResponse;
+use discordrs::{InteractionCallbackResponse, InteractionResponseType};
 
 let result = rest
     .create_interaction_response_with_result(
         interaction_id,
         interaction_token,
         &InteractionCallbackResponse {
-            kind: 4,
+            kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
             data: Some(serde_json::json!({ "content": "완료" })),
         },
     )

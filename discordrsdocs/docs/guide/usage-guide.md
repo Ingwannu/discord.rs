@@ -95,11 +95,11 @@ Double acknowledgements fail locally: the response state is shared atomically ac
 ## 3. Register typed commands
 
 ```rust
-use discordrs::{option_type, CommandOptionBuilder, SlashCommandBuilder};
+use discordrs::{CommandOptionBuilder, CommandOptionType, SlashCommandBuilder};
 
 let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
     .option(
-        CommandOptionBuilder::new(option_type::STRING, "topic", "Ticket topic")
+        CommandOptionBuilder::new(CommandOptionType::STRING, "topic", "Ticket topic")
             .required(true)
             .autocomplete(true),
     )

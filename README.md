@@ -122,6 +122,7 @@ Recent API cleanup tightened the public surface:
 - `RestClient` now exposes the typed REST methods as the supported public path. The old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands` are no longer public.
 - Builder implementation submodules are private. Import builders from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel` because its ID is optional until Discord assigns one. Use `ApplicationCommand::id_opt()` and `ApplicationCommand::created_at()` instead.
+- 3.0 (unreleased): integer discriminants are open newtypes (`ChannelType`, `ButtonStyle`, `CommandOptionType`, `InteractionResponseType`, ...) with named constants, the 2.x `u8` constant modules (`button_style`, `option_type`, ...) are gone, and permission sets are `Permissions` (`PermissionsBitField` is a deprecated alias). See "Migrating from 2.x discriminants" in [Models and Constants](discordrsdocs/docs/api/core-types-and-constants.md).
 
 If you are upgrading existing code, the common replacements are:
 
@@ -186,17 +187,15 @@ async fn main() {
 ## Typed APIs
 
 ```rust
-use discordrs::{
-    option_type, CommandOptionBuilder, PermissionsBitField, SlashCommandBuilder,
-};
+use discordrs::{CommandOptionBuilder, CommandOptionType, Permissions, SlashCommandBuilder};
 
 let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
     .option(
-        CommandOptionBuilder::new(option_type::STRING, "topic", "Ticket topic")
+        CommandOptionBuilder::new(CommandOptionType::STRING, "topic", "Ticket topic")
             .required(true)
             .autocomplete(true),
     )
-    .default_member_permissions(PermissionsBitField(0))
+    .default_member_permissions(Permissions::from_bits(0))
     .build();
 ```
 
@@ -204,7 +203,7 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 
 ```rust
 use discordrs::{
-    button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
+    create_container, send_container_message, ButtonConfig, ButtonStyle, DiscordHttpClient,
 };
 
 async fn send_support_panel(
@@ -212,8 +211,8 @@ async fn send_support_panel(
     channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
-        ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
-        ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),
+        ButtonConfig::new("ticket_open", "Open Ticket").style(ButtonStyle::PRIMARY),
+        ButtonConfig::new("ticket_status", "Check Status").style(ButtonStyle::SECONDARY),
     ];
 
     let container = create_container(

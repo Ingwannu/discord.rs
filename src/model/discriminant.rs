@@ -27,8 +27,11 @@
 //!
 //! Since phase 3 series 3 every model field, request body, query, event
 //! field, and builder setter that carries one of these values uses the
-//! newtype. Seven names replaced 2.x types of the same name; the 2.x
-//! versions are gone, not deprecated:
+//! newtype. The one deliberate exception is
+//! [`MessageComponent::style`](crate::model::MessageComponent::style), whose
+//! meaning depends on the component type; its typed accessors are
+//! `button_style()` and `text_input_style()`. Seven names replaced 2.x types
+//! of the same name; the 2.x versions are gone, not deprecated:
 //!
 //! | Type | 2.x definition it replaced |
 //! |---|---|

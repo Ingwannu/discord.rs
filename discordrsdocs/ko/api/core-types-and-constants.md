@@ -9,10 +9,7 @@
 
 ## `src/constants.rs`
 
-- 컴포넌트 타입 코드
-- 버튼 스타일
-- 텍스트 인풋 스타일
-- 구분선 간격
+- 2.x의 `u8` 상수 모듈(`component_type`, `button_style`, `separator_spacing`, `text_input_style`)은 3.0에서 삭제했습니다. 같은 값은 열린 판별값 타입의 상수입니다(`ComponentType::BUTTON`, `ButtonStyle::PRIMARY`, `TextInputStyle::PARAGRAPH`, `SeparatorSpacing::LARGE`).
 - 게이트웨이 opcode
 - 게이트웨이 인텐트 — 2.1의 Poll 인텐트 `gateway_intents::GUILD_MESSAGE_POLLS`(`1 << 24`)와 `gateway_intents::DIRECT_MESSAGE_POLLS`(`1 << 25`)는 `NON_PRIVILEGED`에 포함되며, 비트 3의 `GUILD_EXPRESSIONS` 별칭도 제공됩니다
 
@@ -149,11 +146,68 @@ fn ids(raw: &str) -> Result<(GuildId, ChannelId), DiscordError> {
 
 ### 열린 판별값
 
-정수 열거값은 이름 붙은 상수를 가진 투명 newtype입니다(`MessageType::REPLY`, `ComponentType::CONTAINER`, `ButtonStyle::PREMIUM` 등). 각 타입은 `new(raw)`, `get()`, `name()`을 제공합니다. `Debug`는 상수 이름을 출력하고, 이 버전이 모르는 값이면 `Unknown(n)`을 출력합니다. 직렬화는 정수 그대로입니다(`#[serde(transparent)]`). `Default`는 없습니다. 모르는 값도 그대로 왕복하며, 저장 폭보다 큰 값은 잘리지 않고 디코딩 오류가 됩니다. 저장 폭은 모두 `u8`이고 `AuditLogActionType`만 `u16`입니다.
+정수 열거값은 이름 붙은 상수를 가진 투명 newtype입니다(`ChannelType::PUBLIC_THREAD`, `MessageType::REPLY`, `ComponentType::CONTAINER`, `ButtonStyle::PREMIUM` 등). 각 타입은 `new(raw)`, `get()`, `name()`을 제공합니다. `Debug`는 상수 이름을 출력하고, 이 버전이 모르는 값이면 `Unknown(n)`을 출력합니다. 직렬화는 정수 그대로입니다(`#[serde(transparent)]`). `Default`는 없습니다. 모르는 값도 그대로 왕복하며, 저장 폭보다 큰 값은 잘리지 않고 디코딩 오류가 됩니다. 저장 폭은 모두 `u8`이고 `AuditLogActionType`만 `u16`입니다. 상수는 `match` 패턴으로 쓸 수 있지만 열린 집합이라 `_` 갈래가 항상 필요합니다.
 
-크레이트 루트에서 바로 쓸 수 있는 타입: `OverwriteType`, `VideoQualityMode`, `ForumSortOrder`, `ForumLayout`, `ComponentType`, `ButtonStyle`, `TextInputStyle`, `SeparatorSpacing`, `MessageType`, `MessageActivityType`, `ReactionType`, `PollLayoutType`, `InteractionType`, `InteractionResponseType`, `CommandType`, `CommandOptionType`, `CommandPermissionType`, `RoleConnectionMetadataType`, `VerificationLevel`, `DefaultMessageNotificationLevel`, `ExplicitContentFilterLevel`, `MfaLevel`, `PremiumTier`, `GuildNsfwLevel`, `ScheduledEventStatus`, `ScheduledEventEntityType`, `ScheduledEventPrivacyLevel`, `StageInstancePrivacyLevel`, `AutoModerationEventType`, `AutoModerationTriggerType`, `AutoModerationActionType`, `KeywordPresetType`, `AuditLogActionType`, `InviteType`, `InviteTargetType`, `InviteTargetUsersJobStatusType`, `WebhookType`, `StickerType`, `StickerFormatType`, `SkuType`, `SkuAccessType`(문서화된 값이 없어 이름 없음), `EntitlementType`, `EntitlementOwnerType`, `SubscriptionStatus`, `UserPremiumType`, `ConnectionVisibility`.
+```rust
+use discordrs::{Channel, ChannelType};
 
-일곱 개 이름은 아직 2.x 타입이 쓰고 있습니다. 시리즈 3에서 교체하기 전까지 새 버전은 `discordrs::model::discriminant::{ChannelType, MessageReferenceType, ApplicationIntegrationType, InteractionContextType, ApplicationCommandHandlerType, ActivityType, WebhookPayloadType}` 경로로만 쓸 수 있습니다. 새 `ChannelType`은 스레드 타입을 포함하고 `is_thread()`, `is_voice_based()`, `is_text_based()`(discord.js `isTextBased()`와 같은 집합)를 제공합니다. 이 헬퍼는 채널 종류만 분류합니다. 권한, 보관되거나 잠긴 스레드, 가려진 채널 때문에 여전히 메시지를 못 보낼 수 있으므로, 결과가 메시지를 보낼 수 있다는 뜻은 아닙니다.
+fn describe(channel: &Channel) -> &'static str {
+    match channel.kind {
+        ChannelType::GUILD_TEXT | ChannelType::GUILD_ANNOUNCEMENT => "text",
+        kind if kind.is_thread() => "thread",
+        kind if kind.is_voice_based() => "voice",
+        _ => "other",
+    }
+}
+```
+
+시리즈 3부터 판별값을 담는 모든 모델 필드, 요청 본문, 쿼리, 게이트웨이 이벤트 필드, 빌더 setter가 newtype을 씁니다. 원본 모듈은 `discordrs::model::discriminant`이고, 모든 타입을 `discordrs::model`과 크레이트 루트에서도 내보냅니다: `ChannelType`, `OverwriteType`, `VideoQualityMode`, `ForumSortOrder`, `ForumLayout`, `ComponentType`, `ButtonStyle`, `TextInputStyle`, `SeparatorSpacing`, `MessageType`, `MessageReferenceType`, `MessageActivityType`, `ReactionType`, `PollLayoutType`, `BaseTheme`, `InteractionType`, `InteractionResponseType`, `CommandType`, `CommandOptionType`, `CommandPermissionType`, `ApplicationIntegrationType`, `InteractionContextType`, `ApplicationCommandHandlerType`, `RoleConnectionMetadataType`, `ApplicationEventWebhookStatus`, `VerificationLevel`, `DefaultMessageNotificationLevel`, `ExplicitContentFilterLevel`, `MfaLevel`, `PremiumTier`, `GuildNsfwLevel`, `OnboardingMode`, `IntegrationExpireBehavior`, `ScheduledEventStatus`, `ScheduledEventEntityType`, `ScheduledEventPrivacyLevel`, `RecurrenceRuleFrequency`, `RecurrenceRuleWeekday`, `RecurrenceRuleMonth`, `StageInstancePrivacyLevel`, `AutoModerationEventType`, `AutoModerationTriggerType`, `AutoModerationActionType`, `KeywordPresetType`, `AuditLogActionType`, `InviteType`, `InviteTargetType`, `InviteTargetUsersJobStatusType`, `WebhookType`, `WebhookPayloadType`, `StickerType`, `StickerFormatType`, `SkuType`, `SkuAccessType`(문서화된 값이 없어 이름 없음), `EntitlementType`, `EntitlementOwnerType`, `SubscriptionStatus`, `UserPremiumType`, `ConnectionVisibility`, `ActivityType`, `VoiceChannelEffectAnimationType`.
+
+`ChannelType`은 스레드 타입을 포함하고 `is_thread()`, `is_voice_based()`, `is_text_based()`(discord.js `isTextBased()`와 같은 집합)를 제공합니다. `Channel::is_thread()` 등은 이 메서드에 위임합니다. 이 헬퍼는 채널 종류만 분류합니다. 권한, 보관되거나 잠긴 스레드, 타임아웃, 가려진 채널 때문에 여전히 메시지를 못 보낼 수 있으므로, 결과가 메시지를 보낼 수 있다는 뜻은 아닙니다. "여기에 보낼 수 있는가"는 `discordrs::permissions`로 확인합니다.
+
+일부러 정수로 남긴 필드는 하나입니다: `MessageComponent::style`(`Option<u8>`)은 `kind`에 따라 뜻이 달라 `button_style()` / `text_input_style()`로 읽습니다. 손으로 디코딩하는 게이트웨이 이벤트 필드(`ReactionEvent::reaction_type`, `InviteEvent::target_type`, `ScheduledEvent`의 레벨, `AutoModerationEvent`의 타입, `AuditLogEntryEvent::action_type`)는 타입이 있지만 그 이벤트의 다른 필드처럼 관대하게 읽습니다. 범위를 벗어난 값은 `None`이 되고 `raw`에 남습니다.
+
+#### 프레즌스 status
+
+`PresenceStatus`는 `Presence::status`, `ClientStatus::{desktop, mobile, web}`, `UpdatePresence::status`, `PresenceUpdateEvent::status`용 열린 문자열 어휘입니다. 상수는 `ONLINE`, `DND`, `IDLE`, `INVISIBLE`, `OFFLINE`이고 다른 문자열도 그대로 보존합니다. `&str`과 비교할 수 있고(`status == "online"`), `str`로 deref되므로 `Option<PresenceStatus>::as_deref()`가 그대로 `Option<&str>`를 줍니다. 문서화된 값은 할당 없이 디코딩합니다. 임의 텍스트(음성 채널 status, 활동 이름, 파일명, URL)는 `String`으로 둡니다.
+
+#### 권한·플래그 집합
+
+권한 집합 타입은 `Permissions`(`bitfield::Permissions`) 하나입니다. 역할·멤버 권한, 덮어쓰기 `allow`/`deny`, 인터랙션 `app_permissions`, 커맨드 `default_member_permissions`, 설치 파라미터, `CurrentUserGuild::permissions`가 이 타입을 씁니다. 권한은 십진 문자열로, 메시지·채널·사용자 플래그와 인텐트, 게이트웨이 capabilities는 숫자로 씁니다(`BitFieldFlags::STRING_ENCODED`). 읽을 때는 두 모양을 모두 받고, 이름 없는 비트도 보존하며, 음수는 거부합니다.
+
+### 2.x 판별값에서 옮기기
+
+| 2.x | 3.0 |
+|---|---|
+| `channel.kind == 0`, `kind: u8` 필드 | `channel.kind == ChannelType::GUILD_TEXT`; 숫자는 `ChannelType::new(n)` / `kind.get()` |
+| 닫힌 `ChannelType::{Text, Dm, Voice, GroupDm, Category, News, StageVoice, GuildDirectory, GuildForum, GuildMedia}` (`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GROUP_DM, GUILD_CATEGORY, GUILD_ANNOUNCEMENT, GUILD_STAGE_VOICE, GUILD_DIRECTORY, GUILD_FORUM, GUILD_MEDIA}` (`.get()`); 스레드는 `ANNOUNCEMENT_THREAD`, `PUBLIC_THREAD`, `PRIVATE_THREAD` |
+| `ActivityType(0)`, `InteractionContextType(1)`, `x.0` | `ActivityType::new(0)` 또는 `ActivityType::PLAYING`; `x.get()` |
+| `ActivityType::default()`, `Activity::default()`(`PLAYING`이었음) | `Default` 없음: `Activity::new(ActivityType::PLAYING, "name")` |
+| `constants::{component_type, button_style, separator_spacing, text_input_style}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle` |
+| `command::{command_type, option_type}` | `CommandType`, `CommandOptionType` |
+| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType`(`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
+| `MessageComponent::BUTTON` 등 `u8` 상수 | `ComponentType::BUTTON` |
+| `MessageComponent { kind, ..Default::default() }` | `MessageComponent { custom_id: .., ..MessageComponent::new(ComponentType::BUTTON) }` |
+| `component.style == Some(1)` | `component.button_style() == Some(ButtonStyle::PRIMARY)` (`style`은 `Option<u64>`에서 `Option<u8>`로) |
+| `ButtonBuilder::style(u8)`, `ButtonConfig::style(u8)`, `TextInputBuilder::new(.., u8)`, `SeparatorBuilder::spacing(u8)`, `channel_types(Vec<u8>)` | 해당 newtype (`channel_types`는 `IntoIterator<Item = ChannelType>`) |
+| `CommandOptionBuilder::new(u8, ..)`, `ApplicationCommandOption { kind: u8 }` | `CommandOptionType`; `ApplicationCommandOption::new(kind, name, description)` |
+| `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>`(Discord 기본값은 `CHAT_INPUT`; `ApplicationCommand::command_type()`이 적용) |
+| 모르는 커맨드 타입이면 `Interaction::Unknown { kind: u8 }`에 커맨드 타입이 들어감 | `kind: InteractionType`은 항상 인터랙션 타입; 모르는 커맨드 타입은 `raw_data["type"]` |
+| `PermissionsBitField(bits)`, `.0`, `insert`, `remove` | `Permissions::from_bits(bits)`, `.bits()`, `set \|= flag`, `set = set.remove(flag)`(새 집합을 반환, `#[must_use]`) |
+| `GuildMfaLevel { level: u64 }`, `modify_guild_mfa_level(.., u64)` | `GuildMfaLevel::new(MfaLevel::ELEVATED)`, `MfaLevel` 인자 |
+| `AuditLogQuery::action_type: Option<u64>` | `Option<AuditLogActionType>` |
+| `OAuth2AuthorizationRequest::integration_type(u8)` | `ApplicationIntegrationType` |
+| `presence.status: Option<String>`, `UpdatePresence::status: String` | `PresenceStatus`(`PresenceStatus::ONLINE`, `PresenceStatus::new("..")`) |
+
+그 밖의 변경:
+
+- **필수 판별값은 필수입니다.** 컴포넌트 `type`, 투표 `layout_type`, 메시지 인터랙션(메타데이터) `type`, 로비 메시지 `type`, 연결 `visibility`, 활동 `type`이 없으면 이제 디코딩 오류입니다(2.x는 `0` 또는 `PLAYING`으로 읽었습니다).
+- **필수 판별값이 있는 타입은 `Default`가 없습니다**: `Activity`, `MessageComponent`, `MessageActivity`, `Poll`, `CommandInteractionOption`, `ComponentInteractionData`, `InteractionCallbackResponse`, `InteractionCallbackResource`, `ApplicationCommandOption`, `ApplicationRoleConnectionMetadata`(`::new` 사용), `EditChannelPermission`(`for_target` 사용), `GuildMfaLevel`, `AutoModerationAction`, `InviteTargetUsersJobStatus`, `UserConnection`, `GuildScheduledEventRecurrenceRule`(`NWeekday`), `ButtonConfig`, 인자를 받는 생성자의 빌더(`SelectMenuBuilder`, `TextInputBuilder`, `CommandOptionBuilder`, 커맨드 빌더 등). 인자 없는 `new()`가 있는 빌더는 `new()`와 같은 `Default`를 유지합니다.
+- **범위 밖 값은 실패합니다.** 저장 폭보다 큰 값(예: `"type": 256`)은 디코딩 오류입니다. 2.x의 `u64` 필드는 아무 숫자나 받았습니다.
+- **`Webhook::kind`**는 이제 Discord의 `type` 키를 읽고 씁니다(2.x는 와이어에서 `kind`라는 이름을 써서 값을 한 번도 디코딩하지 못했습니다).
+- **다른 비트필드의 와이어 모양.** `MessageFlags`, `ChannelFlags`, `Intents`, `GatewayCapabilities`, 사용자 정의 `BitFieldFlags` 집합은 숫자로 직렬화합니다(2.x는 문자열). 음수 입력은 거부합니다.
+- **새 쿼리.** `get_reactions_with_query(.., &GetReactionsQuery { kind: Some(ReactionType::BURST), .. })`로 burst 리액션을 조회합니다.
+- 권한 오류(`PermissionDataError::{NotGuildChannel, InvalidParentChannel}`)는 `ChannelType`을 담고 이름을 출력합니다. 커맨드 검증 오류는 옵션 타입 이름을 출력합니다(`of type BOOLEAN`).
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 
@@ -168,7 +222,7 @@ fn ids(raw: &str) -> Result<(GuildId, ChannelId), DiscordError> {
 
 ## 2.2.0 신규 타입
 
-- `MessageComponent` — `Message.components`를 비롯한 수신 측 페이로드가 raw `serde_json::Value` 대신 관용적(tolerant) 타입드 구조로 디코딩됩니다. 컴포넌트 트리 전체를 하나의 넓은 구조체로 다루며(`kind`가 raw 컴포넌트 `type`을 담고 알려진 모든 필드는 옵션), Discord가 새 컴포넌트 종류를 배포해도 디코딩이 실패하지 않습니다. `MessageComponent::BUTTON`, `STRING_SELECT`, `CONTAINER`, `LABEL` 등 연관 상수가 타입 코드를 제공하고, `iter()`는 컴포넌트와 모든 중첩 자식을 깊이 우선으로 순회합니다.
+- `MessageComponent` — `Message.components`를 비롯한 수신 측 페이로드가 raw `serde_json::Value` 대신 관용적(tolerant) 타입드 구조로 디코딩됩니다. 컴포넌트 트리 전체를 하나의 넓은 구조체로 다루며(`kind`가 raw 컴포넌트 `type`을 담고 알려진 모든 필드는 옵션), Discord가 새 컴포넌트 종류를 배포해도 디코딩이 실패하지 않습니다. `ComponentType` 상수(`ComponentType::BUTTON` 등. 2.x의 `u8` 연관 상수는 3.0에서 삭제)가 타입 코드를 제공하고, `iter()`는 컴포넌트와 모든 중첩 자식을 깊이 우선으로 순회합니다.
 - `MessageSelectOption`, `MessageSelectDefaultValue`(3.0에서는 `SelectDefaultValue` enum), `UnfurledMediaItem`, `MessageMediaGalleryItem` — 수신 컴포넌트의 타입드 구성 요소입니다.
 - `ResolvedData` — 인터랙션 `resolved` 데이터를 ID 키(3.0부터 `UserId`, `RoleId`, `ChannelId`, `MessageId`, `AttachmentId` 같은 타입 키)의 여섯 개 조회 맵(`users`, `members`, `roles`, `channels`, `messages`, `attachments`)으로 제공하며, ID 기반 접근자(`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`)와 `is_empty()`를 포함합니다.
 - `MessageInteractionMetadata` — 타입드 `Message::interaction_metadata`(트리거 인터랙션 id/type, 사용자, 승인 통합 소유자, 원본 응답 메시지 id, 대상 사용자/메시지, 모달용 중첩 `triggering_interaction_metadata`). 사용 중단된 `MessageInteraction`보다 이 필드를 사용합니다.

@@ -33,7 +33,7 @@
 | 1 ✅ | REST 재시도 안전성(메서드·결과 모호성 기준), 버킷 식별(버킷 해시 + major parameter), 진단용 경로의 토큰 마스킹, 종료 close code 처리, 게이트웨이 워커 정리 보장 | M | 모호한 완료·재접속 가능 여부의 오분류 |
 | 1.5 ✅ | 2026-05-02 감사 이후 Discord 변경 반영: 채널 가리기(`CHANNEL_OBFUSCATED`, IDENTIFY `capabilities`, 11/16 강제), 대규모 봇 샤딩 `shard` 파라미터(9/15부터 필수), 초대 대상 사용자 API, `file_types`, Component Embed 수신, Application Identity Profile API, 빠져 있던 Social SDK 로비 경로. 공식 문서 `3714862` 기준 REST 234/234 | S–M | 기존 공개 타입 위에 추가하는 작업이라 3단계 타입 교체 때 함께 옮겨야 함 |
 | 2 | 내부 이벤트 처리(캐시·청크 대기·컬렉터)와 사용자 핸들러 실행 분리, 핸들러 작업 상한, 인터랙션 응답 상태(Unacknowledged → InFlight → Acknowledged, 취소 처리), 샤드 단위 캐시 무효화, 외부 캐시 백엔드 쓰기 순서 보장 | L | 순서 보장과 과부하 동작을 지키며 교착을 푸는 것 |
-| 3 | `Id<M>(NonZeroU64)` 타입 ID, 열린 판별값 newtype(`ChannelType(u8)` 등), 권한 표현 통일, `Embed.components`·`flags` 수신 필드(Component Embed) | L | 잘못된 기본 ID, 다형 대상(역할/사용자), 허용 값 축소 |
+| 3 ✅ | `Id<M>(NonZeroU64)` 타입 ID, 열린 판별값 newtype(`ChannelType(u8)` 등), 권한 표현 통일, `Embed.components`·`flags` 수신 필드(Component Embed) | L | 잘못된 기본 ID, 다형 대상(역할/사용자), 허용 값 축소 |
 | 4 | 누락/null/값을 구분하는 patch 필드 타입, 캐시 병합 수정, `Arc` 이벤트 전달, 직접 타입 디코딩, raw 보관 옵션(알 수 없는 이벤트·디코드 실패는 항상 보관), 참조 기반 컬렉터 필터 | L | 누락/null 구분이나 알 수 없는 payload 손실 |
 | 5 | 타입 요청·컴포넌트 모델과 빌더 출력, REST 이름 정리(`_typed` 제거), 응답 경로 통합, Component Embed 생성 빌더(웹사이트용 payload·`<script>` 태그·제한 검증) | L | wire 형태 차이, 필드 누락 |
 | 6 | 멀티 프로세스 샤딩 IPC·종료·IDENTIFY 조율, 취소 가능한 오디오 읽기와 sink 전달 | L | 프로세스·작업 누수, 취소로 인한 PCM 프레임 손상 |
@@ -42,6 +42,15 @@
 
 3~5단계의 상세 설계(타입 ID와 0/센티널 예외, 열린 판별값, `Patch`/`Nullable`, `Arc<Event>` 봉투,
 요청 모델과 REST 이름, 실행 순서)는 `docs/design/3.0-types-events-requests.md`에 있다.
+
+### 3단계 결과 (2026-10-11)
+
+설계 문서의 시리즈 1~3으로 완료했다: 타입 ID와 다형 ID(시리즈 2 A·B), 열린 판별값으로 모든
+판별값 필드·인자·쿼리·이벤트 필드·빌더 setter 이전과 중복 상수 삭제, 프레즌스 status 어휘 타입,
+`Permissions` 하나로 권한 통일과 비트필드별 와이어 모양(권한은 문자열, 나머지 플래그는 숫자),
+Component Embed 수신 필드(1.5단계). 기록과 측정은 `docs/design/3.0-types-events-requests.md`
+§1·§2. 1단계에서 넘긴 "OAuth2 오류 본문 정리"는 아직 남아 있다(토큰 `Debug` 가리기는
+`InteractionContextData`에 적용됨).
 
 ### 1단계 결과와 다음 단계로 넘긴 항목 (2026-10-10)
 

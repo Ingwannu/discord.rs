@@ -107,9 +107,19 @@ For `gateway/bot`, `cache`, `collector`, `sharding`, `voice`, and `voice_runtime
 cargo test --release --all-features --locked --test id_footprint -- --ignored --nocapture --test-threads=1
 ```
 
-The payloads only use fields that exist before and after a model change, so checking out the previous commit and running the same command gives the comparison. Allocation counts and bytes are deterministic; timings are indicative only. The phase 3 series 2 step A numbers are in `docs/design/3.0-types-events-requests.md` §1 (step B left them unchanged: markers add no bytes).
+The payloads only use fields that exist before and after a model change, so checking out the previous commit and running the same command gives the comparison. Allocation counts and bytes are deterministic; timings are indicative only. The phase 3 series 2 step A numbers are in `docs/design/3.0-types-events-requests.md` §1 (step B left them unchanged: markers add no bytes); the series 3 numbers (discriminants as `u8` newtypes, the interned presence status) are in §2 "시리즈 3 결과".
 
 In unit tests, models without `Default` are built with `T::fixture()` (`src/model/fixtures.rs`, `#[cfg(test)]`) and IDs with `crate::model::test_id(n)`, which infers the marker from context. Integration tests and examples use the public API instead (`"1".parse()?`, `GuildId::try_from(1)?`, or JSON).
+
+## Documented Example Payloads
+
+`src/model/doc_examples.rs` round-trips Discord's documented example payloads (channels, guild, messages, invite, webhooks, stickers, monetization objects, user, application, commands, auto moderation, presences, activities, interactions, and every component example) through the typed models: everything the model writes must have been in the example (or be an empty default), no discriminant key may be dropped, and a second round trip must write the same JSON. It also checks, per converted discriminant field, that an unknown value fitting the storage survives and one past it fails to decode.
+
+The payloads live in `src/model/doc_examples/payloads.rs`, generated from a discord-api-docs checkout at the revision the crate targets (`3714862`). Regenerate after bumping that revision and review the diff:
+
+```text
+python3 ci/doc_examples.py --docs <discord-api-docs clone>
+```
 
 ## Build Time
 
@@ -255,6 +265,7 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
 - passing a `ChannelId` where a `GuildId` is required;
 - implicit `u64` → ID conversion;
 - `GuildId::default()`, or `#[derive(Default)]` on a struct that stores an ID;
+- an integer where an open discriminant (`ChannelType`, `ButtonStyle`) is expected, `Default` on a discriminant (or a struct storing one), and the 2.x tuple spelling `ActivityType(0)` / `.0`;
 - `Patch::null()` on a non-nullable `Patch<bool>`;
 - an `async fn` impl of a public async trait whose future is not `Send` (`CacheBackend`, the async trait available with default features, which this test uses).
 

@@ -71,7 +71,7 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
   ```rust
   let button = ButtonBuilder::new()
       .label("Click me")
-      .style(button_style::PRIMARY)
+      .style(ButtonStyle::PRIMARY)
       .custom_id("btn_1");
   let row = ActionRowBuilder::new().add_button(button);
   let message = ComponentsV2Message::new().add_action_row(row);

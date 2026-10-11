@@ -23,11 +23,11 @@
 ## Example
 
 ```rust
-use discordrs::{option_type, CommandOptionBuilder, SlashCommandBuilder};
+use discordrs::{CommandOptionBuilder, CommandOptionType, SlashCommandBuilder};
 
 let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
     .option(
-        CommandOptionBuilder::new(option_type::STRING, "topic", "Ticket topic")
+        CommandOptionBuilder::new(CommandOptionType::STRING, "topic", "Ticket topic")
             .required(true)
             .autocomplete(true),
     )
@@ -59,7 +59,7 @@ All lengths are Unicode codepoints, as Discord counts them.
 `PrimaryEntryPointCommandBuilder` checks name and description lengths and its localizations (locale keys and lengths). `UserCommandBuilder` and `MessageCommandBuilder` check the name length only, because context-menu names may contain spaces and capitals.
 
 ```rust
-use discordrs::{CommandOptionBuilder, SlashCommandBuilder};
+use discordrs::{ChannelType, CommandOptionBuilder, SlashCommandBuilder};
 
 let command = SlashCommandBuilder::new("ban", "Ban a member")
     .name_localization("ko", "차단")
@@ -73,7 +73,10 @@ let command = SlashCommandBuilder::new("ban", "Ban a member")
             .max_length(512)
             .localized_choice("Spam", "spam", [("ko", "스팸")]),
     )
-    .option(CommandOptionBuilder::channel("log", "Log channel").channel_types([0]))
+    .option(
+        CommandOptionBuilder::channel("log", "Log channel")
+            .channel_types([ChannelType::GUILD_TEXT]),
+    )
     .try_build()?; // DiscordError::Model on the first broken rule
 ```
 

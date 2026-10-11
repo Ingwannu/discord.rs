@@ -5,7 +5,8 @@
 The typed surface is centered on:
 
 - the typed IDs (`GuildId`, `ChannelId`, `UserId`, ...) and `GenericId` for IDs of unknown kind
-- `PermissionsBitField`
+- `Permissions` (`bitfield::Permissions`; `PermissionsBitField` is a deprecated alias since 3.0)
+- the open discriminants (`ChannelType`, `MessageType`, `ComponentType`, ...) and `PresenceStatus`
 - `User`
 - `Guild`
 - `Channel`
@@ -149,11 +150,68 @@ fn ids(raw: &str) -> Result<(GuildId, ChannelId), DiscordError> {
 
 ### Open discriminants
 
-Integer enumerations are transparent newtypes with named constants: `MessageType::REPLY`, `ComponentType::CONTAINER`, `ButtonStyle::PREMIUM`, and so on. Each type provides `new(raw)`, `get()`, and `name()`. `Debug` prints the constant name, or `Unknown(n)` for values this version does not know. Serialization uses the bare integer (`#[serde(transparent)]`). There is no `Default`. Unknown values round-trip unchanged, and a value too wide for the storage type fails to decode instead of being truncated. All types use `u8` storage except `AuditLogActionType`, which uses `u16`.
+Integer enumerations are transparent newtypes with named constants: `ChannelType::PUBLIC_THREAD`, `MessageType::REPLY`, `ComponentType::CONTAINER`, `ButtonStyle::PREMIUM`, and so on. Each type provides `new(raw)`, `get()`, and `name()`. `Debug` prints the constant name, or `Unknown(n)` for values this version does not know. Serialization uses the bare integer (`#[serde(transparent)]`). There is no `Default`. Unknown values round-trip unchanged, and a value too wide for the storage type fails to decode instead of being truncated. All types use `u8` storage except `AuditLogActionType`, which uses `u16`. Constants work as `match` patterns, but the set is open, so a `_` arm is always needed.
 
-Available from the crate root: `OverwriteType`, `VideoQualityMode`, `ForumSortOrder`, `ForumLayout`, `ComponentType`, `ButtonStyle`, `TextInputStyle`, `SeparatorSpacing`, `MessageType`, `MessageActivityType`, `ReactionType`, `PollLayoutType`, `InteractionType`, `InteractionResponseType`, `CommandType`, `CommandOptionType`, `CommandPermissionType`, `RoleConnectionMetadataType`, `VerificationLevel`, `DefaultMessageNotificationLevel`, `ExplicitContentFilterLevel`, `MfaLevel`, `PremiumTier`, `GuildNsfwLevel`, `ScheduledEventStatus`, `ScheduledEventEntityType`, `ScheduledEventPrivacyLevel`, `StageInstancePrivacyLevel`, `AutoModerationEventType`, `AutoModerationTriggerType`, `AutoModerationActionType`, `KeywordPresetType`, `AuditLogActionType`, `InviteType`, `InviteTargetType`, `InviteTargetUsersJobStatusType`, `WebhookType`, `StickerType`, `StickerFormatType`, `SkuType`, `SkuAccessType` (no documented values, so no names), `EntitlementType`, `EntitlementOwnerType`, `SubscriptionStatus`, `UserPremiumType`, and `ConnectionVisibility`.
+```rust
+use discordrs::{Channel, ChannelType};
 
-Seven names are still taken by their 2.x versions. Until series 3 swaps them in, the new versions are reachable only as `discordrs::model::discriminant::{ChannelType, MessageReferenceType, ApplicationIntegrationType, InteractionContextType, ApplicationCommandHandlerType, ActivityType, WebhookPayloadType}`. The new `ChannelType` includes the thread types and provides `is_thread()`, `is_voice_based()`, and `is_text_based()` (the discord.js `isTextBased()` set). These helpers classify the channel type only: they do not mean you can send messages there, because permissions, archived or locked threads, and obfuscated channels can still forbid it.
+fn describe(channel: &Channel) -> &'static str {
+    match channel.kind {
+        ChannelType::GUILD_TEXT | ChannelType::GUILD_ANNOUNCEMENT => "text",
+        kind if kind.is_thread() => "thread",
+        kind if kind.is_voice_based() => "voice",
+        _ => "other",
+    }
+}
+```
+
+Every model field, request body, query, gateway event field, and builder setter that carries one of these values uses the newtype (since series 3). The canonical module is `discordrs::model::discriminant`; every type is also exported from `discordrs::model` and the crate root: `ChannelType`, `OverwriteType`, `VideoQualityMode`, `ForumSortOrder`, `ForumLayout`, `ComponentType`, `ButtonStyle`, `TextInputStyle`, `SeparatorSpacing`, `MessageType`, `MessageReferenceType`, `MessageActivityType`, `ReactionType`, `PollLayoutType`, `BaseTheme`, `InteractionType`, `InteractionResponseType`, `CommandType`, `CommandOptionType`, `CommandPermissionType`, `ApplicationIntegrationType`, `InteractionContextType`, `ApplicationCommandHandlerType`, `RoleConnectionMetadataType`, `ApplicationEventWebhookStatus`, `VerificationLevel`, `DefaultMessageNotificationLevel`, `ExplicitContentFilterLevel`, `MfaLevel`, `PremiumTier`, `GuildNsfwLevel`, `OnboardingMode`, `IntegrationExpireBehavior`, `ScheduledEventStatus`, `ScheduledEventEntityType`, `ScheduledEventPrivacyLevel`, `RecurrenceRuleFrequency`, `RecurrenceRuleWeekday`, `RecurrenceRuleMonth`, `StageInstancePrivacyLevel`, `AutoModerationEventType`, `AutoModerationTriggerType`, `AutoModerationActionType`, `KeywordPresetType`, `AuditLogActionType`, `InviteType`, `InviteTargetType`, `InviteTargetUsersJobStatusType`, `WebhookType`, `WebhookPayloadType`, `StickerType`, `StickerFormatType`, `SkuType`, `SkuAccessType` (no documented values, so no names), `EntitlementType`, `EntitlementOwnerType`, `SubscriptionStatus`, `UserPremiumType`, `ConnectionVisibility`, `ActivityType`, and `VoiceChannelEffectAnimationType`.
+
+`ChannelType` includes the thread types and provides `is_thread()`, `is_voice_based()`, and `is_text_based()` (the discord.js `isTextBased()` set); `Channel::is_thread()` and friends delegate to it. These helpers classify the channel type only: they do not mean you can send messages there, because permissions, archived or locked threads, timeouts, and obfuscated channels can still forbid it. Use `discordrs::permissions` for "can I send here".
+
+One field keeps a raw integer on purpose: `MessageComponent::style` (`Option<u8>`), because its meaning depends on `kind`; read it with `button_style()` / `text_input_style()`. Gateway event fields decoded by hand (`ReactionEvent::reaction_type`, `InviteEvent::target_type`, the `ScheduledEvent` levels, the `AutoModerationEvent` types, `AuditLogEntryEvent::action_type`) are typed but lenient like the other fields of those events: an out-of-range value reads as `None` and stays visible in `raw`.
+
+#### Presence status
+
+`PresenceStatus` is an open string vocabulary for `Presence::status`, `ClientStatus::{desktop, mobile, web}`, `UpdatePresence::status`, and `PresenceUpdateEvent::status`: constants `ONLINE`, `DND`, `IDLE`, `INVISIBLE`, `OFFLINE`, and any other string is kept. It compares with `&str` (`status == "online"`), derefs to `str` (so `Option<PresenceStatus>::as_deref()` still gives `Option<&str>`), and decodes the documented values without allocating. Free text (voice channel status, activity names, filenames, URLs) stays `String`.
+
+#### Permission and flag sets
+
+`Permissions` (`bitfield::Permissions`) is the one permission set type: role and member permissions, overwrite `allow`/`deny`, interaction `app_permissions`, command `default_member_permissions`, install params, and `CurrentUserGuild::permissions`. Permissions are written as decimal strings; message, channel, and user flags, intents, and gateway capabilities are written as numbers (`BitFieldFlags::STRING_ENCODED`). Reading accepts both shapes, keeps bits this version has no name for, and rejects negative values.
+
+### Migrating from 2.x discriminants
+
+| 2.x | 3.0 |
+|---|---|
+| `channel.kind == 0`, `kind: u8` fields | `channel.kind == ChannelType::GUILD_TEXT`; `ChannelType::new(n)` / `kind.get()` for raw numbers |
+| closed `ChannelType::{Text, Dm, Voice, GroupDm, Category, News, StageVoice, GuildDirectory, GuildForum, GuildMedia}` (`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GROUP_DM, GUILD_CATEGORY, GUILD_ANNOUNCEMENT, GUILD_STAGE_VOICE, GUILD_DIRECTORY, GUILD_FORUM, GUILD_MEDIA}` (`.get()`); threads are `ANNOUNCEMENT_THREAD`, `PUBLIC_THREAD`, `PRIVATE_THREAD` |
+| `ActivityType(0)`, `InteractionContextType(1)`, `x.0` | `ActivityType::new(0)` or `ActivityType::PLAYING`; `x.get()` |
+| `ActivityType::default()`, `Activity::default()` (gave `PLAYING`) | no `Default`: `Activity::new(ActivityType::PLAYING, "name")` |
+| `constants::{component_type, button_style, separator_spacing, text_input_style}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle` |
+| `command::{command_type, option_type}` | `CommandType`, `CommandOptionType` |
+| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType` (`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
+| `MessageComponent::BUTTON` (and the other `u8` constants) | `ComponentType::BUTTON` |
+| `MessageComponent { kind, ..Default::default() }` | `MessageComponent { custom_id: .., ..MessageComponent::new(ComponentType::BUTTON) }` |
+| `component.style == Some(1)` | `component.button_style() == Some(ButtonStyle::PRIMARY)` (`style` is `Option<u8>`, was `Option<u64>`) |
+| `ButtonBuilder::style(u8)`, `ButtonConfig::style(u8)`, `TextInputBuilder::new(.., u8)`, `SeparatorBuilder::spacing(u8)`, `channel_types(Vec<u8>)` | the newtype (`channel_types` takes any `IntoIterator<Item = ChannelType>`) |
+| `CommandOptionBuilder::new(u8, ..)`, `ApplicationCommandOption { kind: u8 }` | `CommandOptionType`; `ApplicationCommandOption::new(kind, name, description)` |
+| `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>` (Discord's default is `CHAT_INPUT`; `ApplicationCommand::command_type()` applies it) |
+| `Interaction::Unknown { kind: u8 }` held the command type for unknown command types | `kind: InteractionType` is always the interaction type; an unknown command type is `raw_data["type"]` |
+| `PermissionsBitField(bits)`, `.0`, `insert`, `remove` | `Permissions::from_bits(bits)`, `.bits()`, `set \|= flag`, `set = set.remove(flag)` (returns the new set; `#[must_use]`) |
+| `GuildMfaLevel { level: u64 }`, `modify_guild_mfa_level(.., u64)` | `GuildMfaLevel::new(MfaLevel::ELEVATED)`, `MfaLevel` parameter |
+| `AuditLogQuery::action_type: Option<u64>` | `Option<AuditLogActionType>` |
+| `OAuth2AuthorizationRequest::integration_type(u8)` | `ApplicationIntegrationType` |
+| `presence.status: Option<String>`, `UpdatePresence::status: String` | `PresenceStatus` (`PresenceStatus::ONLINE`, `PresenceStatus::new("..")`) |
+
+Also changed:
+
+- **Required discriminants are required.** A missing component `type`, poll `layout_type`, message interaction (metadata) `type`, lobby message `type`, connection `visibility`, or activity `type` is now a decode error (2.x read `0` or `PLAYING`).
+- **No `Default` where a discriminant is required**: `Activity`, `MessageComponent`, `MessageActivity`, `Poll`, `CommandInteractionOption`, `ComponentInteractionData`, `InteractionCallbackResponse`, `InteractionCallbackResource`, `ApplicationCommandOption`, `ApplicationRoleConnectionMetadata` (use `::new`), `EditChannelPermission` (use `for_target`), `GuildMfaLevel`, `AutoModerationAction`, `InviteTargetUsersJobStatus`, `UserConnection`, `GuildScheduledEventRecurrenceRule`(`NWeekday`), `ButtonConfig`, and the builders whose constructors take arguments (`SelectMenuBuilder`, `TextInputBuilder`, `CommandOptionBuilder`, the command builders, ...). Builders with a no-argument `new()` keep a `Default` equal to `new()`.
+- **Out-of-range values fail.** A value wider than the storage (for example `"type": 256`) is a decode error; 2.x `u64` fields accepted any number.
+- **`Webhook::kind`** now reads and writes Discord's `type` key (2.x used `kind` on the wire, so the value was never decoded).
+- **Wire shapes of other bitfields.** `MessageFlags`, `ChannelFlags`, `Intents`, `GatewayCapabilities`, and custom `BitFieldFlags` sets serialize as numbers (2.x: strings); negative input is rejected.
+- **New query.** `get_reactions_with_query(.., &GetReactionsQuery { kind: Some(ReactionType::BURST), .. })` lists burst reactions.
+- Permission errors (`PermissionDataError::{NotGuildChannel, InvalidParentChannel}`) carry a `ChannelType` and print its name; command validation errors print the option type name (`of type BOOLEAN`).
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 
@@ -168,7 +226,7 @@ Seven names are still taken by their 2.x versions. Until series 3 swaps them in,
 
 ## New in 2.2.0
 
-- `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.
+- `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. `ComponentType` constants (`ComponentType::BUTTON`, ...; the 2.x associated `u8` constants were removed in 3.0) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.
 - `MessageSelectOption`, `MessageSelectDefaultValue` (in 3.0 the `SelectDefaultValue` enum), `UnfurledMediaItem`, and `MessageMediaGalleryItem` — typed pieces of received components.
 - `ResolvedData` — interaction `resolved` data as six lookup maps keyed by ID (typed since 3.0: `UserId`, `RoleId`, `ChannelId`, `MessageId`, `AttachmentId`; `users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
 - `MessageInteractionMetadata` — typed `Message::interaction_metadata` (triggering interaction id/type, user, authorizing integration owners, original response message id, target user/message, interacted message id, and nested `triggering_interaction_metadata` for modals). Prefer it over the deprecated `MessageInteraction`.
@@ -202,10 +260,7 @@ These stay relevant for builders and compatibility helpers.
 
 Constant groups include:
 
-- component type codes
-- button styles
-- text input styles
-- separator spacing values
+- the discriminant constants on their types (`ComponentType::BUTTON`, `ButtonStyle::PRIMARY`, `TextInputStyle::PARAGRAPH`, `SeparatorSpacing::LARGE`, `InteractionResponseType::MODAL`, ...); the 2.x `u8` constant modules were removed in 3.0
 - gateway intents, including the `2.1` poll intents `gateway_intents::GUILD_MESSAGE_POLLS` (`1 << 24`) and `gateway_intents::DIRECT_MESSAGE_POLLS` (`1 << 25`) — both part of `NON_PRIVILEGED` — plus the `GUILD_EXPRESSIONS` alias for bit 3
 
 ## Advice
