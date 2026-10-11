@@ -1,8 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(feature = "gateway")]
-use async_trait::async_trait;
-
 use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 #[cfg(feature = "gateway")]
@@ -287,7 +284,6 @@ impl RoleManager {
 }
 
 #[cfg(feature = "gateway")]
-#[async_trait]
 impl CachedManager<Guild> for GuildManager {
     async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Guild, DiscordError> {
         let id = id.into();
@@ -311,7 +307,6 @@ impl CachedManager<Guild> for GuildManager {
 }
 
 #[cfg(feature = "gateway")]
-#[async_trait]
 impl CachedManager<Channel> for ChannelManager {
     async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Channel, DiscordError> {
         let id = id.into();
@@ -335,7 +330,6 @@ impl CachedManager<Channel> for ChannelManager {
 }
 
 #[cfg(feature = "gateway")]
-#[async_trait]
 impl CachedManager<User> for UserManager {
     async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<User, DiscordError> {
         let id = id.into();

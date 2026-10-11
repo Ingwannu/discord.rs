@@ -30,6 +30,8 @@ pub mod formatters;
 pub mod framework;
 /// Convenience helpers for interaction responses and webhook followups.
 pub mod helpers;
+#[cfg(feature = "interactions")]
+mod hex;
 /// Typed Discord REST client, request bodies, route helpers, and rate-limit handling.
 pub mod http;
 /// Shared manager traits for cached Discord model access.

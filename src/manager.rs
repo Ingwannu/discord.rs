@@ -1,5 +1,5 @@
 #[cfg(feature = "gateway")]
-use async_trait::async_trait;
+use std::future::Future;
 
 use crate::error::DiscordError;
 use crate::model::Snowflake;
@@ -7,20 +7,25 @@ use crate::model::Snowflake;
 /// Trait for cache-aware entity managers that can read from in-memory state and fall back to HTTP.
 ///
 /// On gateway builds this parallels discord.js's `CachedManager` pattern.
+/// The methods return `Send` futures, so generic code can `tokio::spawn`
+/// them; implement them as plain `async fn` (no attribute macro) that hold
+/// no non-`Send` value across an `.await`.
 #[cfg(feature = "gateway")]
-#[async_trait]
 pub trait CachedManager<T: Clone + Send + Sync + 'static>: Send + Sync {
     /// Fetch from cache first, falling back to HTTP API.
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<T, DiscordError>;
+    fn get(
+        &self,
+        id: impl Into<Snowflake> + Send,
+    ) -> impl Future<Output = Result<T, DiscordError>> + Send;
 
     /// Get from cache only (no HTTP fallback).
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<T>;
+    fn cached(&self, id: impl Into<Snowflake> + Send) -> impl Future<Output = Option<T>> + Send;
 
     /// Check if the entity exists in cache.
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool;
+    fn contains(&self, id: impl Into<Snowflake> + Send) -> impl Future<Output = bool> + Send;
 
     /// List all cached entries.
-    async fn list_cached(&self) -> Vec<T>;
+    fn list_cached(&self) -> impl Future<Output = Vec<T>> + Send;
 }
 
 /// Sync trait shape exposed for non-gateway builds.

@@ -25,8 +25,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "sharding")]
-use async_trait::async_trait;
-#[cfg(feature = "sharding")]
 use discordrs::sharding::process::{
     ProcessShardManager, ProcessShardManagerConfig, ShardChildProcess,
 };
@@ -44,7 +42,6 @@ struct Handler {
 }
 
 #[cfg(feature = "sharding")]
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {

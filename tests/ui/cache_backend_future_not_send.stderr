@@ -1,0 +1,19 @@
+error: future cannot be sent between threads safely
+  --> tests/ui/cache_backend_future_not_send.rs:18:10
+   |
+18 |     ) -> Result<CacheClear, DiscordError> {
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ future returned by `clear_cache` is not `Send`
+   |
+   = help: within `impl Future<Output = Result<CacheClear, DiscordError>>`, the trait `Send` is not implemented for `Rc<u64>`
+note: future is not `Send` as this value is used across an await
+  --> tests/ui/cache_backend_future_not_send.rs:20:32
+   |
+19 |         let held = Rc::new(expected_epoch);
+   |             ---- has type `Rc<u64>` which is not `Send`
+20 |         std::future::ready(()).await;
+   |                                ^^^^^ await occurs here, with `held` maybe used later
+note: required by a bound in `CacheBackend::clear_cache::{anon_assoc#0}`
+  --> src/cache/backend.rs
+   |
+   |     ) -> impl Future<Output = Result<CacheClear, DiscordError>> + Send;
+   |                                                                   ^^^^ required by this bound in `CacheBackend::clear_cache::{anon_assoc#0}`

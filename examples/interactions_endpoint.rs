@@ -1,6 +1,4 @@
 #[cfg(feature = "interactions")]
-use async_trait::async_trait;
-#[cfg(feature = "interactions")]
 use axum::Router;
 #[cfg(feature = "interactions")]
 use discordrs::{
@@ -13,7 +11,6 @@ use discordrs::{
 struct Handler;
 
 #[cfg(feature = "interactions")]
-#[async_trait]
 impl InteractionHandler for Handler {
     async fn handle(
         &self,

@@ -1,6 +1,5 @@
+use std::future::Future;
 use std::sync::Arc;
-
-use async_trait::async_trait;
 
 use crate::error::DiscordError;
 use crate::model::{Member, Message, Presence, Snowflake};
@@ -81,14 +80,24 @@ pub enum CacheClear {
 /// per process, and stop the old process before starting its replacement
 /// (an old client's delayed writes and clears are rejected either way).
 /// [`CacheHandle`] implements this contract for the in-memory store.
-#[async_trait]
+///
+/// # Implementing and the `Send` contract
+///
+/// Implement the methods as plain `async fn`; no attribute macro is needed.
+/// They are declared as `fn ... -> impl Future<Output = ...> + Send` because
+/// the gateway runtime calls the backend from a spawned Tokio task, so each
+/// `async fn` must produce a `Send` future (no `Rc`, `RefCell` borrow, or
+/// `std::sync::MutexGuard` held across an `.await`); a violation is a
+/// compile error at the impl. The trait is not object safe: register a
+/// backend with `ClientBuilder::cache_backend(Arc::new(backend))`, which
+/// stores it type-erased.
 pub trait CacheBackend: Send + Sync {
     /// Conditionally clears every entry; see the epoch contract.
-    async fn clear_cache(
+    fn clear_cache(
         &self,
         expected_epoch: u64,
         clear_id: CacheClearId,
-    ) -> Result<CacheClear, DiscordError>;
+    ) -> impl Future<Output = Result<CacheClear, DiscordError>> + Send;
 
     /// Conditionally clears the entries owned by gateway shard `shard_id`
     /// of `shard_count`; see the epoch contract.
@@ -105,93 +114,99 @@ pub trait CacheBackend: Send + Sync {
     /// messages of the shard's guilds (and DM messages on shard 0); there is
     /// deliberately no default, because silently keeping entries would make
     /// the mirror stale.
-    async fn clear_shard_cache(
+    fn clear_shard_cache(
         &self,
         expected_epoch: u64,
         clear_id: CacheClearId,
         shard_id: u32,
         shard_count: u32,
-    ) -> Result<CacheClear, DiscordError>;
+    ) -> impl Future<Output = Result<CacheClear, DiscordError>> + Send;
 
-    async fn purge_expired_entries(&self) -> Result<(), DiscordError>;
+    fn purge_expired_entries(&self) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a member unless `epoch` is older than the store's epoch.
-    async fn put_member(
+    fn put_member(
         &self,
         epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         member: Member,
-    ) -> Result<(), DiscordError>;
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
-    async fn get_member(
+    fn get_member(
         &self,
         guild_id: &Snowflake,
         user_id: &Snowflake,
-    ) -> Result<Option<Arc<Member>>, DiscordError>;
+    ) -> impl Future<Output = Result<Option<Arc<Member>>, DiscordError>> + Send;
 
-    async fn list_members(&self, guild_id: &Snowflake) -> Result<Vec<Arc<Member>>, DiscordError>;
+    fn list_members(
+        &self,
+        guild_id: &Snowflake,
+    ) -> impl Future<Output = Result<Vec<Arc<Member>>, DiscordError>> + Send;
 
     /// Deletes a member unless `epoch` is older than the store's epoch.
-    async fn delete_member(
+    fn delete_member(
         &self,
         epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
-    ) -> Result<(), DiscordError>;
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a message unless `epoch` is older than the store's epoch.
-    async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError>;
+    fn put_message(
+        &self,
+        epoch: u64,
+        message: Message,
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
-    async fn get_message(
+    fn get_message(
         &self,
         channel_id: &Snowflake,
         message_id: &Snowflake,
-    ) -> Result<Option<Arc<Message>>, DiscordError>;
+    ) -> impl Future<Output = Result<Option<Arc<Message>>, DiscordError>> + Send;
 
-    async fn list_messages(
+    fn list_messages(
         &self,
         channel_id: &Snowflake,
-    ) -> Result<Vec<Arc<Message>>, DiscordError>;
+    ) -> impl Future<Output = Result<Vec<Arc<Message>>, DiscordError>> + Send;
 
     /// Deletes a message unless `epoch` is older than the store's epoch.
-    async fn delete_message(
+    fn delete_message(
         &self,
         epoch: u64,
         channel_id: &Snowflake,
         message_id: &Snowflake,
-    ) -> Result<(), DiscordError>;
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a presence unless `epoch` is older than the store's epoch.
-    async fn put_presence(
+    fn put_presence(
         &self,
         epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         presence: Presence,
-    ) -> Result<(), DiscordError>;
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
-    async fn get_presence(
+    fn get_presence(
         &self,
         guild_id: &Snowflake,
         user_id: &Snowflake,
-    ) -> Result<Option<Arc<Presence>>, DiscordError>;
+    ) -> impl Future<Output = Result<Option<Arc<Presence>>, DiscordError>> + Send;
 
-    async fn list_presences(
+    fn list_presences(
         &self,
         guild_id: &Snowflake,
-    ) -> Result<Vec<Arc<Presence>>, DiscordError>;
+    ) -> impl Future<Output = Result<Vec<Arc<Presence>>, DiscordError>> + Send;
 
     /// Deletes a presence unless `epoch` is older than the store's epoch.
-    async fn delete_presence(
+    fn delete_presence(
         &self,
         epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
-    ) -> Result<(), DiscordError>;
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 }
 
-#[async_trait]
 impl CacheBackend for CacheHandle {
     async fn clear_cache(
         &self,

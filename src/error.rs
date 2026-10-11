@@ -284,15 +284,6 @@ impl From<&str> for DiscordError {
     }
 }
 
-#[cfg(feature = "interactions")]
-impl From<hex::FromHexError> for DiscordError {
-    fn from(err: hex::FromHexError) -> Self {
-        Self::Model {
-            message: err.to_string(),
-        }
-    }
-}
-
 #[cfg(any(feature = "gateway", feature = "voice"))]
 impl From<tokio_tungstenite::tungstenite::Error> for DiscordError {
     fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {

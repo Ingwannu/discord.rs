@@ -23,7 +23,6 @@ mod bot {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use async_trait::async_trait;
     use discordrs::voice::player::{
         AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
     };
@@ -156,7 +155,6 @@ mod bot {
         }
     }
 
-    #[async_trait]
     impl EventHandler for Handler {
         async fn ready(&self, ctx: Context, ready: ReadyPayload) {
             {

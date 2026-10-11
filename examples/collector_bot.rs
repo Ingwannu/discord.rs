@@ -1,6 +1,4 @@
 #[cfg(all(feature = "gateway", feature = "collectors"))]
-use async_trait::async_trait;
-#[cfg(all(feature = "gateway", feature = "collectors"))]
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 #[cfg(all(feature = "gateway", feature = "collectors"))]
 use std::time::Duration;
@@ -9,7 +7,6 @@ use std::time::Duration;
 struct Handler;
 
 #[cfg(all(feature = "gateway", feature = "collectors"))]
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         if matches!(event, Event::Ready(_)) {

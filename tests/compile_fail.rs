@@ -1,6 +1,10 @@
 //! Compile-fail contract tests (trybuild) for the phase 3 primitives: typed
 //! IDs and patch fields must turn misuse into compile errors
-//! (docs/design/3.0-types-events-requests.md §5 "필수 테스트").
+//! (docs/design/3.0-types-events-requests.md §5 "필수 테스트"). The public
+//! async traits' `Send` contract is pinned the same way: an `async fn` impl
+//! whose future is not `Send` must fail at the impl
+//! (`cache_backend_future_not_send.rs`; `CacheBackend` is the async trait
+//! available with default features, which this test runs with).
 //!
 //! The expected `.stderr` files in `tests/ui/` are rustc diagnostics, which
 //! change wording between Rust releases. They are therefore kept for one

@@ -5,8 +5,6 @@ use std::sync::Mutex;
 use std::io::Write;
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
-use async_trait::async_trait;
-#[cfg(all(feature = "gateway", feature = "voice"))]
 use discordrs::{
     gateway_intents, Client, Context, EventHandler, ReadyPayload, Snowflake, VoiceServerUpdate,
     VoiceState,
@@ -83,7 +81,6 @@ impl Handler {
 }
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
-#[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: ReadyPayload) {
         let user_id = ready.user.id.to_string();

@@ -2,7 +2,6 @@ use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
 
-use async_trait::async_trait;
 use serde_json::{json, Value};
 #[cfg(feature = "sharding")]
 use tokio::sync::watch;
@@ -577,7 +576,6 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
         hits: Arc<Mutex<Vec<String>>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for RecordingHandler {
         async fn ready(&self, _ctx: super::Context, ready_data: ReadyPayload) {
             self.hits
@@ -708,7 +706,6 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
         hits: Arc<Mutex<Vec<String>>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for OrderedHandler {
         async fn ready(&self, _ctx: super::Context, _ready_data: ReadyPayload) {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -724,7 +721,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
     }
 
     let hits = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn super::EventHandler> = Arc::new(OrderedHandler {
+    let handler: Arc<dyn super::ErasedEventHandler> = Arc::new(OrderedHandler {
         hits: Arc::clone(&hits),
     });
     let http = Arc::new(DiscordHttpClient::new("token", 0));
@@ -1074,7 +1071,6 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         hits: Arc<Mutex<Vec<String>>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for DispatchHandler {
         async fn ready(&self, _ctx: super::Context, ready_data: ReadyPayload) {
             self.hits
@@ -1089,9 +1085,9 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
     }
 
     let hits = Arc::new(Mutex::new(Vec::new()));
-    let handler: Arc<dyn super::EventHandler> = Arc::new(DispatchHandler {
+    let handler = DispatchHandler {
         hits: Arc::clone(&hits),
-    });
+    };
     let http = Arc::new(DiscordHttpClient::new("token", 7));
     let context = super::Context::new(
         Arc::clone(&http),
@@ -1525,7 +1521,6 @@ async fn event_handler_routes_additional_typed_hooks() {
         hits: Arc<Mutex<Vec<String>>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for ExtendedHandler {
         async fn member_add(&self, _ctx: super::Context, guild_id: Snowflake, member: Member) {
             self.hits.lock().await.push(format!(
@@ -1752,7 +1747,6 @@ async fn event_handler_routes_additional_typed_hooks() {
 async fn event_handler_default_impl_accepts_remaining_event_variants() {
     struct NoopHandler;
 
-    #[async_trait]
     impl super::EventHandler for NoopHandler {}
 
     let handler = NoopHandler;
@@ -2450,10 +2444,9 @@ async fn context_new_keeps_legacy_http_and_data_entry_points() {
 async fn process_gateway_dispatch_publishes_events_to_collectors() {
     struct NoopHandler;
 
-    #[async_trait]
     impl super::EventHandler for NoopHandler {}
 
-    let handler: Arc<dyn super::EventHandler> = Arc::new(NoopHandler);
+    let handler = NoopHandler;
     let http = Arc::new(DiscordHttpClient::new("token", 0));
     let context = super::Context::new(
         Arc::clone(&http),
@@ -2872,7 +2865,6 @@ async fn forward_shard_commands_exits_when_gateway_channel_is_closed() {
 async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
     struct NoopHandler;
 
-    #[async_trait]
     impl super::EventHandler for NoopHandler {}
 
     let manager = Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(1))));
@@ -3276,7 +3268,6 @@ impl RecordingBackend {
 }
 
 #[cfg(feature = "cache")]
-#[async_trait]
 impl crate::cache::CacheBackend for RecordingBackend {
     async fn clear_cache(
         &self,
@@ -3452,7 +3443,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
 #[tokio::test]
 async fn cache_backend_receives_member_message_and_presence_writes() {
     let recorder = Arc::new(RecordingBackend::default());
-    let backend: Arc<dyn crate::cache::CacheBackend> = recorder.clone();
+    let backend: Arc<dyn super::ErasedCacheBackend> = recorder.clone();
     let cache = crate::cache::CacheHandle::new();
 
     let member_event = Event::MemberAdd(MemberEvent {
@@ -3550,7 +3541,7 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
 #[tokio::test]
 async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
     let recorder = Arc::new(RecordingBackend::default());
-    let backend: Arc<dyn crate::cache::CacheBackend> = recorder.clone();
+    let backend: Arc<dyn super::ErasedCacheBackend> = recorder.clone();
 
     let ready_event = Event::Ready(ReadyEvent {
         data: ReadyPayload {
@@ -3627,7 +3618,7 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
 #[cfg(feature = "cache")]
 #[test]
 fn client_builder_stores_cache_backend() {
-    let backend: Arc<dyn crate::cache::CacheBackend> = Arc::new(RecordingBackend::default());
+    let backend = Arc::new(RecordingBackend::default());
     let builder =
         super::Client::builder("token", Intents::from_bits(0)).cache_backend(Arc::clone(&backend));
     assert!(builder.cache_backend.is_some());
@@ -3786,7 +3777,6 @@ async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
         results: mpsc::UnboundedSender<Result<Vec<String>, String>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for FetchingHandler {
         async fn message_create(&self, ctx: super::Context, _message: Message) {
             let result = ctx
@@ -3855,7 +3845,6 @@ async fn serial_handler_can_await_a_collector_for_later_events() {
         collected: mpsc::UnboundedSender<Option<String>>,
     }
 
-    #[async_trait]
     impl super::EventHandler for CollectingHandler {
         async fn message_create(&self, ctx: super::Context, message: Message) {
             if message.content != "first" {
@@ -3946,7 +3935,6 @@ struct GatedHandler {
     gated: Vec<&'static str>,
 }
 
-#[async_trait]
 impl super::EventHandler for GatedHandler {
     async fn message_create(&self, _ctx: super::Context, message: Message) {
         self.probe.enter();
@@ -4155,7 +4143,6 @@ async fn handler_panics_are_contained_and_later_events_still_run() {
         probe: Arc<HandlerProbe>,
     }
 
-    #[async_trait]
     impl super::EventHandler for PanickingHandler {
         async fn message_create(&self, _ctx: super::Context, message: Message) {
             if message.content == "boom" {
@@ -4198,7 +4185,6 @@ async fn pipeline_shutdown_aborts_handlers_that_outlive_the_timeout() {
         dropped: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    #[async_trait]
     impl super::EventHandler for StuckHandler {
         async fn message_create(&self, _ctx: super::Context, _message: Message) {
             let _flag = DropFlag(Arc::clone(&self.dropped));
@@ -4898,7 +4884,6 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
         dropped: Arc<std::sync::atomic::AtomicBool>,
     }
 
-    #[async_trait]
     impl super::EventHandler for StuckHandler {
         async fn message_create(&self, _ctx: super::Context, _message: Message) {
             let _flag = TaskDropFlag(Arc::clone(&self.dropped));
@@ -5041,7 +5026,6 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
 
 struct NoopEventHandler;
 
-#[async_trait]
 impl super::EventHandler for NoopEventHandler {}
 
 #[cfg(feature = "sharding")]
@@ -5479,7 +5463,6 @@ async fn collectors_created_by_a_queued_handler_replay_events_published_before_i
         results: mpsc::UnboundedSender<(Option<String>, Option<String>)>,
     }
 
-    #[async_trait]
     impl super::EventHandler for LateCollectingHandler {
         async fn message_create(&self, ctx: super::Context, message: Message) {
             if message.content != "first" {
@@ -5636,7 +5619,6 @@ struct LaneHandler {
     gated: Vec<&'static str>,
 }
 
-#[async_trait]
 impl super::EventHandler for LaneHandler {
     async fn interaction_create(&self, ctx: super::Context, interaction: Interaction) {
         let id = interaction_custom_id(&interaction);
@@ -6209,7 +6191,6 @@ async fn pipeline_shutdown_reports_handlers_that_cannot_be_cancelled() {
         started: mpsc::UnboundedSender<()>,
     }
 
-    #[async_trait]
     impl super::EventHandler for BlockingHandler {
         async fn message_create(&self, _ctx: super::Context, _message: Message) {
             let _ = self.started.send(());
@@ -6355,7 +6336,6 @@ async fn shard_supervisor_shutdown_cancels_pending_boot_waves() {
 async fn backlogged_lanes_reap_finished_handlers_before_admitting_more() {
     struct QuickHandler;
 
-    #[async_trait]
     impl super::EventHandler for QuickHandler {}
 
     let pipeline = super::spawn_event_pipeline(
@@ -6570,7 +6550,6 @@ impl DelayedStore {
 }
 
 #[cfg(feature = "cache")]
-#[async_trait]
 impl crate::cache::CacheBackend for DelayedStore {
     async fn clear_cache(
         &self,
@@ -6794,7 +6773,6 @@ async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
         started: Arc<tokio::sync::Notify>,
     }
 
-    #[async_trait]
     impl super::EventHandler for StuckOnMessage {
         async fn message_create(&self, _ctx: super::Context, _message: Message) {
             self.started.notify_one();

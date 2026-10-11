@@ -1,9 +1,10 @@
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
-use async_trait::async_trait;
 use serde_json::Value;
 #[cfg(feature = "sharding")]
 use tokio::sync::watch;
@@ -59,7 +60,9 @@ use backend::forward_cache_backend_updates;
 #[cfg(feature = "cache")]
 pub use backend::CacheBackendHealth;
 #[cfg(feature = "cache")]
-use backend::{BackendWrite, CacheBackendForwarder, CacheBackendWorker, ForwarderShared};
+use backend::{
+    BackendWrite, CacheBackendForwarder, CacheBackendWorker, ErasedCacheBackend, ForwarderShared,
+};
 #[cfg(test)]
 use pipeline::{process_gateway_dispatch, BacklogWarning, OverflowLog};
 use pipeline::{spawn_event_pipeline, GatewayDispatch};
@@ -678,421 +681,798 @@ impl Context {
     }
 }
 
-/// Trait for `EventHandler` behavior.
+/// Receives gateway events; register one with [`ClientBuilder::event_handler`].
+///
+/// Every method has a default that does nothing, so an implementation only
+/// overrides the hooks it needs. [`handle_event`](Self::handle_event)
+/// receives every event first and by default forwards it to the matching
+/// typed hook (`ready`, `message_create`, ...); unknown events go to
+/// [`raw_event`](Self::raw_event). Overriding `handle_event` replaces that
+/// routing, so the typed hooks are then only called if the override calls
+/// them.
+///
+/// # Implementing
+///
+/// Write the methods as plain `async fn` — no attribute macro is needed:
+///
+/// ```no_run
+/// use discordrs::{Context, EventHandler, Message, ReadyPayload};
+///
+/// struct Handler;
+///
+/// impl EventHandler for Handler {
+///     async fn ready(&self, _ctx: Context, ready: ReadyPayload) {
+///         println!("connected as {}", ready.user.username);
+///     }
+///
+///     async fn message_create(&self, _ctx: Context, message: Message) {
+///         println!("message: {}", message.content);
+///     }
+/// }
+/// ```
+///
+/// # `Send` contract
+///
+/// The methods are declared as `fn ... -> impl Future<Output = ()> + Send`,
+/// because the runtime runs every handler call on a spawned Tokio task. An
+/// `async fn` in your impl therefore must produce a `Send` future: do not
+/// hold a non-`Send` value (`Rc`, `RefCell` borrow, `std::sync::MutexGuard`)
+/// across an `.await`. Violations are compile errors at the impl.
+///
+/// The trait is not object safe (`dyn EventHandler` does not exist). The
+/// runtime stores the handler type-erased and boxes each `handle_event`
+/// future once; the typed hook it awaits is part of that future, so the
+/// default routing allocates once per event (async-trait boxed both).
 #[allow(missing_docs)]
-#[async_trait]
 pub trait EventHandler: Send + Sync + 'static {
     /// Handles one decoded Gateway event and dispatches to typed convenience hooks by default.
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        match event {
-            Event::Ready(event) => self.ready(ctx, event.data).await,
-            Event::GuildCreate(event) => self.guild_create(ctx, event.guild).await,
-            Event::GuildUpdate(event) => self.guild_update(ctx, event.guild).await,
-            Event::GuildDelete(event) => self.guild_delete(ctx, event.data).await,
-            Event::ChannelCreate(event) => self.channel_create(ctx, event.channel).await,
-            Event::ChannelUpdate(event) => self.channel_update(ctx, event.channel).await,
-            Event::ChannelDelete(event) => self.channel_delete(ctx, event.channel).await,
-            Event::MemberAdd(event) => self.member_add(ctx, event.guild_id, event.member).await,
-            Event::MemberUpdate(event) => {
-                self.member_update(ctx, event.guild_id, event.member).await
+    fn handle_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+        async move {
+            match event {
+                Event::Ready(event) => self.ready(ctx, event.data).await,
+                Event::GuildCreate(event) => self.guild_create(ctx, event.guild).await,
+                Event::GuildUpdate(event) => self.guild_update(ctx, event.guild).await,
+                Event::GuildDelete(event) => self.guild_delete(ctx, event.data).await,
+                Event::ChannelCreate(event) => self.channel_create(ctx, event.channel).await,
+                Event::ChannelUpdate(event) => self.channel_update(ctx, event.channel).await,
+                Event::ChannelDelete(event) => self.channel_delete(ctx, event.channel).await,
+                Event::MemberAdd(event) => self.member_add(ctx, event.guild_id, event.member).await,
+                Event::MemberUpdate(event) => {
+                    self.member_update(ctx, event.guild_id, event.member).await
+                }
+                Event::MemberRemove(event) => {
+                    self.member_remove(ctx, event.data.guild_id, event.data.user)
+                        .await
+                }
+                Event::GuildMembersChunk(event) => self.guild_members_chunk(ctx, event).await,
+                Event::RoleCreate(event) => self.role_create(ctx, event.guild_id, event.role).await,
+                Event::RoleUpdate(event) => self.role_update(ctx, event.guild_id, event.role).await,
+                Event::RoleDelete(event) => {
+                    self.role_delete(ctx, event.data.guild_id, event.data.role_id)
+                        .await
+                }
+                Event::MessageCreate(event) => self.message_create(ctx, event.message).await,
+                Event::MessageUpdate(event) => self.message_update(ctx, event.message).await,
+                Event::MessageDelete(event) => {
+                    self.message_delete(ctx, event.data.channel_id, event.data.id)
+                        .await
+                }
+                Event::MessageDeleteBulk(event) => self.message_delete_bulk(ctx, event).await,
+                Event::ChannelPinsUpdate(event) => self.channel_pins_update(ctx, event).await,
+                Event::GuildBanAdd(event) => self.guild_ban_add(ctx, event).await,
+                Event::GuildBanRemove(event) => self.guild_ban_remove(ctx, event).await,
+                Event::GuildEmojisUpdate(event) => self.guild_emojis_update(ctx, event).await,
+                Event::GuildIntegrationsUpdate(event) => {
+                    self.guild_integrations_update(ctx, event).await
+                }
+                Event::EntitlementCreate(event) => self.entitlement_create(ctx, event).await,
+                Event::EntitlementUpdate(event) => self.entitlement_update(ctx, event).await,
+                Event::EntitlementDelete(event) => self.entitlement_delete(ctx, event).await,
+                Event::SubscriptionCreate(event) => self.subscription_create(ctx, event).await,
+                Event::SubscriptionUpdate(event) => self.subscription_update(ctx, event).await,
+                Event::SubscriptionDelete(event) => self.subscription_delete(ctx, event).await,
+                Event::IntegrationCreate(event) => self.integration_create(ctx, event).await,
+                Event::IntegrationUpdate(event) => self.integration_update(ctx, event).await,
+                Event::IntegrationDelete(event) => self.integration_delete(ctx, event).await,
+                Event::GuildSoundboardSoundCreate(event) => {
+                    self.guild_soundboard_sound_create(ctx, event).await
+                }
+                Event::GuildSoundboardSoundUpdate(event) => {
+                    self.guild_soundboard_sound_update(ctx, event).await
+                }
+                Event::GuildSoundboardSoundDelete(event) => {
+                    self.guild_soundboard_sound_delete(ctx, event).await
+                }
+                Event::GuildSoundboardSoundsUpdate(event) => {
+                    self.guild_soundboard_sounds_update(ctx, event).await
+                }
+                Event::SoundboardSounds(event) => self.soundboard_sounds(ctx, event).await,
+                Event::WebhooksUpdate(event) => self.webhooks_update(ctx, event).await,
+                Event::InviteCreate(event) => self.invite_create(ctx, event).await,
+                Event::InviteDelete(event) => self.invite_delete(ctx, event).await,
+                Event::VoiceStateUpdate(event) => self.voice_state_update(ctx, event.state).await,
+                Event::VoiceServerUpdate(event) => self.voice_server_update(ctx, event.data).await,
+                Event::Resumed(event) => self.resumed(ctx, event).await,
+                Event::MessageReactionAdd(event) => self.reaction_add(ctx, event).await,
+                Event::MessageReactionRemove(event) => self.reaction_remove(ctx, event).await,
+                Event::MessageReactionRemoveAll(event) => {
+                    self.reaction_remove_all(ctx, event).await
+                }
+                Event::MessagePollVoteAdd(event) => self.poll_vote_add(ctx, event).await,
+                Event::MessagePollVoteRemove(event) => self.poll_vote_remove(ctx, event).await,
+                Event::TypingStart(event) => self.typing_start(ctx, event).await,
+                Event::PresenceUpdate(event) => self.presence_update(ctx, event).await,
+                Event::InteractionCreate(event) => {
+                    self.interaction_create(ctx, event.interaction).await
+                }
+                Event::UserUpdate(event) => self.user_update(ctx, event.user).await,
+                Event::ThreadCreate(event) => self.thread_create(ctx, event).await,
+                Event::ThreadUpdate(event) => self.thread_update(ctx, event).await,
+                Event::ThreadDelete(event) => self.thread_delete(ctx, event).await,
+                Event::ThreadListSync(event) => self.thread_list_sync(ctx, event).await,
+                Event::ThreadMemberUpdate(event) => self.thread_member_update(ctx, event).await,
+                Event::ThreadMembersUpdate(event) => self.thread_members_update(ctx, event).await,
+                Event::MessageReactionRemoveEmoji(event) => {
+                    self.reaction_remove_emoji(ctx, event).await
+                }
+                Event::GuildStickersUpdate(event) => self.guild_stickers_update(ctx, event).await,
+                Event::GuildScheduledEventCreate(event) => {
+                    self.guild_scheduled_event_create(ctx, event).await
+                }
+                Event::GuildScheduledEventUpdate(event) => {
+                    self.guild_scheduled_event_update(ctx, event).await
+                }
+                Event::GuildScheduledEventDelete(event) => {
+                    self.guild_scheduled_event_delete(ctx, event).await
+                }
+                Event::GuildScheduledEventUserAdd(event) => {
+                    self.guild_scheduled_event_user_add(ctx, event).await
+                }
+                Event::GuildScheduledEventUserRemove(event) => {
+                    self.guild_scheduled_event_user_remove(ctx, event).await
+                }
+                Event::StageInstanceCreate(event) => self.stage_instance_create(ctx, event).await,
+                Event::StageInstanceUpdate(event) => self.stage_instance_update(ctx, event).await,
+                Event::StageInstanceDelete(event) => self.stage_instance_delete(ctx, event).await,
+                Event::VoiceChannelEffectSend(event) => {
+                    self.voice_channel_effect_send(ctx, event).await
+                }
+                Event::VoiceChannelStartTimeUpdate(event) => {
+                    self.voice_channel_start_time_update(ctx, event).await
+                }
+                Event::VoiceChannelStatusUpdate(event) => {
+                    self.voice_channel_status_update(ctx, event).await
+                }
+                Event::ChannelInfo(event) => self.channel_info(ctx, event).await,
+                Event::RateLimited(event) => self.gateway_rate_limited(ctx, event).await,
+                Event::ApplicationCommandPermissionsUpdate(event) => {
+                    self.application_command_permissions_update(ctx, event)
+                        .await
+                }
+                Event::AutoModerationRuleCreate(event) => {
+                    self.auto_moderation_rule_create(ctx, event).await
+                }
+                Event::AutoModerationRuleUpdate(event) => {
+                    self.auto_moderation_rule_update(ctx, event).await
+                }
+                Event::AutoModerationRuleDelete(event) => {
+                    self.auto_moderation_rule_delete(ctx, event).await
+                }
+                Event::AutoModerationActionExecution(event) => {
+                    self.auto_moderation_action_execution(ctx, event).await
+                }
+                Event::GuildAuditLogEntryCreate(event) => {
+                    self.guild_audit_log_entry_create(ctx, event).await
+                }
+                Event::Unknown { kind, raw } => self.raw_event(ctx, kind, raw).await,
             }
-            Event::MemberRemove(event) => {
-                self.member_remove(ctx, event.data.guild_id, event.data.user)
-                    .await
-            }
-            Event::GuildMembersChunk(event) => self.guild_members_chunk(ctx, event).await,
-            Event::RoleCreate(event) => self.role_create(ctx, event.guild_id, event.role).await,
-            Event::RoleUpdate(event) => self.role_update(ctx, event.guild_id, event.role).await,
-            Event::RoleDelete(event) => {
-                self.role_delete(ctx, event.data.guild_id, event.data.role_id)
-                    .await
-            }
-            Event::MessageCreate(event) => self.message_create(ctx, event.message).await,
-            Event::MessageUpdate(event) => self.message_update(ctx, event.message).await,
-            Event::MessageDelete(event) => {
-                self.message_delete(ctx, event.data.channel_id, event.data.id)
-                    .await
-            }
-            Event::MessageDeleteBulk(event) => self.message_delete_bulk(ctx, event).await,
-            Event::ChannelPinsUpdate(event) => self.channel_pins_update(ctx, event).await,
-            Event::GuildBanAdd(event) => self.guild_ban_add(ctx, event).await,
-            Event::GuildBanRemove(event) => self.guild_ban_remove(ctx, event).await,
-            Event::GuildEmojisUpdate(event) => self.guild_emojis_update(ctx, event).await,
-            Event::GuildIntegrationsUpdate(event) => {
-                self.guild_integrations_update(ctx, event).await
-            }
-            Event::EntitlementCreate(event) => self.entitlement_create(ctx, event).await,
-            Event::EntitlementUpdate(event) => self.entitlement_update(ctx, event).await,
-            Event::EntitlementDelete(event) => self.entitlement_delete(ctx, event).await,
-            Event::SubscriptionCreate(event) => self.subscription_create(ctx, event).await,
-            Event::SubscriptionUpdate(event) => self.subscription_update(ctx, event).await,
-            Event::SubscriptionDelete(event) => self.subscription_delete(ctx, event).await,
-            Event::IntegrationCreate(event) => self.integration_create(ctx, event).await,
-            Event::IntegrationUpdate(event) => self.integration_update(ctx, event).await,
-            Event::IntegrationDelete(event) => self.integration_delete(ctx, event).await,
-            Event::GuildSoundboardSoundCreate(event) => {
-                self.guild_soundboard_sound_create(ctx, event).await
-            }
-            Event::GuildSoundboardSoundUpdate(event) => {
-                self.guild_soundboard_sound_update(ctx, event).await
-            }
-            Event::GuildSoundboardSoundDelete(event) => {
-                self.guild_soundboard_sound_delete(ctx, event).await
-            }
-            Event::GuildSoundboardSoundsUpdate(event) => {
-                self.guild_soundboard_sounds_update(ctx, event).await
-            }
-            Event::SoundboardSounds(event) => self.soundboard_sounds(ctx, event).await,
-            Event::WebhooksUpdate(event) => self.webhooks_update(ctx, event).await,
-            Event::InviteCreate(event) => self.invite_create(ctx, event).await,
-            Event::InviteDelete(event) => self.invite_delete(ctx, event).await,
-            Event::VoiceStateUpdate(event) => self.voice_state_update(ctx, event.state).await,
-            Event::VoiceServerUpdate(event) => self.voice_server_update(ctx, event.data).await,
-            Event::Resumed(event) => self.resumed(ctx, event).await,
-            Event::MessageReactionAdd(event) => self.reaction_add(ctx, event).await,
-            Event::MessageReactionRemove(event) => self.reaction_remove(ctx, event).await,
-            Event::MessageReactionRemoveAll(event) => self.reaction_remove_all(ctx, event).await,
-            Event::MessagePollVoteAdd(event) => self.poll_vote_add(ctx, event).await,
-            Event::MessagePollVoteRemove(event) => self.poll_vote_remove(ctx, event).await,
-            Event::TypingStart(event) => self.typing_start(ctx, event).await,
-            Event::PresenceUpdate(event) => self.presence_update(ctx, event).await,
-            Event::InteractionCreate(event) => {
-                self.interaction_create(ctx, event.interaction).await
-            }
-            Event::UserUpdate(event) => self.user_update(ctx, event.user).await,
-            Event::ThreadCreate(event) => self.thread_create(ctx, event).await,
-            Event::ThreadUpdate(event) => self.thread_update(ctx, event).await,
-            Event::ThreadDelete(event) => self.thread_delete(ctx, event).await,
-            Event::ThreadListSync(event) => self.thread_list_sync(ctx, event).await,
-            Event::ThreadMemberUpdate(event) => self.thread_member_update(ctx, event).await,
-            Event::ThreadMembersUpdate(event) => self.thread_members_update(ctx, event).await,
-            Event::MessageReactionRemoveEmoji(event) => {
-                self.reaction_remove_emoji(ctx, event).await
-            }
-            Event::GuildStickersUpdate(event) => self.guild_stickers_update(ctx, event).await,
-            Event::GuildScheduledEventCreate(event) => {
-                self.guild_scheduled_event_create(ctx, event).await
-            }
-            Event::GuildScheduledEventUpdate(event) => {
-                self.guild_scheduled_event_update(ctx, event).await
-            }
-            Event::GuildScheduledEventDelete(event) => {
-                self.guild_scheduled_event_delete(ctx, event).await
-            }
-            Event::GuildScheduledEventUserAdd(event) => {
-                self.guild_scheduled_event_user_add(ctx, event).await
-            }
-            Event::GuildScheduledEventUserRemove(event) => {
-                self.guild_scheduled_event_user_remove(ctx, event).await
-            }
-            Event::StageInstanceCreate(event) => self.stage_instance_create(ctx, event).await,
-            Event::StageInstanceUpdate(event) => self.stage_instance_update(ctx, event).await,
-            Event::StageInstanceDelete(event) => self.stage_instance_delete(ctx, event).await,
-            Event::VoiceChannelEffectSend(event) => {
-                self.voice_channel_effect_send(ctx, event).await
-            }
-            Event::VoiceChannelStartTimeUpdate(event) => {
-                self.voice_channel_start_time_update(ctx, event).await
-            }
-            Event::VoiceChannelStatusUpdate(event) => {
-                self.voice_channel_status_update(ctx, event).await
-            }
-            Event::ChannelInfo(event) => self.channel_info(ctx, event).await,
-            Event::RateLimited(event) => self.gateway_rate_limited(ctx, event).await,
-            Event::ApplicationCommandPermissionsUpdate(event) => {
-                self.application_command_permissions_update(ctx, event)
-                    .await
-            }
-            Event::AutoModerationRuleCreate(event) => {
-                self.auto_moderation_rule_create(ctx, event).await
-            }
-            Event::AutoModerationRuleUpdate(event) => {
-                self.auto_moderation_rule_update(ctx, event).await
-            }
-            Event::AutoModerationRuleDelete(event) => {
-                self.auto_moderation_rule_delete(ctx, event).await
-            }
-            Event::AutoModerationActionExecution(event) => {
-                self.auto_moderation_action_execution(ctx, event).await
-            }
-            Event::GuildAuditLogEntryCreate(event) => {
-                self.guild_audit_log_entry_create(ctx, event).await
-            }
-            Event::Unknown { kind, raw } => self.raw_event(ctx, kind, raw).await,
         }
     }
 
-    async fn ready(&self, _ctx: Context, _ready_data: crate::event::ReadyPayload) {}
-    async fn guild_create(&self, _ctx: Context, _guild: crate::model::Guild) {}
-    async fn guild_update(&self, _ctx: Context, _guild: crate::model::Guild) {}
-    async fn guild_delete(&self, _ctx: Context, _data: crate::event::GuildDeletePayload) {}
-    async fn channel_create(&self, _ctx: Context, _channel: crate::model::Channel) {}
-    async fn channel_update(&self, _ctx: Context, _channel: crate::model::Channel) {}
-    async fn channel_delete(&self, _ctx: Context, _channel: crate::model::Channel) {}
-    async fn member_add(
+    fn ready(
+        &self,
+        _ctx: Context,
+        _ready_data: crate::event::ReadyPayload,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn guild_create(
+        &self,
+        _ctx: Context,
+        _guild: crate::model::Guild,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn guild_update(
+        &self,
+        _ctx: Context,
+        _guild: crate::model::Guild,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn guild_delete(
+        &self,
+        _ctx: Context,
+        _data: crate::event::GuildDeletePayload,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn channel_create(
+        &self,
+        _ctx: Context,
+        _channel: crate::model::Channel,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn channel_update(
+        &self,
+        _ctx: Context,
+        _channel: crate::model::Channel,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn channel_delete(
+        &self,
+        _ctx: Context,
+        _channel: crate::model::Channel,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn member_add(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _member: crate::model::Member,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn member_update(
+    fn member_update(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _member: crate::model::Member,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn member_remove(
+    fn member_remove(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _user: crate::model::User,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_members_chunk(
+    fn guild_members_chunk(
         &self,
         _ctx: Context,
         _event: crate::event::GuildMembersChunkEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn role_create(
+    fn role_create(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _role: crate::model::Role,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn role_update(
+    fn role_update(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _role: crate::model::Role,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn role_delete(
+    fn role_delete(
         &self,
         _ctx: Context,
         _guild_id: crate::model::Snowflake,
         _role_id: crate::model::Snowflake,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn message_create(&self, _ctx: Context, _message: crate::model::Message) {}
-    async fn message_update(&self, _ctx: Context, _message: crate::model::Message) {}
-    async fn message_delete(
+    fn message_create(
+        &self,
+        _ctx: Context,
+        _message: crate::model::Message,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn message_update(
+        &self,
+        _ctx: Context,
+        _message: crate::model::Message,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn message_delete(
         &self,
         _ctx: Context,
         _channel_id: crate::model::Snowflake,
         _message_id: crate::model::Snowflake,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn message_delete_bulk(
+    fn message_delete_bulk(
         &self,
         _ctx: Context,
         _event: crate::event::BulkMessageDeleteEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn channel_pins_update(
+    fn channel_pins_update(
         &self,
         _ctx: Context,
         _event: crate::event::ChannelPinsUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_ban_add(&self, _ctx: Context, _event: crate::event::GuildBanEvent) {}
-    async fn guild_ban_remove(&self, _ctx: Context, _event: crate::event::GuildBanEvent) {}
-    async fn guild_emojis_update(
+    fn guild_ban_add(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildBanEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn guild_ban_remove(
+        &self,
+        _ctx: Context,
+        _event: crate::event::GuildBanEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn guild_emojis_update(
         &self,
         _ctx: Context,
         _event: crate::event::GuildEmojisUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_integrations_update(
+    fn guild_integrations_update(
         &self,
         _ctx: Context,
         _event: crate::event::GuildIntegrationsUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn entitlement_create(&self, _ctx: Context, _event: crate::event::EntitlementEvent) {}
-    async fn entitlement_update(&self, _ctx: Context, _event: crate::event::EntitlementEvent) {}
-    async fn entitlement_delete(&self, _ctx: Context, _event: crate::event::EntitlementEvent) {}
-    async fn subscription_create(&self, _ctx: Context, _event: crate::event::SubscriptionEvent) {}
-    async fn subscription_update(&self, _ctx: Context, _event: crate::event::SubscriptionEvent) {}
-    async fn subscription_delete(&self, _ctx: Context, _event: crate::event::SubscriptionEvent) {}
-    async fn integration_create(&self, _ctx: Context, _event: crate::event::IntegrationEvent) {}
-    async fn integration_update(&self, _ctx: Context, _event: crate::event::IntegrationEvent) {}
-    async fn integration_delete(
+    fn entitlement_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::EntitlementEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn entitlement_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::EntitlementEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn entitlement_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::EntitlementEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn subscription_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::SubscriptionEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn subscription_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::SubscriptionEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn subscription_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::SubscriptionEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn integration_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::IntegrationEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn integration_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::IntegrationEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn integration_delete(
         &self,
         _ctx: Context,
         _event: crate::event::IntegrationDeleteEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_soundboard_sound_create(
+    fn guild_soundboard_sound_create(
         &self,
         _ctx: Context,
         _event: crate::event::SoundboardSoundEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_soundboard_sound_update(
+    fn guild_soundboard_sound_update(
         &self,
         _ctx: Context,
         _event: crate::event::SoundboardSoundEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_soundboard_sound_delete(
+    fn guild_soundboard_sound_delete(
         &self,
         _ctx: Context,
         _event: crate::event::SoundboardSoundDeleteEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_soundboard_sounds_update(
+    fn guild_soundboard_sounds_update(
         &self,
         _ctx: Context,
         _event: crate::event::SoundboardSoundsEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn soundboard_sounds(&self, _ctx: Context, _event: crate::event::SoundboardSoundsEvent) {}
-    async fn webhooks_update(&self, _ctx: Context, _event: crate::event::WebhooksUpdateEvent) {}
-    async fn invite_create(&self, _ctx: Context, _event: crate::event::InviteEvent) {}
-    async fn invite_delete(&self, _ctx: Context, _event: crate::event::InviteEvent) {}
-    async fn voice_state_update(&self, _ctx: Context, _state: crate::model::VoiceState) {}
-    async fn voice_server_update(&self, _ctx: Context, _data: crate::model::VoiceServerUpdate) {}
-    async fn resumed(&self, _ctx: Context, _event: crate::event::ResumedEvent) {}
-    async fn reaction_add(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
-    async fn reaction_remove(&self, _ctx: Context, _data: crate::event::ReactionEvent) {}
-    async fn reaction_remove_all(
+    fn soundboard_sounds(
+        &self,
+        _ctx: Context,
+        _event: crate::event::SoundboardSoundsEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn webhooks_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::WebhooksUpdateEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn invite_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::InviteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn invite_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::InviteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn voice_state_update(
+        &self,
+        _ctx: Context,
+        _state: crate::model::VoiceState,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn voice_server_update(
+        &self,
+        _ctx: Context,
+        _data: crate::model::VoiceServerUpdate,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn resumed(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ResumedEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn reaction_add(
+        &self,
+        _ctx: Context,
+        _data: crate::event::ReactionEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn reaction_remove(
+        &self,
+        _ctx: Context,
+        _data: crate::event::ReactionEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn reaction_remove_all(
         &self,
         _ctx: Context,
         _event: crate::event::ReactionRemoveAllEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn poll_vote_add(&self, _ctx: Context, _event: crate::event::PollVoteEvent) {}
-    async fn poll_vote_remove(&self, _ctx: Context, _event: crate::event::PollVoteEvent) {}
-    async fn typing_start(&self, _ctx: Context, _data: crate::event::TypingStartEvent) {}
-    async fn presence_update(&self, _ctx: Context, _data: crate::event::PresenceUpdateEvent) {}
-    async fn interaction_create(&self, _ctx: Context, _interaction: crate::model::Interaction) {}
-    async fn user_update(&self, _ctx: Context, _user: crate::model::User) {}
-    async fn thread_create(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
-    async fn thread_update(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
-    async fn thread_delete(&self, _ctx: Context, _event: crate::event::ThreadEvent) {}
-    async fn thread_list_sync(&self, _ctx: Context, _event: crate::event::ThreadListSyncEvent) {}
-    async fn thread_member_update(
+    fn poll_vote_add(
+        &self,
+        _ctx: Context,
+        _event: crate::event::PollVoteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn poll_vote_remove(
+        &self,
+        _ctx: Context,
+        _event: crate::event::PollVoteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn typing_start(
+        &self,
+        _ctx: Context,
+        _data: crate::event::TypingStartEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn presence_update(
+        &self,
+        _ctx: Context,
+        _data: crate::event::PresenceUpdateEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn interaction_create(
+        &self,
+        _ctx: Context,
+        _interaction: crate::model::Interaction,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn user_update(
+        &self,
+        _ctx: Context,
+        _user: crate::model::User,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_list_sync(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ThreadListSyncEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_member_update(
         &self,
         _ctx: Context,
         _event: crate::event::ThreadMemberUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn thread_members_update(
+    fn thread_members_update(
         &self,
         _ctx: Context,
         _event: crate::event::ThreadMembersUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn reaction_remove_emoji(
+    fn reaction_remove_emoji(
         &self,
         _ctx: Context,
         _event: crate::event::ReactionRemoveEmojiEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_stickers_update(
+    fn guild_stickers_update(
         &self,
         _ctx: Context,
         _event: crate::event::GuildStickersUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_scheduled_event_create(
+    fn guild_scheduled_event_create(
         &self,
         _ctx: Context,
         _event: crate::event::ScheduledEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_scheduled_event_update(
+    fn guild_scheduled_event_update(
         &self,
         _ctx: Context,
         _event: crate::event::ScheduledEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_scheduled_event_delete(
+    fn guild_scheduled_event_delete(
         &self,
         _ctx: Context,
         _event: crate::event::ScheduledEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_scheduled_event_user_add(
+    fn guild_scheduled_event_user_add(
         &self,
         _ctx: Context,
         _event: crate::event::GuildScheduledEventUserEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_scheduled_event_user_remove(
+    fn guild_scheduled_event_user_remove(
         &self,
         _ctx: Context,
         _event: crate::event::GuildScheduledEventUserEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn stage_instance_create(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    fn stage_instance_create(
+        &self,
+        _ctx: Context,
+        _event: crate::event::StageInstanceEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn stage_instance_update(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    fn stage_instance_update(
+        &self,
+        _ctx: Context,
+        _event: crate::event::StageInstanceEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn stage_instance_delete(&self, _ctx: Context, _event: crate::event::StageInstanceEvent) {
+    fn stage_instance_delete(
+        &self,
+        _ctx: Context,
+        _event: crate::event::StageInstanceEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn voice_channel_effect_send(
+    fn voice_channel_effect_send(
         &self,
         _ctx: Context,
         _event: crate::event::VoiceChannelEffectEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn voice_channel_start_time_update(
+    fn voice_channel_start_time_update(
         &self,
         _ctx: Context,
         _event: crate::event::VoiceChannelStartTimeUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn voice_channel_status_update(
+    fn voice_channel_status_update(
         &self,
         _ctx: Context,
         _event: crate::event::VoiceChannelStatusUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
     /// Handles typed `CHANNEL_INFO` Gateway dispatches.
-    async fn channel_info(&self, _ctx: Context, _event: crate::event::ChannelInfoEvent) {}
-    async fn gateway_rate_limited(&self, _ctx: Context, _event: crate::event::RateLimitedEvent) {}
-    async fn application_command_permissions_update(
+    fn channel_info(
+        &self,
+        _ctx: Context,
+        _event: crate::event::ChannelInfoEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn gateway_rate_limited(
+        &self,
+        _ctx: Context,
+        _event: crate::event::RateLimitedEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn application_command_permissions_update(
         &self,
         _ctx: Context,
         _event: crate::event::ApplicationCommandPermissionsUpdateEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn auto_moderation_rule_create(
+    fn auto_moderation_rule_create(
         &self,
         _ctx: Context,
         _event: crate::event::AutoModerationEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn auto_moderation_rule_update(
+    fn auto_moderation_rule_update(
         &self,
         _ctx: Context,
         _event: crate::event::AutoModerationEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn auto_moderation_rule_delete(
+    fn auto_moderation_rule_delete(
         &self,
         _ctx: Context,
         _event: crate::event::AutoModerationEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn auto_moderation_action_execution(
+    fn auto_moderation_action_execution(
         &self,
         _ctx: Context,
         _event: crate::event::AutoModerationEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn guild_audit_log_entry_create(
+    fn guild_audit_log_entry_create(
         &self,
         _ctx: Context,
         _event: crate::event::AuditLogEntryEvent,
-    ) {
+    ) -> impl Future<Output = ()> + Send {
+        async {}
     }
-    async fn raw_event(&self, _ctx: Context, _event_name: String, _data: Value) {}
+    fn raw_event(
+        &self,
+        _ctx: Context,
+        _event_name: String,
+        _data: Value,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+}
+
+/// Boxed, `Send` future returned by the type-erased handler.
+type HandlerFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
+/// Object-safe view of an [`EventHandler`], which the runtime stores as
+/// `Arc<dyn ErasedEventHandler>`.
+///
+/// ```text
+/// [Decision Log]
+/// - 목적과 의도: async-trait 의존성을 없애 syn v3 이중 빌드를 끊으면서, 런타임은 계속
+///   핸들러 한 개를 여러 샤드·작업에서 공유한다.
+/// - 기존 구현 및 제약 조건: #[async_trait]는 메서드마다 Box<dyn Future>를 돌려 trait을
+///   object safe로 만들었고, 런타임이 Arc<dyn EventHandler>를 저장했다. 반환 위치
+///   impl Future(RPITIT, 1.75+)를 쓰면 trait이 object safe가 아니다. MSRV는 1.88이다.
+/// - 검토한 주요 대안: (1) async-trait 유지 또는 0.1.89 고정(사용자 Cargo는 최신 0.1.x를
+///   고르므로 효과 없음), (2) 런타임 전체를 핸들러 타입으로 제네릭화, (3) 공개 trait은
+///   RPITIT로 두고 내부에서만 박싱하는 비공개 trait + 블랭킷 impl.
+/// - 선택한 방식: (3). 런타임은 handle_event 하나만 부르므로 이 trait도 메서드 하나다.
+/// - 다른 대안 대신 이 방식을 선택한 이유: (2)는 ClientBuilder·샤드 감독자·파이프라인
+///   전부에 타입 매개변수가 번지고 핸들러마다 런타임이 단형화되어 빌드가 오히려 느려진다.
+///   (3)은 사용자 impl에서 매크로만 지우면 되고, 이벤트당 할당이 한 번이다. async-trait
+///   시절의 기본 handle_event는 바깥 박스와 타입 훅 박스로 두 번 할당했다.
+/// - 장점, 단점 및 영향: 공개 API에서 dyn EventHandler가 사라진다(파괴적 변경, CHANGELOG
+///   기록). 사용자 future는 trait 선언의 + Send 때문에 Send여야 하며, 위반은 impl에서
+///   컴파일 오류가 된다. 핸들러 하나의 future 크기는 가장 큰 타입 훅 future를 따른다.
+/// ```
+trait ErasedEventHandler: Send + Sync + 'static {
+    fn handle_event_boxed(&self, ctx: Context, event: Event) -> HandlerFuture<'_>;
+}
+
+impl<H: EventHandler> ErasedEventHandler for H {
+    fn handle_event_boxed(&self, ctx: Context, event: Event) -> HandlerFuture<'_> {
+        Box::pin(self.handle_event(ctx, event))
+    }
 }
 
 /// How gateway events are delivered to the [`EventHandler`].
@@ -1227,7 +1607,7 @@ impl DispatchConfig {
 pub struct ClientBuilder {
     token: String,
     intents: u64,
-    handler: Option<Arc<dyn EventHandler>>,
+    handler: Option<Arc<dyn ErasedEventHandler>>,
     data: TypeMap,
     application_id: Option<u64>,
     gateway_config: GatewayConnectionConfig,
@@ -1237,7 +1617,7 @@ pub struct ClientBuilder {
     dispatch: DispatchConfig,
     default_allowed_mentions: Option<crate::model::AllowedMentions>,
     #[cfg(feature = "cache")]
-    cache_backend: Option<Arc<dyn CacheBackend>>,
+    cache_backend: Option<Arc<dyn ErasedCacheBackend>>,
 }
 
 impl ClientBuilder {
@@ -1287,7 +1667,13 @@ impl ClientBuilder {
     /// finished within [`ClientBuilder::handler_shutdown_timeout`]; shards
     /// left unrecovered are reported in the returned error.
     #[cfg(feature = "cache")]
-    pub fn cache_backend(mut self, backend: Arc<dyn CacheBackend>) -> Self {
+    ///
+    /// Pass the backend in an `Arc` (`.cache_backend(Arc::new(backend))`)
+    /// and keep a clone to read the store yourself. Since 3.0 this takes
+    /// `Arc<B>` for a concrete backend type instead of
+    /// `Arc<dyn CacheBackend>`, because the trait's methods return
+    /// `impl Future` and it is no longer object safe.
+    pub fn cache_backend<B: CacheBackend + 'static>(mut self, backend: Arc<B>) -> Self {
         self.cache_backend = Some(backend);
         self
     }
@@ -1782,7 +2168,7 @@ impl SharedRuntime {
     #[cfg(feature = "cache")]
     fn with_cache_backend(
         mut self,
-        cache_backend: Option<Arc<dyn CacheBackend>>,
+        cache_backend: Option<Arc<dyn ErasedCacheBackend>>,
         drain_timeout: Duration,
     ) -> (Self, Option<CacheBackendWorker>) {
         let Some(backend) = cache_backend else {
@@ -1836,7 +2222,7 @@ struct ShardStartControl {
 struct SpawnShardSupervisorConfig {
     token: String,
     intents: u64,
-    handler: Arc<dyn EventHandler>,
+    handler: Arc<dyn ErasedEventHandler>,
     runtime: SharedRuntime,
     gateway_config: GatewayConnectionConfig,
     total_shards: u32,
@@ -2005,7 +2391,7 @@ async fn release_boot_waves(
 struct ShardLaunch {
     token: String,
     intents: u64,
-    handler: Arc<dyn EventHandler>,
+    handler: Arc<dyn ErasedEventHandler>,
     runtime: SharedRuntime,
     gateway_config: GatewayConnectionConfig,
     shard: (u32, u32),

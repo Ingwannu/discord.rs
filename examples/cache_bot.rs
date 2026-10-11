@@ -1,13 +1,10 @@
 #[cfg(all(feature = "gateway", feature = "cache"))]
-use async_trait::async_trait;
-#[cfg(all(feature = "gateway", feature = "cache"))]
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler, Snowflake};
 
 #[cfg(all(feature = "gateway", feature = "cache"))]
 struct Handler;
 
 #[cfg(all(feature = "gateway", feature = "cache"))]
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {

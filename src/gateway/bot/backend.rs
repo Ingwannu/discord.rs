@@ -50,7 +50,9 @@
 //!   and each MESSAGE_UPDATE costs one extra read.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 
 use futures_util::FutureExt;
@@ -63,7 +65,147 @@ use super::{merge_message_update, presence_from_update, MessageUpdateFields};
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::Event;
-use crate::model::Snowflake;
+use crate::model::{Member, Message, Presence, Snowflake};
+
+/// Boxed, `Send` future returned by [`ErasedCacheBackend`].
+type BackendFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, DiscordError>> + Send + 'a>>;
+
+/// Object-safe view of a [`CacheBackend`], stored by the client as
+/// `Arc<dyn ErasedCacheBackend>`.
+///
+/// The public trait returns `impl Future + Send` and is therefore not object
+/// safe; the same reasoning as `ErasedEventHandler` in `bot.rs` applies
+/// (no async-trait, one allocation per call as before). It mirrors only the
+/// methods the worker below calls, under their public names so the worker
+/// reads the same as with the public trait. Each boxed future makes the
+/// inner call only when first polled, so [`contained`] also catches a
+/// backend that panics while creating its future, not only while running
+/// it.
+pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
+    fn clear_cache(
+        &self,
+        expected_epoch: u64,
+        clear_id: CacheClearId,
+    ) -> BackendFuture<'_, CacheClear>;
+    fn clear_shard_cache(
+        &self,
+        expected_epoch: u64,
+        clear_id: CacheClearId,
+        shard_id: u32,
+        shard_count: u32,
+    ) -> BackendFuture<'_, CacheClear>;
+    fn put_member(
+        &self,
+        epoch: u64,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        member: Member,
+    ) -> BackendFuture<'_, ()>;
+    fn delete_member<'a>(
+        &'a self,
+        epoch: u64,
+        guild_id: &'a Snowflake,
+        user_id: &'a Snowflake,
+    ) -> BackendFuture<'a, ()>;
+    fn put_message(&self, epoch: u64, message: Message) -> BackendFuture<'_, ()>;
+    fn get_message<'a>(
+        &'a self,
+        channel_id: &'a Snowflake,
+        message_id: &'a Snowflake,
+    ) -> BackendFuture<'a, Option<Arc<Message>>>;
+    fn delete_message<'a>(
+        &'a self,
+        epoch: u64,
+        channel_id: &'a Snowflake,
+        message_id: &'a Snowflake,
+    ) -> BackendFuture<'a, ()>;
+    fn put_presence(
+        &self,
+        epoch: u64,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: Presence,
+    ) -> BackendFuture<'_, ()>;
+}
+
+impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
+    fn clear_cache(
+        &self,
+        expected_epoch: u64,
+        clear_id: CacheClearId,
+    ) -> BackendFuture<'_, CacheClear> {
+        Box::pin(async move { CacheBackend::clear_cache(self, expected_epoch, clear_id).await })
+    }
+
+    fn clear_shard_cache(
+        &self,
+        expected_epoch: u64,
+        clear_id: CacheClearId,
+        shard_id: u32,
+        shard_count: u32,
+    ) -> BackendFuture<'_, CacheClear> {
+        Box::pin(async move {
+            CacheBackend::clear_shard_cache(self, expected_epoch, clear_id, shard_id, shard_count)
+                .await
+        })
+    }
+
+    fn put_member(
+        &self,
+        epoch: u64,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        member: Member,
+    ) -> BackendFuture<'_, ()> {
+        Box::pin(
+            async move { CacheBackend::put_member(self, epoch, guild_id, user_id, member).await },
+        )
+    }
+
+    fn delete_member<'a>(
+        &'a self,
+        epoch: u64,
+        guild_id: &'a Snowflake,
+        user_id: &'a Snowflake,
+    ) -> BackendFuture<'a, ()> {
+        Box::pin(async move { CacheBackend::delete_member(self, epoch, guild_id, user_id).await })
+    }
+
+    fn put_message(&self, epoch: u64, message: Message) -> BackendFuture<'_, ()> {
+        Box::pin(async move { CacheBackend::put_message(self, epoch, message).await })
+    }
+
+    fn get_message<'a>(
+        &'a self,
+        channel_id: &'a Snowflake,
+        message_id: &'a Snowflake,
+    ) -> BackendFuture<'a, Option<Arc<Message>>> {
+        Box::pin(async move { CacheBackend::get_message(self, channel_id, message_id).await })
+    }
+
+    fn delete_message<'a>(
+        &'a self,
+        epoch: u64,
+        channel_id: &'a Snowflake,
+        message_id: &'a Snowflake,
+    ) -> BackendFuture<'a, ()> {
+        Box::pin(
+            async move { CacheBackend::delete_message(self, epoch, channel_id, message_id).await },
+        )
+    }
+
+    fn put_presence(
+        &self,
+        epoch: u64,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: Presence,
+    ) -> BackendFuture<'_, ()> {
+        Box::pin(async move {
+            CacheBackend::put_presence(self, epoch, guild_id, user_id, presence).await
+        })
+    }
+}
 
 /// Capacity of the client-wide external cache backend write queue.
 pub(super) const CACHE_BACKEND_QUEUE_CAPACITY: usize = 8_192;
@@ -306,7 +448,7 @@ impl CacheBackendForwarder {
     /// Spawns the worker. `drain_timeout` bounds how long it keeps retrying
     /// pending recoveries after its queue closed.
     pub(super) fn spawn(
-        backend: Arc<dyn CacheBackend>,
+        backend: Arc<dyn ErasedCacheBackend>,
         capacity: usize,
         drain_timeout: Duration,
     ) -> (Self, CacheBackendWorker) {
@@ -503,7 +645,7 @@ impl StoreSession {
     /// Issues one clear attempt. A failed call leaves it in doubt.
     async fn attempt(
         &mut self,
-        backend: &dyn CacheBackend,
+        backend: &dyn ErasedCacheBackend,
         clear: InDoubtClear,
     ) -> Result<CacheClear, ClearFailure> {
         let call = match clear.scope {
@@ -537,7 +679,7 @@ impl StoreSession {
     /// if it turned out applied.
     async fn resolve_in_doubt(
         &mut self,
-        backend: &dyn CacheBackend,
+        backend: &dyn ErasedCacheBackend,
     ) -> Result<Option<ClearScope>, ClearFailure> {
         let Some(clear) = self.in_doubt else {
             return Ok(None);
@@ -562,7 +704,7 @@ impl StoreSession {
     /// has not cleared it yet) under the compare-and-set epoch contract.
     async fn clear(
         &mut self,
-        backend: &dyn CacheBackend,
+        backend: &dyn ErasedCacheBackend,
         shard: ShardPair,
     ) -> Result<u64, ClearFailure> {
         if let Some(scope) = self.resolve_in_doubt(backend).await? {
@@ -591,7 +733,7 @@ impl StoreSession {
     /// the store's epoch from a rejection and retries a few times. This does
     /// not make the claim exclusive: a second client starting meanwhile can
     /// claim the store after it (see the [`CacheBackend`] docs).
-    async fn claim(&mut self, backend: &dyn CacheBackend) -> Result<u64, ClearFailure> {
+    async fn claim(&mut self, backend: &dyn ErasedCacheBackend) -> Result<u64, ClearFailure> {
         let id = self.next_id();
         self.claim_with(backend, id, 0).await
     }
@@ -601,7 +743,7 @@ impl StoreSession {
     /// or the claim budget is spent.
     async fn claim_with(
         &mut self,
-        backend: &dyn CacheBackend,
+        backend: &dyn ErasedCacheBackend,
         id: CacheClearId,
         mut expected: u64,
     ) -> Result<u64, ClearFailure> {
@@ -635,7 +777,7 @@ impl StoreSession {
     /// The epoch to stamp writes with: settles an in-doubt clear first (a
     /// write stamped with a stale epoch would be ignored by the store) and
     /// claims the store if needed.
-    async fn write_epoch(&mut self, backend: &dyn CacheBackend) -> Result<u64, ClearFailure> {
+    async fn write_epoch(&mut self, backend: &dyn ErasedCacheBackend) -> Result<u64, ClearFailure> {
         self.resolve_in_doubt(backend).await?;
         match self.epoch {
             Some(epoch) => Ok(epoch),
@@ -662,7 +804,7 @@ fn mark_superseded(shared: &ForwarderShared, current: u64) {
 }
 
 async fn run_cache_backend_worker(
-    backend: Arc<dyn CacheBackend>,
+    backend: Arc<dyn ErasedCacheBackend>,
     mut writes: mpsc::Receiver<QueuedWrite>,
     shared: Arc<ForwarderShared>,
     drain_timeout: Duration,
@@ -759,7 +901,7 @@ async fn run_cache_backend_worker(
 /// Applies one dequeued write. Returns `None` when the write was not
 /// attempted (discarded, superseded, or a test flush).
 async fn handle_write(
-    backend: &dyn CacheBackend,
+    backend: &dyn ErasedCacheBackend,
     shared: &ForwarderShared,
     session: &mut StoreSession,
     ticket: Option<u64>,
@@ -841,7 +983,7 @@ async fn contained<T>(
 /// (`closed`: the queue is drained, so every boundary is passed) and whose
 /// retry time, if any, has come.
 async fn run_due_resyncs(
-    backend: &dyn CacheBackend,
+    backend: &dyn ErasedCacheBackend,
     shared: &ForwarderShared,
     session: &mut StoreSession,
     dequeued: Option<u64>,
@@ -896,7 +1038,7 @@ async fn run_due_resyncs(
 /// caught panics) name the failed operation; any error leaves the shard's
 /// mirror possibly stale, so the caller schedules a resync.
 async fn apply_backend_write(
-    backend: &dyn CacheBackend,
+    backend: &dyn ErasedCacheBackend,
     epoch: u64,
     write: BackendWrite,
 ) -> Result<(), String> {

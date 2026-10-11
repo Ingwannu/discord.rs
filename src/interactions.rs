@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, State},
@@ -9,6 +8,7 @@ use axum::{
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
+use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
@@ -76,15 +76,38 @@ impl InteractionResponse {
     }
 }
 
-/// Trait for `InteractionHandler` behavior.
-#[async_trait]
+/// Handles verified raw interactions for [`interactions_endpoint`].
+///
+/// Implement [`handle`](Self::handle) as a plain `async fn`; no attribute
+/// macro is needed. It is declared as `fn ... -> impl Future + Send` because
+/// the endpoint runs inside an axum (Tokio) server, which requires `Send`
+/// request futures: do not hold a non-`Send` value (`Rc`, `RefCell` borrow,
+/// `std::sync::MutexGuard`) across an `.await`. A violation is a compile
+/// error at the impl.
+///
+/// ```no_run
+/// use discordrs::{InteractionContext, InteractionHandler, InteractionResponse, RawInteraction};
+///
+/// #[derive(Clone)]
+/// struct Handler;
+///
+/// impl InteractionHandler for Handler {
+///     async fn handle(
+///         &self,
+///         _ctx: InteractionContext,
+///         _interaction: RawInteraction,
+///     ) -> InteractionResponse {
+///         InteractionResponse::DeferredMessage
+///     }
+/// }
+/// ```
 pub trait InteractionHandler: Send + Sync {
     /// Handles one verified raw Discord interaction.
-    async fn handle(
+    fn handle(
         &self,
         ctx: InteractionContext,
         interaction: RawInteraction,
-    ) -> InteractionResponse;
+    ) -> impl Future<Output = InteractionResponse> + Send;
 }
 
 /// Trait for `TypedInteractionHandler` behavior.
@@ -101,14 +124,17 @@ pub trait InteractionHandler: Send + Sync {
 ///   or returns [`InteractionResponse::Accepted`]: the endpoint answers
 ///   `202 Accepted` with no body, as Discord specifies, and any other
 ///   response the handler returned is discarded with a warning.
-#[async_trait]
+///
+/// Implement [`handle_typed`](Self::handle_typed) as a plain `async fn`; the
+/// returned future must be `Send` for the same reason as with
+/// [`InteractionHandler`].
 pub trait TypedInteractionHandler: Send + Sync {
     /// Handles one verified typed Discord interaction.
-    async fn handle_typed(
+    fn handle_typed(
         &self,
         ctx: InteractionContextData,
         interaction: Interaction,
-    ) -> InteractionResponse;
+    ) -> impl Future<Output = InteractionResponse> + Send;
 }
 
 #[derive(Clone)]
@@ -121,7 +147,8 @@ const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
 const INTERACTION_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
 fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
-    let public_key_bytes = hex::decode(public_key)?;
+    let public_key_bytes = crate::hex::decode(public_key)
+        .map_err(|error| invalid_data_error(format!("invalid public key hex: {error}")))?;
     let public_key_bytes: [u8; 32] = public_key_bytes
         .as_slice()
         .try_into()
@@ -182,7 +209,8 @@ fn verify_signature_with_key_at_time(
     now_unix_timestamp: i64,
 ) -> Result<(), DiscordError> {
     validate_signature_timestamp(timestamp, now_unix_timestamp)?;
-    let signature_bytes = hex::decode(signature_hex)?;
+    let signature_bytes = crate::hex::decode(signature_hex)
+        .map_err(|error| invalid_data_error(format!("invalid signature hex: {error}")))?;
     let signature = Signature::from_slice(&signature_bytes)
         .map_err(|error| invalid_data_error(format!("invalid signature bytes: {error}")))?;
 
@@ -542,7 +570,6 @@ mod tests {
     use crate::response::{
         AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
     };
-    use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Bytes},
         extract::State,
@@ -564,7 +591,6 @@ mod tests {
     #[derive(Clone)]
     struct TestHandler;
 
-    #[async_trait]
     impl InteractionHandler for TestHandler {
         async fn handle(
             &self,
@@ -589,7 +615,6 @@ mod tests {
     #[derive(Clone)]
     struct TypedTestHandler;
 
-    #[async_trait]
     impl TypedInteractionHandler for TypedTestHandler {
         async fn handle_typed(
             &self,
@@ -607,7 +632,6 @@ mod tests {
         response: Value,
     }
 
-    #[async_trait]
     impl InteractionHandler for RecordingRawHandler {
         async fn handle(
             &self,
@@ -627,7 +651,6 @@ mod tests {
         response: Value,
     }
 
-    #[async_trait]
     impl TypedInteractionHandler for RecordingTypedHandler {
         async fn handle_typed(
             &self,
@@ -685,7 +708,7 @@ mod tests {
         signed_payload.extend_from_slice(body);
         let signature = signing_key.sign(&signed_payload);
 
-        (verifying_key, hex::encode(signature.to_bytes()))
+        (verifying_key, crate::hex::encode(&signature.to_bytes()))
     }
 
     fn signed_headers(signature: &str, timestamp: &str) -> HeaderMap {
@@ -874,7 +897,7 @@ mod tests {
         let (verifying_key, signature) = sign_request(&timestamp, body);
 
         assert!(verify_discord_signature(
-            &hex::encode(verifying_key.as_bytes()),
+            &crate::hex::encode(verifying_key.as_bytes()),
             &signature,
             &timestamp,
             body
@@ -886,6 +909,62 @@ mod tests {
     fn decode_verifying_key_rejects_invalid_lengths() {
         let error = decode_verifying_key("abcd").unwrap_err();
         assert!(error.to_string().contains("32 bytes"));
+    }
+
+    #[test]
+    fn decode_verifying_key_accepts_uppercase_and_rejects_malformed_hex() {
+        let key_hex = crate::hex::encode(test_signing_key().verifying_key().as_bytes());
+        assert!(decode_verifying_key(&key_hex.to_ascii_uppercase()).is_ok());
+
+        let odd = decode_verifying_key(&key_hex[1..]).unwrap_err();
+        assert!(matches!(odd, crate::DiscordError::Model { .. }));
+        assert!(odd
+            .to_string()
+            .contains("invalid public key hex: odd number of hex digits"));
+
+        let non_hex = decode_verifying_key(&format!("zz{}", &key_hex[2..])).unwrap_err();
+        assert!(non_hex
+            .to_string()
+            .contains("invalid public key hex: invalid hex character 'z' at position 0"));
+    }
+
+    #[test]
+    fn signature_verification_rejects_malformed_signature_hex() {
+        let body = br#"{"type":1}"#;
+        let timestamp = TEST_NOW_UNIX_TIMESTAMP.to_string();
+        let (verifying_key, signature) = sign_request(&timestamp, body);
+
+        let uppercase = signature.to_ascii_uppercase();
+        assert!(verify_signature_with_key_at_time(
+            &verifying_key,
+            &uppercase,
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP
+        )
+        .is_ok());
+
+        let odd = verify_signature_with_key_at_time(
+            &verifying_key,
+            &signature[1..],
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .unwrap_err();
+        assert!(odd.to_string().contains("invalid signature hex"));
+
+        let non_hex = verify_signature_with_key_at_time(
+            &verifying_key,
+            &format!("{}gg", &signature[2..]),
+            &timestamp,
+            body,
+            TEST_NOW_UNIX_TIMESTAMP,
+        )
+        .unwrap_err();
+        assert!(non_hex
+            .to_string()
+            .contains("invalid signature hex: invalid hex character 'g'"));
     }
 
     #[test]
@@ -1438,7 +1517,6 @@ mod tests {
     #[derive(Clone)]
     struct RestThenInlineHandler;
 
-    #[async_trait]
     impl TypedInteractionHandler for RestThenInlineHandler {
         async fn handle_typed(
             &self,
@@ -1477,7 +1555,6 @@ mod tests {
     #[derive(Clone)]
     struct AcceptedRawHandler;
 
-    #[async_trait]
     impl InteractionHandler for AcceptedRawHandler {
         async fn handle(
             &self,

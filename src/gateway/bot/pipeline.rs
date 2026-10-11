@@ -17,7 +17,7 @@ use super::apply_voice_updates;
 #[cfg(feature = "cache")]
 use super::backend::{forward_cache_backend_updates, CacheBackendForwarder};
 use super::{
-    apply_cache_updates, lock_member_chunk_waiters, Context, DispatchConfig, EventHandler,
+    apply_cache_updates, lock_member_chunk_waiters, Context, DispatchConfig, ErasedEventHandler,
     InteractionOverloadHook, InteractionOverloadReason, MemberChunkWaiters, OverloadedInteraction,
     OVERLOAD_WARNING_INTERVAL,
 };
@@ -440,7 +440,7 @@ struct InteractionLane {
 }
 
 pub(super) fn spawn_event_pipeline(
-    handler: Arc<dyn EventHandler>,
+    handler: Arc<dyn ErasedEventHandler>,
     ctx: Context,
     #[cfg(feature = "cache")] cache_backend: Option<CacheBackendForwarder>,
     dispatch: DispatchConfig,
@@ -653,7 +653,7 @@ async fn finish_running(
 /// `permits` in flight (one in Serial mode, so calls start in gateway order
 /// only after the previous one finished).
 async fn run_handler_dispatcher(
-    handler: Arc<dyn EventHandler>,
+    handler: Arc<dyn ErasedEventHandler>,
     ctx: Context,
     mut deliveries: mpsc::Receiver<HandlerDelivery>,
     permits: usize,
@@ -703,7 +703,9 @@ async fn run_handler_dispatcher(
         let handler_ctx = delivery.context(&ctx);
         running.spawn(async move {
             let _permit = permit;
-            handler.handle_event(handler_ctx, delivery.event).await;
+            handler
+                .handle_event_boxed(handler_ctx, delivery.event)
+                .await;
         });
         #[cfg(test)]
         high_water.fetch_max(running.len(), Ordering::Relaxed);
@@ -730,7 +732,7 @@ fn reap_finished(shard_id: u32, running: &mut JoinSet<()>) {
 /// interactions run concurrently with each other (up to the lane's limit)
 /// and with regular handler calls, even in Serial mode.
 async fn run_interaction_dispatcher(
-    handler: Arc<dyn EventHandler>,
+    handler: Arc<dyn ErasedEventHandler>,
     ctx: Context,
     mut deliveries: mpsc::Receiver<HandlerDelivery>,
     lane: InteractionLane,
@@ -792,7 +794,9 @@ async fn run_interaction_dispatcher(
                 let handler_ctx = delivery.context(&ctx);
                 running.spawn(async move {
                     let _permit = permit;
-                    handler.handle_event(handler_ctx, delivery.event).await;
+                    handler
+                        .handle_event_boxed(handler_ctx, delivery.event)
+                        .await;
                 });
                 #[cfg(test)]
                 high_water.fetch_max(running.len(), Ordering::Relaxed);

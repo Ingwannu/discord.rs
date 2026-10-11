@@ -6,7 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use serde_json::json;
 
 use crate::{
@@ -193,7 +192,6 @@ impl AppFramework {
     }
 }
 
-#[async_trait]
 impl TypedInteractionHandler for AppFramework {
     async fn handle_typed(
         &self,

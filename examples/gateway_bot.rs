@@ -1,6 +1,4 @@
 #[cfg(feature = "gateway")]
-use async_trait::async_trait;
-#[cfg(feature = "gateway")]
 use discordrs::{
     gateway_intents, respond_with_message, ChatInputCommandInteraction, Client, Context,
     CreateMessage, Event, EventHandler, Interaction,
@@ -10,7 +8,6 @@ use discordrs::{
 struct Handler;
 
 #[cfg(feature = "gateway")]
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {
