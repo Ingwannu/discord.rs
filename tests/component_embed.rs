@@ -662,7 +662,8 @@ fn container_builder_with_preview_safe_parts_converts() {
     let container = ContainerBuilder::new()
         .accent_color(0x5865F2)
         .spoiler(false)
-        .add_text_display(TextDisplayBuilder::new("hello").id(1))
+        // Raw JSON keeps this test independent of the builders' `id` setter type.
+        .add_component(json!({"type": 10, "id": 1, "content": "hello"}))
         .add_section(
             SectionBuilder::new()
                 .add_text_display(TextDisplayBuilder::new("read more"))
