@@ -72,7 +72,7 @@ pub use component::{
     MentionableId, MessageComponent, MessageComponentIter, MessageComponentValue,
     MessageMediaGalleryItem, MessageSelectOption, SelectDefaultValue, UnfurledMediaItem,
 };
-pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedMedia};
+pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedMedia, EmbedProvider};
 pub use entity::DiscordModel;
 pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
