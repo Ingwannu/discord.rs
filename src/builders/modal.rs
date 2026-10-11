@@ -147,8 +147,25 @@ impl TextInputBuilder {
     }
 }
 
+// [Decision Log]
+// - 목적과 의도: 모달 전용 컴포넌트(라디오 그룹, 체크박스 그룹, 체크박스) 빌더가 Discord 문서
+//   (components/reference, 3714862)대로 받아들여지는 페이로드만 만들게 한다.
+// - 기존 구현 및 제약 조건: 세 빌더 모두 `disabled` setter가 있었다. 문서는 "모달에서 `disabled`를
+//   쓰면 오류"라고 하고, 이 셋은 모달에만 들어간다. 체크박스는 `checked` 키로 초기 상태를 보냈지만
+//   문서의 키는 `default`이고, 문서는 체크박스에 `required`를 둘 수 없다고 한다.
+// - 검토한 주요 대안: (1) setter를 deprecated로 두고 계속 내보내기, (2) deprecated + 아무것도 하지
+//   않기, (3) 삭제(컴파일 오류 + 마이그레이션 노트), 초기 상태는 `default_checked`로 내보내고
+//   `checked`는 같은 일을 하는 deprecated 별칭.
+// - 선택한 방식: (3).
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 항상 거절될 페이로드를 계속 만든다. (2)는 사용자
+//   의도를 조용히 버린다. 3.0은 어차피 파괴적 변경이므로 컴파일 오류로 알리는 편이 정확하다.
+//   `checked`의 뜻(초기 상태)은 유효하므로 별칭으로 남겨 올바른 키를 내보낸다.
+// - 장점, 단점 및 영향: `RadioGroupBuilder::disabled`, `CheckboxGroupBuilder::disabled`,
+//   `CheckboxBuilder::{disabled, required}` 삭제. 필수 체크박스는 옵션 하나짜리 체크박스 그룹 +
+//   `required(true)`로 만든다(문서의 권장).
+/// A radio group (modals only; wrap it in a label). Modals cannot contain
+/// disabled components, so there is no `disabled` setter.
 #[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `RadioGroupBuilder`.
 pub struct RadioGroupBuilder {
     #[serde(rename = "type")]
     component_type: ComponentType,
@@ -156,8 +173,6 @@ pub struct RadioGroupBuilder {
     options: Vec<SelectOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
 }
@@ -170,7 +185,6 @@ impl RadioGroupBuilder {
             custom_id: custom_id.to_string(),
             options: Vec::new(),
             required: None,
-            disabled: None,
             id: None,
         }
     }
@@ -190,11 +204,6 @@ impl RadioGroupBuilder {
         self
     }
 
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = Some(disabled);
-        self
-    }
-
     pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
@@ -205,8 +214,9 @@ impl RadioGroupBuilder {
     }
 }
 
+/// A checkbox group (modals only; wrap it in a label). Modals cannot contain
+/// disabled components, so there is no `disabled` setter.
 #[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `CheckboxGroupBuilder`.
 pub struct CheckboxGroupBuilder {
     #[serde(rename = "type")]
     component_type: ComponentType,
@@ -218,8 +228,6 @@ pub struct CheckboxGroupBuilder {
     max_values: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
 }
@@ -234,7 +242,6 @@ impl CheckboxGroupBuilder {
             min_values: None,
             max_values: None,
             required: None,
-            disabled: None,
             id: None,
         }
     }
@@ -264,11 +271,6 @@ impl CheckboxGroupBuilder {
         self
     }
 
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = Some(disabled);
-        self
-    }
-
     pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
@@ -279,18 +281,19 @@ impl CheckboxGroupBuilder {
     }
 }
 
+/// A single yes/no checkbox (modals only; wrap it in a label).
+///
+/// Discord does not let a checkbox be required or disabled; for a box the
+/// user must tick, use a [`CheckboxGroupBuilder`] with one option and
+/// `required(true)`.
 #[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `CheckboxBuilder`.
 pub struct CheckboxBuilder {
     #[serde(rename = "type")]
     component_type: ComponentType,
     custom_id: String,
+    /// Initial state, sent as `default`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    checked: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disabled: Option<bool>,
+    default: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
 }
@@ -301,26 +304,22 @@ impl CheckboxBuilder {
         Self {
             component_type: ComponentType::CHECKBOX,
             custom_id: custom_id.to_string(),
-            checked: None,
-            required: None,
-            disabled: None,
+            default: None,
             id: None,
         }
     }
 
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.checked = Some(checked);
+    /// Whether the checkbox starts checked (Discord's `default`).
+    pub fn default_checked(mut self, checked: bool) -> Self {
+        self.default = Some(checked);
         self
     }
 
-    pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
-        self
-    }
-
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = Some(disabled);
-        self
+    /// The 2.x name of [`Self::default_checked`]. 2.x sent it as a
+    /// `checked` key, which Discord does not read; this now sends `default`.
+    #[deprecated(since = "3.0.0", note = "use default_checked (sent as `default`)")]
+    pub fn checked(self, checked: bool) -> Self {
+        self.default_checked(checked)
     }
 
     pub fn id(mut self, id: ComponentId) -> Self {
@@ -713,7 +712,6 @@ mod tests {
             .add_option(SelectOption::new("One", "1"))
             .add_options(vec![SelectOption::new("Two", "2").default_selected(true)])
             .required(true)
-            .disabled(false)
             .id(ComponentId::new(4))
             .build();
 
@@ -732,10 +730,7 @@ mod tests {
             payload.get("required").and_then(|value| value.as_bool()),
             Some(true)
         );
-        assert_eq!(
-            payload.get("disabled").and_then(|value| value.as_bool()),
-            Some(false)
-        );
+        assert!(payload.get("disabled").is_none());
         assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(4));
     }
 
@@ -747,7 +742,6 @@ mod tests {
             .min_values(1)
             .max_values(2)
             .required(true)
-            .disabled(true)
             .id(ComponentId::new(8))
             .build();
 
@@ -763,7 +757,6 @@ mod tests {
                 "min_values": 1,
                 "max_values": 2,
                 "required": true,
-                "disabled": true,
                 "id": 8,
             })
         );
@@ -772,23 +765,24 @@ mod tests {
     #[test]
     fn checkbox_and_file_upload_builders_serialize_optional_fields() {
         let checkbox = CheckboxBuilder::new("terms")
-            .checked(true)
-            .required(true)
-            .disabled(false)
+            .default_checked(true)
             .id(ComponentId::new(3))
             .build();
 
+        // Discord's create field for the initial state is `default`.
         assert_eq!(
             checkbox,
             json!({
                 "type": ComponentType::CHECKBOX,
                 "custom_id": "terms",
-                "checked": true,
-                "required": true,
-                "disabled": false,
+                "default": true,
                 "id": 3,
             })
         );
+        #[expect(deprecated, reason = "the 2.x setter must send the documented key too")]
+        let legacy = CheckboxBuilder::new("terms").checked(false).build();
+        assert_eq!(legacy["default"], json!(false));
+        assert!(legacy.get("checked").is_none());
 
         let upload = FileUploadBuilder::new("attachment")
             .min_values(1)
