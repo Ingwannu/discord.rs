@@ -242,6 +242,7 @@ fn perf_fixtures_decode() {
                 assert_eq!(components[0].components.len(), 6);
             }
             (EventKind::GuildCreate(guild), "guild_create.large") => {
+                let guild = guild.available().expect("an available guild");
                 assert_eq!(guild.members.len(), 1_000);
                 assert_eq!(guild.channels.len(), 200);
                 assert_eq!(guild.guild.roles.len(), 300);

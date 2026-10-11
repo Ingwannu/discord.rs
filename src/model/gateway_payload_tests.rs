@@ -70,10 +70,49 @@ fn assert_normalized(created: &GuildCreate) {
     assert_eq!(created.guild_scheduled_events.len(), 1);
 }
 
+/// The fast path's result for a payload that must be an available guild.
+fn decode_available(text: &str) -> Result<GuildCreate, serde_json::Error> {
+    GuildCreatePayload::from_json_str(text).map(|payload| match payload {
+        GuildCreatePayload::Available(guild) => *guild,
+        GuildCreatePayload::Unavailable(guild) => panic!("unexpected {guild:?}"),
+    })
+}
+
+#[test]
+fn guild_create_reads_an_unavailable_guild_without_making_one_up() {
+    for text in [
+        r#"{"id":"10","unavailable":true}"#,
+        r#"{ "unavailable" : true , "id" : "10" }"#,
+        // Fields beside `unavailable: true` are not trusted as a guild.
+        r#"{"id":"10","name":"g","unavailable":true,"members":[]}"#,
+    ] {
+        let payload = GuildCreatePayload::from_json_str(text).unwrap();
+        assert!(
+            matches!(payload, GuildCreatePayload::Unavailable(UnavailableGuild { id }) if id == test_id(10)),
+            "{text}: {payload:?}"
+        );
+        assert_eq!(payload.id(), test_id(10));
+        assert!(payload.available().is_none());
+    }
+
+    let available =
+        GuildCreatePayload::from_json_str(r#"{"id":"10","name":"g","unavailable":false}"#).unwrap();
+    assert_eq!(
+        available.available().map(|guild| guild.guild.name.as_str()),
+        Some("g")
+    );
+    let missing_id = GuildCreatePayload::from_json_str(r#"{"unavailable":true}"#).unwrap_err();
+    assert!(
+        missing_id.to_string().contains("missing field `id`"),
+        "{missing_id}"
+    );
+    assert!(GuildCreatePayload::from_json_str(r#"{"id":"x","unavailable":true}"#).is_err());
+}
+
 #[test]
 fn guild_create_fast_path_matches_the_guild_conversion() {
     let payload = guild_create_payload();
-    let fast = GuildCreate::from_json_str(&payload.to_string()).unwrap();
+    let fast = decode_available(&payload.to_string()).unwrap();
     let slow = GuildCreate::from(serde_json::from_value::<Guild>(payload).unwrap());
     assert_normalized(&fast);
     assert_normalized(&slow);
@@ -91,7 +130,7 @@ fn guild_create_fast_path_matches_the_guild_conversion() {
 #[test]
 fn guild_create_to_guild_puts_every_collection_back() {
     let payload = guild_create_payload();
-    let created = GuildCreate::from_json_str(&payload.to_string()).unwrap();
+    let created = decode_available(&payload.to_string()).unwrap();
     let guild = created.to_guild();
     assert_eq!(guild.channels.len(), 2);
     assert_eq!(guild.threads.len(), 1);
@@ -105,15 +144,15 @@ fn guild_create_to_guild_puts_every_collection_back() {
 #[test]
 fn guild_create_fast_path_accepts_escaped_keys_and_rejects_bad_payloads() {
     let escaped = r#"{"id":"10","name":"guild","members":[{"roles":[]}]}"#;
-    let created = GuildCreate::from_json_str(escaped).unwrap();
+    let created = decode_available(escaped).unwrap();
     assert_eq!(created.guild.name, "guild");
     assert_eq!(created.members.len(), 1);
 
-    let missing_name = GuildCreate::from_json_str(r#"{"id":"10"}"#).unwrap_err();
+    let missing_name = decode_available(r#"{"id":"10"}"#).unwrap_err();
     assert!(missing_name.to_string().contains("name"), "{missing_name}");
-    assert!(GuildCreate::from_json_str(r#"{"id":"10","name":"g","members":{}}"#).is_err());
-    assert!(GuildCreate::from_json_str(r#"{"id":"10","name":"g"} trailing"#).is_err());
-    assert!(GuildCreate::from_json_str("[]").is_err());
+    assert!(decode_available(r#"{"id":"10","name":"g","members":{}}"#).is_err());
+    assert!(decode_available(r#"{"id":"10","name":"g"} trailing"#).is_err());
+    assert!(decode_available("[]").is_err());
 }
 
 fn cached_message() -> Message {

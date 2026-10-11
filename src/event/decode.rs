@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::model::{
     marker, ApplicationCommandPermission, ApplicationId, AuditLogEntry, BorrowedKey, ChannelId,
-    ClientStatus, CommandPermissionsId, GuildCreate, GuildId, Id, Member, MessageId,
+    ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, Id, Member, MessageId,
     PresenceStatus, ReactionType, SoundboardSound, UserId,
 };
 use crate::parsers::parse_interaction;
@@ -91,7 +91,7 @@ dispatch_table! { data;
     },
     "GUILD_BAN_ADD" => EventKind::GuildBanAdd(Box::new(typed(data)?)),
     "GUILD_BAN_REMOVE" => EventKind::GuildBanRemove(Box::new(typed(data)?)),
-    "GUILD_CREATE" => EventKind::GuildCreate(Box::new(GuildCreate::from_json_str(data)?)),
+    "GUILD_CREATE" => EventKind::GuildCreate(GuildCreatePayload::from_json_str(data)?),
     "GUILD_DELETE" => EventKind::GuildDelete(typed(data)?),
     "GUILD_EMOJIS_UPDATE" => EventKind::GuildEmojisUpdate(decode_guild_emojis_update_event(data)?),
     "GUILD_INTEGRATIONS_UPDATE" => {

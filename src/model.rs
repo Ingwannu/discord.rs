@@ -80,7 +80,9 @@ pub use gateway::{
 #[cfg(all(feature = "gateway", feature = "cache"))]
 pub(crate) use gateway_payload::normalize_presence;
 pub(crate) use gateway_payload::BorrowedKey;
-pub use gateway_payload::{GuildCreate, MessageUpdate, PartialUser};
+pub use gateway_payload::{
+    GuildCreate, GuildCreatePayload, MessageUpdate, PartialUser, UnavailableGuild,
+};
 pub use guild::{
     CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
     CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole, CurrentUserGuild,

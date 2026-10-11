@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 use super::*;
 use crate::error::DiscordError;
 use crate::model::{
-    test_id, AutoModerationActionType, ChannelType, Id, IdMarker, Interaction, Patch,
-    SubscriptionStatus,
+    test_id, AutoModerationActionType, ChannelType, GuildCreatePayload, Id, IdMarker, Interaction,
+    Patch, SubscriptionStatus,
 };
 
 /// The 2.x-style test entry: decodes a `Value` payload and reports a
@@ -485,7 +485,7 @@ fn decode_event_covers_additional_typed_gateway_payloads() {
     .unwrap()
     .kind()
     {
-        EventKind::GuildCreate(event) => {
+        EventKind::GuildCreate(GuildCreatePayload::Available(event)) => {
             assert_eq!(event.guild.id, snowflake("1"));
             assert_eq!(event.guild.name, "discordrs");
         }

@@ -23,7 +23,7 @@ The managers prefer cache hits and fall back to `RestClient` fetches.
 
 Since `2.1`, GUILD_CREATE populates the channel, thread, member, user, voice-state, presence, emoji, sticker, and stage-instance caches under a single write lock; the cached `Guild` is stored with the bulk collections stripped (`Guild::without_create_collections()`) to avoid double storage. GUILD_MEMBERS_CHUNK payloads (including those collected by `Context::fetch_members(...)`) and THREAD_* events are cached too, so cache-aware managers are warm right after a guild becomes available.
 
-Since 3.0 (phase 4) `CacheHandle::apply_guild_create` takes the gateway's `GuildCreate` payload and stores its guild, members, and presences as the same `Arc`s the event holds instead of copying them; build one from a REST `Guild` with `GuildCreate::from(guild)`. `apply_guild_update(&Guild)` applies GUILD_UPDATE.
+Since 3.0 (phase 4) `CacheHandle::apply_guild_create` takes the gateway's `GuildCreate` payload and stores its guild, members, and presences as the same `Arc`s the event holds instead of copying them; build one from a REST `Guild` with `GuildCreate::from(guild)`. `apply_guild_update(&Guild)` applies GUILD_UPDATE. An unavailable GUILD_CREATE (`GuildCreatePayload::Unavailable`) is never stored as a guild: the gateway runtime calls `remove_guild` for it, as for GUILD_DELETE with `"unavailable": true`.
 
 ### Shared Entries and Copy-on-Write Updates (3.0)
 

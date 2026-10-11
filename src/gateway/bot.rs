@@ -26,7 +26,8 @@ use crate::error::DiscordError;
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationId, ChannelId, GuildId, Interaction, MessageId, Nullable, Patch, RoleId, UserId,
+    ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, Nullable, Patch,
+    RoleId, UserId,
 };
 #[cfg(feature = "sharding")]
 use crate::sharding::{
@@ -756,7 +757,8 @@ impl Context {
 //   필요하다. (4)는 이벤트마다 깊은 복제다. (3)은 할당이 0이고, 규칙이 `EventKind`의 저장 방식
 //   하나로 설명된다.
 // - 장점, 단점 및 영향: 훅 시그니처가 깨진다(마이그레이션 노트). 참조 훅의 future는 이벤트를
-//   빌리므로 사용자는 보관할 값만 복제한다. GUILD_CREATE 훅은 `&GuildCreate`를 받는다.
+//   빌리므로 사용자는 보관할 값만 복제한다. GUILD_CREATE 훅은 `&GuildCreatePayload`(사용 가능한
+//   길드 또는 id만 있는 사용 불가 길드)를 받는다.
 #[expect(
     missing_docs,
     reason = "one hook per Gateway event: the hook is named after the event, whose payload \
@@ -980,7 +982,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn guild_create(
         &self,
         _ctx: Context,
-        _guild: &crate::model::GuildCreate,
+        _guild: &crate::model::GuildCreatePayload,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -2756,8 +2758,14 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         EventKind::Ready(_) => {
             cache.clear_shard(shard.0, shard.1).await;
         }
-        EventKind::GuildCreate(guild) => {
+        EventKind::GuildCreate(GuildCreatePayload::Available(guild)) => {
             cache.apply_guild_create(guild).await;
+        }
+        // Never a made-up guild: drop the stale copy, as GUILD_DELETE with
+        // `unavailable: true` does. The guild comes back with a full
+        // GUILD_CREATE once it is available.
+        EventKind::GuildCreate(GuildCreatePayload::Unavailable(guild)) => {
+            cache.remove_guild(guild.id).await;
         }
         EventKind::GuildUpdate(guild) => {
             cache.apply_guild_update(guild).await;

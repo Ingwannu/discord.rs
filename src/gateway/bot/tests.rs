@@ -1196,8 +1196,8 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         SINGLE_SHARD,
         &Event::from_kind(
             "GUILD_CREATE",
-            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(
-                crate::model::Guild {
+            EventKind::GuildCreate(crate::model::GuildCreatePayload::from(
+                crate::model::GuildCreate::from(crate::model::Guild {
                     id: guild_id,
                     name: "guild".to_string(),
                     roles: vec![Role {
@@ -1206,8 +1206,8 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
                         ..Role::fixture()
                     }],
                     ..crate::model::Guild::fixture()
-                },
-            ))),
+                }),
+            )),
         ),
     )
     .await;
@@ -1833,13 +1833,13 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
     let events = vec![
         Event::from_kind(
             "GUILD_CREATE",
-            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(
-                crate::model::Guild {
+            EventKind::GuildCreate(crate::model::GuildCreatePayload::from(
+                crate::model::GuildCreate::from(crate::model::Guild {
                     id: guild_id,
                     name: "guild".to_string(),
                     ..crate::model::Guild::fixture()
-                },
-            ))),
+                }),
+            )),
         ),
         Event::from_kind(
             "GUILD_UPDATE",
@@ -3106,7 +3106,9 @@ async fn apply_cache_updates_populates_entities_from_guild_create() {
         SINGLE_SHARD,
         &Event::from_kind(
             "GUILD_CREATE",
-            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(guild))),
+            EventKind::GuildCreate(crate::model::GuildCreatePayload::from(
+                crate::model::GuildCreate::from(guild),
+            )),
         ),
     )
     .await;
@@ -4424,7 +4426,9 @@ async fn ready_on_one_shard_keeps_the_guilds_of_other_shards() {
             shard,
             &Event::from_kind(
                 "GUILD_CREATE",
-                EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(guild))),
+                EventKind::GuildCreate(crate::model::GuildCreatePayload::from(
+                    crate::model::GuildCreate::from(guild),
+                )),
             ),
         )
         .await;
@@ -4713,6 +4717,36 @@ async fn message_updates_copy_shared_snapshots_and_merge_unique_ones_in_place() 
     let merged = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
     assert_eq!(merged.content, "v3");
     assert_eq!(Arc::as_ptr(&merged), address);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild = json!({ "id": "10", "name": "guild", "roles": [{ "id": "11", "name": "r" }] });
+    for (name, unavailable) in [
+        ("GUILD_CREATE", json!({ "id": "10", "unavailable": true })),
+        ("GUILD_DELETE", json!({ "id": "10", "unavailable": true })),
+    ] {
+        let create = decode_event("GUILD_CREATE", guild.clone()).unwrap();
+        super::apply_cache_updates(&cache, SINGLE_SHARD, &create).await;
+        assert_eq!(cache.guild(test_id(10)).await.unwrap().name, "guild");
+
+        let event = decode_event(name, unavailable).unwrap();
+        match event.kind() {
+            EventKind::GuildCreate(crate::model::GuildCreatePayload::Unavailable(guild)) => {
+                assert_eq!(guild.id, test_id(10));
+            }
+            EventKind::GuildDelete(data) => assert_eq!(data.unavailable, Some(true)),
+            other => panic!("{name}: {other:?}"),
+        }
+        super::apply_cache_updates(&cache, SINGLE_SHARD, &event).await;
+        assert!(cache.guild(test_id(10)).await.is_none(), "{name}");
+        assert!(
+            cache.role(test_id(10), test_id(11)).await.is_none(),
+            "{name}"
+        );
+    }
 }
 
 #[cfg(feature = "cache")]

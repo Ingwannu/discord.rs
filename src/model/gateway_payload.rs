@@ -4,6 +4,8 @@
 //! - [`GuildCreate`] holds GUILD_CREATE split into the units the cache stores
 //!   (`Arc<Member>`, `Arc<Presence>`, channels with their guild filled in), so
 //!   the cache shares them instead of copying a whole [`Guild`].
+//!   [`GuildCreatePayload`] tells it apart from an unavailable guild, for
+//!   which Discord sends only the id.
 //! - [`MessageUpdate`] and [`PartialUser`] are MESSAGE_UPDATE's partial
 //!   shape: every mutable field is a [`Patch`] / [`NullablePatch`], so an
 //!   omitted field keeps the cached value, `null` clears it, and `[]` replaces
@@ -99,6 +101,76 @@ pub struct GuildCreate {
     pub guild_scheduled_events: Vec<serde_json::Value>,
 }
 
+/// A GUILD_CREATE payload: a guild the bot can read, or one that is
+/// unavailable.
+///
+/// Discord sends GUILD_CREATE when the bot joins a guild, while it lazily
+/// loads the guilds READY listed, and when a guild becomes available again
+/// after an outage. A guild still in an outage arrives as an unavailable
+/// guild object, `{"id": "...", "unavailable": true}`, with no guild data;
+/// it is never turned into a [`Guild`]. GUILD_DELETE with
+/// `"unavailable": true` signals the same state for a guild that goes down
+/// mid-session.
+#[derive(Clone, Debug)]
+pub enum GuildCreatePayload {
+    /// A complete guild.
+    Available(Box<GuildCreate>),
+    /// A guild that is unavailable: only its id is known.
+    Unavailable(UnavailableGuild),
+}
+
+impl GuildCreatePayload {
+    /// The guild's id.
+    pub fn id(&self) -> GuildId {
+        match self {
+            Self::Available(guild) => guild.id(),
+            Self::Unavailable(guild) => guild.id,
+        }
+    }
+
+    /// The guild, when it is available.
+    pub fn available(&self) -> Option<&GuildCreate> {
+        match self {
+            Self::Available(guild) => Some(guild),
+            Self::Unavailable(_) => None,
+        }
+    }
+
+    /// Decodes a GUILD_CREATE `d` payload from JSON text, reading members
+    /// and presences straight into `Arc`s.
+    ///
+    /// Only serde_json text works here: the keys other than `members` and
+    /// `presences` are collected as borrowed [`RawValue`]s and handed to
+    /// [`Guild`]'s own decoder, so the field list is not duplicated.
+    pub(crate) fn from_json_str(text: &str) -> Result<Self, serde_json::Error> {
+        let mut deserializer = serde_json::Deserializer::from_str(text);
+        let decoded = deserializer.deserialize_map(GuildCreateVisitor)?;
+        deserializer.end()?;
+        Ok(decoded)
+    }
+}
+
+impl From<GuildCreate> for GuildCreatePayload {
+    fn from(guild: GuildCreate) -> Self {
+        Self::Available(Box::new(guild))
+    }
+}
+
+/// A guild Discord cannot serve right now (an outage): the unavailable
+/// guild object of GUILD_CREATE, which carries nothing but the id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct UnavailableGuild {
+    pub id: GuildId,
+}
+
+impl UnavailableGuild {
+    /// An unavailable guild with this id.
+    pub fn new(id: GuildId) -> Self {
+        Self { id }
+    }
+}
+
 impl GuildCreate {
     /// The guild's id.
     pub fn id(&self) -> GuildId {
@@ -170,19 +242,6 @@ impl GuildCreate {
             }),
         }
     }
-
-    /// Decodes a GUILD_CREATE `d` payload from JSON text, reading members
-    /// and presences straight into `Arc`s.
-    ///
-    /// Only serde_json text works here: the keys other than `members` and
-    /// `presences` are collected as borrowed [`RawValue`]s and handed to
-    /// [`Guild`]'s own decoder, so the field list is not duplicated.
-    pub(crate) fn from_json_str(text: &str) -> Result<Self, serde_json::Error> {
-        let mut deserializer = serde_json::Deserializer::from_str(text);
-        let decoded = deserializer.deserialize_map(GuildCreateVisitor)?;
-        deserializer.end()?;
-        Ok(decoded)
-    }
 }
 
 impl From<Guild> for GuildCreate {
@@ -217,13 +276,13 @@ const GUILD_CREATE_KEY_HINT: usize = 64;
 struct GuildCreateVisitor;
 
 impl<'de> Visitor<'de> for GuildCreateVisitor {
-    type Value = GuildCreate;
+    type Value = GuildCreatePayload;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a GUILD_CREATE guild object")
     }
 
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<GuildCreate, A::Error> {
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<GuildCreatePayload, A::Error> {
         let mut members = Vec::new();
         let mut presences = Vec::new();
         let mut rest: Vec<(Cow<'de, str>, &'de RawValue)> =
@@ -237,9 +296,23 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
                 _ => rest.push((key, map.next_value()?)),
             }
         }
+        // An unavailable guild object carries only `id`; reading it as a
+        // `Guild` would fail on the missing `name` or, with defaults, make up
+        // a guild that would overwrite the cached one.
+        let field = |name: &str| {
+            rest.iter()
+                .rev()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| *value)
+        };
+        if field("unavailable").is_some_and(|value| value.get() == "true") {
+            let id = field("id").ok_or_else(|| de::Error::missing_field("id"))?;
+            let id = serde_json::from_str(id.get()).map_err(de::Error::custom)?;
+            return Ok(GuildCreatePayload::Unavailable(UnavailableGuild { id }));
+        }
         let rest = de::value::MapDeserializer::<_, serde_json::Error>::new(rest.into_iter());
         let guild = Guild::deserialize(rest).map_err(de::Error::custom)?;
-        Ok(GuildCreate::assemble(guild, members, presences))
+        Ok(GuildCreate::assemble(guild, members, presences).into())
     }
 }
 

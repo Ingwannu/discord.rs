@@ -47,7 +47,7 @@ flowchart LR
 - `src/builders/`: Components V2, Modal 페이로드 빌더. `limits.rs`에 `validate()`가 검사하는 컴포넌트·모달·임베드 한도를 모았습니다(비공개, 커맨드용 공개 `command::limits`와 같은 방식)
 - `src/event.rs`: `Event` 봉투(`EventKind`, `EventMetadata`, 선택적 원본 payload)와 이벤트별 payload 타입. `src/event/decode.rs`는 디스패치의 `d` 텍스트를 바로 타입으로 디코딩하며, 이름 인턴 표와 디코더 분기를 정렬된 표 하나에서 만듭니다
 - `src/gateway/`: WebSocket 런타임, heartbeat/resume/reconnect. 읽기 루프(`client.rs`)는 얕은 봉투만 읽고 `d`를 `Box<RawValue>`로 큐에 넣으며, 샤드별 처리기(`bot/pipeline.rs`)가 디코딩하고 캐시·외부 백엔드(`bot/backend.rs`)를 갱신한 뒤 `Arc<Event>` 하나를 컬렉터 저널과 핸들러 호출이 공유합니다
-- `src/model/gateway_payload.rs`: 게이트웨이 전용 payload. 캐시 저장 단위로 나눈 `GuildCreate`와 `Patch` 필드를 쓰는 부분 갱신 `MessageUpdate` / `PartialUser`
+- `src/model/gateway_payload.rs`: 게이트웨이 전용 payload. 캐시 저장 단위로 나눈 `GuildCreate`(사용 불가 길드와 구분하는 `GuildCreatePayload`)와 `Patch` 필드를 쓰는 부분 갱신 `MessageUpdate` / `PartialUser`
 - `src/http.rs`: REST 클라이언트 및 429 재시도
 - `src/parsers/`: 인터랙션/모달 파싱
 - `src/helpers.rs`: 응답 헬퍼

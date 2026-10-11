@@ -616,8 +616,9 @@ pub enum EventKind {
     Ready(Box<ReadyPayload>),
     /// RESUMED.
     Resumed,
-    /// GUILD_CREATE, split into the units the cache stores.
-    GuildCreate(Box<crate::model::GuildCreate>),
+    /// GUILD_CREATE: an available guild split into the units the cache
+    /// stores, or an unavailable guild (id only).
+    GuildCreate(crate::model::GuildCreatePayload),
     /// GUILD_UPDATE.
     GuildUpdate(Box<Guild>),
     /// GUILD_DELETE.

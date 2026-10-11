@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use discordrs::model::{Nullable, Patch, Presence};
+use discordrs::model::{GuildCreatePayload, Nullable, Patch, Presence};
 use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -136,7 +136,12 @@ fn borrowed_str<'de, D: serde::Deserializer<'de>>(
 /// gateway/bot.rs `apply_cache_updates`, for the event kinds measured here.
 async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
     match event.kind() {
-        EventKind::GuildCreate(guild) => cache.apply_guild_create(guild).await,
+        EventKind::GuildCreate(GuildCreatePayload::Available(guild)) => {
+            cache.apply_guild_create(guild).await;
+        }
+        EventKind::GuildCreate(GuildCreatePayload::Unavailable(guild)) => {
+            cache.remove_guild(guild.id).await;
+        }
         EventKind::MessageCreate(message) => {
             if let Some(author) = message.author.as_ref() {
                 cache.upsert_user(author.clone()).await;
