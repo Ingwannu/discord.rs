@@ -1,12 +1,14 @@
+//! Interaction decoding: the typed decoder ([`decode_interaction`], and
+//! `Deserialize for Interaction` in [`wire`]) and the raw-handler helpers
+//! that work on a `serde_json::Value` the endpoint already parsed.
+
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationId, AutocompleteInteraction, ChannelId, ChatInputCommandInteraction, CommandId,
-    CommandInteractionData, CommandType, ComponentInteraction, ComponentInteractionData,
-    ComponentType, GuildId, Interaction, InteractionContextData, InteractionId,
-    InteractionResponseState, InteractionType, MessageContextMenuInteraction,
-    ModalSubmitInteraction, PingInteraction, UserContextMenuInteraction, UserId,
+    ApplicationId, ChannelId, CommandId, CommandType, ComponentType, GuildId, Interaction,
+    InteractionId, InteractionType, UserId,
 };
 use crate::types::invalid_data_error;
 
@@ -15,6 +17,8 @@ use super::{
     optional_id_field, optional_string_field, optional_string_values_field, required_id_field,
     required_object_field, required_string_field, required_u8_field, value_to_u8,
 };
+
+mod wire;
 
 #[derive(Clone, Debug)]
 /// Typed Discord API enum for `RawInteraction`.
@@ -208,142 +212,43 @@ pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError
     }
 }
 
-/// Provides the `parse_interaction` helper.
+/// Decodes an interaction object from its JSON text: the `d` of a gateway
+/// `INTERACTION_CREATE` dispatch, or the body Discord POSTs to an
+/// interactions endpoint.
+///
+/// This is the decoder the gateway and the typed endpoint use. It reads the
+/// text once into the typed [`Interaction`], with no `serde_json::Value`
+/// tree and no copy of `data`, `resolved`, or `member`; strings and IDs are
+/// the only allocations. Every interaction type decodes: known types and
+/// command types into their variants, anything else into
+/// [`Interaction::Unknown`] with its `data` kept as JSON text.
+///
+/// `Interaction` also implements `Deserialize` in the same wire format, so
+/// `serde_json::from_slice::<Interaction>(bytes)` and
+/// `Interaction::deserialize(&*raw_value)` work the same way.
+///
+/// ```
+/// use discordrs::{decode_interaction, Interaction};
+///
+/// let interaction = decode_interaction(
+///     r#"{"id":"1","application_id":"2","token":"t","type":2,
+///         "data":{"id":"3","name":"ping","type":1}}"#,
+/// )
+/// .unwrap();
+/// assert!(matches!(interaction, Interaction::ChatInputCommand(_)));
+/// ```
+pub fn decode_interaction(json: &str) -> Result<Interaction, DiscordError> {
+    serde_json::from_str(json).map_err(DiscordError::from)
+}
+
+/// Decodes an interaction from a parsed `serde_json::Value`, for callers
+/// that already hold one; same result as [`decode_interaction`].
+///
+/// Prefer [`decode_interaction`] on the JSON text: a `Value` has already
+/// paid for the tree, and its sorted keys put `data` before `type`, so the
+/// decoder re-encodes `data` once before reading it.
 pub fn parse_interaction(raw: &Value) -> Result<Interaction, DiscordError> {
-    let interaction_type = InteractionType::new(required_u8_field(raw, "type", "interaction")?);
-    let context = parse_typed_interaction_context(raw)?;
-
-    let interaction = match interaction_type {
-        InteractionType::PING => Interaction::Ping(PingInteraction { context }),
-        InteractionType::APPLICATION_COMMAND => {
-            let data = parse_command_interaction_data(raw)?;
-            // Discord treats an absent command `type` as CHAT_INPUT.
-            match data.kind.unwrap_or(CommandType::CHAT_INPUT) {
-                CommandType::CHAT_INPUT => {
-                    Interaction::ChatInputCommand(ChatInputCommandInteraction { context, data })
-                }
-                CommandType::USER => {
-                    Interaction::UserContextMenu(UserContextMenuInteraction { context, data })
-                }
-                CommandType::MESSAGE => {
-                    Interaction::MessageContextMenu(MessageContextMenuInteraction { context, data })
-                }
-                _ => Interaction::Unknown {
-                    context,
-                    kind: interaction_type,
-                    raw_data: raw.get("data").cloned().unwrap_or(Value::Null),
-                },
-            }
-        }
-        InteractionType::MESSAGE_COMPONENT => Interaction::Component(ComponentInteraction {
-            context,
-            data: parse_component_interaction_data(raw)?,
-        }),
-        InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => {
-            Interaction::Autocomplete(AutocompleteInteraction {
-                context,
-                data: parse_command_interaction_data(raw)?,
-            })
-        }
-        InteractionType::MODAL_SUBMIT => Interaction::ModalSubmit(ModalSubmitInteraction {
-            context,
-            submission: parse_modal_submission(raw)?,
-        }),
-        kind => Interaction::Unknown {
-            context,
-            kind,
-            raw_data: raw.get("data").cloned().unwrap_or(Value::Null),
-        },
-    };
-
-    Ok(interaction)
-}
-
-fn parse_typed_interaction_context(raw: &Value) -> Result<InteractionContextData, DiscordError> {
-    let member = raw
-        .get("member")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?;
-    let user = raw
-        .get("user")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?
-        .or_else(|| {
-            member
-                .as_ref()
-                .and_then(|member: &crate::model::Member| member.user.clone())
-        });
-
-    Ok(InteractionContextData {
-        id: required_id_field(raw, "id", "interaction")?,
-        application_id: required_id_field(raw, "application_id", "interaction")?,
-        token: required_string_field(raw, "token", "interaction")?,
-        guild_id: optional_id_field(raw, "guild_id", "interaction")?,
-        channel_id: optional_id_field(raw, "channel_id", "interaction")?,
-        user,
-        member,
-        app_permissions: raw
-            .get("app_permissions")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
-        locale: optional_string_field(raw, "locale"),
-        guild_locale: optional_string_field(raw, "guild_locale"),
-        entitlements: raw
-            .get("entitlements")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
-        context: raw
-            .get("context")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
-        authorizing_integration_owners: raw
-            .get("authorizing_integration_owners")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
-        response_state: InteractionResponseState::new(),
-    })
-}
-
-fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData, DiscordError> {
-    let data = required_object_field(raw, "data", "interaction")?.clone();
-    let options = data
-        .get("options")
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?
-        .unwrap_or_default();
-    Ok(CommandInteractionData {
-        id: optional_id_field(&data, "id", "interaction.data")?,
-        name: optional_string_field(&data, "name"),
-        kind: data.get("type").and_then(value_to_u8).map(CommandType::new),
-        options,
-        resolved: data
-            .get("resolved")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
-        target_id: optional_id_field(&data, "target_id", "interaction.data")?,
-    })
-}
-
-fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionData, DiscordError> {
-    let data = required_object_field(raw, "data", "interaction")?.clone();
-    Ok(ComponentInteractionData {
-        custom_id: required_string_field(&data, "custom_id", "component_data")?,
-        component_type: ComponentType::new(required_u8_field(
-            &data,
-            "component_type",
-            "component_data",
-        )?),
-        values: optional_string_values_field(&data, "values", "component_data")?
-            .unwrap_or_default(),
-    })
+    Interaction::deserialize(raw).map_err(|error| invalid_data_error(error.to_string()))
 }
 
 #[cfg(test)]
@@ -569,6 +474,7 @@ mod tests {
                 // The interaction type stays APPLICATION_COMMAND; the unknown
                 // command type is only in the raw data.
                 assert_eq!(kind, InteractionType::APPLICATION_COMMAND);
+                let raw_data: Value = serde_json::from_str(raw_data.unwrap().get()).unwrap();
                 assert_eq!(raw_data["type"], json!(99));
                 assert_eq!(raw_data["name"], json!("unknown-command"));
             }
@@ -837,7 +743,7 @@ mod tests {
                 context,
             } => {
                 assert_eq!(kind, InteractionType::new(99));
-                assert_eq!(raw_data, json!(null));
+                assert!(raw_data.is_none());
                 assert_eq!(context.id.get(), 1);
             }
             other => panic!("unexpected unknown interaction: {other:?}"),
@@ -973,6 +879,6 @@ mod tests {
         .unwrap_err();
         assert!(error
             .to_string()
-            .contains("missing or invalid component_data.custom_id"));
+            .contains("invalid interaction.data: missing field `custom_id`"));
     }
 }

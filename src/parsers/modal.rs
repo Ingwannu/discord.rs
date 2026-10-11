@@ -103,7 +103,9 @@ pub enum V2ModalComponent {
     FileUpload {
         /// Component custom ID.
         custom_id: String,
-        /// Uploaded attachment IDs.
+        /// Uploaded attachment IDs; the files themselves are in the
+        /// interaction's resolved data
+        /// ([`ModalSubmitInteraction::get_attachments`](crate::model::ModalSubmitInteraction::get_attachments)).
         values: Vec<String>,
     },
     /// A submitted checkbox (wire `value: bool`).
@@ -248,9 +250,10 @@ impl V2ModalSubmission {
 /// Reads a modal submit's `data` object, or a whole interaction payload
 /// whose `data` is one, from a `serde_json::Value`.
 ///
-/// The submitted values only; `resolved` is not read. Decoding JSON text
-/// directly with `serde_json::from_str::<V2ModalSubmission>` skips the
-/// `Value` tree.
+/// The submitted values only: the `resolved` attachments, users, roles, and
+/// channels are on [`crate::model::ModalSubmitInteraction`], which
+/// [`crate::decode_interaction`] returns. Decoding JSON text directly with
+/// `serde_json::from_str::<V2ModalSubmission>` skips the `Value` tree.
 pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, DiscordError> {
     let modal_data = if data.get("custom_id").is_some() && data.get("components").is_some() {
         data

@@ -19,8 +19,8 @@ use crate::model::{
     InteractionResponseState, InteractionResponseType, InteractionType,
 };
 use crate::parsers::{
-    parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
-    InteractionContext, RawInteraction,
+    parse_interaction_context, parse_raw_interaction, value_to_u8, InteractionContext,
+    RawInteraction,
 };
 use crate::response::{AckKind, InteractionResponsePhase};
 use crate::types::invalid_data_error;
@@ -458,43 +458,17 @@ where
         return status.into_response();
     }
 
-    let payload: Value = match serde_json::from_slice(body.as_ref()) {
-        Ok(payload) => payload,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    let interaction_type = match payload
-        .get("type")
-        .and_then(value_to_u8)
-        .map(InteractionType::new)
-    {
-        Some(interaction_type) => interaction_type,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "missing or invalid interaction.type" })),
-            )
-                .into_response();
-        }
-    };
-
-    if interaction_type == InteractionType::PING {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
-        )
-            .into_response();
-    }
-
-    let interaction = match parse_interaction(&payload) {
+    // Decoded straight from the body: no `Value` tree (see
+    // `parsers::decode_interaction`).
+    let interaction = match serde_json::from_slice::<Interaction>(body.as_ref()) {
         Ok(interaction) => interaction,
         Err(error) => {
+            // Endpoint verification must get its PONG even if the PING
+            // lacks a field the typed decoder requires (the check before
+            // decoding used to read `type` alone).
+            if is_ping(body.as_ref()) {
+                return pong();
+            }
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "error": error.to_string() })),
@@ -502,12 +476,36 @@ where
                 .into_response();
         }
     };
+    if matches!(interaction, Interaction::Ping(_)) {
+        return pong();
+    }
     let context: InteractionContextData = interaction.context().clone();
     let interaction_id = context.id;
     let response_state = context.response_state.clone();
 
     let response = state.handler.handle_typed(context, interaction).await;
     typed_endpoint_answer(&response_state, interaction_id, response).into_response()
+}
+
+/// Answers a PING.
+fn pong() -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
+    )
+        .into_response()
+}
+
+/// Whether `body` is a JSON object whose `type` is PING, reading only that
+/// key.
+fn is_ping(body: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct TypeOnly {
+        #[serde(rename = "type")]
+        kind: InteractionType,
+    }
+    serde_json::from_slice::<TypeOnly>(body)
+        .is_ok_and(|payload| payload.kind == InteractionType::PING)
 }
 
 /// Decides which transport owns the initial response and answers Discord
@@ -1306,7 +1304,22 @@ mod tests {
             .get("error")
             .and_then(Value::as_str)
             .unwrap()
-            .contains("missing or invalid component_data.custom_id"));
+            .contains("invalid interaction.data: missing field `custom_id`"));
+
+        // A PING the typed decoder rejects (here: no id or token) still
+        // gets its PONG, as before the endpoint decoded the whole body.
+        let bare_ping = serde_json::to_vec(&json!({ "type": 1 })).unwrap();
+        let bare_ping = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key,
+                handler: handler.clone(),
+            }),
+            signed_headers_for_body(&bare_ping),
+            Bytes::from(bare_ping),
+        )
+        .await;
+        assert_eq!(json_response(bare_ping).await, json!({ "type": 1 }));
+        assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

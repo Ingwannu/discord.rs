@@ -1049,11 +1049,13 @@ fn interaction_accessors_cover_all_variants() {
                 custom_id: "modal".to_string(),
                 components: vec![],
             },
+            resolved: None,
         }),
         Interaction::Unknown {
             context: context(8, 80, "unknown-token"),
             kind: InteractionType::new(99),
-            raw_data: json!({ "kind": "unknown" }),
+            raw_data: serde_json::value::RawValue::from_string(r#"{"kind":"unknown"}"#.to_string())
+                .ok(),
         },
     ];
 
@@ -2010,7 +2012,10 @@ fn authorizing_integration_owners_keeps_bot_dm_zero_and_unknown_keys() {
         serde_json::from_value(json!({ "0": "0", "1": "42", "7": ["future", 1] })).unwrap();
     assert_eq!(owners.guild_install, Some(GuildInstallOwner::BotDm));
     assert_eq!(owners.user_install.map(UserId::get), Some(42));
-    assert_eq!(owners.other.get("7"), Some(&json!(["future", 1])));
+    assert_eq!(
+        owners.other.get("7").map(|raw| raw.get()),
+        Some(r#"["future",1]"#)
+    );
     assert!(!owners.is_empty());
     assert_eq!(
         serde_json::to_value(&owners).unwrap(),

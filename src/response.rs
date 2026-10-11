@@ -3015,6 +3015,7 @@ mod tests {
                 custom_id: "m".to_string(),
                 components: Vec::new(),
             },
+            resolved: None,
         };
         assert_model_error(
             &modal.defer_update(&http).await.unwrap_err(),

@@ -1,17 +1,18 @@
 //! Interaction payloads, interaction context, and callback responses.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 
-use crate::parsers::V2ModalSubmission;
+use crate::parsers::{V2ModalComponent, V2ModalSubmission};
 
 use super::{
     ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, CommandOptionType,
     CommandOptionValue, CommandType, ComponentType, Entitlement, GenericId, GuildId,
-    GuildInstallOwner, InteractionContextType, InteractionId, InteractionResponseState,
-    InteractionResponseType, InteractionType, Member, MentionableId, Message, MessageId,
-    Permissions, Role, RoleId, User, UserId,
+    GuildInstallOwner, Id, IdMarker, InteractionContextType, InteractionId,
+    InteractionResponseState, InteractionResponseType, InteractionType, Member, MentionableId,
+    Message, MessageId, Permissions, Role, RoleId, User, UserId,
 };
 
 /// `authorizing_integration_owners` of an interaction (or of a message's
@@ -21,8 +22,13 @@ use super::{
 /// (`GUILD_INSTALL`) holds the guild ID, or `"0"` when the interaction came
 /// from a DM with the bot, so it is a [`GuildInstallOwner`] rather than an
 /// ID. Key `"1"` (`USER_INSTALL`) holds the installing user's ID. Keys added
-/// by future integration types are kept in [`Self::other`] and written back
-/// unchanged.
+/// by future integration types are kept in [`Self::other`] as JSON text and
+/// written back unchanged.
+///
+/// `Serialize`/`Deserialize` are written by hand (in `parsers/interaction`)
+/// instead of a `#[serde(flatten)]` map: flatten buffers the whole object
+/// in serde's `Content` tree on every interaction, and `RawValue` cannot be
+/// read back out of that buffer.
 ///
 /// ```
 /// use discordrs::{AuthorizingIntegrationOwners, GuildInstallOwner};
@@ -32,17 +38,30 @@ use super::{
 /// assert_eq!(owners.guild_install, Some(GuildInstallOwner::BotDm));
 /// assert_eq!(owners.user_install.map(|user| user.get()), Some(80351110224678912));
 /// ```
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default)]
 pub struct AuthorizingIntegrationOwners {
     /// `GUILD_INSTALL` (`"0"`): the guild, or [`GuildInstallOwner::BotDm`].
-    #[serde(rename = "0", default, skip_serializing_if = "Option::is_none")]
     pub guild_install: Option<GuildInstallOwner>,
     /// `USER_INSTALL` (`"1"`): the user who installed the app.
-    #[serde(rename = "1", default, skip_serializing_if = "Option::is_none")]
     pub user_install: Option<UserId>,
-    /// Entries for integration types this version does not know, as sent.
-    #[serde(flatten)]
-    pub other: serde_json::Map<String, serde_json::Value>,
+    /// Entries for integration types this version does not know, keyed as
+    /// sent, each value as its JSON text (Discord has not documented their
+    /// shape yet).
+    pub other: BTreeMap<String, Box<RawValue>>,
+}
+
+/// Compares the known entries by value and unknown ones by JSON text.
+impl PartialEq for AuthorizingIntegrationOwners {
+    fn eq(&self, other: &Self) -> bool {
+        self.guild_install == other.guild_install
+            && self.user_install == other.user_install
+            && self.other.len() == other.other.len()
+            && self.other.iter().zip(&other.other).all(
+                |((key, value), (other_key, other_value))| {
+                    key == other_key && value.get() == other_value.get()
+                },
+            )
+    }
 }
 
 impl AuthorizingIntegrationOwners {
@@ -258,8 +277,12 @@ impl CommandInteractionOption {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `CommandInteractionData`.
+/// `data` of an application command or autocomplete interaction.
+///
+/// `Deserialize` is written by hand (in `parsers/interaction`) so the
+/// interaction decoder can keep the keys of an unknown command type as JSON
+/// text with the same field list; it reads the same keys a derive would.
+#[derive(Clone, Debug, Serialize, Default)]
 pub struct CommandInteractionData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<CommandId>,
@@ -269,9 +292,9 @@ pub struct CommandInteractionData {
     /// [`CommandType::CHAT_INPUT`].
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<CommandType>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<CommandInteractionOption>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedData>,
     /// Target of a user or message context menu command. Its kind depends
     /// on the command type, so this shared field is untyped; use
@@ -279,6 +302,10 @@ pub struct CommandInteractionData {
     /// [`MessageContextMenuInteraction::target_id`] for the typed ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<GenericId>,
+    /// The guild the invoked command is registered to; absent for global
+    /// commands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<GuildId>,
 }
 
 /// `data` of a message component interaction. No `Default`: `custom_id`
@@ -287,7 +314,8 @@ pub struct CommandInteractionData {
 pub struct ComponentInteractionData {
     pub custom_id: String,
     pub component_type: ComponentType,
-    #[serde(default)]
+    /// Selected values of a select menu; empty for buttons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
 }
 
@@ -357,6 +385,111 @@ pub struct ComponentInteraction {
 pub struct ModalSubmitInteraction {
     pub context: InteractionContextData,
     pub submission: V2ModalSubmission,
+    /// `data.resolved`: the attachments behind File Upload values and the
+    /// users, members, roles, and channels behind select values. Discord
+    /// omits it when no such component was submitted. The lookups below
+    /// read it per component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<ResolvedData>,
+}
+
+impl ModalSubmitInteraction {
+    /// The resolved data of the submission, when Discord sent any.
+    pub fn resolved(&self) -> Option<&ResolvedData> {
+        self.resolved.as_ref()
+    }
+
+    /// Files uploaded through File Upload `custom_id`, in upload order.
+    ///
+    /// Each uploaded ID is looked up in [`Self::resolved`]; an ID Discord
+    /// did not resolve is skipped. Empty when there is no such component.
+    pub fn get_attachments<'a>(
+        &'a self,
+        custom_id: &'a str,
+    ) -> impl Iterator<Item = &'a Attachment> + 'a {
+        self.resolved_values(custom_id, |resolved, id| resolved.attachment(id))
+    }
+
+    /// Users selected in user or mentionable select `custom_id` (roles of
+    /// a mentionable select are left out; see [`Self::get_roles`]).
+    pub fn get_users<'a>(&'a self, custom_id: &'a str) -> impl Iterator<Item = &'a User> + 'a {
+        self.resolved_values(custom_id, |resolved, id| resolved.user(id))
+    }
+
+    /// Partial members of the users selected in user or mentionable select
+    /// `custom_id`; only present for a modal submitted in a guild.
+    pub fn get_members<'a>(&'a self, custom_id: &'a str) -> impl Iterator<Item = &'a Member> + 'a {
+        self.resolved_values(custom_id, |resolved, id| resolved.member(id))
+    }
+
+    /// Roles selected in role or mentionable select `custom_id`.
+    pub fn get_roles<'a>(&'a self, custom_id: &'a str) -> impl Iterator<Item = &'a Role> + 'a {
+        self.resolved_values(custom_id, |resolved, id| resolved.role(id))
+    }
+
+    /// Partial channels selected in channel select `custom_id`.
+    pub fn get_channels<'a>(
+        &'a self,
+        custom_id: &'a str,
+    ) -> impl Iterator<Item = &'a Channel> + 'a {
+        self.resolved_values(custom_id, |resolved, id| resolved.channel(id))
+    }
+
+    /// Looks up each submitted value of component `custom_id` (a select or
+    /// File Upload) as an ID of kind `M` in the resolved data.
+    fn resolved_values<'a, M, T, F>(
+        &'a self,
+        custom_id: &'a str,
+        lookup: F,
+    ) -> impl Iterator<Item = &'a T> + 'a
+    where
+        M: IdMarker,
+        T: 'a,
+        F: Fn(&'a ResolvedData, Id<M>) -> Option<&'a T> + 'a,
+    {
+        let values = self
+            .submission
+            .components
+            .iter()
+            .find_map(|component| submitted_values(component, custom_id))
+            .unwrap_or_default();
+        let resolved = self.resolved.as_ref();
+        values.iter().filter_map(move |value| {
+            let id = value.parse().ok()?;
+            lookup(resolved?, id)
+        })
+    }
+}
+
+/// The `values` of a submitted select or File Upload named `custom_id`.
+fn submitted_values<'a>(component: &'a V2ModalComponent, custom_id: &str) -> Option<&'a [String]> {
+    match component {
+        V2ModalComponent::StringSelect {
+            custom_id: id,
+            values,
+        }
+        | V2ModalComponent::UserSelect {
+            custom_id: id,
+            values,
+        }
+        | V2ModalComponent::RoleSelect {
+            custom_id: id,
+            values,
+        }
+        | V2ModalComponent::ChannelSelect {
+            custom_id: id,
+            values,
+        }
+        | V2ModalComponent::MentionableSelect {
+            custom_id: id,
+            values,
+        }
+        | V2ModalComponent::FileUpload {
+            custom_id: id,
+            values,
+        } if id == custom_id => Some(values),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -365,9 +498,17 @@ pub struct PingInteraction {
     pub context: InteractionContextData,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// A received interaction, typed by its `type` (and, for application
+/// commands, by the command `type`).
+///
+/// `Serialize` and `Deserialize` use Discord's wire format: the interaction
+/// object as Discord sends it in `INTERACTION_CREATE` and to an
+/// interactions endpoint. Decode one with [`crate::decode_interaction`] or
+/// any serde_json entry point; the decoder reads the payload once, with no
+/// intermediate `serde_json::Value` (see `parsers/interaction` for how it
+/// handles key order).
+#[derive(Clone, Debug)]
 #[non_exhaustive]
-/// Typed Discord API enum for `Interaction`.
 pub enum Interaction {
     /// Discord API enum variant `Ping`.
     Ping(PingInteraction),
@@ -392,10 +533,17 @@ pub enum Interaction {
         /// The interaction `type`. For an application command with an
         /// unknown command type this is
         /// [`InteractionType::APPLICATION_COMMAND`] and the command type is
-        /// `raw_data["type"]` (2.x stored the command type here instead).
+        /// the `type` key of `raw_data` (2.x stored the command type here
+        /// instead).
         kind: InteractionType,
-        /// Raw interaction data object for unsupported variants.
-        raw_data: serde_json::Value,
+        /// The interaction's `data` object as JSON text; `None` when Discord
+        /// sent no `data`. Read it with `serde_json::from_str(raw.get())`.
+        ///
+        /// For an application command of an unknown command type whose
+        /// `type` key came before the other keys, the documented keys are
+        /// re-encoded from their decoded values and the rest are kept as
+        /// sent, so the object is equivalent but not byte-identical.
+        raw_data: Option<Box<RawValue>>,
     },
 }
 
@@ -449,6 +597,10 @@ impl Interaction {
 pub struct InteractionCallbackResponse {
     #[serde(rename = "type")]
     pub kind: InteractionResponseType,
+    /// The callback data, whose shape depends on `kind` (message, choices,
+    /// or modal). It stays a `Value` until the request models of 3.0 step 5
+    /// replace this outgoing body with a typed response enum; the builders
+    /// that fill it still produce `Value`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
 }
@@ -477,10 +629,20 @@ pub struct InteractionCallbackResource {
     /// The callback type that created this resource.
     #[serde(rename = "type")]
     pub kind: InteractionResponseType,
+    /// The Activity launched by a `LAUNCH_ACTIVITY` response.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub activity_instance: Option<serde_json::Value>,
+    pub activity_instance: Option<InteractionCallbackActivityInstance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<Message>,
+}
+
+/// The Activity instance a `LAUNCH_ACTIVITY` interaction response started
+/// (Discord: "Activity Instance Resource").
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractionCallbackActivityInstance {
+    /// Instance ID of the Activity, the same ID as
+    /// [`ActivityInstance::instance_id`](super::ActivityInstance::instance_id).
+    pub id: String,
 }
 
 /// Full interaction callback result (`with_response=true`).

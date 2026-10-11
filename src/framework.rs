@@ -547,6 +547,7 @@ mod tests {
                         custom_id: "modal:ok".to_string(),
                         components: Vec::new(),
                     },
+                    resolved: None,
                 }),
             )
             .await

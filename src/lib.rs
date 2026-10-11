@@ -282,8 +282,8 @@ pub use builders::{
 };
 
 pub use parsers::{
-    parse_interaction, parse_interaction_context, parse_modal_submission, parse_raw_interaction,
-    InteractionContext, RawInteraction, V2ModalComponent, V2ModalSubmission,
+    decode_interaction, parse_interaction, parse_interaction_context, parse_modal_submission,
+    parse_raw_interaction, InteractionContext, RawInteraction, V2ModalComponent, V2ModalSubmission,
 };
 
 pub use constants::{gateway_intents, MESSAGE_FLAG_IS_COMPONENTS_V2};

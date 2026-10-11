@@ -11,8 +11,8 @@ pub mod interaction;
 pub mod modal;
 
 pub use interaction::{
-    parse_interaction, parse_interaction_context, parse_raw_interaction, InteractionContext,
-    RawInteraction,
+    decode_interaction, parse_interaction, parse_interaction_context, parse_raw_interaction,
+    InteractionContext, RawInteraction,
 };
 pub use modal::{parse_modal_submission, V2ModalComponent, V2ModalSubmission};
 
