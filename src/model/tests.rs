@@ -1972,7 +1972,7 @@ fn dynamic_profile_fields_round_trip_known_and_unknown_types() {
         matches!(&fields[2], DynamicProfileField::Media { value, .. } if value.url.ends_with("b.png"))
     );
     assert!(matches!(&fields[3], DynamicProfileField::Unknown(_)));
-    assert_eq!(fields[3].name(), Some("Future"));
+    assert_eq!(fields[3].name().as_deref(), Some("Future"));
     assert_eq!(
         serde_json::to_value(&fields).expect("serialize"),
         raw,

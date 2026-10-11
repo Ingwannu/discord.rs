@@ -8106,7 +8106,17 @@ async fn application_identity_profile_routes_have_expected_shapes() {
         .get_application_identity_profile(test_id(7), "p/1")
         .await
         .expect("get profile");
-    assert_eq!(fetched, created);
+    // The profile has no `PartialEq` (raw `metadata`); compare the JSON.
+    assert_eq!(
+        serde_json::to_value(&fetched).expect("fetched json"),
+        serde_json::to_value(&created).expect("created json")
+    );
+    assert_eq!(
+        created
+            .metadata_as::<serde_json::Value>()
+            .expect("metadata json"),
+        Some(json!({ "region": "kr" }))
+    );
     let by_user = client
         .get_user_application_identities(test_id(7))
         .await
@@ -8185,11 +8195,14 @@ async fn application_identity_profile_update_enforces_documented_limits() {
             primary: None,
             dynamic: (0..30)
                 .map(|index| {
-                    crate::model::DynamicProfileField::Unknown(json!({
-                        "type": 99,
-                        "name": format!("f{index}"),
-                        "value": "x".repeat(400),
-                    }))
+                    crate::model::DynamicProfileField::Unknown(
+                        serde_json::value::to_raw_value(&json!({
+                            "type": 99,
+                            "name": format!("f{index}"),
+                            "value": "x".repeat(400),
+                        }))
+                        .expect("raw field"),
+                    )
                 })
                 .collect(),
         }),
