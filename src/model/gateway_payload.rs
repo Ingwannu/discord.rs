@@ -244,7 +244,7 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
 }
 
 /// A map key borrowed from the input when it has no escapes.
-struct BorrowedKey<'de>(Cow<'de, str>);
+pub(crate) struct BorrowedKey<'de>(pub(crate) Cow<'de, str>);
 
 impl<'de> Deserialize<'de> for BorrowedKey<'de> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {

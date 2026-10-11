@@ -1489,6 +1489,52 @@ fn decode_event_reports_required_field_errors_and_preserves_unknown_events() {
 }
 
 #[test]
+fn field_map_events_read_escaped_and_repeated_keys_like_the_2x_decoder() {
+    // Low-volume lenient events read a field map: escaped keys match, the
+    // last of a repeated key wins, and a bad lenient field reads as `None`.
+    let event = super::decode_event(
+        "WEBHOOKS_UPDATE",
+        r#"{"guild\u005fid":"1","channel_id":"2","channel_id":"3"}"#,
+    )
+    .unwrap();
+    let EventKind::WebhooksUpdate(update) = event.kind() else {
+        panic!("{:?}", event.kind());
+    };
+    assert_eq!(update.guild_id, Some(snowflake("1")));
+    assert_eq!(update.channel_id, Some(snowflake("3")));
+
+    let event =
+        super::decode_event("WEBHOOKS_UPDATE", r#"{"guild_id":{},"channel_id":"2"}"#).unwrap();
+    let EventKind::WebhooksUpdate(update) = event.kind() else {
+        panic!("{:?}", event.kind());
+    };
+    assert_eq!(update.guild_id, None);
+    assert_eq!(update.channel_id, Some(snowflake("2")));
+
+    // Required fields and the payload shape still fail the event.
+    for (name, payload, message) in [
+        (
+            "MESSAGE_DELETE_BULK",
+            r#"{"ids":["1"]}"#,
+            "missing field `channel_id`",
+        ),
+        (
+            "MESSAGE_DELETE_BULK",
+            r#"{"ids":"1","channel_id":"2"}"#,
+            "invalid type",
+        ),
+        ("WEBHOOKS_UPDATE", r#"["1","2"]"#, "expected a JSON object"),
+        ("RATE_LIMITED", r#"{"meta":1e400}"#, "number out of range"),
+    ] {
+        let event = super::decode_event(name, payload).unwrap();
+        let EventKind::DecodeFailed(error) = event.kind() else {
+            panic!("{name} {payload}: {:?}", event.kind());
+        };
+        assert!(error.message().contains(message), "{name}: {error}");
+    }
+}
+
+#[test]
 fn decode_event_handles_entitlement_and_soundboard_events() {
     let entitlement = decode_event(
         "ENTITLEMENT_UPDATE",
