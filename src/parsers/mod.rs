@@ -101,49 +101,6 @@ pub(crate) fn required_object_field<'a>(
     }
 }
 
-pub(crate) fn required_array_field<'a>(
-    value: &'a Value,
-    field: &str,
-    context: &str,
-) -> Result<&'a [Value], DiscordError> {
-    value
-        .get(field)
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
-}
-
-pub(crate) fn required_bool_field(
-    value: &Value,
-    field: &str,
-    context: &str,
-) -> Result<bool, DiscordError> {
-    value
-        .get(field)
-        .and_then(Value::as_bool)
-        .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
-}
-
-pub(crate) fn required_string_values_field(
-    value: &Value,
-    field: &str,
-    context: &str,
-) -> Result<Vec<String>, DiscordError> {
-    let values = value
-        .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))?;
-
-    let mut parsed_values = Vec::with_capacity(values.len());
-    for entry in values {
-        let parsed = value_to_string(entry)
-            .ok_or_else(|| invalid_data_error(format!("{context}.{field} must contain strings")))?;
-        parsed_values.push(parsed);
-    }
-
-    Ok(parsed_values)
-}
-
 pub(crate) fn optional_string_values_field(
     value: &Value,
     field: &str,
@@ -172,9 +129,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        optional_string_field, optional_string_values_field, required_array_field,
-        required_bool_field, required_object_field, required_string_field,
-        required_string_values_field, required_u8_field, value_to_string, value_to_u8,
+        optional_string_field, optional_string_values_field, required_object_field,
+        required_string_field, required_u8_field, value_to_string, value_to_u8,
     };
     use crate::error::DiscordError;
 
@@ -203,8 +159,6 @@ mod tests {
             "id": "123",
             "count": "7",
             "payload": { "ok": true },
-            "items": [1, 2],
-            "enabled": true,
         });
 
         assert_eq!(
@@ -226,11 +180,6 @@ mod tests {
                 .get("ok"),
             Some(&json!(true))
         );
-        assert_eq!(
-            required_array_field(&value, "items", "interaction").unwrap(),
-            &[json!(1), json!(2)]
-        );
-        assert!(required_bool_field(&value, "enabled", "interaction").unwrap());
     }
 
     #[test]
@@ -239,8 +188,6 @@ mod tests {
             "wrong_string": false,
             "wrong_number": 512,
             "wrong_object": [],
-            "wrong_array": {},
-            "wrong_bool": "true",
         });
 
         assert_eq!(
@@ -260,14 +207,6 @@ mod tests {
             "interaction.wrong_object must be an object"
         );
         assert_eq!(
-            model_message(required_array_field(&value, "wrong_array", "interaction").unwrap_err()),
-            "missing or invalid interaction.wrong_array"
-        );
-        assert_eq!(
-            model_message(required_bool_field(&value, "wrong_bool", "interaction").unwrap_err()),
-            "missing or invalid interaction.wrong_bool"
-        );
-        assert_eq!(
             model_message(required_object_field(&value, "missing", "interaction").unwrap_err()),
             "missing interaction.missing"
         );
@@ -283,12 +222,12 @@ mod tests {
         let invalid_shape = json!({ "values": "nope" });
 
         assert_eq!(
-            required_string_values_field(&valid, "values", "component_data").unwrap(),
-            vec![
+            optional_string_values_field(&valid, "values", "component_data").unwrap(),
+            Some(vec![
                 String::from("one"),
                 String::from("2"),
                 String::from("three")
-            ]
+            ])
         );
         assert_eq!(
             optional_string_values_field(&valid, "tags", "component_data").unwrap(),
@@ -297,13 +236,6 @@ mod tests {
         assert_eq!(
             optional_string_values_field(&valid, "missing", "component_data").unwrap(),
             None
-        );
-        assert_eq!(
-            model_message(
-                required_string_values_field(&invalid_entry, "values", "component_data")
-                    .unwrap_err()
-            ),
-            "component_data.values must contain strings"
         );
         assert_eq!(
             model_message(
