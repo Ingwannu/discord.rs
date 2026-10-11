@@ -212,6 +212,80 @@ impl RadioGroupBuilder {
     pub fn build(self) -> Value {
         to_json_value(self)
     }
+
+    /// Validates the radio group against Discord's documented limits without
+    /// consuming the builder: `custom_id` 1-100 characters, 2-10 options, and
+    /// option labels, values, and descriptions of at most 100 characters.
+    ///
+    /// [`LabelBuilder`] and [`ModalBuilder`] do not re-check a group they
+    /// wrap, so call this before handing the builder to them.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len(
+            "radio group custom_id",
+            &self.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )?;
+        validation::ensure_count(
+            "radio group options",
+            self.options.len(),
+            limits::MIN_RADIO_GROUP_OPTIONS,
+            limits::MAX_RADIO_GROUP_OPTIONS,
+        )?;
+        validate_group_options("radio group", &self.options)
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
+    }
+}
+
+// [Decision Log]
+// - 목적과 의도: 라디오 그룹, 체크박스 그룹, 체크박스도 다른 빌더처럼 `validate()`/`try_build()`로
+//   문서(components/reference, 3714862)의 제한 위반을 Discord 400 전에 로컬에서 잡는다.
+// - 기존 구현 및 제약 조건: `build()`는 검증하지 않는 동작을 유지한다. 두 그룹의 옵션 구조는
+//   label/value/description에 "max 100 characters"만 적는데, 문자열 선택 메뉴 검증기는 label과
+//   value를 1자 이상으로도 검사한다. `LabelBuilder`/`ModalBuilder`는 자식을 `Value`로 저장하므로
+//   자식 빌더 검증을 따라갈 경로가 없다.
+// - 검토한 주요 대안: (1) 선택 메뉴의 옵션 검사 루프를 components.rs 공용 함수로 빼서 같이 쓰기,
+//   (2) 두 그룹만 쓰는 모듈 내부 함수, (3) 옵션 수와 min/max_values의 관계(max_values ≤ 옵션 수 등)도
+//   검사하기.
+// - 선택한 방식: (2). 문서에 적힌 규칙만 검사하고, min_values ≤ max_values는 "최소/최대 선택 수"의
+//   정의상 항상 성립해야 하므로(선택 메뉴, 텍스트 입력과 같은 검사) 포함한다.
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 선택 메뉴의 최소 1자 규칙을 매개변수로 갈라야 해서
+//   선택 메뉴 동작을 건드릴 위험만 늘린다. (3)은 문서에 없는 규칙이라 Discord가 받는 페이로드를
+//   로컬에서 거절할 수 있다.
+// - 장점, 단점 및 영향: 로컬 검증이 문서보다 엄격해지지 않는다. 대신 옵션 수보다 큰 min_values 같은
+//   실수는 Discord가 알려 준다. 라벨이나 모달에 넣을 그룹은 넣기 전에 각자 `validate()`해야 한다.
+/// Checks each radio or checkbox group option's `label`, `value`, and
+/// `description` against the documented "max 100 characters". Unlike the
+/// string select check, an empty label or value is not rejected: the group
+/// option structures give only a maximum.
+fn validate_group_options(component: &str, options: &[SelectOption]) -> Result<(), DiscordError> {
+    for option in options {
+        let label = &option.label;
+        validation::ensure_max_len(
+            &format!("{component} option \"{label}\" label"),
+            label,
+            limits::MAX_SELECT_OPTION_TEXT_LENGTH,
+        )?;
+        validation::ensure_max_len(
+            &format!("{component} option \"{label}\" value"),
+            &option.value,
+            limits::MAX_SELECT_OPTION_TEXT_LENGTH,
+        )?;
+        if let Some(description) = &option.description {
+            validation::ensure_max_len(
+                &format!("{component} option \"{label}\" description"),
+                description,
+                limits::MAX_SELECT_OPTION_TEXT_LENGTH,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// A checkbox group (modals only; wrap it in a label). Modals cannot contain
@@ -279,6 +353,76 @@ impl CheckboxGroupBuilder {
     pub fn build(self) -> Value {
         to_json_value(self)
     }
+
+    /// Validates the checkbox group against Discord's documented limits
+    /// without consuming the builder: `custom_id` 1-100 characters, 1-10
+    /// options whose labels, values, and descriptions are at most 100
+    /// characters, `min_values` 0-10, `max_values` 1-10, `min_values` not
+    /// above `max_values`, and `min_values` 0 only with `required(false)`.
+    ///
+    /// The values are not compared with the number of options because
+    /// Discord documents no such rule. [`LabelBuilder`] and [`ModalBuilder`]
+    /// do not re-check a group they wrap, so call this before handing the
+    /// builder to them.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len(
+            "checkbox group custom_id",
+            &self.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )?;
+        validation::ensure_count(
+            "checkbox group options",
+            self.options.len(),
+            1,
+            limits::MAX_CHECKBOX_GROUP_OPTIONS,
+        )?;
+        validate_group_options("checkbox group", &self.options)?;
+        if let Some(min) = self.min_values {
+            if min > limits::MAX_CHECKBOX_GROUP_VALUES {
+                return Err(DiscordError::model(format!(
+                    "checkbox group min_values must be at most {}, got {min}",
+                    limits::MAX_CHECKBOX_GROUP_VALUES
+                )));
+            }
+            // Checkbox Group Structure footnote: "`min_values` must be either
+            // omitted or at least `1` if `required` is omitted or `true`."
+            // `required` defaults to true, so only an explicit
+            // `required(false)` allows 0.
+            if min == 0 && self.required != Some(false) {
+                return Err(DiscordError::model(
+                    "checkbox group min_values must be at least 1 when required is omitted \
+                     or true, got 0",
+                ));
+            }
+        }
+        if let Some(max) = self.max_values {
+            if !(1..=limits::MAX_CHECKBOX_GROUP_VALUES).contains(&max) {
+                return Err(DiscordError::model(format!(
+                    "checkbox group max_values must be 1-{}, got {max}",
+                    limits::MAX_CHECKBOX_GROUP_VALUES
+                )));
+            }
+        }
+        // Not a separate rule in the docs, but a minimum number of choices
+        // above the maximum can never be met; select menus and text inputs
+        // apply the same check.
+        if let (Some(min), Some(max)) = (self.min_values, self.max_values) {
+            if min > max {
+                return Err(DiscordError::model(format!(
+                    "checkbox group min_values ({min}) must not exceed max_values ({max})"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
+    }
 }
 
 /// A single yes/no checkbox (modals only; wrap it in a label).
@@ -329,6 +473,28 @@ impl CheckboxBuilder {
 
     pub fn build(self) -> Value {
         to_json_value(self)
+    }
+
+    /// Validates the checkbox against Discord's documented limits without
+    /// consuming the builder: `custom_id` 1-100 characters, the only limit
+    /// the Checkbox Structure gives.
+    ///
+    /// [`LabelBuilder`] and [`ModalBuilder`] do not re-check a checkbox they
+    /// wrap, so call this before handing the builder to them.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        validation::ensure_len(
+            "checkbox custom_id",
+            &self.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )
+    }
+
+    /// Validating counterpart to [`Self::build`]: fails locally with a
+    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
+    pub fn try_build(self) -> Result<Value, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
@@ -1073,5 +1239,225 @@ mod tests {
             .build()
             .get("file_types")
             .is_none());
+    }
+
+    /// `count` options with short, distinct labels and values.
+    fn numbered_options(count: usize) -> Vec<SelectOption> {
+        (0..count)
+            .map(|index| SelectOption::new(&format!("Option {index}"), &index.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn radio_group_try_build_matches_build_for_valid_group() {
+        let make = || {
+            RadioGroupBuilder::new("class")
+                .add_option(SelectOption::new("Mage", "mage").description("Ranged"))
+                .add_option(SelectOption::new("Rogue", "rogue").default_selected(true))
+                .required(false)
+                .id(ComponentId::new(2))
+        };
+        assert_eq!(
+            make().build(),
+            make().try_build().expect("valid radio group")
+        );
+    }
+
+    #[test]
+    fn radio_group_validate_enforces_documented_limits() {
+        let with_options =
+            |count| RadioGroupBuilder::new("class").add_options(numbered_options(count));
+
+        // custom_id: 1-100 characters.
+        RadioGroupBuilder::new(&"i".repeat(100))
+            .add_options(numbered_options(2))
+            .validate()
+            .expect("100-character custom_id");
+        expect_model_error(
+            RadioGroupBuilder::new(&"i".repeat(101))
+                .add_options(numbered_options(2))
+                .try_build(),
+            "radio group custom_id must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            RadioGroupBuilder::new("")
+                .add_options(numbered_options(2))
+                .try_build(),
+            "radio group custom_id must be 1-100 characters, got 0",
+        );
+
+        // options: min 2, max 10.
+        with_options(2).validate().expect("two options");
+        expect_model_error(
+            with_options(1).try_build(),
+            "radio group options must contain 2-10 items, got 1",
+        );
+        with_options(10).validate().expect("ten options");
+        expect_model_error(
+            with_options(11).try_build(),
+            "radio group options must contain 2-10 items, got 11",
+        );
+
+        // Option label, value, and description: max 100 characters each.
+        let with_option = |option| with_options(1).add_option(option);
+        with_option(
+            SelectOption::new(&"l".repeat(100), &"v".repeat(100)).description(&"d".repeat(100)),
+        )
+        .validate()
+        .expect("100-character option text");
+        expect_model_error(
+            with_option(SelectOption::new(&"l".repeat(101), "v")).try_build(),
+            "label must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            with_option(SelectOption::new("Label", &"v".repeat(101))).try_build(),
+            "radio group option \"Label\" value must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            with_option(SelectOption::new("Label", "v").description(&"d".repeat(101))).try_build(),
+            "radio group option \"Label\" description must be at most 100 characters, got 101",
+        );
+        // The docs give option text only a maximum, so empty text is not
+        // rejected locally.
+        with_option(SelectOption::new("", ""))
+            .validate()
+            .expect("empty option text has no documented minimum");
+    }
+
+    #[test]
+    fn checkbox_group_try_build_matches_build_for_valid_group() {
+        let make = || {
+            CheckboxGroupBuilder::new("events")
+                .add_options(numbered_options(3))
+                .min_values(1)
+                .max_values(2)
+                .required(true)
+                .id(ComponentId::new(5))
+        };
+        assert_eq!(
+            make().build(),
+            make().try_build().expect("valid checkbox group")
+        );
+    }
+
+    #[test]
+    fn checkbox_group_validate_enforces_documented_limits() {
+        let with_options =
+            |count| CheckboxGroupBuilder::new("events").add_options(numbered_options(count));
+
+        // custom_id: 1-100 characters.
+        CheckboxGroupBuilder::new(&"i".repeat(100))
+            .add_options(numbered_options(1))
+            .validate()
+            .expect("100-character custom_id");
+        expect_model_error(
+            CheckboxGroupBuilder::new(&"i".repeat(101))
+                .add_options(numbered_options(1))
+                .try_build(),
+            "checkbox group custom_id must be 1-100 characters, got 101",
+        );
+
+        // options: min 1, max 10.
+        with_options(1).validate().expect("one option");
+        expect_model_error(
+            with_options(0).try_build(),
+            "checkbox group options must contain 1-10 items, got 0",
+        );
+        with_options(10).validate().expect("ten options");
+        expect_model_error(
+            with_options(11).try_build(),
+            "checkbox group options must contain 1-10 items, got 11",
+        );
+
+        // Option label, value, and description: max 100 characters each.
+        let with_option = |option| with_options(1).add_option(option);
+        with_option(
+            SelectOption::new(&"l".repeat(100), &"v".repeat(100)).description(&"d".repeat(100)),
+        )
+        .validate()
+        .expect("100-character option text");
+        expect_model_error(
+            with_option(SelectOption::new(&"l".repeat(101), "v")).try_build(),
+            "label must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            with_option(SelectOption::new("Label", &"v".repeat(101))).try_build(),
+            "checkbox group option \"Label\" value must be at most 100 characters, got 101",
+        );
+        expect_model_error(
+            with_option(SelectOption::new("Label", "v").description(&"d".repeat(101))).try_build(),
+            "checkbox group option \"Label\" description must be at most 100 characters, got 101",
+        );
+
+        // min_values: max 10; max_values: min 1, max 10.
+        with_options(10)
+            .min_values(10)
+            .max_values(10)
+            .validate()
+            .expect("min_values and max_values at 10");
+        expect_model_error(
+            with_options(10).min_values(11).try_build(),
+            "checkbox group min_values must be at most 10, got 11",
+        );
+        with_options(1)
+            .max_values(1)
+            .validate()
+            .expect("max_values at 1");
+        expect_model_error(
+            with_options(1).max_values(0).try_build(),
+            "checkbox group max_values must be 1-10, got 0",
+        );
+        expect_model_error(
+            with_options(10).max_values(11).try_build(),
+            "checkbox group max_values must be 1-10, got 11",
+        );
+
+        // min_values must not exceed max_values.
+        with_options(3)
+            .min_values(2)
+            .max_values(2)
+            .validate()
+            .expect("min_values equal to max_values");
+        expect_model_error(
+            with_options(3).min_values(3).max_values(2).try_build(),
+            "checkbox group min_values (3) must not exceed max_values (2)",
+        );
+
+        // min_values 0 only when required is explicitly false.
+        with_options(2)
+            .min_values(0)
+            .required(false)
+            .validate()
+            .expect("min_values 0 with required(false)");
+        expect_model_error(
+            with_options(2).min_values(0).try_build(),
+            "checkbox group min_values must be at least 1 when required is omitted or true, got 0",
+        );
+        expect_model_error(
+            with_options(2).min_values(0).required(true).try_build(),
+            "checkbox group min_values must be at least 1 when required is omitted or true, got 0",
+        );
+    }
+
+    #[test]
+    fn checkbox_try_build_matches_build_and_enforces_custom_id_length() {
+        let make = || {
+            CheckboxBuilder::new("like")
+                .default_checked(true)
+                .id(ComponentId::new(7))
+        };
+        assert_eq!(make().build(), make().try_build().expect("valid checkbox"));
+
+        CheckboxBuilder::new(&"i".repeat(100))
+            .validate()
+            .expect("100-character custom_id");
+        expect_model_error(
+            CheckboxBuilder::new(&"i".repeat(101)).try_build(),
+            "checkbox custom_id must be 1-100 characters, got 101",
+        );
+        expect_model_error(
+            CheckboxBuilder::new("").try_build(),
+            "checkbox custom_id must be 1-100 characters, got 0",
+        );
     }
 }

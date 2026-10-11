@@ -10,8 +10,10 @@
 //! `command::limits`, local validation is a fail-fast aid, not a gate: when
 //! Discord raises a limit, change it here and nowhere else.
 
-/// `custom_id` on buttons, select menus, text inputs, and modals: 1-100
-/// characters.
+/// `custom_id` on buttons, select menus, text inputs, modals, radio groups,
+/// checkbox groups, and checkboxes: 1-100 characters. The radio group,
+/// checkbox group, and checkbox structures each say "Developer-defined
+/// identifier for the input; 1-100 characters".
 pub(super) const MAX_CUSTOM_ID_LENGTH: usize = 100;
 /// Button labels: up to 80 characters.
 pub(super) const MAX_BUTTON_LABEL_LENGTH: usize = 80;
@@ -23,6 +25,9 @@ pub(super) const MAX_SELECT_PLACEHOLDER_LENGTH: usize = 150;
 /// String select options: 1-25.
 pub(super) const MAX_SELECT_OPTIONS: usize = 25;
 /// Select option labels, values, and descriptions: up to 100 characters.
+/// The Radio Group Option and Checkbox Group Option structures give the same
+/// limit ("max 100 characters" on `value`, `label`, and `description`), and
+/// the builders model all three as `SelectOption`.
 pub(super) const MAX_SELECT_OPTION_TEXT_LENGTH: usize = 100;
 /// Upper bound of a select menu's `min_values` (0-25) and `max_values`
 /// (1-25).
@@ -49,6 +54,26 @@ pub(super) const MAX_TEXT_INPUT_LENGTH: u16 = 4000;
 pub(super) const MAX_MODAL_TITLE_LENGTH: usize = 45;
 /// Top-level components in a modal: 1-5.
 pub(super) const MAX_MODAL_COMPONENTS: usize = 5;
+
+// Radio Group and Checkbox Group structures in components/reference
+// (discord-api-docs 3714862). The two option-count limits are separate
+// constants because the docs list them separately and either may change
+// alone.
+
+/// Fewest radio group options: 2. Radio Group Structure, `options`: "List of
+/// options to show; min 2, max 10".
+pub(super) const MIN_RADIO_GROUP_OPTIONS: usize = 2;
+/// Most radio group options: 10. Radio Group Structure, `options`: "List of
+/// options to show; min 2, max 10".
+pub(super) const MAX_RADIO_GROUP_OPTIONS: usize = 10;
+/// Checkbox group options: 1-10. Checkbox Group Structure, `options`: "List
+/// of options to show; min 1, max 10".
+pub(super) const MAX_CHECKBOX_GROUP_OPTIONS: usize = 10;
+/// Upper bound of a checkbox group's `min_values` ("Minimum number of items
+/// that must be chosen; min 0, max 10 (defaults to 1)") and `max_values`
+/// ("Maximum number of items that can be chosen; min 1, max 10 (defaults to
+/// the number of options)"), from the Checkbox Group Structure.
+pub(super) const MAX_CHECKBOX_GROUP_VALUES: u8 = 10;
 
 /// Embed titles: up to 256 characters.
 pub(super) const MAX_EMBED_TITLE_LENGTH: usize = 256;
