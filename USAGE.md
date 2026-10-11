@@ -1533,7 +1533,7 @@ Current sharding behavior:
 Useful supervisor APIs:
 
 - `statuses()` (always current, whether or not events are drained)
-- `drain_events()` (a bounded history: at most 256 events per shard, with `ShardSupervisorEvent::Lagged` where older ones were dropped)
+- `drain_events()` (a bounded history: at most 256 events per shard, with `ShardSupervisorEvent::Lagged` where older ones were dropped; shards that have stopped are drained and then skipped, and it errors only when nothing is left and every shard has stopped)
 - `send(shard_id, ShardIpcMessage)`
 - `reconnect(shard_id)`
 - `update_presence(shard_id, ...)`

@@ -2906,11 +2906,26 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         guard.statuses()[0].state,
         crate::sharding::ShardRuntimeState::Stopped
     );
+    // The ended shard's last events are still delivered...
+    assert_eq!(
+        guard.drain_events().unwrap(),
+        vec![
+            crate::sharding::ShardSupervisorEvent::StateChanged {
+                shard_id: 0,
+                state: crate::sharding::ShardRuntimeState::Queued,
+            },
+            crate::sharding::ShardSupervisorEvent::StateChanged {
+                shard_id: 0,
+                state: crate::sharding::ShardRuntimeState::Stopped,
+            },
+        ]
+    );
+    // ...and once nothing is left and every shard has ended, draining says so.
     assert!(guard
         .drain_events()
-        .expect_err("closed boot gate should leave runtime event channel disconnected")
+        .expect_err("the only shard has ended and nothing is left")
         .to_string()
-        .contains("event channel disconnected"));
+        .contains("every shard's event channel disconnected"));
 }
 
 #[cfg(feature = "sharding")]

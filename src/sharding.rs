@@ -268,6 +268,16 @@ impl ShardEventSink {
     }
 }
 
+/// What one receive attempt on a shard found.
+enum ShardEventPoll {
+    Event(ShardSupervisorEvent),
+    /// Nothing queued; the shard can still publish.
+    Empty,
+    /// Nothing queued, and every publisher of the shard is gone: its
+    /// runtime has ended and no event will follow.
+    Finished,
+}
+
 /// Where a [`ShardRuntimeHandle`] reads supervisor events from.
 #[derive(Clone)]
 enum ShardEventSource {
@@ -336,37 +346,42 @@ impl ShardRuntimeHandle {
     /// and the next call returns [`ShardSupervisorEvent::Lagged`] with the
     /// number dropped. Receiving does not change the status, which `publish`
     /// already updated. Returns an error once the queue is empty and every
-    /// publisher of the shard is gone.
+    /// publisher of the shard is gone (its runtime has ended); events queued
+    /// before that are still returned first.
     pub fn try_recv_event(&self) -> Result<Option<ShardSupervisorEvent>, DiscordError> {
+        match self.next_event() {
+            ShardEventPoll::Event(event) => Ok(Some(event)),
+            ShardEventPoll::Empty => Ok(None),
+            ShardEventPoll::Finished => Err(invalid_data_error(format!(
+                "shard {} event channel disconnected",
+                self.info().id
+            ))),
+        }
+    }
+
+    fn next_event(&self) -> ShardEventPoll {
         match &self.events {
             ShardEventSource::Queue {
                 queue, publishing, ..
             } => {
                 let mut queue = lock_or_recover(queue);
                 if let Some(event) = queue.pop() {
-                    return Ok(Some(event));
+                    ShardEventPoll::Event(event)
+                } else if publishing.strong_count() == 0 {
+                    ShardEventPoll::Finished
+                } else {
+                    ShardEventPoll::Empty
                 }
-                if publishing.strong_count() == 0 {
-                    return Err(self.disconnected_error());
-                }
-                Ok(None)
             }
             ShardEventSource::Channel(receiver) => match lock_or_recover(receiver).try_recv() {
                 Ok(event) => {
                     apply_event(&mut lock_or_recover(&self.status), &event);
-                    Ok(Some(event))
+                    ShardEventPoll::Event(event)
                 }
-                Err(TryRecvError::Empty) => Ok(None),
-                Err(TryRecvError::Disconnected) => Err(self.disconnected_error()),
+                Err(TryRecvError::Empty) => ShardEventPoll::Empty,
+                Err(TryRecvError::Disconnected) => ShardEventPoll::Finished,
             },
         }
-    }
-
-    fn disconnected_error(&self) -> DiscordError {
-        invalid_data_error(format!(
-            "shard {} event channel disconnected",
-            self.info().id
-        ))
     }
 }
 
@@ -569,12 +584,35 @@ impl ShardingManager {
     /// [`ShardSupervisorEvent::Lagged`] markers where events were dropped
     /// (see [`ShardRuntimeHandle::try_recv_event`]). Statuses are not
     /// changed by draining; [`Self::statuses`] is always current.
+    ///
+    /// A shard whose runtime has ended (every publisher dropped) is drained
+    /// like any other, so its last events, such as a final `Stopped`, are
+    /// returned, and is skipped afterwards; its last status stays in
+    /// [`Self::statuses`]. An ended shard never makes this fail or discard
+    /// events already taken. The only error is "nothing left at all": no
+    /// event to return while every registered shard has ended, so a loop
+    /// that drains until an error stops after the last shard's final events.
+    /// Use [`Self::poll_event`] to watch one shard end.
     pub fn drain_events(&self) -> Result<Vec<ShardSupervisorEvent>, DiscordError> {
         let mut events = Vec::new();
+        let mut running_shards = 0_usize;
         for handle in self.runtimes.values() {
-            while let Some(event) = handle.try_recv_event()? {
-                events.push(event);
+            loop {
+                match handle.next_event() {
+                    ShardEventPoll::Event(event) => events.push(event),
+                    ShardEventPoll::Empty => {
+                        running_shards += 1;
+                        break;
+                    }
+                    ShardEventPoll::Finished => break,
+                }
             }
+        }
+
+        if events.is_empty() && running_shards == 0 && !self.runtimes.is_empty() {
+            return Err(invalid_data_error(
+                "every shard's event channel disconnected",
+            ));
         }
         Ok(events)
     }
@@ -823,6 +861,93 @@ mod tests {
             manager.poll_event(0).unwrap(),
             Some(state_changed(ShardRuntimeState::Running))
         );
+    }
+
+    #[test]
+    fn a_finished_shard_does_not_make_drain_events_lose_events() {
+        let event_shard = |event: &ShardSupervisorEvent| match event {
+            ShardSupervisorEvent::StateChanged { shard_id, .. }
+            | ShardSupervisorEvent::SessionEstablished { shard_id, .. }
+            | ShardSupervisorEvent::GatewayError { shard_id, .. }
+            | ShardSupervisorEvent::Lagged { shard_id, .. } => *shard_id,
+        };
+        let on = |shard_id, state| ShardSupervisorEvent::StateChanged { shard_id, state };
+        let mut manager = ShardingManager::new(ShardConfig::new(2));
+        let shard_zero = manager.prepare_runtime(0).unwrap();
+        let shard_one = manager.prepare_runtime(1).unwrap();
+
+        shard_zero
+            .publish(on(0, ShardRuntimeState::Running))
+            .unwrap();
+        for _ in 0..=SHARD_EVENT_QUEUE_CAPACITY {
+            shard_one
+                .publish(on(1, ShardRuntimeState::Running))
+                .unwrap();
+        }
+        // Shard 0 stops and its last publisher goes away.
+        shard_zero
+            .publish(on(0, ShardRuntimeState::Stopped))
+            .unwrap();
+        drop(shard_zero);
+
+        // Nothing is lost: shard 0's final events, shard 1's Lagged marker,
+        // and shard 1's queue, whatever order the shards are visited in.
+        let events = manager.drain_events().unwrap();
+        assert_eq!(events.len(), 2 + 1 + SHARD_EVENT_QUEUE_CAPACITY);
+        let shard_zero_events: Vec<_> = events
+            .iter()
+            .filter(|event| event_shard(event) == 0)
+            .cloned()
+            .collect();
+        assert_eq!(
+            shard_zero_events,
+            vec![
+                on(0, ShardRuntimeState::Running),
+                on(0, ShardRuntimeState::Stopped)
+            ]
+        );
+        assert!(events.contains(&ShardSupervisorEvent::Lagged {
+            shard_id: 1,
+            missed: 1,
+        }));
+
+        // The finished shard keeps its status, is skipped by later drains,
+        // and still reports its end to per-shard polling.
+        assert_eq!(manager.state(0), Some(ShardRuntimeState::Stopped));
+        assert!(manager.drain_events().unwrap().is_empty());
+        shard_one
+            .publish(on(1, ShardRuntimeState::Reconnecting))
+            .unwrap();
+        assert_eq!(
+            manager.drain_events().unwrap(),
+            vec![on(1, ShardRuntimeState::Reconnecting)]
+        );
+        assert!(manager
+            .poll_event(0)
+            .unwrap_err()
+            .to_string()
+            .contains("event channel disconnected"));
+
+        // Once the last shard has ended, its final events still come first;
+        // only an empty drain with every shard gone is an error.
+        shard_one
+            .publish(on(1, ShardRuntimeState::Stopped))
+            .unwrap();
+        drop(shard_one);
+        assert_eq!(
+            manager.drain_events().unwrap(),
+            vec![on(1, ShardRuntimeState::Stopped)]
+        );
+        assert!(manager
+            .drain_events()
+            .unwrap_err()
+            .to_string()
+            .contains("every shard's event channel disconnected"));
+        assert_eq!(manager.statuses().len(), 2);
+
+        // No shards at all is not "every shard ended".
+        let empty = ShardingManager::new(ShardConfig::new(1));
+        assert!(empty.drain_events().unwrap().is_empty());
     }
 
     #[test]
