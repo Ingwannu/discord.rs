@@ -20,5 +20,5 @@ mod component_embed;
 pub use component_embed::{
     ComponentEmbed, ComponentEmbedBuilder, ComponentEmbedError, PreviewAccessory, PreviewActionRow,
     PreviewComponent, PreviewContainer, PreviewLinkButton, PreviewMediaGallery, PreviewMediaItem,
-    PreviewSection, PreviewSeparator, PreviewTextDisplay, PreviewThumbnail, SeparatorSpacing,
+    PreviewSection, PreviewSeparator, PreviewTextDisplay, PreviewThumbnail,
 };

@@ -17,6 +17,13 @@
 //! them at runtime, and the conversion from the message builders is a
 //! `TryFrom` that names what does not fit. The full decision log is in
 //! docs/design/3.0-types-events-requests.md §4 ("Component Embed 생성").
+//!
+//! The model holds no `serde_json::Value`. Untyped JSON enters only through
+//! the `TryFrom<&Value>` impls at the bottom of this file;
+//! `TryFrom<ContainerBuilder>` reads the builder's JSON through the same
+//! reader, because the message builders still store `Value`s. Shared types
+//! come from the model: [`ComponentId`] for component `id`s and the open
+//! [`SeparatorSpacing`] discriminant, narrowed to 1 and 2 by validation.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -28,8 +35,10 @@ use serde_json::{Map, Value};
 
 use crate::builders::ContainerBuilder;
 use crate::command::validation::char_count;
-use crate::constants::{button_style, component_type, separator_spacing};
+use crate::constants::{button_style, component_type};
 use crate::error::DiscordError;
+use crate::model::discriminant::SeparatorSpacing;
+use crate::model::{ComponentId, Nullable, NullablePatch, Patch};
 use crate::types::Emoji;
 
 /// A website's Component Embed: the JSON document Discord reads from the
@@ -155,11 +164,12 @@ impl ComponentEmbed {
     }
 
     /// Validates the embed and returns its JSON document, compact and with
-    /// `<`, `>`, `&`, U+2028, and U+2029 written as `\uXXXX` escapes. The
-    /// same text is safe to serve as the linked JSON file and to inline in a
-    /// `<script>` element (also in XHTML), and its byte length is what the
-    /// 3,000-byte limit was checked against. Other non-ASCII text stays as
-    /// UTF-8, so serve the page as UTF-8.
+    /// `<`, `>`, `&`, U+2028, U+2029, U+FFFE, and U+FFFF written as `\uXXXX`
+    /// escapes (C0 controls are JSON escapes already). The same text is safe
+    /// to serve as the linked JSON file and to inline in a `<script>` element,
+    /// also in XHTML, and its byte length is what the 3,000-byte limit was
+    /// checked against. Other non-ASCII text stays as UTF-8, so serve the
+    /// page as UTF-8.
     pub fn to_json(&self) -> Result<String, ComponentEmbedError> {
         self.check_structure()?;
         let json = self.encode()?;
@@ -186,8 +196,9 @@ impl ComponentEmbed {
     }
 
     /// Returns the `<link rel="discord:component-embed" type="application/json"
-    /// href="…">` element that points Discord at a JSON document served
-    /// separately (the output of [`Self::to_json`]).
+    /// href="…" />` element that points Discord at a JSON document served
+    /// separately (the output of [`Self::to_json`]). It is self-closing, which
+    /// HTML accepts and XHTML requires.
     ///
     /// Discord requires an absolute URL on the page's host, a subdomain of it,
     /// or its parent domain. Only "absolute `http`/`https` URL" can be checked
@@ -200,7 +211,7 @@ impl ComponentEmbed {
             });
         }
         Ok(format!(
-            "<link rel=\"{}\" type=\"application/json\" href=\"{}\">",
+            "<link rel=\"{}\" type=\"application/json\" href=\"{}\" />",
             Self::ELEMENT_NAME,
             escape_attribute(href)
         ))
@@ -268,14 +279,14 @@ impl ComponentEmbedBuilder {
     }
 
     /// Sets the container's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.embed.component.id = Some(id);
         self
     }
 
     /// Sets the container's accent colour (RGB, at most `0xFFFFFF`).
     pub fn accent_color(mut self, color: u32) -> Self {
-        self.embed.component.accent_color = Some(color);
+        self.embed.component.accent_color = Patch::Value(Nullable::Value(color));
         self
     }
 
@@ -322,9 +333,11 @@ impl ComponentEmbedBuilder {
 #[non_exhaustive]
 pub struct PreviewContainer {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
-    /// Accent bar colour as RGB, `0x000000`-`0xFFFFFF`.
-    pub accent_color: Option<u32>,
+    pub id: Option<ComponentId>,
+    /// Accent bar colour as RGB, `0x000000`-`0xFFFFFF`. The spec types it
+    /// `?integer`, so omitted ([`Patch::Missing`]), explicit `null`
+    /// ([`Patch::null`]), and a value are kept apart.
+    pub accent_color: NullablePatch<u32>,
     /// Whether the container is blurred as a spoiler (Discord's default:
     /// `false`).
     pub spoiler: Option<bool>,
@@ -342,7 +355,7 @@ impl PreviewContainer {
     fn check(&self, tally: &mut Tally) -> Result<(), ComponentEmbedError> {
         let path = ROOT_PATH;
         tally.component(self.id, path)?;
-        if let Some(color) = self.accent_color {
+        if let Some(&color) = present(&self.accent_color) {
             if color > ComponentEmbed::MAX_ACCENT_COLOR {
                 return Err(ComponentEmbedError::AccentColorOutOfRange {
                     value: color,
@@ -367,7 +380,7 @@ impl Serialize for PreviewContainer {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("type", &component_type::CONTAINER)?;
         serialize_some(&mut map, "id", &self.id)?;
-        serialize_some(&mut map, "accent_color", &self.accent_color)?;
+        serialize_present(&mut map, "accent_color", &self.accent_color)?;
         serialize_some(&mut map, "spoiler", &self.spoiler)?;
         map.serialize_entry("components", &self.components)?;
         map.end()
@@ -400,7 +413,7 @@ impl PreviewComponent {
             Self::Section(section) => section.check(path, tally),
             Self::TextDisplay(text) => tally.component(text.id, path),
             Self::MediaGallery(gallery) => gallery.check(path, tally),
-            Self::Separator(separator) => tally.component(separator.id, path),
+            Self::Separator(separator) => separator.check(path, tally),
         }
     }
 }
@@ -453,7 +466,7 @@ impl From<PreviewSeparator> for PreviewComponent {
 #[non_exhaustive]
 pub struct PreviewActionRow {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// The row's link buttons (serialized as `components`).
     pub buttons: Vec<PreviewLinkButton>,
 }
@@ -465,7 +478,7 @@ impl PreviewActionRow {
     }
 
     /// Sets the row's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -510,7 +523,7 @@ impl Serialize for PreviewActionRow {
 #[non_exhaustive]
 pub struct PreviewLinkButton {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// Target URL, at most 512 characters.
     pub url: String,
     /// Button text, at most 80 characters. A button needs a label, an emoji,
@@ -536,7 +549,7 @@ impl PreviewLinkButton {
     }
 
     /// Sets the button's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -603,7 +616,7 @@ impl Serialize for PreviewLinkButton {
 #[non_exhaustive]
 pub struct PreviewSection {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// The section's text, 1-3 text displays.
     pub components: Vec<PreviewTextDisplay>,
     /// The component shown beside the text.
@@ -622,7 +635,7 @@ impl PreviewSection {
     }
 
     /// Sets the section's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -703,7 +716,7 @@ impl From<PreviewThumbnail> for PreviewAccessory {
 #[non_exhaustive]
 pub struct PreviewTextDisplay {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// Markdown text.
     pub content: String,
 }
@@ -718,7 +731,7 @@ impl PreviewTextDisplay {
     }
 
     /// Sets the text display's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -740,11 +753,12 @@ impl Serialize for PreviewTextDisplay {
 #[non_exhaustive]
 pub struct PreviewThumbnail {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// Image URL (`media.url`): `http` or `https`, at most 2,048 characters.
     pub url: String,
-    /// Alt text, at most 1,024 characters.
-    pub description: Option<String>,
+    /// Alt text, at most 1,024 characters. Nullable in the spec
+    /// (`?string`): omitted, `null`, and a value are kept apart.
+    pub description: NullablePatch<String>,
     /// Whether the thumbnail is blurred as a spoiler.
     pub spoiler: Option<bool>,
 }
@@ -755,20 +769,20 @@ impl PreviewThumbnail {
         Self {
             id: None,
             url: url.into(),
-            description: None,
+            description: Patch::Missing,
             spoiler: None,
         }
     }
 
     /// Sets the thumbnail's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
 
     /// Sets the alt text.
     pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.description = Patch::Value(Nullable::Value(description.into()));
         self
     }
 
@@ -780,7 +794,11 @@ impl PreviewThumbnail {
 
     fn check(&self, path: &str, tally: &mut Tally) -> Result<(), ComponentEmbedError> {
         tally.component(self.id, path)?;
-        check_media(path, &self.url, self.description.as_deref())
+        check_media(
+            path,
+            &self.url,
+            present(&self.description).map(String::as_str),
+        )
     }
 }
 
@@ -790,7 +808,7 @@ impl Serialize for PreviewThumbnail {
         map.serialize_entry("type", &component_type::THUMBNAIL)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("media", &MediaRef { url: &self.url })?;
-        serialize_some(&mut map, "description", &self.description)?;
+        serialize_present(&mut map, "description", &self.description)?;
         serialize_some(&mut map, "spoiler", &self.spoiler)?;
         map.end()
     }
@@ -802,7 +820,7 @@ impl Serialize for PreviewThumbnail {
 #[non_exhaustive]
 pub struct PreviewMediaGallery {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// The gallery's images or videos.
     pub items: Vec<PreviewMediaItem>,
 }
@@ -814,7 +832,7 @@ impl PreviewMediaGallery {
     }
 
     /// Sets the gallery's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -838,7 +856,7 @@ impl PreviewMediaGallery {
             check_media(
                 &format!("{items_path}[{index}]"),
                 &item.url,
-                item.description.as_deref(),
+                present(&item.description).map(String::as_str),
             )?;
         }
         Ok(())
@@ -862,8 +880,9 @@ impl Serialize for PreviewMediaGallery {
 pub struct PreviewMediaItem {
     /// Media URL (`media.url`): `http` or `https`, at most 2,048 characters.
     pub url: String,
-    /// Alt text, at most 1,024 characters.
-    pub description: Option<String>,
+    /// Alt text, at most 1,024 characters. Nullable in the spec
+    /// (`?string`): omitted, `null`, and a value are kept apart.
+    pub description: NullablePatch<String>,
     /// Whether the item is blurred as a spoiler.
     pub spoiler: Option<bool>,
 }
@@ -873,14 +892,14 @@ impl PreviewMediaItem {
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
-            description: None,
+            description: Patch::Missing,
             spoiler: None,
         }
     }
 
     /// Sets the alt text.
     pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.description = Patch::Value(Nullable::Value(description.into()));
         self
     }
 
@@ -895,7 +914,7 @@ impl Serialize for PreviewMediaItem {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("media", &MediaRef { url: &self.url })?;
-        serialize_some(&mut map, "description", &self.description)?;
+        serialize_present(&mut map, "description", &self.description)?;
         serialize_some(&mut map, "spoiler", &self.spoiler)?;
         map.end()
     }
@@ -908,10 +927,11 @@ impl Serialize for PreviewMediaItem {
 #[non_exhaustive]
 pub struct PreviewSeparator {
     /// Optional component identifier, unique within the embed.
-    pub id: Option<u32>,
+    pub id: Option<ComponentId>,
     /// Whether a divider line is shown (Discord's default: `true`).
     pub divider: Option<bool>,
-    /// Padding size (Discord's default: small).
+    /// Padding size, [`SeparatorSpacing::SMALL`] (Discord's default) or
+    /// [`SeparatorSpacing::LARGE`]; other values fail validation.
     pub spacing: Option<SeparatorSpacing>,
 }
 
@@ -922,7 +942,7 @@ impl PreviewSeparator {
     }
 
     /// Sets the separator's component `id`.
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -938,6 +958,20 @@ impl PreviewSeparator {
         self.spacing = Some(spacing);
         self
     }
+
+    fn check(&self, path: &str, tally: &mut Tally) -> Result<(), ComponentEmbedError> {
+        tally.component(self.id, path)?;
+        // `SeparatorSpacing` is an open discriminant that can hold any `u8`;
+        // Separator Structure allows only "`1` for small padding, `2` for
+        // large padding".
+        match self.spacing {
+            None | Some(SeparatorSpacing::SMALL | SeparatorSpacing::LARGE) => Ok(()),
+            Some(spacing) => Err(ComponentEmbedError::InvalidSeparatorSpacing {
+                path: format!("{path}.spacing"),
+                spacing,
+            }),
+        }
+    }
 }
 
 impl Serialize for PreviewSeparator {
@@ -948,40 +982,6 @@ impl Serialize for PreviewSeparator {
         serialize_some(&mut map, "divider", &self.divider)?;
         serialize_some(&mut map, "spacing", &self.spacing)?;
         map.end()
-    }
-}
-
-/// Separator padding size; serialized as Discord's number (`1` or `2`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SeparatorSpacing {
-    /// Small padding (`1`).
-    Small,
-    /// Large padding (`2`).
-    Large,
-}
-
-impl SeparatorSpacing {
-    /// The wire value.
-    pub const fn value(self) -> u8 {
-        match self {
-            Self::Small => separator_spacing::SMALL,
-            Self::Large => separator_spacing::LARGE,
-        }
-    }
-
-    fn from_value(value: u64) -> Option<Self> {
-        match u8::try_from(value).ok()? {
-            separator_spacing::SMALL => Some(Self::Small),
-            separator_spacing::LARGE => Some(Self::Large),
-            _ => None,
-        }
-    }
-}
-
-impl Serialize for SeparatorSpacing {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u8(self.value())
     }
 }
 
@@ -1068,13 +1068,21 @@ pub enum ComponentEmbedError {
         /// The limit.
         max: u32,
     },
-    /// Two components share a nonzero `id` (Discord requires unique IDs; `0`
-    /// means unset).
+    /// A separator `spacing` other than [`SeparatorSpacing::SMALL`] (1) or
+    /// [`SeparatorSpacing::LARGE`] (2).
+    InvalidSeparatorSpacing {
+        /// Location of the spacing.
+        path: String,
+        /// The value given.
+        spacing: SeparatorSpacing,
+    },
+    /// Two components share a nonzero `id` (Discord requires unique IDs;
+    /// [`ComponentId`] `0` means unset and may repeat).
     DuplicateComponentId {
         /// Location of the second component with the ID.
         path: String,
         /// The repeated ID.
-        id: u32,
+        id: ComponentId,
     },
     /// Conversion only: a container inside the container.
     NestedContainer {
@@ -1107,6 +1115,14 @@ pub enum ComponentEmbedError {
         path: String,
         /// The key.
         field: String,
+    },
+    /// Conversion only: an explicit `null` for a field that cannot hold one,
+    /// because the spec does not make it nullable or (emoji keys) the shared
+    /// [`Emoji`] type cannot carry it. Omit the key instead; conversion never
+    /// drops a `null` silently.
+    NullNotAllowed {
+        /// Location of the `null`.
+        path: String,
     },
     /// Conversion only: a missing field or a value of the wrong JSON type.
     InvalidPayload {
@@ -1166,6 +1182,11 @@ impl fmt::Display for ComponentEmbedError {
                 f,
                 "{ROOT_PATH}.accent_color must be an RGB value up to {max:#08X}, got {value:#X}"
             ),
+            Self::InvalidSeparatorSpacing { path, spacing } => write!(
+                f,
+                "{path} must be 1 (small) or 2 (large), got {}",
+                spacing.get()
+            ),
             Self::DuplicateComponentId { path, id } => write!(
                 f,
                 "{path}: component id {id} is already used by another component"
@@ -1194,6 +1215,10 @@ impl fmt::Display for ComponentEmbedError {
                     "{path}: field `{field}` is not allowed in a component embed"
                 )
             }
+            Self::NullNotAllowed { path } => write!(
+                f,
+                "{path} is null, which this field cannot hold in a component embed; omit the key"
+            ),
             Self::InvalidPayload { path, reason } => write!(f, "{path}: {reason}"),
             Self::InvalidLinkHref { href } => write!(
                 f,
@@ -1229,16 +1254,20 @@ const MIN_CHILDREN: usize = 1;
 struct Tally {
     components: usize,
     gallery_items: usize,
-    ids: HashSet<u32>,
+    ids: HashSet<ComponentId>,
 }
 
 impl Tally {
-    /// Counts one component and records its `id`. `0` is Discord's "unset"
-    /// value, so it may repeat.
-    fn component(&mut self, id: Option<u32>, path: &str) -> Result<(), ComponentEmbedError> {
+    /// Counts one component and records its `id`. `ComponentId` 0 is
+    /// Discord's "unset" value (Discord assigns one), so it may repeat.
+    fn component(
+        &mut self,
+        id: Option<ComponentId>,
+        path: &str,
+    ) -> Result<(), ComponentEmbedError> {
         self.components = self.components.saturating_add(1);
         match id {
-            Some(id) if id != 0 && !self.ids.insert(id) => {
+            Some(id) if id.get() != 0 && !self.ids.insert(id) => {
                 Err(ComponentEmbedError::DuplicateComponentId {
                     path: path.to_owned(),
                     id,
@@ -1246,6 +1275,14 @@ impl Tally {
             }
             _ => Ok(()),
         }
+    }
+}
+
+/// The value of a nullable field, if it has one.
+fn present<T>(field: &NullablePatch<T>) -> Option<&T> {
+    match field {
+        Patch::Value(Nullable::Value(value)) => Some(value),
+        Patch::Value(Nullable::Null) | Patch::Missing => None,
     }
 }
 
@@ -1349,6 +1386,18 @@ struct MediaRef<'a> {
     url: &'a str,
 }
 
+/// Writes a nullable field unless it is omitted: `null` or the value.
+fn serialize_present<M: SerializeMap, T: Serialize>(
+    map: &mut M,
+    key: &'static str,
+    value: &NullablePatch<T>,
+) -> Result<(), M::Error> {
+    match value {
+        Patch::Missing => Ok(()),
+        Patch::Value(value) => map.serialize_entry(key, value),
+    }
+}
+
 fn serialize_some<M: SerializeMap, T: Serialize>(
     map: &mut M,
     key: &'static str,
@@ -1360,30 +1409,43 @@ fn serialize_some<M: SerializeMap, T: Serialize>(
     }
 }
 
-/// Compact JSON whose text can sit inside a `<script>` element.
+/// Compact JSON whose text can sit inside a `<script>` element of an HTML
+/// page or an XHTML (XML 1.0) page, both of which Discord accepts.
 ///
-/// serde_json already escapes `"`, `\`, and control characters. In addition,
-/// every `<`, `>`, `&`, U+2028, and U+2029 inside a string becomes a `\uXXXX`
-/// escape, which JSON parsers read back as the same character:
+/// serde_json already escapes `"`, `\`, and every C0 control character
+/// (U+0000-U+001F, including tab, LF, and CR). In addition, these characters
+/// inside a string become `\uXXXX` escapes, which JSON parsers read back as
+/// the same character:
 ///
-/// - `<` so that no `</script` (any case) can close the element and no
+/// - `<`, so that no `</script` (any case) can close the element and no
 ///   `<!--` can switch the HTML tokenizer into its escaped script states;
-/// - `&` and `>` because Discord also accepts `application/xhtml+xml` pages,
-///   where script text is parsed as XML (a raw `&` or `<` breaks the page and
-///   `]]>` ends a CDATA section). This is the set Rails `json_escape` and
-///   Django `json_script` use;
-/// - U+2028/U+2029 because they end a line in pre-ES2019 JavaScript, in case
-///   the JSON is ever pasted into a script.
+/// - `&` and `>`, because XHTML parses script text as XML: a raw `&` or `<`
+///   breaks the page and `]]>` ends a CDATA section. With `<` this is the
+///   set Rails `json_escape` and Django `json_script` use;
+/// - U+FFFE and U+FFFF, which XML 1.0 forbids (production `Char`);
+/// - U+2028 and U+2029, because they end a line in pre-ES2019 JavaScript,
+///   in case the JSON is ever pasted into a script.
+///
+/// That covers every character XML 1.0 forbids that a Rust `str` can hold:
+/// the C0 controls (escaped by JSON) and U+FFFE/U+FFFF. Surrogates
+/// (U+D800-U+DFFF) cannot occur in a `str`. The other noncharacters
+/// (U+FDD0-U+FDEF, U+1FFFE, ...) and DEL/C1 controls (U+007F-U+009F) are
+/// allowed XML characters; HTML reports them as parse errors but passes them
+/// through unchanged, so they stay as UTF-8. The text never contains a raw
+/// U+0000, which HTML would replace, or a raw CR, which both parsers
+/// normalize.
 ///
 /// These characters can occur only inside JSON strings, never in the
 /// structure, so escaping string fragments covers every occurrence. Each
-/// escape costs 5 more bytes (U+2028/U+2029: 3 more), and the limit is
-/// checked on this output. Other non-ASCII text stays UTF-8 rather than
-/// `\uXXXX`, which would triple its size.
+/// escape costs 5 more bytes for the ASCII ones and 3 more for the others,
+/// and the limit is checked on this output. Other non-ASCII text stays UTF-8
+/// rather than `\uXXXX`, which would triple its size.
 struct ScriptSafeFormatter;
 
 /// Characters [`ScriptSafeFormatter`] escapes beyond what JSON requires.
-const SCRIPT_UNSAFE: [char; 5] = ['<', '>', '&', '\u{2028}', '\u{2029}'];
+const SCRIPT_UNSAFE: [char; 7] = [
+    '<', '>', '&', '\u{2028}', '\u{2029}', '\u{fffe}', '\u{ffff}',
+];
 
 impl serde_json::ser::Formatter for ScriptSafeFormatter {
     fn write_string_fragment<W: ?Sized + io::Write>(
@@ -1466,9 +1528,7 @@ impl TryFrom<&Value> for ComponentEmbed {
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         let map = expect_object(value, "$")?;
         only_keys(map, &["component"], "$")?;
-        let container = map
-            .get("component")
-            .ok_or_else(|| missing("$", "component"))?;
+        let container = read_required(map, "component", "$", Some, "a container")?;
         read_container(container, ROOT_PATH).map(Self::new)
     }
 }
@@ -1486,6 +1546,13 @@ impl TryFrom<&Value> for PreviewComponent {
 
 const CONTAINER_CHILDREN: &str =
     "an action row, section, text display, media gallery, or separator";
+
+/// JSON type names for `InvalidPayload` reasons.
+const EXPECTED_U32: &str = "an integer from 0 to 4294967295";
+const EXPECTED_INTEGER: &str = "an integer";
+const EXPECTED_BOOL: &str = "a boolean";
+const EXPECTED_STRING: &str = "a string";
+const EXPECTED_OBJECT: &str = "a JSON object";
 
 fn read_container(value: &Value, path: &str) -> Result<PreviewContainer, ComponentEmbedError> {
     let map = expect_object(value, path)?;
@@ -1508,9 +1575,9 @@ fn read_container(value: &Value, path: &str) -> Result<PreviewContainer, Compone
         .map(|(index, child)| read_child(child, &format!("{path}.components[{index}]")))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PreviewContainer {
-        id: read_u32(map, "id", path)?,
-        accent_color: read_u32(map, "accent_color", path)?,
-        spoiler: read_bool(map, "spoiler", path)?,
+        id: read_component_id(map, path)?,
+        accent_color: read_nullable(map, "accent_color", path, as_u32, EXPECTED_U32)?,
+        spoiler: read_optional(map, "spoiler", path, Value::as_bool, EXPECTED_BOOL)?,
         components,
     })
 }
@@ -1566,7 +1633,7 @@ fn read_action_row(
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PreviewActionRow {
-        id: read_u32(map, "id", path)?,
+        id: read_component_id(map, path)?,
         buttons,
     })
 }
@@ -1577,11 +1644,7 @@ fn read_link_button(
 ) -> Result<PreviewLinkButton, ComponentEmbedError> {
     // Style first: a custom-ID button reports "not a link button", which says
     // more than "`custom_id` is not allowed".
-    let style = map
-        .get("style")
-        .ok_or_else(|| missing(path, "style"))?
-        .as_u64()
-        .ok_or_else(|| wrong_type(path, "style", "an integer"))?;
+    let style = read_required(map, "style", path, Value::as_u64, EXPECTED_INTEGER)?;
     if style != u64::from(button_style::LINK) {
         return Err(ComponentEmbedError::ButtonNotLink {
             path: path.to_owned(),
@@ -1593,25 +1656,37 @@ fn read_link_button(
         &["id", "type", "url", "style", "label", "emoji", "disabled"],
         path,
     )?;
-    let emoji = match map.get("emoji") {
-        None | Some(Value::Null) => None,
+    let emoji = match read_optional(map, "emoji", path, Value::as_object, EXPECTED_OBJECT)? {
         Some(emoji) => Some(read_emoji(emoji, &format!("{path}.emoji"))?),
+        None => None,
     };
     Ok(PreviewLinkButton {
-        id: read_u32(map, "id", path)?,
-        url: read_string(map, "url", path)?.ok_or_else(|| missing(path, "url"))?,
-        label: read_string(map, "label", path)?,
+        id: read_component_id(map, path)?,
+        url: read_required(map, "url", path, as_string, EXPECTED_STRING)?,
+        label: read_optional(map, "label", path, as_string, EXPECTED_STRING)?,
         emoji,
-        disabled: read_bool(map, "disabled", path)?,
+        disabled: read_optional(map, "disabled", path, Value::as_bool, EXPECTED_BOOL)?,
     })
 }
 
-fn read_emoji(value: &Value, path: &str) -> Result<Emoji, ComponentEmbedError> {
-    let map = expect_object(value, path)?;
-    only_keys(map, &["id", "name", "animated"], path)?;
-    serde_json::from_value(value.clone()).map_err(|error| ComponentEmbedError::InvalidPayload {
-        path: path.to_owned(),
-        reason: format!("expected a partial emoji: {error}"),
+/// Reads a partial emoji into the shared [`Emoji`] type. The emoji `id` is
+/// nullable in Discord's emoji object, but `Emoji` stores "no ID" as an
+/// omitted key and cannot carry an explicit `null`, so a `null` key fails
+/// here instead of being dropped; omitting the key means the same thing.
+fn read_emoji(map: &Map<String, Value>, path: &str) -> Result<Emoji, ComponentEmbedError> {
+    const KEYS: [&str; 3] = ["id", "name", "animated"];
+    only_keys(map, &KEYS, path)?;
+    if let Some(key) = KEYS
+        .into_iter()
+        .find(|key| map.get(*key) == Some(&Value::Null))
+    {
+        return Err(null_not_allowed(path, key));
+    }
+    serde_json::from_value(Value::Object(map.clone())).map_err(|error| {
+        ComponentEmbedError::InvalidPayload {
+            path: path.to_owned(),
+            reason: format!("expected a partial emoji: {error}"),
+        }
     })
 }
 
@@ -1638,11 +1713,7 @@ fn read_section(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let accessory_path = format!("{path}.accessory");
-    let accessory = expect_object(
-        map.get("accessory")
-            .ok_or_else(|| missing(path, "accessory"))?,
-        &accessory_path,
-    )?;
+    let accessory = read_required(map, "accessory", path, Value::as_object, EXPECTED_OBJECT)?;
     let kind = read_type(accessory, &accessory_path)?;
     let accessory = if kind == u64::from(component_type::BUTTON) {
         PreviewAccessory::Button(read_link_button(accessory, &accessory_path)?)
@@ -1656,7 +1727,7 @@ fn read_section(
         });
     };
     Ok(PreviewSection {
-        id: read_u32(map, "id", path)?,
+        id: read_component_id(map, path)?,
         components,
         accessory,
     })
@@ -1668,8 +1739,8 @@ fn read_text_display(
 ) -> Result<PreviewTextDisplay, ComponentEmbedError> {
     only_keys(map, &["type", "id", "content"], path)?;
     Ok(PreviewTextDisplay {
-        id: read_u32(map, "id", path)?,
-        content: read_string(map, "content", path)?.ok_or_else(|| missing(path, "content"))?,
+        id: read_component_id(map, path)?,
+        content: read_required(map, "content", path, as_string, EXPECTED_STRING)?,
     })
 }
 
@@ -1683,10 +1754,10 @@ fn read_thumbnail(
         path,
     )?;
     Ok(PreviewThumbnail {
-        id: read_u32(map, "id", path)?,
+        id: read_component_id(map, path)?,
         url: read_media_url(map, path)?,
-        description: read_string(map, "description", path)?,
-        spoiler: read_bool(map, "spoiler", path)?,
+        description: read_nullable(map, "description", path, as_string, EXPECTED_STRING)?,
+        spoiler: read_optional(map, "spoiler", path, Value::as_bool, EXPECTED_BOOL)?,
     })
 }
 
@@ -1704,13 +1775,19 @@ fn read_media_gallery(
             only_keys(item, &["media", "description", "spoiler"], &item_path)?;
             Ok(PreviewMediaItem {
                 url: read_media_url(item, &item_path)?,
-                description: read_string(item, "description", &item_path)?,
-                spoiler: read_bool(item, "spoiler", &item_path)?,
+                description: read_nullable(
+                    item,
+                    "description",
+                    &item_path,
+                    as_string,
+                    EXPECTED_STRING,
+                )?,
+                spoiler: read_optional(item, "spoiler", &item_path, Value::as_bool, EXPECTED_BOOL)?,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PreviewMediaGallery {
-        id: read_u32(map, "id", path)?,
+        id: read_component_id(map, path)?,
         items,
     })
 }
@@ -1720,19 +1797,22 @@ fn read_separator(
     path: &str,
 ) -> Result<PreviewSeparator, ComponentEmbedError> {
     only_keys(map, &["type", "id", "divider", "spacing"], path)?;
-    let spacing = match map.get("spacing") {
-        None | Some(Value::Null) => None,
-        Some(spacing) => Some(
-            spacing
-                .as_u64()
-                .and_then(SeparatorSpacing::from_value)
-                .ok_or_else(|| wrong_type(path, "spacing", "1 (small) or 2 (large)"))?,
-        ),
-    };
     Ok(PreviewSeparator {
-        id: read_u32(map, "id", path)?,
-        divider: read_bool(map, "divider", path)?,
-        spacing,
+        id: read_component_id(map, path)?,
+        divider: read_optional(map, "divider", path, Value::as_bool, EXPECTED_BOOL)?,
+        // Any `u8` converts, like the open discriminant it becomes; values
+        // other than 1 and 2 fail in `validate()` with the other limits.
+        spacing: read_optional(
+            map,
+            "spacing",
+            path,
+            |raw| {
+                raw.as_u64()
+                    .and_then(|raw| u8::try_from(raw).ok())
+                    .map(SeparatorSpacing::new)
+            },
+            "an integer from 0 to 255",
+        )?,
     })
 }
 
@@ -1740,12 +1820,99 @@ fn read_separator(
 /// fields are filled in by Discord.
 fn read_media_url(map: &Map<String, Value>, path: &str) -> Result<String, ComponentEmbedError> {
     let media_path = format!("{path}.media");
-    let media = expect_object(
-        map.get("media").ok_or_else(|| missing(path, "media"))?,
-        &media_path,
-    )?;
+    let media = read_required(map, "media", path, Value::as_object, EXPECTED_OBJECT)?;
     only_keys(media, &["url"], &media_path)?;
-    read_string(media, "url", &media_path)?.ok_or_else(|| missing(&media_path, "url"))
+    read_required(media, "url", &media_path, as_string, EXPECTED_STRING)
+}
+
+fn read_component_id(
+    map: &Map<String, Value>,
+    path: &str,
+) -> Result<Option<ComponentId>, ComponentEmbedError> {
+    read_optional(map, "id", path, as_u32, EXPECTED_U32).map(|id| id.map(ComponentId::new))
+}
+
+fn read_type(map: &Map<String, Value>, path: &str) -> Result<u64, ComponentEmbedError> {
+    read_required(map, "type", path, Value::as_u64, EXPECTED_INTEGER)
+}
+
+fn read_array<'v>(
+    map: &'v Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<&'v [Value], ComponentEmbedError> {
+    read_required(map, key, path, Value::as_array, "an array").map(Vec::as_slice)
+}
+
+/// A key's state. Conversion is lossless or fails, so `null` is never folded
+/// into "absent": fields the spec marks nullable (`?type`) keep it, and every
+/// other field rejects it with its path.
+enum Field<'v> {
+    Absent,
+    Null,
+    Present(&'v Value),
+}
+
+fn field<'v>(map: &'v Map<String, Value>, key: &str) -> Field<'v> {
+    match map.get(key) {
+        None => Field::Absent,
+        Some(Value::Null) => Field::Null,
+        Some(value) => Field::Present(value),
+    }
+}
+
+/// An optional field that the spec does not let be `null`.
+fn read_optional<'v, T>(
+    map: &'v Map<String, Value>,
+    key: &str,
+    path: &str,
+    parse: impl FnOnce(&'v Value) -> Option<T>,
+    expected: &str,
+) -> Result<Option<T>, ComponentEmbedError> {
+    match field(map, key) {
+        Field::Absent => Ok(None),
+        Field::Null => Err(null_not_allowed(path, key)),
+        Field::Present(value) => parse(value)
+            .map(Some)
+            .ok_or_else(|| wrong_type(path, key, expected)),
+    }
+}
+
+/// A required field (never `null` in the preview subset).
+fn read_required<'v, T>(
+    map: &'v Map<String, Value>,
+    key: &str,
+    path: &str,
+    parse: impl FnOnce(&'v Value) -> Option<T>,
+    expected: &str,
+) -> Result<T, ComponentEmbedError> {
+    read_optional(map, key, path, parse, expected)?.ok_or_else(|| missing(path, key))
+}
+
+/// An optional field that the spec marks nullable: absent, `null`, and a value
+/// stay distinct ([`Patch::Missing`], [`Patch::null`], a value).
+fn read_nullable<'v, T>(
+    map: &'v Map<String, Value>,
+    key: &str,
+    path: &str,
+    parse: impl FnOnce(&'v Value) -> Option<T>,
+    expected: &str,
+) -> Result<NullablePatch<T>, ComponentEmbedError> {
+    match field(map, key) {
+        Field::Absent => Ok(Patch::Missing),
+        Field::Null => Ok(Patch::null()),
+        Field::Present(value) => parse(value)
+            .map(|value| Patch::Value(Nullable::Value(value)))
+            .ok_or_else(|| wrong_type(path, key, expected)),
+    }
+}
+
+fn as_u32(value: &Value) -> Option<u32> {
+    value.as_u64().and_then(|number| u32::try_from(number).ok())
+}
+
+fn as_string(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_owned)
 }
 
 fn expect_object<'v>(
@@ -1756,7 +1923,7 @@ fn expect_object<'v>(
         .as_object()
         .ok_or_else(|| ComponentEmbedError::InvalidPayload {
             path: path.to_owned(),
-            reason: "expected a JSON object".to_owned(),
+            reason: format!("expected {EXPECTED_OBJECT}"),
         })
 }
 
@@ -1774,73 +1941,16 @@ fn only_keys(
     }
 }
 
-fn read_type(map: &Map<String, Value>, path: &str) -> Result<u64, ComponentEmbedError> {
-    map.get("type")
-        .ok_or_else(|| missing(path, "type"))?
-        .as_u64()
-        .ok_or_else(|| wrong_type(path, "type", "an integer"))
-}
-
-fn read_array<'v>(
-    map: &'v Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<&'v [Value], ComponentEmbedError> {
-    map.get(key)
-        .ok_or_else(|| missing(path, key))?
-        .as_array()
-        .map(Vec::as_slice)
-        .ok_or_else(|| wrong_type(path, key, "an array"))
-}
-
-/// Optional fields: absent and `null` both mean unset.
-fn read_u32(
-    map: &Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<Option<u32>, ComponentEmbedError> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .and_then(|number| u32::try_from(number).ok())
-            .map(Some)
-            .ok_or_else(|| wrong_type(path, key, "an integer from 0 to 4294967295")),
-    }
-}
-
-fn read_bool(
-    map: &Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<Option<bool>, ComponentEmbedError> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_bool()
-            .map(Some)
-            .ok_or_else(|| wrong_type(path, key, "a boolean")),
-    }
-}
-
-fn read_string(
-    map: &Map<String, Value>,
-    key: &str,
-    path: &str,
-) -> Result<Option<String>, ComponentEmbedError> {
-    match map.get(key) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => value
-            .as_str()
-            .map(|text| Some(text.to_owned()))
-            .ok_or_else(|| wrong_type(path, key, "a string")),
-    }
-}
-
 fn missing(path: &str, key: &str) -> ComponentEmbedError {
     ComponentEmbedError::InvalidPayload {
         path: path.to_owned(),
         reason: format!("missing required field `{key}`"),
+    }
+}
+
+fn null_not_allowed(path: &str, key: &str) -> ComponentEmbedError {
+    ComponentEmbedError::NullNotAllowed {
+        path: format!("{path}.{key}"),
     }
 }
 

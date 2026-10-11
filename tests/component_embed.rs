@@ -14,12 +14,13 @@
 use discordrs::request::{
     ComponentEmbed, ComponentEmbedBuilder, ComponentEmbedError, PreviewActionRow, PreviewComponent,
     PreviewContainer, PreviewLinkButton, PreviewMediaGallery, PreviewMediaItem, PreviewSection,
-    PreviewSeparator, PreviewTextDisplay, PreviewThumbnail, SeparatorSpacing,
+    PreviewSeparator, PreviewTextDisplay, PreviewThumbnail,
 };
 use discordrs::{
-    text_input_style, ActionRowBuilder, ButtonBuilder, ContainerBuilder, DiscordError, Emoji,
-    FileBuilder, MediaGalleryBuilder, MediaGalleryItem, SectionBuilder, SelectMenuBuilder,
-    SeparatorBuilder, TextDisplayBuilder, TextInputBuilder, ThumbnailBuilder,
+    text_input_style, ActionRowBuilder, ButtonBuilder, ComponentId, ContainerBuilder, DiscordError,
+    Emoji, FileBuilder, MediaGalleryBuilder, MediaGalleryItem, Nullable, Patch, SectionBuilder,
+    SelectMenuBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, TextInputBuilder,
+    ThumbnailBuilder,
 };
 use serde_json::{json, Value};
 
@@ -38,7 +39,8 @@ fn escaped(character: char) -> String {
 }
 
 /// Expected encoder output with the escapes spelled as `$lt`, `$gt`, `$amp`,
-/// `$ls` (U+2028), and `$ps` (U+2029), which keeps long expectations readable.
+/// `$ls` (U+2028), `$ps` (U+2029), `$fffe`, and `$ffff`, which keeps long
+/// expectations readable.
 fn with_escapes(template: &str) -> String {
     template
         .replace("$lt", &escaped('<'))
@@ -46,6 +48,70 @@ fn with_escapes(template: &str) -> String {
         .replace("$amp", &escaped('&'))
         .replace("$ls", &escaped('\u{2028}'))
         .replace("$ps", &escaped('\u{2029}'))
+        .replace("$fffe", &escaped('\u{fffe}'))
+        .replace("$ffff", &escaped('\u{ffff}'))
+}
+
+/// XML 1.0 `Char` production: what an XHTML page may contain at all.
+fn is_xml_char(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10_FFFF
+    )
+}
+
+/// Text content that an XML parser accepts inside an element: only XML
+/// characters, no markup start (`<`), no `&` (the encoder emits no
+/// entities), and no CDATA end.
+fn assert_xml_text(text: &str) {
+    assert!(
+        text.chars().all(is_xml_char),
+        "non-XML character in {text:?}"
+    );
+    assert!(!text.contains('<') && !text.contains('&') && !text.contains("]]>"));
+}
+
+/// A tiny well-formedness check for one self-closing element with
+/// double-quoted attributes, as XML requires: `<name a="v" b="v" />`, where
+/// every `&` in a value starts a predefined entity reference and no value
+/// contains `<` or `"`.
+fn assert_well_formed_empty_element(tag: &str, name: &str) {
+    let mut rest = tag
+        .strip_prefix(&format!("<{name}"))
+        .and_then(|rest| rest.strip_suffix(" />"))
+        .unwrap_or_else(|| panic!("not a self-closing <{name} />: {tag}"));
+    let mut names = Vec::new();
+    while !rest.is_empty() {
+        let attribute = rest.strip_prefix(' ').unwrap_or_else(|| panic!("{tag}"));
+        let (attribute_name, after) = attribute
+            .split_once("=\"")
+            .unwrap_or_else(|| panic!("{tag}"));
+        assert!(
+            !attribute_name.is_empty()
+                && attribute_name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
+            "{tag}"
+        );
+        assert!(
+            !names.contains(&attribute_name),
+            "duplicate attribute in {tag}"
+        );
+        names.push(attribute_name);
+        let (value, after) = after.split_once('"').unwrap_or_else(|| panic!("{tag}"));
+        assert!(!value.contains('<'), "{tag}");
+        for (index, _) in value.match_indices('&') {
+            let reference = value.get(index..).unwrap_or_default();
+            assert!(
+                ["&amp;", "&quot;", "&lt;", "&gt;", "&apos;"]
+                    .iter()
+                    .any(|entity| reference.starts_with(entity)),
+                "bare & in {tag}"
+            );
+        }
+        assert!(value.chars().all(is_xml_char), "{tag}");
+        rest = after;
+    }
 }
 
 fn parse(json: &str) -> Value {
@@ -79,7 +145,7 @@ fn full_example() -> ComponentEmbed {
                 .add_item(PreviewMediaItem::new(format!("{SITE}/photos/3.png"))),
         )
         .add_text("*Screenshots of new content*")
-        .add_component(PreviewSeparator::new().spacing(SeparatorSpacing::Small))
+        .add_component(PreviewSeparator::new().spacing(SeparatorSpacing::SMALL))
         .add_component(
             PreviewActionRow::new()
                 .add_button(PreviewLinkButton::new(format!("{SITE}/store")).label("Store"))
@@ -166,27 +232,27 @@ fn patch_notes_script_tag_is_golden() {
 #[test]
 fn numeric_tags_and_link_button_keys() {
     let embed = ComponentEmbed::builder()
-        .id(1)
+        .id(ComponentId::new(1))
         .accent_color(0)
         .add_component(
             PreviewSection::new(
                 PreviewLinkButton::new("https://e.co")
-                    .id(3)
+                    .id(ComponentId::new(3))
                     .label("Go")
                     .emoji(Emoji::unicode("🔗"))
                     .disabled(true),
             )
-            .id(2)
-            .add_text_display(PreviewTextDisplay::new("x").id(4)),
+            .id(ComponentId::new(2))
+            .add_text_display(PreviewTextDisplay::new("x").id(ComponentId::new(4))),
         )
         .add_component(
             PreviewSeparator::new()
-                .id(5)
+                .id(ComponentId::new(5))
                 .divider(false)
-                .spacing(SeparatorSpacing::Large),
+                .spacing(SeparatorSpacing::LARGE),
         )
         .add_component(
-            PreviewMediaGallery::new().id(6).add_item(
+            PreviewMediaGallery::new().id(ComponentId::new(6)).add_item(
                 PreviewMediaItem::new("https://e.co/a.png")
                     .description("alt")
                     .spoiler(true),
@@ -273,8 +339,43 @@ fn escapes_in_urls_and_labels_too() {
     );
 }
 
+#[test]
+fn output_holds_only_xml_characters() {
+    // Every C0 control, the two XML-forbidden noncharacters, and the edges of
+    // the allowed ranges, including characters that stay raw.
+    let mut content: String = (0_u8..0x20).map(char::from).collect();
+    content.push_str("\u{7f}\u{85}\u{d7ff}\u{e000}\u{fdd0}\u{fffd}\u{fffe}\u{ffff}");
+    content.push_str("\u{1fffe}\u{10ffff}");
+    let embed = text_embed(&content);
+    let json = embed.to_json().expect("valid");
+    assert_xml_text(&json);
+    assert_eq!(
+        parse(&json)["component"]["components"][0]["content"],
+        content.as_str()
+    );
+
+    let tag = embed.to_script_tag().expect("valid");
+    let text = tag
+        .strip_prefix(r#"<script id="discord:component-embed" type="application/json">"#)
+        .and_then(|rest| rest.strip_suffix("</script>"))
+        .expect("script element");
+    assert_xml_text(text);
+
+    let pair = text_embed("a\u{fffe}b\u{ffff}c").to_json().expect("valid");
+    assert_eq!(
+        pair,
+        with_escapes(
+            r#"{"component":{"type":17,"components":[{"type":10,"content":"a$fffeb$ffffc"}]}}"#
+        )
+    );
+    // 3 bytes of UTF-8 become 6 bytes of escape.
+    assert!(text_embed_of_size(3_000, "\u{ffff}", 6).validate().is_ok());
+    assert!(text_embed_of_size(3_001, "\u{fffe}", 6).validate().is_err());
+}
+
 // ---------------------------------------------------------------------------
 // Limits: boundary and boundary + 1
+
 // ---------------------------------------------------------------------------
 
 /// Builds a text embed whose escaped document is exactly `target` bytes,
@@ -614,28 +715,67 @@ fn accent_color_range() {
 }
 
 #[test]
+fn separator_spacing_is_small_or_large() {
+    let spaced = |spacing: SeparatorSpacing| {
+        ComponentEmbed::builder().add_component(PreviewSeparator::new().spacing(spacing))
+    };
+    assert!(spaced(SeparatorSpacing::SMALL).validate().is_ok());
+    assert!(spaced(SeparatorSpacing::LARGE).validate().is_ok());
+    for raw in [0, 3, u8::MAX] {
+        assert_eq!(
+            expect_error(spaced(SeparatorSpacing::new(raw)).validate()),
+            ComponentEmbedError::InvalidSeparatorSpacing {
+                path: "component.components[0].spacing".to_owned(),
+                spacing: SeparatorSpacing::new(raw),
+            }
+        );
+    }
+    // An unknown value converts (the type is open) and is rejected on output.
+    let document = json!({"component": {"type": 17, "components": [{"type": 14, "spacing": 3}]}});
+    let converted = ComponentEmbed::try_from(&document).expect("shape is fine");
+    assert_eq!(
+        converted.component.components,
+        [PreviewComponent::from(
+            PreviewSeparator::new().spacing(SeparatorSpacing::new(3))
+        )]
+    );
+    assert_eq!(
+        expect_error(converted.to_json()).to_string(),
+        "component.components[0].spacing must be 1 (small) or 2 (large), got 3"
+    );
+}
+
+#[test]
 fn component_ids_are_unique_except_zero() {
     let duplicate = ComponentEmbed::builder()
-        .add_component(PreviewTextDisplay::new("a").id(7))
-        .add_component(PreviewSeparator::new().id(7));
+        .add_component(PreviewTextDisplay::new("a").id(ComponentId::new(7)))
+        .add_component(PreviewSeparator::new().id(ComponentId::new(7)));
     assert_eq!(
         expect_error(duplicate.validate()),
         ComponentEmbedError::DuplicateComponentId {
             path: "component.components[1]".to_owned(),
-            id: 7
+            id: ComponentId::new(7)
         }
     );
-    let nested = ComponentEmbed::builder().id(3).add_component(
-        PreviewSection::new(PreviewLinkButton::new("https://e.co").label("b").id(3)).add_text("t"),
-    );
+    let nested = ComponentEmbed::builder()
+        .id(ComponentId::new(3))
+        .add_component(
+            PreviewSection::new(
+                PreviewLinkButton::new("https://e.co")
+                    .label("b")
+                    .id(ComponentId::new(3)),
+            )
+            .add_text("t"),
+        );
     assert!(matches!(
         expect_error(nested.validate()),
-        ComponentEmbedError::DuplicateComponentId { path, id: 3 } if path == "component.components[0].accessory"
+        ComponentEmbedError::DuplicateComponentId { path, id }
+            if path == "component.components[0].accessory" && id == ComponentId::new(3)
     ));
     let zeros = ComponentEmbed::builder()
-        .id(0)
-        .add_component(PreviewTextDisplay::new("a").id(0))
-        .add_component(PreviewSeparator::new().id(0));
+        .id(ComponentId::new(0))
+        .add_component(PreviewTextDisplay::new("a").id(ComponentId::new(0)))
+        .add_component(PreviewSeparator::new().id(ComponentId::new(0)));
     assert!(zeros.validate().is_ok());
 }
 
@@ -643,7 +783,10 @@ fn component_ids_are_unique_except_zero() {
 fn build_never_validates_and_try_build_does() {
     let builder = ComponentEmbedBuilder::new().accent_color(u32::MAX);
     let embed = builder.clone().build();
-    assert_eq!(embed.component.accent_color, Some(u32::MAX));
+    assert_eq!(
+        embed.component.accent_color,
+        Patch::Value(Nullable::Value(u32::MAX))
+    );
     assert!(embed.component.components.is_empty());
     assert_eq!(
         expect_error(builder.clone().try_build()),
@@ -695,7 +838,7 @@ fn container_builder_with_preview_safe_parts_converts() {
     let expected = ComponentEmbed::builder()
         .accent_color(0x5865F2)
         .spoiler(false)
-        .add_component(PreviewTextDisplay::new("hello").id(1))
+        .add_component(PreviewTextDisplay::new("hello").id(ComponentId::new(1)))
         .add_component(
             PreviewSection::new(PreviewLinkButton::new("https://e.co/a").label("Open"))
                 .add_text("read more"),
@@ -716,7 +859,7 @@ fn container_builder_with_preview_safe_parts_converts() {
         .add_component(
             PreviewSeparator::new()
                 .divider(true)
-                .spacing(SeparatorSpacing::Small),
+                .spacing(SeparatorSpacing::SMALL),
         )
         .add_component(
             PreviewActionRow::new().add_button(
@@ -857,7 +1000,9 @@ fn malformed_payloads_name_the_field() {
             field: "proxy_url".to_owned()
         }
     );
-    let separator = json!({"type": 14, "spacing": 3});
+    // Spacing must fit the open `SeparatorSpacing` (a `u8`); whether it is 1
+    // or 2 is a limit, checked on output (`separator_spacing_is_small_or_large`).
+    let separator = json!({"type": 14, "spacing": 300});
     assert!(matches!(
         expect_error(PreviewComponent::try_from(&separator)),
         ComponentEmbedError::InvalidPayload { path, .. } if path == "$.spacing"
@@ -879,8 +1024,178 @@ fn malformed_payloads_name_the_field() {
     );
 }
 
+/// Sets (`Some`) or removes (`None`) `key` in the object at `pointer`.
+fn with_field(mut document: Value, pointer: &str, key: &str, state: Option<Value>) -> Value {
+    let object = document
+        .pointer_mut(pointer)
+        .and_then(Value::as_object_mut)
+        .expect("object at pointer");
+    match state {
+        Some(value) => {
+            object.insert(key.to_owned(), value);
+        }
+        None => {
+            object.remove(key);
+        }
+    }
+    document
+}
+
+fn text_document() -> Value {
+    json!({"component": {"type": 17, "components": [{"type": 10, "content": "x"}]}})
+}
+
+#[test]
+fn nullable_fields_keep_absent_null_and_value_apart() {
+    let cases = [
+        (
+            text_document(),
+            "/component",
+            "accent_color",
+            json!(0x5865F2),
+        ),
+        (
+            json!({"component": {"type": 17, "components": [{"type": 9,
+                "components": [{"type": 10, "content": "t"}],
+                "accessory": {"type": 11, "media": {"url": "https://e.co/t.png"}}}]}}),
+            "/component/components/0/accessory",
+            "description",
+            json!("alt"),
+        ),
+        (
+            json!({"component": {"type": 17, "components": [{"type": 12,
+                "items": [{"media": {"url": "https://e.co/a.png"}}]}]}}),
+            "/component/components/0/items/0",
+            "description",
+            json!("alt"),
+        ),
+    ];
+    for (base, pointer, key, value) in cases {
+        for state in [None, Some(Value::Null), Some(value)] {
+            let document = with_field(base.clone(), pointer, key, state.clone());
+            let embed = ComponentEmbed::try_from(&document).expect("convertible");
+            let round_trip = parse(&embed.to_json().expect("valid"));
+            assert_eq!(round_trip, document, "{pointer}/{key} = {state:?}");
+        }
+    }
+
+    // The three states as the model holds them.
+    let accent = |state: Option<Value>| {
+        let document = with_field(text_document(), "/component", "accent_color", state);
+        ComponentEmbed::try_from(&document)
+            .expect("convertible")
+            .component
+            .accent_color
+    };
+    assert_eq!(accent(None), Patch::Missing);
+    assert_eq!(accent(Some(Value::Null)), Patch::null());
+    assert_eq!(accent(Some(json!(7))), Patch::Value(Nullable::Value(7)));
+
+    // Built by hand: an explicit null is written, a missing field is not.
+    let mut thumbnail = PreviewThumbnail::new("https://e.co/t.png");
+    thumbnail.description = Patch::null();
+    let json = thumbnail_embed(thumbnail).to_json().expect("valid");
+    assert!(json.contains(r#""description":null"#), "{json}");
+    let json = thumbnail_embed(PreviewThumbnail::new("https://e.co/t.png"))
+        .to_json()
+        .expect("valid");
+    assert!(!json.contains("description"), "{json}");
+}
+
+#[test]
+fn null_on_a_non_nullable_field_fails_with_its_path() {
+    let null_path = |result: Result<PreviewComponent, ComponentEmbedError>| match result {
+        Err(ComponentEmbedError::NullNotAllowed { path }) => path,
+        other => panic!("expected NullNotAllowed, got {other:?}"),
+    };
+    let button = json!({"type": 2, "style": 5, "url": "https://e.co", "label": "b"});
+    for key in ["id", "url", "label", "emoji", "disabled", "style", "type"] {
+        let button = with_field(button.clone(), "", key, Some(Value::Null));
+        let row = json!({"type": 1, "components": [button]});
+        assert_eq!(
+            null_path(PreviewComponent::try_from(&row)),
+            format!("$.components[0].{key}")
+        );
+    }
+    // Emoji `id` is nullable in Discord's emoji object, but the shared
+    // `Emoji` type cannot hold an explicit null, so it fails rather than
+    // being dropped.
+    for key in ["id", "name", "animated"] {
+        let emoji = with_field(json!({"name": "🔗"}), "", key, Some(Value::Null));
+        let button = with_field(button.clone(), "", "emoji", Some(emoji));
+        let row = json!({"type": 1, "components": [button]});
+        assert_eq!(
+            null_path(PreviewComponent::try_from(&row)),
+            format!("$.components[0].emoji.{key}")
+        );
+    }
+    let cases = [
+        (json!({"type": 14, "spacing": null}), "$.spacing"),
+        (json!({"type": 14, "divider": null}), "$.divider"),
+        (json!({"type": 14, "id": null}), "$.id"),
+        (json!({"type": 10, "content": null}), "$.content"),
+        (json!({"type": 1, "components": null}), "$.components"),
+        (json!({"type": 12, "items": null}), "$.items"),
+        (
+            json!({"type": 12, "items": [{"media": {"url": "https://e.co/a.png"}, "spoiler": null}]}),
+            "$.items[0].spoiler",
+        ),
+        (
+            json!({"type": 12, "items": [{"media": null}]}),
+            "$.items[0].media",
+        ),
+        (
+            json!({"type": 12, "items": [{"media": {"url": null}}]}),
+            "$.items[0].media.url",
+        ),
+        (
+            json!({"type": 9, "components": [{"type": 10, "content": "t"}], "accessory": null}),
+            "$.accessory",
+        ),
+        (
+            json!({"type": 9, "components": [{"type": 10, "content": "t"}],
+                "accessory": {"type": 11, "media": {"url": "https://e.co/t.png"}, "spoiler": null}}),
+            "$.accessory.spoiler",
+        ),
+    ];
+    for (value, path) in cases {
+        assert_eq!(
+            null_path(PreviewComponent::try_from(&value)),
+            path,
+            "{value}"
+        );
+    }
+    for (document, path) in [
+        (json!({"component": null}), "$.component"),
+        (
+            json!({"component": {"type": 17, "spoiler": null, "components": []}}),
+            "component.spoiler",
+        ),
+        (
+            json!({"component": {"type": 17, "id": null, "components": []}}),
+            "component.id",
+        ),
+    ] {
+        assert_eq!(
+            expect_error(ComponentEmbed::try_from(&document)),
+            ComponentEmbedError::NullNotAllowed {
+                path: path.to_owned()
+            }
+        );
+    }
+    // The same through the message builders' raw escape hatch.
+    let container = ContainerBuilder::new().add_component(json!({"type": 14, "spacing": null}));
+    assert_eq!(
+        expect_error(PreviewContainer::try_from(container)),
+        ComponentEmbedError::NullNotAllowed {
+            path: "component.components[0].spacing".to_owned()
+        }
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Link tag, errors
+
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -889,8 +1204,10 @@ fn link_tag_escapes_the_href_and_requires_an_absolute_http_url() {
         ComponentEmbed::link_tag("https://cdn.example.com/embed.json?a=1&b=\"2\"<>")
             .expect("absolute"),
         "<link rel=\"discord:component-embed\" type=\"application/json\" \
-         href=\"https://cdn.example.com/embed.json?a=1&amp;b=&quot;2&quot;&lt;&gt;\">"
+         href=\"https://cdn.example.com/embed.json?a=1&amp;b=&quot;2&quot;&lt;&gt;\" />"
     );
+    let tag = ComponentEmbed::link_tag("https://e.co/a.json?x=1&y=2").expect("absolute");
+    assert_well_formed_empty_element(&tag, "link");
     for rejected in ["/embeds/article.json", "javascript:alert(1)", "embed.json"] {
         assert_eq!(
             expect_error(ComponentEmbed::link_tag(rejected)),
