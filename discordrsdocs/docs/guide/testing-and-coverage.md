@@ -172,19 +172,22 @@ Rules for new code:
   `(response, body)` type pair, down from about 275. For a crate that calls 150 endpoints this
   was 2.6% less IR and a 2.6% smaller stripped release binary; its debug compile time did not
   change measurably.
-- **One deserializer for models (open since phase 4 B).** Each model's `Deserialize` impl is
-  compiled once per deserializer type. Typed REST responses decode through
-  `body::decode_json_body`, which goes through `serde_json::Value`; since phase 4 B the gateway
-  decodes every dispatch straight from its `d` text (`serde_json::from_str`, the `&str`
-  deserializer), so the models both paths read are compiled twice. Measured on the all-features lib
-  dev build with `cargo llvm-lines --lib --all-features`: 1,147,993 IR lines on main `23775d1`,
-  1,502,341 after phase 4 B (+354k, +30.9%): 308k lines of `&str` deserializer code (about 80k of
-  it for models REST still decodes through `Value`, about 133k for gateway-only payloads and their
-  wire structs, the rest serde_json internals), while `Value` deserializer code fell only from
-  161k to 137k. Moving `decode_json_body` (and the interaction parser) to the same `&str`
-  deserializer removes the duplicate copies; it changes REST error strings and duplicate-key
-  handling, which `decode_json_body_matches_the_previous_decoder_values_and_errors` pins, so it is
-  a separate decision (see the phase 4 B record in `docs/design/3.0-types-events-requests.md`).
+- **One deserializer for models (phase 4 B follow-up).** Each model's `Deserialize` impl is
+  compiled once per deserializer type, so every path that reads models uses serde_json's `&str`
+  reader (`serde_json::from_str`): gateway dispatches from their `d` text, REST responses
+  (`body::decode_json_body` reads the body as UTF-8 text), webhook events (the `Value` is written
+  back to text first), and the voice gateway (frames stay text). Rarely sent, mostly lenient
+  dispatches read one borrowed field map instead of a derived wire struct each; hot dispatches keep
+  derived structs. Measured on the all-features lib dev build with
+  `cargo llvm-lines --lib --all-features`: 1,147,993 IR lines on main `23775d1`, 1,502,341 after
+  phase 4 B, 1,371,082 after the follow-up (`085e921`, +19.4% over main). Most of the remaining
+  `Value`-reader code (93.7k lines) is the interaction parser's second copy of `Message`, `Member`,
+  `User`, `Channel`, and friends, which goes away when the parser decodes from text; the rest of
+  the difference is the text reader's larger per-struct code and the gateway-only payloads. REST
+  error messages now carry serde_json's position, and a duplicated key in an object decoded into a
+  struct is an error; `decode_json_body_matches_the_previous_decoder_except_the_documented_changes`
+  pins both. The per-category breakdown is in the "4단계 B 후속" record in
+  `docs/design/3.0-types-events-requests.md`.
 - **Erase long-lived task types.** `tokio::spawn::<F>` compiles its task harness four times per
   future type, about 9,000 IR lines. Spawn long-lived `()` tasks (one per player, track,
   connection, or child process) through `crate::task::spawn_erased`, which shares one instance.
