@@ -17,12 +17,16 @@ pub struct Invite {
     /// The guild the invite is for, as a partial guild (ID, name, images,
     /// description, features, verification and NSFW levels, vanity code,
     /// boost count); the other [`Guild`] fields stay empty.
+    ///
+    /// This and the other embedded objects below are boxed: inline they
+    /// would make every `Invite` about 3.6 KB instead of about 1 KB, and
+    /// most invites carry only some of them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild: Option<Guild>,
+    pub guild: Option<Box<Guild>>,
     /// The channel the invite is for, as a partial channel (ID, name,
     /// type); `None` when Discord sends `null`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel: Option<Channel>,
+    pub channel: Option<Box<Channel>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inviter: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -32,7 +36,7 @@ pub struct Invite {
     /// The embedded application to open for an embedded-application voice
     /// channel invite.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_application: Option<PartialApplication>,
+    pub target_application: Option<Box<PartialApplication>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approximate_presence_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,7 +46,7 @@ pub struct Invite {
     /// The scheduled event the invite points at, when it was fetched with a
     /// valid `guild_scheduled_event_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_scheduled_event: Option<GuildScheduledEvent>,
+    pub guild_scheduled_event: Option<Box<GuildScheduledEvent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

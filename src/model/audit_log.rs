@@ -28,9 +28,11 @@ pub struct AuditLogEntry {
     /// Changes made to the target, one entry per changed field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<AuditLogChange>>,
-    /// Extra information Discord adds for some action types.
+    /// Extra information Discord adds for some action types. Boxed: most
+    /// entries have none, and inline it would triple the entry's size
+    /// (112 to 328 bytes) for every entry of a 100-entry page.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<AuditLogEntryOptions>,
+    pub options: Option<Box<AuditLogEntryOptions>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
