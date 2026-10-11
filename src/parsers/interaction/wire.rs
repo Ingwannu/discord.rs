@@ -50,6 +50,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 
 use serde::de::{self, DeserializeSeed, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
@@ -140,10 +141,10 @@ impl<'de> DeserializeSeed<'de> for DataSeed {
                 Box::<RawValue>::deserialize(deserializer).map(Data::Raw)
             }
             InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => {
-                CommandInteractionData::deserialize(deserializer).map(Data::Autocomplete)
+                object::<CommandInteractionData, _>(deserializer).map(Data::Autocomplete)
             }
             InteractionType::MESSAGE_COMPONENT => {
-                ComponentInteractionData::deserialize(deserializer).map(Data::Component)
+                object::<ComponentInteractionData, _>(deserializer).map(Data::Component)
             }
             InteractionType::MODAL_SUBMIT => ModalDataSeed {
                 keep_resolved: true,
@@ -378,7 +379,7 @@ fn decode_late(kind: InteractionType, raw: Box<RawValue>) -> Result<Data, String
     if kind != InteractionType::APPLICATION_COMMAND {
         return DataSeed { kind }.deserialize(&*raw).map_err(invalid);
     }
-    match CommandInteractionData::deserialize(&*raw) {
+    match object::<CommandInteractionData, _>(&*raw) {
         Ok(data) => Ok(match CommandKind::of(data.kind) {
             Some(command_kind) => Data::Command(command_kind, data),
             None => Data::Raw(raw),
@@ -393,17 +394,46 @@ fn decode_late(kind: InteractionType, raw: Box<RawValue>) -> Result<Data, String
 }
 
 /// The command `type` of command `data`, skipping every other key without
-/// allocating; `None` when `data` is not an object with a readable `type`,
-/// `Some(None)` when it has no `type`.
+/// allocating; `None` when `data` is not an object with a readable `type`
+/// (a JSON array is not read positionally), `Some(None)` when it has no
+/// `type`.
 fn command_type_of(raw: &RawValue) -> Option<Option<CommandType>> {
     #[derive(Deserialize)]
     struct CommandHeader {
         #[serde(rename = "type")]
         kind: Option<CommandType>,
     }
-    CommandHeader::deserialize(raw)
+    object::<CommandHeader, _>(raw)
         .ok()
         .map(|header| header.kind)
+}
+
+/// Decodes `T` from a JSON object only.
+///
+/// A derived struct `Deserialize` also accepts a JSON array and fills the
+/// fields by position, so `"data": [99]` or `["1", "ping", 1]` would read as
+/// command data (or reach the unknown-command fallback). Discord's `data` is
+/// always an object; anything else is an error.
+fn object<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    struct ObjectVisitor<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+        type Value = T;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(ObjectVisitor(PhantomData))
 }
 
 /// The command types with their own [`Interaction`] variant.
@@ -802,6 +832,33 @@ mod tests {
             r#"{{{CONTEXT},"type":2,"data":{{"type":"1","name":"x"}}}}"#
         ))
         .is_err());
+    }
+
+    #[test]
+    fn data_that_is_not_an_object_is_an_error() {
+        // A derived struct decoder would read these arrays by position; a
+        // malformed command must not become a typed or an unknown command.
+        for (kind, data) in [
+            (2, "[99]"),
+            (2, r#"["1","ping",1,[],null,null,null]"#),
+            (4, r#"["1","ping",1,[],null,null,null]"#),
+            (3, r#"["click",2,null,[],null]"#),
+            (2, r#""text""#),
+        ] {
+            for payload in [
+                format!(r#"{{{CONTEXT},"type":{kind},"data":{data}}}"#),
+                format!(r#"{{"data":{data},{CONTEXT},"type":{kind}}}"#),
+            ] {
+                let error = decode_interaction(&payload)
+                    .map(|interaction| format!("decoded as {interaction:?}"))
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    error.contains("invalid interaction.data"),
+                    "{payload}: {error}"
+                );
+            }
+        }
     }
 
     #[test]
