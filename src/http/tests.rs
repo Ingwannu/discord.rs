@@ -2234,8 +2234,13 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
         900
     );
     assert_eq!(
-        audit_log.audit_log_entries[0].options.as_ref().unwrap()["status"],
-        json!("live")
+        audit_log.audit_log_entries[0]
+            .options
+            .as_ref()
+            .unwrap()
+            .status
+            .as_deref(),
+        Some("live")
     );
     assert_eq!(audit_log.users[0].username, "moderator");
     assert_eq!(

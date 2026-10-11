@@ -55,7 +55,10 @@ pub use application_identity::{
     PrimaryProfileData, ProfileMedia, UpdateApplicationIdentityProfile, MAX_PROFILE_DATA_BYTES,
     MAX_PROFILE_DYNAMIC_FIELDS, MAX_PROFILE_STRING_CHARS, MAX_PROFILE_USERNAME_CHARS,
 };
-pub use audit_log::{AuditLog, AuditLogEntry, AuditLogQuery};
+pub use audit_log::{
+    AuditLog, AuditLogChange, AuditLogEntry, AuditLogEntryOptions, AuditLogPartialRole,
+    AuditLogQuery,
+};
 pub use channel::{
     AddGroupDmRecipient, Attachment, Channel, CreateDmChannel, CreateGroupDmChannel,
     CreateGuildChannel, DefaultReaction, EditChannelPermission, FollowedChannel, ForumTag,
