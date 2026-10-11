@@ -29,11 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - REST route coverage re-audited against discord-api-docs `3714862` (2026-10-09): 234 / 234 method + path routes mapped.
 - Minimum supported Rust version declared as 1.88 (`rust-version`, all features) and verified in CI by building and testing default and all features on that toolchain.
 - Weekly, report-only Discord API drift check (`ci/api_drift.py`, `api-drift` workflow): compares discord-api-docs REST routes and Gateway receive events with the crate in both directions and keeps a single `api-drift` issue up to date; it never fails CI. Helper-built routes are listed in `ci/api-drift-allowlist.toml` with a reason each, and every PR runs `--self-check` against the source.
+- `ReactionCollector` via `CollectorHub::reaction_collector(message_id)` / `reaction_collector_for_message(&Message)` with discord.js `ReactionCollector` parity: filter, `max_items` (counts every accepted add like discord.js `total`) / `max_emojis` / `max_users`, time and idle windows, stop handles, `dispose(true)` for REMOVE / REMOVE_ALL / REMOVE_EMOJI, and message/channel/thread/parent-channel/guild deletion end reasons. Results are a `ReactionCollection` keyed by `EmojiKey`, with normal and burst users tracked separately.
+- Slash-command validation covers mixed subcommand/option levels, required-before-optional order, unique (including localized) option names per level, choice type/autocomplete/value-length rules, min/max value and length ranges, locale keys and localized values, Discord's name character set and lowercase rule (rejecting only characters known to be invalid, so results do not depend on the compiler's Unicode version), and the 8,000-character per-command total using the longest localization of each field. Limits and the locale table are public in `discordrs::command::limits`.
+- Option and choice localizations (`CommandOptionBuilder::name_localization`, `description_localization`, `localized_choice`) and `channel_types` on `CHANNEL` options, with the matching model fields.
 
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
 - CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
 - The published crate excludes `ci/`, `.github/`, `discordrsdocs/`, and `docs/`.
+
+- `CollectorEndReason` is `#[non_exhaustive]` and gains `EmojiLimit`, `UserLimit`, `MessageDelete`, `ChannelDelete`, `ThreadDelete`, and `GuildDelete`. Collectors no longer yield an event, or restart the idle window, after their timeout or idle window expired; when several outcomes are ready the order is stop, timeout, idle, then events (a 2.2.0 bug).
+- `validate()` / `try_build()` on slash and entry-point command builders now reject names Discord rejects (punctuation, uppercase in any script, the ASCII apostrophe — use `ʼ` U+02BC) and unknown locale keys; `build()` still never validates.
 
 ### Deprecated
 - `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.
