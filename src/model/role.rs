@@ -60,6 +60,13 @@ pub struct ModifyGuildRolePosition {
     pub position: Option<Option<i64>>,
 }
 
+impl ModifyGuildRolePosition {
+    /// Entry for role `id` that changes nothing until `position` is set.
+    pub fn new(id: GenericId) -> Self {
+        Self { id, position: None }
+    }
+}
+
 /// Request body for creating a guild role.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct CreateGuildRole {

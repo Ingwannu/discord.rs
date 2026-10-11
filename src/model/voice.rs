@@ -113,6 +113,19 @@ pub struct CreateStageInstance {
     pub guild_scheduled_event_id: Option<GenericId>,
 }
 
+impl CreateStageInstance {
+    /// Starts a stage in `channel_id` with `topic`; optional fields unset.
+    pub fn new(channel_id: GenericId, topic: impl Into<String>) -> Self {
+        Self {
+            channel_id,
+            topic: topic.into(),
+            privacy_level: None,
+            send_start_notification: None,
+            guild_scheduled_event_id: None,
+        }
+    }
+}
+
 /// Request body for modifying a stage instance.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyStageInstance {

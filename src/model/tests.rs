@@ -1997,3 +1997,41 @@ fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
     assert_eq!(value["system_channel_id"], json!(2));
     assert_eq!(everyone.get(), 0);
 }
+
+#[test]
+fn required_id_request_bodies_have_constructors_instead_of_default() {
+    use super::{
+        CreateDmChannel, CreateStageInstance, CreateTestEntitlement, LobbyMember,
+        LobbyMemberUpdate, ModifyGuildChannelPosition, ModifyGuildRolePosition,
+    };
+
+    let id: GenericId = test_id(42);
+    assert_eq!(
+        serde_json::to_value(CreateDmChannel::new(id)).unwrap(),
+        json!({ "recipient_id": "42" })
+    );
+    assert_eq!(
+        serde_json::to_value(ModifyGuildChannelPosition::new(id)).unwrap(),
+        json!({ "id": "42" })
+    );
+    assert_eq!(
+        serde_json::to_value(ModifyGuildRolePosition::new(id)).unwrap(),
+        json!({ "id": "42" })
+    );
+    assert_eq!(
+        serde_json::to_value(CreateTestEntitlement::new(id, test_id(7), 2)).unwrap(),
+        json!({ "sku_id": "42", "owner_id": "7", "owner_type": 2 })
+    );
+    assert_eq!(
+        serde_json::to_value(CreateStageInstance::new(id, "town hall")).unwrap(),
+        json!({ "channel_id": "42", "topic": "town hall" })
+    );
+    assert_eq!(
+        serde_json::to_value(LobbyMember::new(id)).unwrap(),
+        json!({ "id": "42" })
+    );
+    assert_eq!(
+        serde_json::to_value(LobbyMemberUpdate::new(id)).unwrap(),
+        json!({ "id": "42" })
+    );
+}

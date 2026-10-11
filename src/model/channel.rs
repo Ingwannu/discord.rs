@@ -282,10 +282,29 @@ pub struct ModifyGuildChannelPosition {
     pub parent_id: Option<Option<GenericId>>,
 }
 
+impl ModifyGuildChannelPosition {
+    /// Entry for channel `id` that changes nothing until a field is set.
+    pub fn new(id: GenericId) -> Self {
+        Self {
+            id,
+            position: None,
+            lock_permissions: None,
+            parent_id: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `CreateDmChannel`.
 pub struct CreateDmChannel {
     pub recipient_id: GenericId,
+}
+
+impl CreateDmChannel {
+    /// Opens (or returns) the DM channel with `recipient_id`.
+    pub fn new(recipient_id: GenericId) -> Self {
+        Self { recipient_id }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]

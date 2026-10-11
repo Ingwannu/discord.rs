@@ -19,6 +19,17 @@ pub struct LobbyMember {
     pub flags: Option<u64>,
 }
 
+impl LobbyMember {
+    /// Member `id` with no metadata or flags.
+    pub fn new(id: GenericId) -> Self {
+        Self {
+            id,
+            metadata: None,
+            flags: None,
+        }
+    }
+}
+
 /// Lobby object used by Discord matchmaking APIs.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Lobby {
@@ -164,6 +175,18 @@ pub struct LobbyMemberUpdate {
     /// Removes this member instead of upserting when true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remove_member: Option<bool>,
+}
+
+impl LobbyMemberUpdate {
+    /// Update for member `id` that changes nothing until a field is set.
+    pub fn new(id: GenericId) -> Self {
+        Self {
+            id,
+            metadata: None,
+            flags: None,
+            remove_member: None,
+        }
+    }
 }
 
 /// Request body for linking or unlinking a channel from a lobby.

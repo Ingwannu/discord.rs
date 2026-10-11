@@ -65,6 +65,18 @@ pub struct CreateTestEntitlement {
     pub owner_type: u8,
 }
 
+impl CreateTestEntitlement {
+    /// Grants `sku_id` to `owner_id`; `owner_type` is `1` for a guild and
+    /// `2` for a user.
+    pub fn new(sku_id: GenericId, owner_id: GenericId, owner_type: u8) -> Self {
+        Self {
+            sku_id,
+            owner_id,
+            owner_type,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `EntitlementQuery`.
 pub struct EntitlementQuery {
