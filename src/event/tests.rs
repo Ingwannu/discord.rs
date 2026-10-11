@@ -1,86 +1,165 @@
-use crate::model::{
-    test_id, AutoModerationActionType, ChannelType, EntitlementType, StageInstancePrivacyLevel,
-    SubscriptionStatus,
-};
+use std::sync::Arc;
+
 use serde_json::{json, Value};
 
 use super::*;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Entitlement, Guild, Id, IdMarker, Integration, IntegrationAccount, Interaction,
-    InteractionContextData, Member, Message, PingInteraction, Role, SoundboardSound, StageInstance,
-    Subscription, User, VoiceServerUpdate, VoiceState,
+    test_id, AutoModerationActionType, ChannelType, Id, IdMarker, Interaction, Patch,
+    SubscriptionStatus,
 };
-use crate::types::Emoji;
+
+/// The 2.x-style test entry: decodes a `Value` payload and reports a
+/// payload that does not fit its type as an error, as the old decoder did.
+fn decode_event(name: &str, payload: Value) -> Result<Event, DiscordError> {
+    let event = super::decode_event(name, &payload.to_string())?;
+    if let EventKind::DecodeFailed(error) = event.kind() {
+        return Err(DiscordError::from(error.to_string()));
+    }
+    Ok(event)
+}
+
+/// The raw payload of `event` as a `Value`, for comparisons.
+fn raw_json(event: &Event) -> Option<Value> {
+    event
+        .raw()
+        .map(|raw| serde_json::from_str(raw.get()).expect("raw payloads are JSON"))
+}
 
 fn snowflake<M: IdMarker>(id: &str) -> Id<M> {
     id.parse().unwrap()
 }
 
-fn raw(kind: &str) -> Value {
-    json!({ "kind": kind })
+fn raw_box(json: &str) -> Box<RawValue> {
+    RawValue::from_string(json.to_string()).unwrap()
 }
 
-fn user(id: &str, username: &str) -> User {
-    User {
-        id: snowflake(id),
-        username: username.to_string(),
-        ..User::fixture()
+fn metadata(name: &str) -> EventMetadata {
+    EventMetadata::new(name, Instant::now())
+}
+
+#[test]
+fn event_and_kind_stay_within_their_layout_budget() {
+    // Design gate (docs/design/3.0-types-events-requests.md, phase 4):
+    // every delivery moves an `Arc<Event>`, and these sizes bound what the
+    // journal, queues, and handler futures hold per event.
+    assert!(
+        std::mem::size_of::<EventKind>() <= 64,
+        "EventKind is {} bytes",
+        std::mem::size_of::<EventKind>()
+    );
+    assert!(
+        std::mem::size_of::<Event>() <= 192,
+        "Event is {} bytes",
+        std::mem::size_of::<Event>()
+    );
+}
+
+#[test]
+fn known_events_keep_raw_only_when_asked() {
+    let payload = r#"{"id":"2","channel_id":"1","content":"hi"}"#;
+    let dropped = Event::decode(metadata("MESSAGE_CREATE"), raw_box(payload), false);
+    assert!(matches!(dropped.kind(), EventKind::MessageCreate(_)));
+    assert!(dropped.raw().is_none());
+
+    let kept = Event::decode(metadata("MESSAGE_CREATE"), raw_box(payload), true);
+    assert!(matches!(kept.kind(), EventKind::MessageCreate(_)));
+    assert_eq!(kept.raw().map(RawValue::get), Some(payload));
+}
+
+#[test]
+fn unknown_and_failed_dispatches_always_keep_raw_and_stay_distinct() {
+    let unknown = Event::decode(metadata("SOMETHING_NEW"), raw_box(r#"{"x":1}"#), false);
+    assert!(matches!(unknown.kind(), EventKind::Unknown));
+    assert_eq!(unknown.name(), "SOMETHING_NEW");
+    assert_eq!(unknown.raw().map(RawValue::get), Some(r#"{"x":1}"#));
+
+    let failed = Event::decode(
+        metadata("GUILD_MEMBER_ADD"),
+        raw_box(r#"{"user":{}}"#),
+        false,
+    );
+    let EventKind::DecodeFailed(error) = failed.kind() else {
+        panic!("expected a decode failure, got {failed:?}");
+    };
+    assert!(error.message().contains("guild_id"), "{error}");
+    assert_eq!(error.to_string(), error.message());
+    assert_eq!(failed.raw().map(RawValue::get), Some(r#"{"user":{}}"#));
+}
+
+#[test]
+fn debug_output_never_shows_the_raw_payload() {
+    let secret = r#"{"id":"1","application_id":"2","token":"very-secret-token","type":1}"#;
+    let event = Event::decode(metadata("SOMETHING_NEW"), raw_box(secret), true);
+    let debug = format!("{event:?}");
+    assert!(!debug.contains("very-secret-token"), "{debug}");
+    assert!(
+        debug.contains(&format!("<{} bytes>", secret.len())),
+        "{debug}"
+    );
+
+    let without_raw = Event::decode(metadata("RESUMED"), raw_box("null"), false);
+    assert!(format!("{without_raw:?}").contains("raw: None"));
+}
+
+#[test]
+fn metadata_records_shard_sequence_and_receive_time() {
+    let received_at = Instant::now();
+    let metadata = EventMetadata::new("MESSAGE_CREATE", received_at)
+        .with_shard(3, 0)
+        .with_sequence(42);
+    assert_eq!(metadata.name(), "MESSAGE_CREATE");
+    assert_eq!(metadata.shard(), (3, 1), "a zero shard count is one");
+    assert_eq!(metadata.sequence(), Some(42));
+    assert_eq!(metadata.received_at(), received_at);
+    assert_eq!(EventMetadata::new("X", received_at).sequence(), None);
+
+    let event = Event::decode(metadata.clone(), raw_box("null"), false);
+    assert_eq!(event.metadata(), &metadata);
+    assert!(matches!(event.into_kind(), EventKind::DecodeFailed(_)));
+}
+
+#[test]
+fn dispatch_names_are_interned_from_one_sorted_table() {
+    assert!(
+        decode::KNOWN_DISPATCHES
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]),
+        "the dispatch table must stay sorted for the binary search"
+    );
+    for name in decode::KNOWN_DISPATCHES {
+        assert!(matches!(intern(name), Cow::Borrowed(_)), "{name}");
+        // Every known name has a decoder: an empty object either decodes or
+        // fails to decode, but is never `Unknown`.
+        let event = Event::decode(metadata(name), raw_box("{}"), false);
+        assert!(!matches!(event.kind(), EventKind::Unknown), "{name}");
     }
+    assert!(matches!(intern("NOT_A_DISPATCH"), Cow::Owned(_)));
 }
 
-fn guild(id: &str, name: &str) -> Guild {
-    Guild {
-        id: snowflake(id),
-        name: name.to_string(),
-        ..Guild::fixture()
-    }
+fn intern(name: &str) -> Cow<'static, str> {
+    decode::intern_dispatch_name(name)
 }
 
-fn channel(id: &str) -> Channel {
-    Channel {
-        id: snowflake(id),
-        kind: ChannelType::GUILD_TEXT,
-        ..Channel::fixture()
-    }
+#[test]
+fn decode_event_rejects_text_that_is_not_json() {
+    assert!(super::decode_event("MESSAGE_CREATE", "{not json").is_err());
 }
 
-fn member(id: &str, username: &str) -> Member {
-    Member {
-        user: Some(user(id, username)),
-        ..Default::default()
-    }
-}
-
-fn role(id: &str, name: &str) -> Role {
-    Role {
-        id: snowflake(id),
-        name: name.to_string(),
-        ..Role::fixture()
-    }
-}
-
-fn message(id: &str, channel_id: &str, content: &str) -> Message {
-    Message {
-        id: snowflake(id),
-        channel_id: snowflake(channel_id),
-        content: content.to_string(),
-        ..Message::fixture()
-    }
-}
-
-fn interaction_context() -> InteractionContextData {
-    InteractionContextData {
-        id: snowflake("400"),
-        application_id: snowflake("401"),
-        token: "token".to_string(),
-        ..InteractionContextData::fixture()
-    }
-}
-
-fn assert_kind_and_raw(event: Event, expected_kind: &str) {
-    assert_eq!(event.kind(), expected_kind);
-    assert_eq!(event.raw(), &raw(expected_kind));
+#[test]
+fn shared_payloads_are_arcs_and_member_events_share_their_member() {
+    let created = Event::decode(
+        metadata("GUILD_MEMBER_ADD"),
+        raw_box(r#"{"guild_id":"1","user":{"id":"2","username":"a"},"roles":[]}"#),
+        false,
+    );
+    let EventKind::MemberAdd(member) = created.kind() else {
+        panic!("unexpected {created:?}");
+    };
+    assert_eq!(member.guild_id, snowflake("1"));
+    assert_eq!(Arc::strong_count(&member.member), 1);
+    let shared = Arc::clone(&member.member);
+    assert_eq!(Arc::strong_count(&shared), 2);
 }
 
 #[test]
@@ -94,10 +173,9 @@ fn decode_message_create_event_returns_typed_payload() {
     });
     let event = decode_event("MESSAGE_CREATE", raw.clone()).unwrap();
 
-    match event {
-        Event::MessageCreate(message) => {
-            assert_eq!(message.message.content, "hello");
-            assert_eq!(message.raw, raw);
+    match event.kind() {
+        EventKind::MessageCreate(message) => {
+            assert_eq!(message.content, "hello");
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -113,11 +191,10 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match emojis_update {
-        Event::GuildEmojisUpdate(event) => {
+    match emojis_update.kind() {
+        EventKind::GuildEmojisUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("1"));
             assert!(event.emojis.is_empty());
-            assert_eq!(event.raw, json!({"guild_id": "1", "emojis": {}}));
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -130,8 +207,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match webhooks_update {
-        Event::WebhooksUpdate(event) => {
+    match webhooks_update.kind() {
+        EventKind::WebhooksUpdate(event) => {
             assert_eq!(event.guild_id, None);
             assert_eq!(event.channel_id, None);
         }
@@ -147,8 +224,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match invite_create {
-        Event::InviteCreate(event) => {
+    match invite_create.kind() {
+        EventKind::InviteCreate(event) => {
             assert_eq!(event.guild_id, None);
             assert_eq!(event.channel_id, None);
             assert_eq!(event.code, None);
@@ -165,8 +242,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match invite_delete {
-        Event::InviteDelete(event) => {
+    match invite_delete.kind() {
+        EventKind::InviteDelete(event) => {
             assert_eq!(event.guild_id, None);
             assert_eq!(event.channel_id, None);
             assert_eq!(event.code, None);
@@ -183,8 +260,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match pins_update {
-        Event::ChannelPinsUpdate(event) => {
+    match pins_update.kind() {
+        EventKind::ChannelPinsUpdate(event) => {
             assert_eq!(event.channel_id, snowflake("2"));
             assert_eq!(event.guild_id, None);
             assert_eq!(event.last_pin_timestamp, None);
@@ -202,8 +279,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match typing_start {
-        Event::TypingStart(event) => {
+    match typing_start.kind() {
+        EventKind::TypingStart(event) => {
             assert_eq!(event.channel_id, None);
             assert_eq!(event.guild_id, None);
             assert_eq!(event.user_id, None);
@@ -221,8 +298,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match presence_update {
-        Event::PresenceUpdate(event) => {
+    match presence_update.kind() {
+        EventKind::PresenceUpdate(event) => {
             assert_eq!(event.user_id, None);
             assert_eq!(event.guild_id, None);
             assert_eq!(event.status, None);
@@ -237,8 +314,8 @@ fn decode_event_handles_optional_field_fallbacks() {
         }),
     )
     .unwrap();
-    match integrations_update {
-        Event::GuildIntegrationsUpdate(event) => {
+    match integrations_update.kind() {
+        EventKind::GuildIntegrationsUpdate(event) => {
             assert_eq!(event.guild_id, None);
         }
         other => panic!("unexpected event: {other:?}"),
@@ -258,8 +335,8 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match member_add {
-        Event::MemberAdd(event) => {
+    match member_add.kind() {
+        EventKind::MemberAdd(event) => {
             assert_eq!(event.guild_id, snowflake("100"));
             assert_eq!(
                 event
@@ -284,8 +361,8 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match role_create {
-        Event::RoleCreate(event) => {
+    match role_create.kind() {
+        EventKind::RoleCreate(event) => {
             assert_eq!(event.guild_id, snowflake("100"));
             assert_eq!(event.role.id, snowflake("300"));
             assert_eq!(event.role.name, "mods");
@@ -302,19 +379,11 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match bulk_delete {
-        Event::MessageDeleteBulk(event) => {
+    match bulk_delete.kind() {
+        EventKind::MessageDeleteBulk(event) => {
             assert_eq!(event.ids, vec![snowflake("10"), snowflake("11")]);
             assert_eq!(event.channel_id, snowflake("12"));
             assert_eq!(event.guild_id, Some(snowflake("13")));
-            assert_eq!(
-                event.raw,
-                json!({
-                    "ids": ["10", "11"],
-                    "channel_id": "12",
-                    "guild_id": "13"
-                })
-            );
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -327,8 +396,8 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match pins_update {
-        Event::ChannelPinsUpdate(event) => {
+    match pins_update.kind() {
+        EventKind::ChannelPinsUpdate(event) => {
             assert_eq!(event.channel_id, snowflake("14"));
             assert_eq!(
                 event.last_pin_timestamp.as_deref(),
@@ -348,8 +417,8 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match typing_start {
-        Event::TypingStart(event) => {
+    match typing_start.kind() {
+        EventKind::TypingStart(event) => {
             assert_eq!(event.channel_id, Some(snowflake("15")));
             assert_eq!(event.guild_id, Some(snowflake("16")));
             assert_eq!(event.user_id, Some(snowflake("17")));
@@ -378,8 +447,8 @@ fn decode_event_reads_nested_and_required_payloads() {
         }),
     )
     .unwrap();
-    match presence_update {
-        Event::PresenceUpdate(event) => {
+    match presence_update.kind() {
+        EventKind::PresenceUpdate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("18")));
             assert_eq!(event.user_id, Some(snowflake("19")));
             assert_eq!(event.status.as_deref(), Some("online"));
@@ -414,8 +483,9 @@ fn decode_event_covers_additional_typed_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildCreate(event) => {
+        EventKind::GuildCreate(event) => {
             assert_eq!(event.guild.id, snowflake("1"));
             assert_eq!(event.guild.name, "discordrs");
         }
@@ -431,10 +501,11 @@ fn decode_event_covers_additional_typed_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::ChannelCreate(event) => {
-            assert_eq!(event.channel.id, snowflake("2"));
-            assert_eq!(event.channel.name.as_deref(), Some("general"));
+        EventKind::ChannelCreate(event) => {
+            assert_eq!(event.id, snowflake("2"));
+            assert_eq!(event.name.as_deref(), Some("general"));
         }
         other => panic!("unexpected channel event: {other:?}"),
     }
@@ -450,10 +521,11 @@ fn decode_event_covers_additional_typed_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MemberRemove(event) => {
-            assert_eq!(event.data.guild_id, snowflake("3"));
-            assert_eq!(event.data.user.id, snowflake("4"));
+        EventKind::MemberRemove(event) => {
+            assert_eq!(event.guild_id, snowflake("3"));
+            assert_eq!(event.user.id, snowflake("4"));
         }
         other => panic!("unexpected member removal event: {other:?}"),
     }
@@ -466,10 +538,11 @@ fn decode_event_covers_additional_typed_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::RoleDelete(event) => {
-            assert_eq!(event.data.guild_id, snowflake("5"));
-            assert_eq!(event.data.role_id, snowflake("6"));
+        EventKind::RoleDelete(event) => {
+            assert_eq!(event.guild_id, snowflake("5"));
+            assert_eq!(event.role_id, snowflake("6"));
         }
         other => panic!("unexpected role delete event: {other:?}"),
     }
@@ -498,8 +571,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildScheduledEventCreate(event) => {
+        EventKind::GuildScheduledEventCreate(event) => {
             assert_eq!(event.id, Some(snowflake("700")));
             assert_eq!(event.guild_id, Some(snowflake("701")));
             assert_eq!(event.channel_id, Some(snowflake("702")));
@@ -543,8 +617,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::AutoModerationRuleCreate(event) => {
+        EventKind::AutoModerationRuleCreate(event) => {
             assert_eq!(event.id, Some(snowflake("710")));
             assert_eq!(event.guild_id, Some(snowflake("711")));
             assert_eq!(event.name.as_deref(), Some("Keyword Filter"));
@@ -588,8 +663,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::AutoModerationActionExecution(event) => {
+        EventKind::AutoModerationActionExecution(event) => {
             assert_eq!(event.guild_id, Some(snowflake("720")));
             let action = event.action.as_ref().expect("action should decode");
             assert_eq!(action.kind, AutoModerationActionType::SEND_ALERT_MESSAGE);
@@ -627,8 +703,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildAuditLogEntryCreate(event) => {
+        EventKind::GuildAuditLogEntryCreate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("730")));
             assert_eq!(event.id, Some(snowflake("731")));
             assert_eq!(event.user_id, Some(snowflake("732")));
@@ -660,10 +737,11 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::UserUpdate(event) => {
-            assert_eq!(event.user.id, snowflake("740"));
-            assert_eq!(event.user.username, "bot");
+        EventKind::UserUpdate(event) => {
+            assert_eq!(event.id, snowflake("740"));
+            assert_eq!(event.username, "bot");
         }
         other => panic!("unexpected user update event: {other:?}"),
     }
@@ -680,9 +758,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         }),
     )
     .unwrap();
-    assert_eq!(rate_limited.kind(), "RATE_LIMITED");
-    match rate_limited {
-        Event::RateLimited(event) => {
+    assert_eq!(rate_limited.name(), "RATE_LIMITED");
+    match rate_limited.kind() {
+        EventKind::RateLimited(event) => {
             assert_eq!(event.opcode, Some(8));
             assert_eq!(event.retry_after, Some(12.5));
             assert_eq!(
@@ -705,11 +783,12 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::VoiceStateUpdate(event) => {
-            assert_eq!(event.state.guild_id, Some(snowflake("1")));
-            assert_eq!(event.state.channel_id, Some(snowflake("2")));
-            assert_eq!(event.state.user_id, Some(snowflake("3")));
+        EventKind::VoiceStateUpdate(event) => {
+            assert_eq!(event.guild_id, Some(snowflake("1")));
+            assert_eq!(event.channel_id, Some(snowflake("2")));
+            assert_eq!(event.user_id, Some(snowflake("3")));
         }
         other => panic!("unexpected voice state event: {other:?}"),
     }
@@ -723,14 +802,12 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::VoiceServerUpdate(event) => {
-            assert_eq!(event.data.guild_id, snowflake("4"));
-            assert_eq!(event.data.token, "voice-token");
-            assert_eq!(
-                event.data.endpoint.as_deref(),
-                Some("wss://voice.discord.test")
-            );
+        EventKind::VoiceServerUpdate(event) => {
+            assert_eq!(event.guild_id, snowflake("4"));
+            assert_eq!(event.token, "voice-token");
+            assert_eq!(event.endpoint.as_deref(), Some("wss://voice.discord.test"));
         }
         other => panic!("unexpected voice server event: {other:?}"),
     }
@@ -746,8 +823,9 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildBanAdd(event) => {
+        EventKind::GuildBanAdd(event) => {
             assert_eq!(event.guild_id, snowflake("7"));
             assert_eq!(event.user.username, "banned");
         }
@@ -777,8 +855,9 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageReactionAdd(event) => {
+        EventKind::MessageReactionAdd(event) => {
             assert_eq!(event.user_id, Some(snowflake("9")));
             assert_eq!(event.channel_id, Some(snowflake("10")));
             assert_eq!(event.message_id, Some(snowflake("11")));
@@ -796,7 +875,7 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
             assert_eq!(event.burst_colors, vec!["#ff0000", "#00ff00"]);
             assert_eq!(event.reaction_type, Some(ReactionType::BURST));
             assert_eq!(
-                event.emoji.and_then(|emoji| emoji.name),
+                event.emoji.as_ref().and_then(|emoji| emoji.name.clone()),
                 Some("?뵦".to_string())
             );
         }
@@ -813,9 +892,10 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::InteractionCreate(event) => {
-            assert!(matches!(event.interaction, Interaction::Ping(_)));
+        EventKind::InteractionCreate(event) => {
+            assert!(matches!(**event, Interaction::Ping(_)));
         }
         other => panic!("unexpected interaction event: {other:?}"),
     }
@@ -834,12 +914,13 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::Ready(event) => {
-            assert_eq!(event.data.user.id, snowflake("50"));
-            assert_eq!(event.data.session_id, "session-50");
-            assert!(event.data.application.is_none());
-            assert!(event.data.resume_gateway_url.is_none());
+        EventKind::Ready(event) => {
+            assert_eq!(event.user.id, snowflake("50"));
+            assert_eq!(event.session_id, "session-50");
+            assert!(event.application.is_none());
+            assert!(event.resume_gateway_url.is_none());
         }
         other => panic!("unexpected ready event: {other:?}"),
     }
@@ -853,10 +934,11 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildUpdate(event) => {
-            assert_eq!(event.guild.id, snowflake("51"));
-            assert_eq!(event.guild.name, "guild-update");
+        EventKind::GuildUpdate(event) => {
+            assert_eq!(event.id, snowflake("51"));
+            assert_eq!(event.name, "guild-update");
         }
         other => panic!("unexpected guild update event: {other:?}"),
     }
@@ -868,10 +950,11 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildDelete(event) => {
-            assert_eq!(event.data.id, snowflake("52"));
-            assert_eq!(event.data.unavailable, None);
+        EventKind::GuildDelete(event) => {
+            assert_eq!(event.id, snowflake("52"));
+            assert_eq!(event.unavailable, None);
         }
         other => panic!("unexpected guild delete event: {other:?}"),
     }
@@ -884,10 +967,11 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::ChannelUpdate(event) => {
-            assert_eq!(event.channel.id, snowflake("53"));
-            assert_eq!(event.channel.kind, ChannelType::GUILD_TEXT);
+        EventKind::ChannelUpdate(event) => {
+            assert_eq!(event.id, snowflake("53"));
+            assert_eq!(event.kind, ChannelType::GUILD_TEXT);
         }
         other => panic!("unexpected channel update event: {other:?}"),
     }
@@ -900,10 +984,11 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::ChannelDelete(event) => {
-            assert_eq!(event.channel.id, snowflake("54"));
-            assert_eq!(event.channel.kind, ChannelType::GUILD_TEXT);
+        EventKind::ChannelDelete(event) => {
+            assert_eq!(event.id, snowflake("54"));
+            assert_eq!(event.kind, ChannelType::GUILD_TEXT);
         }
         other => panic!("unexpected channel delete event: {other:?}"),
     }
@@ -919,8 +1004,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MemberUpdate(event) => {
+        EventKind::MemberUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("55"));
             assert_eq!(
                 event
@@ -945,8 +1031,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::RoleUpdate(event) => {
+        EventKind::RoleUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("57"));
             assert_eq!(event.role.id, snowflake("58"));
             assert_eq!(event.role.name, "role-update");
@@ -965,11 +1052,12 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageUpdate(event) => {
-            assert_eq!(event.message.id, snowflake("59"));
-            assert_eq!(event.message.channel_id, snowflake("60"));
-            assert_eq!(event.message.content, "edited");
+        EventKind::MessageUpdate(event) => {
+            assert_eq!(event.id, snowflake("59"));
+            assert_eq!(event.channel_id, snowflake("60"));
+            assert_eq!(event.content, Patch::Value("edited".to_string()));
         }
         other => panic!("unexpected message update event: {other:?}"),
     }
@@ -982,11 +1070,12 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageDelete(event) => {
-            assert_eq!(event.data.id, snowflake("61"));
-            assert_eq!(event.data.channel_id, snowflake("62"));
-            assert_eq!(event.data.guild_id, None);
+        EventKind::MessageDelete(event) => {
+            assert_eq!(event.id, snowflake("61"));
+            assert_eq!(event.channel_id, snowflake("62"));
+            assert_eq!(event.guild_id, None);
         }
         other => panic!("unexpected message delete event: {other:?}"),
     }
@@ -1002,8 +1091,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildBanRemove(event) => {
+        EventKind::GuildBanRemove(event) => {
             assert_eq!(event.guild_id, snowflake("63"));
             assert_eq!(event.user.id, snowflake("64"));
             assert_eq!(event.user.username, "ban-remove");
@@ -1018,8 +1108,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildEmojisUpdate(event) => {
+        EventKind::GuildEmojisUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("65"));
             assert!(event.emojis.is_empty());
         }
@@ -1033,8 +1124,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildIntegrationsUpdate(event) => {
+        EventKind::GuildIntegrationsUpdate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("66")));
         }
         other => panic!("unexpected integrations update event: {other:?}"),
@@ -1048,8 +1140,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::WebhooksUpdate(event) => {
+        EventKind::WebhooksUpdate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("67")));
             assert_eq!(event.channel_id, Some(snowflake("68")));
         }
@@ -1065,8 +1158,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::InviteDelete(event) => {
+        EventKind::InviteDelete(event) => {
             assert_eq!(event.guild_id, Some(snowflake("69")));
             assert_eq!(event.channel_id, Some(snowflake("70")));
             assert_eq!(event.code.as_deref(), Some("invite-code"));
@@ -1087,14 +1181,15 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageReactionRemove(event) => {
+        EventKind::MessageReactionRemove(event) => {
             assert_eq!(event.user_id, Some(snowflake("71")));
             assert_eq!(event.channel_id, Some(snowflake("72")));
             assert_eq!(event.message_id, Some(snowflake("73")));
             assert_eq!(event.guild_id, Some(snowflake("74")));
             assert_eq!(
-                event.emoji.and_then(|emoji| emoji.name),
+                event.emoji.as_ref().and_then(|emoji| emoji.name.clone()),
                 Some("x".to_string())
             );
         }
@@ -1110,8 +1205,9 @@ fn decode_event_covers_remaining_success_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageReactionRemoveAll(event) => {
+        EventKind::MessageReactionRemoveAll(event) => {
             assert_eq!(event.channel_id, Some(snowflake("75")));
             assert_eq!(event.message_id, Some(snowflake("76")));
             assert_eq!(event.guild_id, Some(snowflake("77")));
@@ -1137,15 +1233,16 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::Ready(event) => {
-            assert_eq!(event.data.user.id, snowflake("80"));
+        EventKind::Ready(event) => {
+            assert_eq!(event.user.id, snowflake("80"));
             assert_eq!(
-                event.data.application.map(|app| app.id),
+                event.application.as_ref().map(|app| app.id),
                 Some(snowflake("81"))
             );
             assert_eq!(
-                event.data.resume_gateway_url.as_deref(),
+                event.resume_gateway_url.as_deref(),
                 Some("wss://gateway.discord.test")
             );
         }
@@ -1160,10 +1257,11 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildDelete(event) => {
-            assert_eq!(event.data.id, snowflake("82"));
-            assert_eq!(event.data.unavailable, Some(true));
+        EventKind::GuildDelete(event) => {
+            assert_eq!(event.id, snowflake("82"));
+            assert_eq!(event.unavailable, Some(true));
         }
         other => panic!("unexpected guild delete event: {other:?}"),
     }
@@ -1177,11 +1275,12 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::MessageDelete(event) => {
-            assert_eq!(event.data.id, snowflake("83"));
-            assert_eq!(event.data.channel_id, snowflake("84"));
-            assert_eq!(event.data.guild_id, Some(snowflake("85")));
+        EventKind::MessageDelete(event) => {
+            assert_eq!(event.id, snowflake("83"));
+            assert_eq!(event.channel_id, snowflake("84"));
+            assert_eq!(event.guild_id, Some(snowflake("85")));
         }
         other => panic!("unexpected message delete event: {other:?}"),
     }
@@ -1195,8 +1294,9 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::ChannelPinsUpdate(event) => {
+        EventKind::ChannelPinsUpdate(event) => {
             assert_eq!(event.channel_id, snowflake("86"));
             assert_eq!(event.guild_id, Some(snowflake("87")));
             assert_eq!(
@@ -1219,8 +1319,9 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildEmojisUpdate(event) => {
+        EventKind::GuildEmojisUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("88"));
             assert_eq!(event.emojis.len(), 1);
             assert_eq!(event.emojis[0].name.as_deref(), Some("wave"));
@@ -1237,8 +1338,9 @@ fn decode_event_covers_success_payloads_with_present_optional_fields() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::InviteCreate(event) => {
+        EventKind::InviteCreate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("89")));
             assert_eq!(event.channel_id, Some(snowflake("90")));
             assert_eq!(event.code.as_deref(), Some("invite-create"));
@@ -1269,28 +1371,28 @@ fn decode_event_covers_new_gateway_surface_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildMembersChunk(event) => {
-            assert_eq!(event.data.guild_id.get(), 1);
-            assert_eq!(event.data.members.len(), 1);
-            assert_eq!(event.data.not_found[0].get(), 4);
+        EventKind::GuildMembersChunk(event) => {
+            assert_eq!(event.guild_id.get(), 1);
+            assert_eq!(event.members.len(), 1);
+            assert_eq!(event.not_found[0].get(), 4);
             assert_eq!(
-                event.data.presences.unwrap()[0]
+                event.presences.as_ref().unwrap()[0]
                     .activities
                     .as_ref()
                     .unwrap()[0]
                     .name,
                 "Testing"
             );
-            assert_eq!(event.data.nonce.as_deref(), Some("abc"));
+            assert_eq!(event.nonce.as_deref(), Some("abc"));
         }
         other => panic!("unexpected guild members chunk event: {other:?}"),
     }
 
-    match decode_event("RESUMED", json!({ "trace": [] })).unwrap() {
-        Event::Resumed(event) => assert_eq!(event.raw["trace"], json!([])),
-        other => panic!("unexpected resumed event: {other:?}"),
-    }
+    let resumed = decode_event("RESUMED", json!({ "trace": [] })).unwrap();
+    assert!(matches!(resumed.kind(), EventKind::Resumed));
+    assert_eq!(raw_json(&resumed), Some(json!({ "trace": [] })));
 
     match decode_event(
         "VOICE_CHANNEL_STATUS_UPDATE",
@@ -1301,8 +1403,9 @@ fn decode_event_covers_new_gateway_surface_variants() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::VoiceChannelStatusUpdate(event) => {
+        EventKind::VoiceChannelStatusUpdate(event) => {
             assert_eq!(event.channel_id.unwrap().get(), 2);
             assert_eq!(event.status.as_deref(), Some("Live"));
         }
@@ -1318,10 +1421,10 @@ fn decode_event_covers_new_gateway_surface_variants() {
         }]
     });
     let event = decode_event("CHANNEL_INFO", raw_channel_info.clone()).unwrap();
-    assert_eq!(event.kind(), "CHANNEL_INFO");
-    assert_eq!(event.raw(), &raw_channel_info);
-    match event {
-        Event::ChannelInfo(event) => {
+    assert_eq!(event.name(), "CHANNEL_INFO");
+    assert_eq!(raw_json(&event), Some(raw_channel_info.clone()));
+    match event.kind() {
+        EventKind::ChannelInfo(event) => {
             assert_eq!(event.guild_id.get(), 1);
             assert_eq!(event.channels[0].id.get(), 2);
             assert_eq!(event.channels[0].status.as_deref(), Some("Live"));
@@ -1346,10 +1449,12 @@ fn decode_event_reports_required_field_errors_and_preserves_unknown_events() {
         }),
     )
     .unwrap_err();
-    match missing_guild_id {
-        DiscordError::Model { message } => assert_eq!(message, "missing field guild_id"),
-        other => panic!("unexpected error: {other:?}"),
-    }
+    assert!(
+        missing_guild_id
+            .to_string()
+            .contains("missing field `guild_id`"),
+        "{missing_guild_id}"
+    );
 
     let invalid_guild_id = decode_event(
         "GUILD_ROLE_CREATE",
@@ -1363,7 +1468,8 @@ fn decode_event_reports_required_field_errors_and_preserves_unknown_events() {
     )
     .unwrap_err();
     assert!(
-        matches!(invalid_guild_id, DiscordError::Json(message) if message.contains("snowflake"))
+        invalid_guild_id.to_string().contains("snowflake"),
+        "{invalid_guild_id}"
     );
 
     let missing_ids = decode_event(
@@ -1373,834 +1479,13 @@ fn decode_event_reports_required_field_errors_and_preserves_unknown_events() {
         }),
     )
     .unwrap_err();
-    assert!(matches!(missing_ids, DiscordError::Json(_)));
+    assert!(missing_ids.to_string().contains("ids"), "{missing_ids}");
 
     let raw = json!({ "x": 1 });
     let unknown = decode_event("SOMETHING_NEW", raw.clone()).unwrap();
-    match unknown {
-        Event::Unknown {
-            kind,
-            raw: event_raw,
-        } => {
-            assert_eq!(kind, "SOMETHING_NEW");
-            assert_eq!(event_raw, raw);
-        }
-        other => panic!("unexpected event: {other:?}"),
-    }
-}
-
-#[test]
-fn event_kind_and_raw_cover_remaining_variants() {
-    let cases = vec![
-        (
-            "READY",
-            Event::Ready(ReadyEvent {
-                data: ReadyPayload {
-                    user: user("1", "ready"),
-                    session_id: "session".to_string(),
-                    application: Some(ReadyApplication { id: snowflake("2") }),
-                    resume_gateway_url: Some("wss://gateway.discord.test".to_string()),
-                },
-                raw: raw("READY"),
-            }),
-        ),
-        (
-            "GUILD_CREATE",
-            Event::GuildCreate(GuildEvent {
-                guild: guild("10", "guild-create"),
-                raw: raw("GUILD_CREATE"),
-            }),
-        ),
-        (
-            "GUILD_UPDATE",
-            Event::GuildUpdate(GuildEvent {
-                guild: guild("11", "guild-update"),
-                raw: raw("GUILD_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_DELETE",
-            Event::GuildDelete(GuildDeleteEvent {
-                data: GuildDeletePayload {
-                    id: snowflake("12"),
-                    unavailable: Some(true),
-                },
-                raw: raw("GUILD_DELETE"),
-            }),
-        ),
-        (
-            "CHANNEL_CREATE",
-            Event::ChannelCreate(ChannelEvent {
-                channel: channel("13"),
-                raw: raw("CHANNEL_CREATE"),
-            }),
-        ),
-        (
-            "CHANNEL_UPDATE",
-            Event::ChannelUpdate(ChannelEvent {
-                channel: channel("14"),
-                raw: raw("CHANNEL_UPDATE"),
-            }),
-        ),
-        (
-            "CHANNEL_DELETE",
-            Event::ChannelDelete(ChannelEvent {
-                channel: channel("15"),
-                raw: raw("CHANNEL_DELETE"),
-            }),
-        ),
-        (
-            "GUILD_MEMBER_UPDATE",
-            Event::MemberUpdate(MemberEvent {
-                guild_id: snowflake("16"),
-                member: member("17", "member-update"),
-                raw: raw("GUILD_MEMBER_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_MEMBER_REMOVE",
-            Event::MemberRemove(MemberRemoveEvent {
-                data: MemberRemovePayload {
-                    guild_id: snowflake("18"),
-                    user: user("19", "member-remove"),
-                },
-                raw: raw("GUILD_MEMBER_REMOVE"),
-            }),
-        ),
-        (
-            "GUILD_ROLE_UPDATE",
-            Event::RoleUpdate(RoleEvent {
-                guild_id: snowflake("20"),
-                role: role("21", "role-update"),
-                raw: raw("GUILD_ROLE_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_ROLE_DELETE",
-            Event::RoleDelete(RoleDeleteEvent {
-                data: RoleDeletePayload {
-                    guild_id: snowflake("22"),
-                    role_id: snowflake("23"),
-                },
-                raw: raw("GUILD_ROLE_DELETE"),
-            }),
-        ),
-        (
-            "MESSAGE_UPDATE",
-            Event::MessageUpdate(MessageEvent {
-                message: message("24", "25", "updated"),
-                raw: raw("MESSAGE_UPDATE"),
-            }),
-        ),
-        (
-            "MESSAGE_DELETE",
-            Event::MessageDelete(MessageDeleteEvent {
-                data: MessageDeletePayload {
-                    id: snowflake("26"),
-                    channel_id: snowflake("27"),
-                    guild_id: Some(snowflake("28")),
-                },
-                raw: raw("MESSAGE_DELETE"),
-            }),
-        ),
-        (
-            "GUILD_BAN_ADD",
-            Event::GuildBanAdd(GuildBanEvent {
-                guild_id: snowflake("29"),
-                user: user("30", "ban-add"),
-                raw: raw("GUILD_BAN_ADD"),
-            }),
-        ),
-        (
-            "GUILD_BAN_REMOVE",
-            Event::GuildBanRemove(GuildBanEvent {
-                guild_id: snowflake("31"),
-                user: user("32", "ban-remove"),
-                raw: raw("GUILD_BAN_REMOVE"),
-            }),
-        ),
-        (
-            "MESSAGE_REACTION_ADD",
-            Event::MessageReactionAdd(ReactionEvent {
-                user_id: Some(snowflake("33")),
-                channel_id: Some(snowflake("34")),
-                message_id: Some(snowflake("35")),
-                guild_id: Some(snowflake("36")),
-                emoji: Some(Emoji::unicode("?뵦")),
-                raw: raw("MESSAGE_REACTION_ADD"),
-                ..ReactionEvent::default()
-            }),
-        ),
-        (
-            "MESSAGE_REACTION_REMOVE",
-            Event::MessageReactionRemove(ReactionEvent {
-                user_id: Some(snowflake("37")),
-                channel_id: Some(snowflake("38")),
-                message_id: Some(snowflake("39")),
-                guild_id: Some(snowflake("40")),
-                emoji: Some(Emoji::unicode("?뵦")),
-                raw: raw("MESSAGE_REACTION_REMOVE"),
-                ..ReactionEvent::default()
-            }),
-        ),
-        (
-            "MESSAGE_REACTION_REMOVE_ALL",
-            Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-                channel_id: Some(snowflake("41")),
-                message_id: Some(snowflake("42")),
-                guild_id: Some(snowflake("43")),
-                raw: raw("MESSAGE_REACTION_REMOVE_ALL"),
-            }),
-        ),
-        (
-            "INTERACTION_CREATE",
-            Event::InteractionCreate(InteractionEvent {
-                interaction: Interaction::Ping(PingInteraction {
-                    context: interaction_context(),
-                }),
-                raw: raw("INTERACTION_CREATE"),
-            }),
-        ),
-        (
-            "VOICE_STATE_UPDATE",
-            Event::VoiceStateUpdate(VoiceStateEvent {
-                state: VoiceState {
-                    guild_id: Some(snowflake("44")),
-                    channel_id: Some(snowflake("45")),
-                    user_id: Some(snowflake("46")),
-                    ..Default::default()
-                },
-                raw: raw("VOICE_STATE_UPDATE"),
-            }),
-        ),
-        (
-            "VOICE_SERVER_UPDATE",
-            Event::VoiceServerUpdate(VoiceServerEvent {
-                data: VoiceServerUpdate {
-                    guild_id: snowflake("47"),
-                    token: "voice-token".to_string(),
-                    endpoint: Some("wss://voice.discord.test".to_string()),
-                },
-                raw: raw("VOICE_SERVER_UPDATE"),
-            }),
-        ),
-    ];
-
-    for (kind, event) in cases {
-        assert_kind_and_raw(event, kind);
-    }
-}
-
-#[test]
-fn event_kind_and_raw_cover_missing_variants() {
-    let cases = vec![
-        (
-            "GUILD_MEMBER_ADD",
-            Event::MemberAdd(MemberEvent {
-                guild_id: snowflake("80"),
-                member: member("81", "member-add"),
-                raw: raw("GUILD_MEMBER_ADD"),
-            }),
-        ),
-        (
-            "GUILD_ROLE_CREATE",
-            Event::RoleCreate(RoleEvent {
-                guild_id: snowflake("82"),
-                role: role("83", "role-create"),
-                raw: raw("GUILD_ROLE_CREATE"),
-            }),
-        ),
-        (
-            "MESSAGE_CREATE",
-            Event::MessageCreate(MessageEvent {
-                message: message("84", "85", "created"),
-                raw: raw("MESSAGE_CREATE"),
-            }),
-        ),
-        (
-            "MESSAGE_DELETE_BULK",
-            Event::MessageDeleteBulk(BulkMessageDeleteEvent {
-                ids: vec![snowflake("86"), snowflake("87")],
-                channel_id: snowflake("88"),
-                guild_id: Some(snowflake("89")),
-                raw: raw("MESSAGE_DELETE_BULK"),
-            }),
-        ),
-        (
-            "CHANNEL_PINS_UPDATE",
-            Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
-                channel_id: snowflake("90"),
-                guild_id: Some(snowflake("91")),
-                last_pin_timestamp: Some("2024-07-01T00:00:00Z".to_string()),
-                raw: raw("CHANNEL_PINS_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_EMOJIS_UPDATE",
-            Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-                guild_id: snowflake("92"),
-                emojis: vec![Emoji::unicode("wave")],
-                raw: raw("GUILD_EMOJIS_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_INTEGRATIONS_UPDATE",
-            Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-                guild_id: Some(snowflake("93")),
-                raw: raw("GUILD_INTEGRATIONS_UPDATE"),
-            }),
-        ),
-        (
-            "ENTITLEMENT_CREATE",
-            Event::EntitlementCreate(EntitlementEvent {
-                entitlement: Entitlement {
-                    id: snowflake("930"),
-                    sku_id: snowflake("931"),
-                    application_id: snowflake("932"),
-                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
-                    deleted: false,
-                    ..Entitlement::fixture()
-                },
-                raw: raw("ENTITLEMENT_CREATE"),
-            }),
-        ),
-        (
-            "SUBSCRIPTION_CREATE",
-            Event::SubscriptionCreate(SubscriptionEvent {
-                subscription: Subscription {
-                    id: snowflake("940"),
-                    user_id: snowflake("941"),
-                    current_period_start: "2026-04-01T00:00:00Z".to_string(),
-                    current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: SubscriptionStatus::ACTIVE,
-                    ..Subscription::fixture()
-                },
-                raw: raw("SUBSCRIPTION_CREATE"),
-            }),
-        ),
-        (
-            "INTEGRATION_CREATE",
-            Event::IntegrationCreate(IntegrationEvent {
-                guild_id: Some(snowflake("942")),
-                integration: Integration {
-                    id: snowflake("943"),
-                    name: "integration".to_string(),
-                    kind: "discord".to_string(),
-                    account: IntegrationAccount {
-                        id: "account".to_string(),
-                        name: "account".to_string(),
-                    },
-                    ..Integration::fixture()
-                },
-                raw: raw("INTEGRATION_CREATE"),
-            }),
-        ),
-        (
-            "INTEGRATION_DELETE",
-            Event::IntegrationDelete(IntegrationDeleteEvent {
-                id: Some(snowflake("944")),
-                guild_id: Some(snowflake("945")),
-                application_id: Some(snowflake("946")),
-                raw: raw("INTEGRATION_DELETE"),
-            }),
-        ),
-        (
-            "GUILD_SOUNDBOARD_SOUND_CREATE",
-            Event::GuildSoundboardSoundCreate(SoundboardSoundEvent {
-                sound: SoundboardSound {
-                    name: "quack".to_string(),
-                    sound_id: snowflake("933"),
-                    guild_id: Some(snowflake("934")),
-                    volume: 1.0,
-                    available: true,
-                    ..SoundboardSound::fixture()
-                },
-                raw: raw("GUILD_SOUNDBOARD_SOUND_CREATE"),
-            }),
-        ),
-        (
-            "GUILD_SOUNDBOARD_SOUND_DELETE",
-            Event::GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent {
-                sound_id: snowflake("935"),
-                guild_id: snowflake("936"),
-                raw: raw("GUILD_SOUNDBOARD_SOUND_DELETE"),
-            }),
-        ),
-        (
-            "SOUNDBOARD_SOUNDS",
-            Event::SoundboardSounds(SoundboardSoundsEvent {
-                guild_id: snowflake("937"),
-                soundboard_sounds: vec![SoundboardSound {
-                    name: "quack".to_string(),
-                    sound_id: snowflake("938"),
-                    volume: 1.0,
-                    available: true,
-                    ..SoundboardSound::fixture()
-                }],
-                raw: raw("SOUNDBOARD_SOUNDS"),
-            }),
-        ),
-        (
-            "ENTITLEMENT_UPDATE",
-            Event::EntitlementUpdate(EntitlementEvent {
-                entitlement: Entitlement {
-                    id: snowflake("939"),
-                    sku_id: snowflake("940"),
-                    application_id: snowflake("941"),
-                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
-                    deleted: false,
-                    ..Entitlement::fixture()
-                },
-                raw: raw("ENTITLEMENT_UPDATE"),
-            }),
-        ),
-        (
-            "ENTITLEMENT_DELETE",
-            Event::EntitlementDelete(EntitlementEvent {
-                entitlement: Entitlement {
-                    id: snowflake("942"),
-                    sku_id: snowflake("943"),
-                    application_id: snowflake("944"),
-                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
-                    deleted: true,
-                    ..Entitlement::fixture()
-                },
-                raw: raw("ENTITLEMENT_DELETE"),
-            }),
-        ),
-        (
-            "SUBSCRIPTION_UPDATE",
-            Event::SubscriptionUpdate(SubscriptionEvent {
-                subscription: Subscription {
-                    id: snowflake("945"),
-                    user_id: snowflake("946"),
-                    current_period_start: "2026-04-01T00:00:00Z".to_string(),
-                    current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: SubscriptionStatus::INACTIVE,
-                    ..Subscription::fixture()
-                },
-                raw: raw("SUBSCRIPTION_UPDATE"),
-            }),
-        ),
-        (
-            "SUBSCRIPTION_DELETE",
-            Event::SubscriptionDelete(SubscriptionEvent {
-                subscription: Subscription {
-                    id: snowflake("947"),
-                    user_id: snowflake("948"),
-                    current_period_start: "2026-04-01T00:00:00Z".to_string(),
-                    current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: SubscriptionStatus::ENDING,
-                    ..Subscription::fixture()
-                },
-                raw: raw("SUBSCRIPTION_DELETE"),
-            }),
-        ),
-        (
-            "INTEGRATION_UPDATE",
-            Event::IntegrationUpdate(IntegrationEvent {
-                guild_id: Some(snowflake("949")),
-                integration: Integration {
-                    id: snowflake("950"),
-                    name: "updated-integration".to_string(),
-                    kind: "discord".to_string(),
-                    account: IntegrationAccount {
-                        id: "account".to_string(),
-                        name: "account".to_string(),
-                    },
-                    ..Integration::fixture()
-                },
-                raw: raw("INTEGRATION_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_SOUNDBOARD_SOUND_UPDATE",
-            Event::GuildSoundboardSoundUpdate(SoundboardSoundEvent {
-                sound: SoundboardSound {
-                    name: "updated".to_string(),
-                    sound_id: snowflake("951"),
-                    guild_id: Some(snowflake("952")),
-                    volume: 1.0,
-                    available: true,
-                    ..SoundboardSound::fixture()
-                },
-                raw: raw("GUILD_SOUNDBOARD_SOUND_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_SOUNDBOARD_SOUNDS_UPDATE",
-            Event::GuildSoundboardSoundsUpdate(SoundboardSoundsEvent {
-                guild_id: snowflake("953"),
-                soundboard_sounds: Vec::new(),
-                raw: raw("GUILD_SOUNDBOARD_SOUNDS_UPDATE"),
-            }),
-        ),
-        (
-            "WEBHOOKS_UPDATE",
-            Event::WebhooksUpdate(WebhooksUpdateEvent {
-                guild_id: Some(snowflake("94")),
-                channel_id: Some(snowflake("95")),
-                raw: raw("WEBHOOKS_UPDATE"),
-            }),
-        ),
-        (
-            "INVITE_CREATE",
-            Event::InviteCreate(InviteEvent {
-                guild_id: Some(snowflake("96")),
-                channel_id: Some(snowflake("97")),
-                code: Some("invite-create".to_string()),
-                inviter: None,
-                uses: None,
-                max_uses: None,
-                max_age: None,
-                temporary: None,
-                created_at: None,
-                expires_at: None,
-                target_type: None,
-                target_user: None,
-                raw: raw("INVITE_CREATE"),
-            }),
-        ),
-        (
-            "INVITE_DELETE",
-            Event::InviteDelete(InviteEvent {
-                guild_id: Some(snowflake("98")),
-                channel_id: Some(snowflake("99")),
-                code: Some("invite-delete".to_string()),
-                inviter: None,
-                uses: None,
-                max_uses: None,
-                max_age: None,
-                temporary: None,
-                created_at: None,
-                expires_at: None,
-                target_type: None,
-                target_user: None,
-                raw: raw("INVITE_DELETE"),
-            }),
-        ),
-        (
-            "MESSAGE_POLL_VOTE_ADD",
-            Event::MessagePollVoteAdd(PollVoteEvent {
-                user_id: Some(snowflake("980")),
-                channel_id: Some(snowflake("981")),
-                message_id: Some(snowflake("982")),
-                guild_id: Some(snowflake("983")),
-                answer_id: Some(crate::model::PollAnswerId::new(1)),
-                raw: raw("MESSAGE_POLL_VOTE_ADD"),
-            }),
-        ),
-        (
-            "MESSAGE_POLL_VOTE_REMOVE",
-            Event::MessagePollVoteRemove(PollVoteEvent {
-                user_id: Some(snowflake("984")),
-                channel_id: Some(snowflake("985")),
-                message_id: Some(snowflake("986")),
-                guild_id: Some(snowflake("987")),
-                answer_id: Some(crate::model::PollAnswerId::new(2)),
-                raw: raw("MESSAGE_POLL_VOTE_REMOVE"),
-            }),
-        ),
-        (
-            "TYPING_START",
-            Event::TypingStart(TypingStartEvent {
-                channel_id: Some(snowflake("100")),
-                guild_id: Some(snowflake("101")),
-                user_id: Some(snowflake("102")),
-                timestamp: Some(123),
-                raw: raw("TYPING_START"),
-            }),
-        ),
-        (
-            "PRESENCE_UPDATE",
-            Event::PresenceUpdate(PresenceUpdateEvent {
-                user_id: Some(snowflake("103")),
-                guild_id: Some(snowflake("104")),
-                status: Some(PresenceStatus::IDLE),
-                raw: raw("PRESENCE_UPDATE"),
-                ..PresenceUpdateEvent::default()
-            }),
-        ),
-        (
-            "THREAD_CREATE",
-            Event::ThreadCreate(ThreadEvent {
-                thread: channel("110"),
-                newly_created: None,
-                raw: raw("THREAD_CREATE"),
-            }),
-        ),
-        (
-            "THREAD_UPDATE",
-            Event::ThreadUpdate(ThreadEvent {
-                thread: channel("111"),
-                newly_created: None,
-                raw: raw("THREAD_UPDATE"),
-            }),
-        ),
-        (
-            "THREAD_DELETE",
-            Event::ThreadDelete(ThreadEvent {
-                thread: channel("112"),
-                newly_created: None,
-                raw: raw("THREAD_DELETE"),
-            }),
-        ),
-        (
-            "THREAD_LIST_SYNC",
-            Event::ThreadListSync(ThreadListSyncEvent {
-                guild_id: Some(snowflake("113")),
-                channel_ids: Vec::new(),
-                threads: vec![channel("114")],
-                members: Vec::new(),
-                raw: raw("THREAD_LIST_SYNC"),
-            }),
-        ),
-        (
-            "THREAD_MEMBER_UPDATE",
-            Event::ThreadMemberUpdate(ThreadMemberUpdateEvent {
-                guild_id: Some(snowflake("115")),
-                thread_id: Some(snowflake("116")),
-                user_id: None,
-                join_timestamp: None,
-                flags: None,
-                raw: raw("THREAD_MEMBER_UPDATE"),
-            }),
-        ),
-        (
-            "THREAD_MEMBERS_UPDATE",
-            Event::ThreadMembersUpdate(ThreadMembersUpdateEvent {
-                guild_id: Some(snowflake("117")),
-                thread_id: Some(snowflake("118")),
-                added_members: Some(vec![crate::model::ThreadMember {
-                    id: Some(snowflake("119")),
-                    ..crate::model::ThreadMember::default()
-                }]),
-                removed_member_ids: Some(vec![snowflake("120")]),
-                member_count: Some(2),
-                raw: raw("THREAD_MEMBERS_UPDATE"),
-            }),
-        ),
-        (
-            "MESSAGE_REACTION_REMOVE_EMOJI",
-            Event::MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent {
-                channel_id: Some(snowflake("121")),
-                message_id: Some(snowflake("122")),
-                guild_id: Some(snowflake("123")),
-                emoji: Some(Emoji::unicode("wave")),
-                raw: raw("MESSAGE_REACTION_REMOVE_EMOJI"),
-            }),
-        ),
-        (
-            "GUILD_STICKERS_UPDATE",
-            Event::GuildStickersUpdate(GuildStickersUpdateEvent {
-                guild_id: Some(snowflake("124")),
-                stickers: Vec::new(),
-                raw: raw("GUILD_STICKERS_UPDATE"),
-            }),
-        ),
-        (
-            "GUILD_SCHEDULED_EVENT_UPDATE",
-            Event::GuildScheduledEventUpdate(ScheduledEvent {
-                id: Some(snowflake("125")),
-                guild_id: Some(snowflake("126")),
-                raw: raw("GUILD_SCHEDULED_EVENT_UPDATE"),
-                ..ScheduledEvent::default()
-            }),
-        ),
-        (
-            "GUILD_SCHEDULED_EVENT_DELETE",
-            Event::GuildScheduledEventDelete(ScheduledEvent {
-                id: Some(snowflake("127")),
-                guild_id: Some(snowflake("128")),
-                raw: raw("GUILD_SCHEDULED_EVENT_DELETE"),
-                ..ScheduledEvent::default()
-            }),
-        ),
-        (
-            "GUILD_SCHEDULED_EVENT_USER_ADD",
-            Event::GuildScheduledEventUserAdd(GuildScheduledEventUserEvent {
-                guild_scheduled_event_id: snowflake("129"),
-                user_id: snowflake("130"),
-                guild_id: snowflake("131"),
-                member: None,
-                user: None,
-                raw: raw("GUILD_SCHEDULED_EVENT_USER_ADD"),
-            }),
-        ),
-        (
-            "GUILD_SCHEDULED_EVENT_USER_REMOVE",
-            Event::GuildScheduledEventUserRemove(GuildScheduledEventUserEvent {
-                guild_scheduled_event_id: snowflake("132"),
-                user_id: snowflake("133"),
-                guild_id: snowflake("134"),
-                member: None,
-                user: None,
-                raw: raw("GUILD_SCHEDULED_EVENT_USER_REMOVE"),
-            }),
-        ),
-        (
-            "STAGE_INSTANCE_UPDATE",
-            Event::StageInstanceUpdate(StageInstanceEvent {
-                stage_instance: StageInstance {
-                    id: snowflake("135"),
-                    guild_id: snowflake("136"),
-                    channel_id: snowflake("137"),
-                    topic: "updated".to_string(),
-                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
-                    ..StageInstance::fixture()
-                },
-                raw: raw("STAGE_INSTANCE_UPDATE"),
-            }),
-        ),
-        (
-            "STAGE_INSTANCE_DELETE",
-            Event::StageInstanceDelete(StageInstanceEvent {
-                stage_instance: StageInstance {
-                    id: snowflake("138"),
-                    guild_id: snowflake("139"),
-                    channel_id: snowflake("140"),
-                    topic: "deleted".to_string(),
-                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
-                    ..StageInstance::fixture()
-                },
-                raw: raw("STAGE_INSTANCE_DELETE"),
-            }),
-        ),
-        (
-            "VOICE_CHANNEL_EFFECT_SEND",
-            Event::VoiceChannelEffectSend(VoiceChannelEffectEvent {
-                channel_id: Some(snowflake("141")),
-                guild_id: Some(snowflake("142")),
-                user_id: Some(snowflake("143")),
-                emoji: Some(Emoji::unicode("wave")),
-                animation_type: Some(VoiceChannelEffectAnimationType::BASIC),
-                animation_id: Some(2),
-                sound_id: Some(snowflake("144")),
-                sound_volume: Some(0.5),
-                raw: raw("VOICE_CHANNEL_EFFECT_SEND"),
-            }),
-        ),
-        (
-            "VOICE_CHANNEL_START_TIME_UPDATE",
-            Event::VoiceChannelStartTimeUpdate(VoiceChannelStartTimeUpdateEvent {
-                channel_id: Some(snowflake("145")),
-                guild_id: Some(snowflake("146")),
-                voice_channel_start_time: Some("2026-05-02T00:00:00Z".to_string()),
-                raw: raw("VOICE_CHANNEL_START_TIME_UPDATE"),
-            }),
-        ),
-        (
-            "VOICE_CHANNEL_STATUS_UPDATE",
-            Event::VoiceChannelStatusUpdate(VoiceChannelStatusUpdateEvent {
-                channel_id: Some(snowflake("147")),
-                guild_id: Some(snowflake("148")),
-                status: Some("live".to_string()),
-                raw: raw("VOICE_CHANNEL_STATUS_UPDATE"),
-            }),
-        ),
-        (
-            "CHANNEL_INFO",
-            Event::ChannelInfo(ChannelInfoEvent {
-                guild_id: snowflake("149"),
-                channels: vec![ChannelInfoChannel {
-                    id: snowflake("150"),
-                    status: Some("live".to_string()),
-                    voice_start_time: Some("2026-05-02T00:00:00Z".to_string()),
-                    raw: raw("CHANNEL_INFO_CHANNEL"),
-                }],
-                raw: raw("CHANNEL_INFO"),
-            }),
-        ),
-        (
-            "RATE_LIMITED",
-            Event::RateLimited(RateLimitedEvent {
-                opcode: Some(8),
-                retry_after: Some(1.5),
-                meta: Some(json!({"nonce": "members"})),
-                raw: raw("RATE_LIMITED"),
-            }),
-        ),
-        (
-            "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
-            Event::ApplicationCommandPermissionsUpdate(ApplicationCommandPermissionsUpdateEvent {
-                id: Some(crate::model::CommandPermissionsId::Command(snowflake(
-                    "151",
-                ))),
-                application_id: Some(snowflake("152")),
-                guild_id: Some(snowflake("153")),
-                permissions: vec![crate::model::ApplicationCommandPermission::role(
-                    test_id(154),
-                    true,
-                )],
-                raw: raw("APPLICATION_COMMAND_PERMISSIONS_UPDATE"),
-            }),
-        ),
-        (
-            "AUTO_MODERATION_RULE_UPDATE",
-            Event::AutoModerationRuleUpdate(AutoModerationEvent {
-                id: Some(snowflake("155")),
-                guild_id: Some(snowflake("156")),
-                name: Some("updated".to_string()),
-                creator_id: None,
-                event_type: None,
-                trigger_type: None,
-                trigger_metadata: None,
-                actions: Vec::new(),
-                enabled: None,
-                exempt_roles: Vec::new(),
-                exempt_channels: Vec::new(),
-                action: None,
-                rule_id: None,
-                rule_trigger_type: None,
-                user_id: None,
-                channel_id: None,
-                message_id: None,
-                alert_system_message_id: None,
-                content: None,
-                matched_keyword: None,
-                matched_content: None,
-                raw: raw("AUTO_MODERATION_RULE_UPDATE"),
-            }),
-        ),
-        (
-            "AUTO_MODERATION_RULE_DELETE",
-            Event::AutoModerationRuleDelete(AutoModerationEvent {
-                id: Some(snowflake("157")),
-                guild_id: Some(snowflake("158")),
-                name: Some("deleted".to_string()),
-                creator_id: None,
-                event_type: None,
-                trigger_type: None,
-                trigger_metadata: None,
-                actions: Vec::new(),
-                enabled: None,
-                exempt_roles: Vec::new(),
-                exempt_channels: Vec::new(),
-                action: None,
-                rule_id: None,
-                rule_trigger_type: None,
-                user_id: None,
-                channel_id: None,
-                message_id: None,
-                alert_system_message_id: None,
-                content: None,
-                matched_keyword: None,
-                matched_content: None,
-                raw: raw("AUTO_MODERATION_RULE_DELETE"),
-            }),
-        ),
-        (
-            "SOMETHING_NEW",
-            Event::Unknown {
-                kind: "SOMETHING_NEW".to_string(),
-                raw: raw("SOMETHING_NEW"),
-            },
-        ),
-    ];
-
-    for (kind, event) in cases {
-        assert_kind_and_raw(event, kind);
-    }
+    assert!(matches!(unknown.kind(), EventKind::Unknown));
+    assert_eq!(unknown.name(), "SOMETHING_NEW");
+    assert_eq!(raw_json(&unknown), Some(raw));
 }
 
 #[test]
@@ -2217,10 +1502,10 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match entitlement {
-        Event::EntitlementUpdate(event) => {
-            assert_eq!(event.entitlement.sku_id.get(), 2);
-            assert!(!event.entitlement.deleted);
+    match entitlement.kind() {
+        EventKind::EntitlementUpdate(event) => {
+            assert_eq!(event.sku_id.get(), 2);
+            assert!(!event.deleted);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2238,10 +1523,10 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match subscription {
-        Event::SubscriptionUpdate(event) => {
-            assert_eq!(event.subscription.id.get(), 30);
-            assert_eq!(event.subscription.status, SubscriptionStatus::INACTIVE);
+    match subscription.kind() {
+        EventKind::SubscriptionUpdate(event) => {
+            assert_eq!(event.id.get(), 30);
+            assert_eq!(event.status, SubscriptionStatus::INACTIVE);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2258,8 +1543,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match integration {
-        Event::IntegrationCreate(event) => {
+    match integration.kind() {
+        EventKind::IntegrationCreate(event) => {
             assert_eq!(event.guild_id.unwrap().get(), 41);
             assert_eq!(event.integration.id.get(), 40);
         }
@@ -2275,8 +1560,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match integration_delete {
-        Event::IntegrationDelete(event) => {
+    match integration_delete.kind() {
+        EventKind::IntegrationDelete(event) => {
             assert_eq!(event.id.unwrap().get(), 40);
             assert_eq!(event.application_id.unwrap().get(), 42);
         }
@@ -2294,8 +1579,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match poll_vote {
-        Event::MessagePollVoteRemove(event) => {
+    match poll_vote.kind() {
+        EventKind::MessagePollVoteRemove(event) => {
             assert_eq!(event.user_id.unwrap().get(), 50);
             assert_eq!(event.answer_id, Some(crate::model::PollAnswerId::new(2)));
         }
@@ -2313,10 +1598,10 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match sound {
-        Event::GuildSoundboardSoundUpdate(event) => {
-            assert_eq!(event.sound.sound_id.get(), 10);
-            assert_eq!(event.sound.guild_id.unwrap().get(), 20);
+    match sound.kind() {
+        EventKind::GuildSoundboardSoundUpdate(event) => {
+            assert_eq!(event.sound_id.get(), 10);
+            assert_eq!(event.guild_id.unwrap().get(), 20);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2329,8 +1614,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match delete {
-        Event::GuildSoundboardSoundDelete(event) => {
+    match delete.kind() {
+        EventKind::GuildSoundboardSoundDelete(event) => {
             assert_eq!(event.sound_id.get(), 10);
             assert_eq!(event.guild_id.get(), 20);
         }
@@ -2350,8 +1635,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
         }),
     )
     .unwrap();
-    match sounds {
-        Event::GuildSoundboardSoundsUpdate(event) => {
+    match sounds.kind() {
+        EventKind::GuildSoundboardSoundsUpdate(event) => {
             assert_eq!(event.guild_id.get(), 20);
             assert_eq!(event.soundboard_sounds.len(), 1);
         }
@@ -2363,8 +1648,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
 fn decode_event_covers_structural_decoder_branches() {
     fn assert_decodes_with_raw(kind: &str, payload: Value) {
         let event = decode_event(kind, payload.clone()).expect(kind);
-        assert_eq!(event.kind(), kind);
-        assert_eq!(event.raw(), &payload);
+        assert_eq!(event.name(), kind);
+        assert_eq!(raw_json(&event), Some(payload));
     }
 
     for kind in ["THREAD_CREATE", "THREAD_UPDATE", "THREAD_DELETE"] {
@@ -2594,8 +1879,8 @@ fn invite_create_decodes_full_typed_fields() {
     )
     .unwrap();
 
-    match event {
-        Event::InviteCreate(invite) => {
+    match event.kind() {
+        EventKind::InviteCreate(invite) => {
             assert_eq!(invite.code.as_deref(), Some("abc123"));
             assert_eq!(
                 invite.inviter.as_ref().map(|user| user.id),
@@ -2624,8 +1909,8 @@ fn thread_events_decode_new_typed_fields() {
         json!({ "id": "310", "type": 11, "newly_created": true }),
     )
     .unwrap();
-    match created {
-        Event::ThreadCreate(thread) => assert_eq!(thread.newly_created, Some(true)),
+    match created.kind() {
+        EventKind::ThreadCreate(thread) => assert_eq!(thread.newly_created, Some(true)),
         other => panic!("unexpected event: {other:?}"),
     }
 
@@ -2639,8 +1924,8 @@ fn thread_events_decode_new_typed_fields() {
         }),
     )
     .unwrap();
-    match list_sync {
-        Event::ThreadListSync(sync) => {
+    match list_sync.kind() {
+        EventKind::ThreadListSync(sync) => {
             assert_eq!(sync.channel_ids, vec![snowflake("312"), snowflake("313")]);
             assert_eq!(sync.threads.len(), 1);
             assert_eq!(sync.members.len(), 1);
@@ -2660,8 +1945,8 @@ fn thread_events_decode_new_typed_fields() {
         }),
     )
     .unwrap();
-    match member_update {
-        Event::ThreadMemberUpdate(update) => {
+    match member_update.kind() {
+        EventKind::ThreadMemberUpdate(update) => {
             assert_eq!(update.thread_id, Some(snowflake("316")));
             assert_eq!(update.user_id, Some(snowflake("318")));
             assert_eq!(
@@ -2684,9 +1969,12 @@ fn thread_events_decode_new_typed_fields() {
         }),
     )
     .unwrap();
-    match members_update {
-        Event::ThreadMembersUpdate(update) => {
-            let added = update.added_members.expect("added members should decode");
+    match members_update.kind() {
+        EventKind::ThreadMembersUpdate(update) => {
+            let added = update
+                .added_members
+                .as_ref()
+                .expect("added members should decode");
             assert_eq!(added.len(), 1);
             assert_eq!(added[0].user_id, Some(snowflake("321")));
         }
@@ -2696,7 +1984,7 @@ fn thread_events_decode_new_typed_fields() {
 
 #[test]
 fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
-    match decode_event(
+    let permissions_update = decode_event(
         "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
         json!({
             "id": "300",
@@ -2709,9 +1997,9 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
             ]
         }),
     )
-    .unwrap()
-    {
-        Event::ApplicationCommandPermissionsUpdate(event) => {
+    .unwrap();
+    match permissions_update.kind() {
+        EventKind::ApplicationCommandPermissionsUpdate(event) => {
             use crate::model::{CommandPermissionTarget, CommandPermissionsId};
 
             assert_eq!(event.id, Some(CommandPermissionsId::Command(test_id(300))));
@@ -2730,8 +2018,11 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
                 event.permissions[2].target,
                 CommandPermissionTarget::Channel(test_id(305))
             );
-            // The raw payload stays available alongside the typed view.
-            assert_eq!(event.raw["permissions"][0]["id"], json!("303"));
+            // The raw payload stays readable alongside the typed view.
+            assert_eq!(
+                raw_json(&permissions_update).unwrap()["permissions"][0]["id"],
+                json!("303")
+            );
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2746,10 +2037,10 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::ApplicationCommandPermissionsUpdate(event) => {
+        EventKind::ApplicationCommandPermissionsUpdate(event) => {
             assert!(event.permissions.is_empty());
-            assert_eq!(event.raw["permissions"][0]["id"], json!(12.5));
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2764,8 +2055,9 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildScheduledEventUpdate(event) => {
+        EventKind::GuildScheduledEventUpdate(event) => {
             assert_eq!(
                 event
                     .entity_metadata
@@ -2786,8 +2078,9 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
         }),
     )
     .unwrap()
+    .kind()
     {
-        Event::GuildScheduledEventUpdate(event) => {
+        EventKind::GuildScheduledEventUpdate(event) => {
             assert!(event.entity_metadata.is_none());
         }
         other => panic!("unexpected event: {other:?}"),

@@ -25,7 +25,7 @@
 //!   (`process_gateway_dispatch` in `src/gateway/bot/pipeline.rs`,
 //!   `apply_cache_updates` in `src/gateway/bot.rs`) do with one frame. Those
 //!   steps are private, so the replica rebuilds them from public API
-//!   (`serde_json`, `decode_event`, `CacheHandle`, `Event::clone`); every
+//!   (`serde_json`, `Event::decode`, `CacheHandle`, `Arc<Event>`); every
 //!   step names the code it mirrors and must follow it when that code
 //!   changes. Its allocation counts and bytes are deterministic.
 //! - `e2e.*` (`e2e.rs`) drives the real `Client` in a separate bot process
@@ -97,8 +97,8 @@ mod storm;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use discordrs::model::{Guild, Message, Presence};
-use discordrs::{decode_event, CollectorHub, Context, Event, MessageBuilder};
+use discordrs::model::{Guild, Message, Nullable, Patch, Presence};
+use discordrs::{decode_event, CollectorHub, Context, Event, EventKind, MessageBuilder};
 use serde_json::{json, Value};
 
 use crate::alloc::Mark;
@@ -140,12 +140,12 @@ fn perf_report() {
     drop(hub);
 
     // Inline sizes: queue slots, journal entries, and handler futures hold
-    // these by value. When phase 4 adds `EventKind`, report
-    // `size_of::<EventKind>()` here as `event_kind` (gated in
-    // ci/perf-gates.json).
+    // these by value; `event_kind` is the `EventKind` inside `Event` (both
+    // gated in ci/perf-gates.json).
     report.push(
         Scenario::new("layout.size_of", "layout")
             .set("event", std::mem::size_of::<Event>())
+            .set("event_kind", std::mem::size_of::<EventKind>())
             .set("message", std::mem::size_of::<Message>())
             .set("guild", std::mem::size_of::<Guild>())
             .set("member", std::mem::size_of::<discordrs::model::Member>())
@@ -157,6 +157,7 @@ fn perf_report() {
             .set("empty_collector_hub_bytes", empty_hub.retained_bytes)
             .deterministic(&[
                 "event",
+                "event_kind",
                 "message",
                 "guild",
                 "member",
@@ -223,28 +224,27 @@ fn perf_report() {
 fn perf_fixtures_decode() {
     let _serial = serial();
     for case in inbound_cases() {
-        let event = decode_event(case.event, case.d.clone()).unwrap();
-        match (&event, case.name) {
-            (Event::MessageCreate(event), "message_create.plain") => {
-                assert_eq!(event.message.mentions.len(), 1);
-                assert!(event.message.member.is_some());
+        let event = decode_event(case.event, &case.d.to_string()).unwrap();
+        match (event.kind(), case.name) {
+            (EventKind::MessageCreate(message), "message_create.plain") => {
+                assert_eq!(message.mentions.len(), 1);
+                assert!(message.member.is_some());
             }
-            (Event::MessageCreate(event), "message_create.embeds") => {
-                assert_eq!(event.message.embeds.len(), 2);
-                assert_eq!(event.message.embeds[0].fields.len(), 6);
-                assert_eq!(event.message.components.as_ref().map(Vec::len), Some(2));
-                assert!(event.message.interaction_metadata.is_some());
+            (EventKind::MessageCreate(message), "message_create.embeds") => {
+                assert_eq!(message.embeds.len(), 2);
+                assert_eq!(message.embeds[0].fields.len(), 6);
+                assert_eq!(message.components.as_ref().map(Vec::len), Some(2));
+                assert!(message.interaction_metadata.is_some());
             }
-            (Event::MessageCreate(event), "message_create.components_v2") => {
-                let components = event.message.components.as_ref().unwrap();
+            (EventKind::MessageCreate(message), "message_create.components_v2") => {
+                let components = message.components.as_ref().unwrap();
                 assert_eq!(components.len(), 2);
                 assert_eq!(components[0].components.len(), 6);
             }
-            (Event::GuildCreate(event), "guild_create.large") => {
-                let guild = &event.guild;
+            (EventKind::GuildCreate(guild), "guild_create.large") => {
                 assert_eq!(guild.members.len(), 1_000);
                 assert_eq!(guild.channels.len(), 200);
-                assert_eq!(guild.roles.len(), 300);
+                assert_eq!(guild.guild.roles.len(), 300);
                 assert_eq!(guild.presences.len(), 1_000);
                 assert_eq!(guild.voice_states.len(), 50);
                 assert_eq!(guild.emojis.len(), 30);
@@ -253,21 +253,24 @@ fn perf_fixtures_decode() {
                     .as_ref()
                     .is_some_and(|activities| !activities.is_empty())));
             }
-            (Event::MessageUpdate(event), "message_update.partial") => {
-                assert!(event.message.edited_timestamp.is_some());
-                assert!(event.message.author.is_none());
+            (EventKind::MessageUpdate(update), "message_update.partial") => {
+                assert!(matches!(
+                    update.edited_timestamp,
+                    Patch::Value(Nullable::Value(_))
+                ));
+                assert!(update.author.is_missing());
             }
-            (Event::PresenceUpdate(event), "presence_update") => {
+            (EventKind::PresenceUpdate(presence), "presence_update") => {
                 // decode_presence_update_event falls back to empty
                 // activities on a decode error.
-                assert_eq!(event.activities.len(), 2);
-                assert!(event.client_status.is_some());
-                assert!(event.user_id.is_some() && event.guild_id.is_some());
+                assert_eq!(presence.activities.len(), 2);
+                assert!(presence.client_status.is_some());
+                assert!(presence.user_id.is_some() && presence.guild_id.is_some());
             }
-            (Event::InteractionCreate(event), "interaction_create.chat_input") => {
-                let discordrs::model::Interaction::ChatInputCommand(command) = &event.interaction
+            (EventKind::InteractionCreate(interaction), "interaction_create.chat_input") => {
+                let discordrs::model::Interaction::ChatInputCommand(command) = &**interaction
                 else {
-                    panic!("not a chat input command: {:?}", event.interaction);
+                    panic!("not a chat input command: {interaction:?}");
                 };
                 let resolved = command.data.resolved.as_ref().unwrap();
                 assert_eq!(resolved.users.len(), 1);
@@ -276,11 +279,11 @@ fn perf_fixtures_decode() {
                 assert_eq!(resolved.roles.len(), 1);
                 assert_eq!(resolved.attachments.len(), 1);
             }
-            (Event::Unknown { kind, .. }, "unknown_dispatch") => {
-                assert_eq!(kind, UNKNOWN_EVENT_NAME);
+            (EventKind::Unknown, "unknown_dispatch") => {
+                assert_eq!(event.name(), UNKNOWN_EVENT_NAME);
             }
-            (Event::Unknown { kind, .. }, "floor") => assert_eq!(kind, FLOOR_EVENT),
-            (event, name) => panic!("{name} decoded to {}", event.kind()),
+            (EventKind::Unknown, "floor") => assert_eq!(event.name(), FLOOR_EVENT),
+            (kind, name) => panic!("{name} decoded to {kind:?}"),
         }
     }
     // A storm guild decodes like guild 0 and owns disjoint IDs.

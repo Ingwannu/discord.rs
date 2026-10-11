@@ -88,7 +88,9 @@ clone_on_ref_ptr = "warn"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value`: the gateway reads each frame as a shallow envelope and keeps the
+# dispatch payload as a `RawValue` (no `Value` tree); see src/event.rs.
+serde_json = { version = "1", features = ["raw_value"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"], optional = true }
 flate2 = { version = "1", optional = true }

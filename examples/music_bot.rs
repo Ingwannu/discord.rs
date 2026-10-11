@@ -161,7 +161,7 @@ mod bot {
     }
 
     impl EventHandler for Handler {
-        async fn ready(&self, ctx: Context, ready: ReadyPayload) {
+        async fn ready(&self, ctx: Context, ready: &ReadyPayload) {
             {
                 let mut state = self.state.lock().expect("session state mutex poisoned");
                 state.user_id = Some(ready.user.id);
@@ -178,7 +178,7 @@ mod bot {
             }
         }
 
-        async fn voice_state_update(&self, _ctx: Context, voice_state: VoiceState) {
+        async fn voice_state_update(&self, _ctx: Context, voice_state: &VoiceState) {
             let expected_user = {
                 let state = self.state.lock().expect("session state mutex poisoned");
                 state.user_id
@@ -186,7 +186,7 @@ mod bot {
             if voice_state.guild_id != Some(self.guild_id) || voice_state.user_id != expected_user {
                 return;
             }
-            if let Some(session_id) = voice_state.session_id {
+            if let Some(session_id) = voice_state.session_id.clone() {
                 let mut state = self.state.lock().expect("session state mutex poisoned");
                 state.session_id = Some(session_id);
                 drop(state);
@@ -194,12 +194,12 @@ mod bot {
             }
         }
 
-        async fn voice_server_update(&self, _ctx: Context, server: VoiceServerUpdate) {
+        async fn voice_server_update(&self, _ctx: Context, server: &VoiceServerUpdate) {
             if server.guild_id != self.guild_id {
                 return;
             }
             let mut state = self.state.lock().expect("session state mutex poisoned");
-            state.server = Some(server);
+            state.server = Some(server.clone());
             drop(state);
             self.try_start_playback();
         }

@@ -1,19 +1,16 @@
 //! In-memory cache scenarios: GUILD_CREATE ingestion, message inserts under
 //! the default limits, and MESSAGE_UPDATE merges.
 
-use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use discordrs::model::{Guild, Message};
+use discordrs::model::{Guild, GuildCreate, Message, MessageUpdate};
 use discordrs::{CacheConfig, CacheHandle, ChannelId, MessageId};
-use serde_json::Value;
 
 use crate::alloc::{counting, Mark, Sample, Uncounted, LIVE_BYTES};
 use crate::fixtures::{
     fixture, synthesized_guild_create, LARGE_GUILD, MESSAGE_CREATE_PLAIN, MESSAGE_UPDATE_PARTIAL,
 };
-use crate::inbound::merge_update_replica;
 use crate::report::{Report, Scenario, DETERMINISTIC};
 
 /// Messages inserted in the message cache scenario, spread over
@@ -56,32 +53,25 @@ async fn insert_message(
     elapsed
 }
 
-/// The apply_cache_updates MESSAGE_UPDATE path for message `n` (cached
-/// clone, payload key set, merge, upsert); returns how long it took. The
-/// partial's copy is excluded.
+/// The apply_cache_updates MESSAGE_UPDATE path for message `n`: the typed
+/// patch merged into the cached message under the write lock
+/// (`CacheHandle::apply_message_update`); returns how long it took. The
+/// update's copy is excluded.
 async fn update_message(
     cache: &CacheHandle,
-    partial: &Message,
-    partial_raw: &Value,
+    partial: &MessageUpdate,
     n: u64,
     sample: &mut Sample,
 ) -> Duration {
-    let mut message = partial.clone();
-    message.id = message_id(n);
-    message.channel_id = message_channel_id(n);
+    let mut update = partial.clone();
+    update.id = message_id(n);
+    update.channel_id = message_channel_id(n);
     let mark = counting().then(Mark::start);
     let start = Instant::now();
-    let cached = cache
-        .message(message.channel_id, message.id)
+    cache
+        .apply_message_update(&update)
         .await
         .unwrap_or_else(|| panic!("message {n} is not cached"));
-    let fields: HashSet<String> = partial_raw
-        .as_object()
-        .map(|object| object.keys().cloned().collect())
-        .unwrap_or_default();
-    cache
-        .upsert_message(merge_update_replica(cached, message, &fields))
-        .await;
     let elapsed = start.elapsed();
     if let Some(mark) = mark {
         let step = mark.finish();
@@ -101,10 +91,14 @@ pub(crate) fn run_cache(rt: &tokio::runtime::Runtime, report: &mut Report) {
     rt.block_on(async {
         // GUILD_CREATE x10 into a fresh cache: 10,000 members, users, and
         // presences, 2,000 channels, 3,000 roles. The typed guilds are
-        // decoded before measuring; apply_guild_create clones what it keeps.
-        let guilds: Vec<Guild> = (100..110)
+        // decoded before measuring; apply_guild_create shares the guild,
+        // members, and presences and copies the rest.
+        let guilds: Vec<GuildCreate> = (100..110)
             .map(|index| {
-                serde_json::from_value(synthesized_guild_create(index, &LARGE_GUILD)).unwrap()
+                GuildCreate::from(
+                    serde_json::from_value::<Guild>(synthesized_guild_create(index, &LARGE_GUILD))
+                        .unwrap(),
+                )
             })
             .collect();
         let ops = u64::try_from(guilds.len()).unwrap();
@@ -139,8 +133,8 @@ pub(crate) fn run_cache(rt: &tokio::runtime::Runtime, report: &mut Report) {
         // MESSAGE_CREATE x50,000 into a fresh cache with default limits,
         // then MESSAGE_UPDATE x10,000 against the 10,000 messages it keeps.
         let template: Message = serde_json::from_value(fixture(MESSAGE_CREATE_PLAIN)).unwrap();
-        let partial_raw = fixture(MESSAGE_UPDATE_PARTIAL);
-        let partial: Message = serde_json::from_value(partial_raw.clone()).unwrap();
+        let partial: MessageUpdate =
+            serde_json::from_value(fixture(MESSAGE_UPDATE_PARTIAL)).unwrap();
         let first_cached = MESSAGE_INSERTS - MESSAGE_UPDATES;
 
         let cache = CacheHandle::with_config(CacheConfig::default());
@@ -162,7 +156,7 @@ pub(crate) fn run_cache(rt: &tokio::runtime::Runtime, report: &mut Report) {
             ..Sample::default()
         };
         for n in first_cached..MESSAGE_INSERTS {
-            update_message(&cache, &partial, &partial_raw, n, &mut update).await;
+            update_message(&cache, &partial, n, &mut update).await;
         }
         update.retained_bytes = LIVE_BYTES.load(Ordering::SeqCst) - live_before;
         update.peak_bytes -= live_before;
@@ -179,7 +173,7 @@ pub(crate) fn run_cache(rt: &tokio::runtime::Runtime, report: &mut Report) {
             let mut update_timings = Vec::with_capacity(usize::try_from(MESSAGE_UPDATES).unwrap());
             for n in first_cached..MESSAGE_INSERTS {
                 update_timings
-                    .push(update_message(&cache, &partial, &partial_raw, n, &mut ignored).await);
+                    .push(update_message(&cache, &partial, n, &mut ignored).await);
             }
             (insert_timings, update_timings)
         };
@@ -199,7 +193,7 @@ pub(crate) fn run_cache(rt: &tokio::runtime::Runtime, report: &mut Report) {
                 .batch(update, MESSAGE_UPDATES)
                 .timings(update_timings)
                 .deterministic(HASHED_DETERMINISTIC)
-                .note("per update: cache.message() clone + key set + merge + upsert_message (the partial's copy is excluded)"),
+                .note("per update: apply_message_update (typed patch merged copy-on-write under the write lock; the update's copy is excluded)"),
         );
     });
 }

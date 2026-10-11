@@ -11,7 +11,7 @@ use tokio::sync::{broadcast, watch, Notify};
 use tokio::time;
 
 #[cfg(feature = "collectors")]
-use crate::event::{Event, ReactionEvent};
+use crate::event::{Event, EventKind, ReactionEvent};
 #[cfg(feature = "collectors")]
 use crate::model::{
     Channel, ChannelId, ComponentInteraction, EmojiId, GuildId, Interaction, Message, MessageId,
@@ -140,7 +140,9 @@ impl EventCursor {
 /// events without a gap or duplicate, and an evicted cursor is reported as
 /// lag with the exact number of missed events.
 struct EventJournal {
-    events: VecDeque<Event>,
+    /// Shared with the handler call and every subscription; a slot is one
+    /// pointer, so an empty 256-slot journal is 2 KiB.
+    events: VecDeque<Arc<Event>>,
     /// Sequence number of `events[0]`.
     first_seq: u64,
     capacity: usize,
@@ -256,8 +258,9 @@ impl CollectorHub {
         &self.publisher.0
     }
 
-    /// Appends an event and returns the cursor just after it.
-    pub(crate) fn publish(&self, event: Event) -> EventCursor {
+    /// Appends an event and returns the cursor just after it. The journal
+    /// keeps the `Arc`, not a copy.
+    pub(crate) fn publish(&self, event: Arc<Event>) -> EventCursor {
         let shared = self.shared();
         let cursor = {
             let mut journal = shared.journal();
@@ -378,8 +381,9 @@ pub struct EventSubscription {
 
 #[cfg(feature = "collectors")]
 impl EventSubscription {
-    /// Receives the next event; see the type docs for the error cases.
-    pub async fn recv(&mut self) -> Result<Event, broadcast::error::RecvError> {
+    /// Receives the next event (the journal's shared `Arc`, not a copy); see
+    /// the type docs for the error cases.
+    pub async fn recv(&mut self) -> Result<Arc<Event>, broadcast::error::RecvError> {
         loop {
             // Register for the wake-up before checking, so a publish (or the
             // hub closing) between the check and the await is not missed.
@@ -397,7 +401,7 @@ impl EventSubscription {
                 // simply not published yet.
                 let offset = usize::try_from(self.next - journal.first_seq).ok();
                 if let Some(event) = offset.and_then(|offset| journal.events.get(offset)) {
-                    let event = event.clone();
+                    let event = Arc::clone(event);
                     self.next += 1;
                     return Ok(event);
                 }
@@ -454,7 +458,9 @@ enum Step<T> {
 trait CollectorLogic: Send {
     type Item;
 
-    fn handle(&mut self, event: Event) -> Step<Self::Item>;
+    /// Decides about one event by reference; only an item it collects is
+    /// copied out of the shared event.
+    fn handle(&mut self, event: &Event) -> Step<Self::Item>;
 
     /// Limit-based end reason, if one is reached. `received` is the number of
     /// items yielded so far; logics with their own tallies may ignore it.
@@ -462,17 +468,18 @@ trait CollectorLogic: Send {
 }
 
 #[cfg(feature = "collectors")]
-/// Logic for the single-event collectors: extract one item type, filter it,
-/// and stop after `max_items` yielded items.
+/// Logic for the single-event collectors: find one item type in the event,
+/// filter it by reference, copy it out only when it passes, and stop after
+/// `max_items` yielded items.
 struct Extracting<T> {
-    extract: fn(Event) -> Option<T>,
+    extract: fn(&Event) -> Option<&T>,
     filter: Option<EventFilter<T>>,
     max_items: Option<usize>,
 }
 
 #[cfg(feature = "collectors")]
 impl<T> Extracting<T> {
-    fn new(extract: fn(Event) -> Option<T>) -> Self {
+    fn new(extract: fn(&Event) -> Option<&T>) -> Self {
         Self {
             extract,
             filter: None,
@@ -482,15 +489,15 @@ impl<T> Extracting<T> {
 }
 
 #[cfg(feature = "collectors")]
-impl<T> CollectorLogic for Extracting<T> {
+impl<T: Clone + Send> CollectorLogic for Extracting<T> {
     type Item = T;
 
-    fn handle(&mut self, event: Event) -> Step<T> {
+    fn handle(&mut self, event: &Event) -> Step<T> {
         let Some(item) = (self.extract)(event) else {
             return Step::Skip;
         };
-        if passes(self.filter.as_ref(), &item) {
-            Step::Collect(item)
+        if passes(self.filter.as_ref(), item) {
+            Step::Collect(item.clone())
         } else {
             Step::Skip
         }
@@ -663,7 +670,7 @@ async fn recv_next<L: CollectorLogic>(
 ) -> NextOutcome<L::Item> {
     loop {
         match receiver.recv().await {
-            Ok(event) => match logic.handle(event) {
+            Ok(event) => match logic.handle(&event) {
                 Step::Collect(item) => return NextOutcome::Item(item),
                 Step::Skip => {}
                 Step::End(reason) => return NextOutcome::Ended(reason),
@@ -832,23 +839,23 @@ macro_rules! impl_extracting_collector {
 }
 
 #[cfg(feature = "collectors")]
-fn extract_message(event: Event) -> Option<Message> {
-    match event {
-        Event::MessageCreate(event) | Event::MessageUpdate(event) => Some(event.message),
+fn extract_message(event: &Event) -> Option<&Message> {
+    match event.kind() {
+        EventKind::MessageCreate(message) => Some(message),
         _ => None,
     }
 }
 
 #[cfg(feature = "collectors")]
-fn extract_interaction(event: Event) -> Option<Interaction> {
-    match event {
-        Event::InteractionCreate(event) => Some(event.interaction),
+fn extract_interaction(event: &Event) -> Option<&Interaction> {
+    match event.kind() {
+        EventKind::InteractionCreate(interaction) => Some(interaction),
         _ => None,
     }
 }
 
 #[cfg(feature = "collectors")]
-fn extract_component(event: Event) -> Option<ComponentInteraction> {
+fn extract_component(event: &Event) -> Option<&ComponentInteraction> {
     match extract_interaction(event)? {
         Interaction::Component(component) => Some(component),
         _ => None,
@@ -856,7 +863,7 @@ fn extract_component(event: Event) -> Option<ComponentInteraction> {
 }
 
 #[cfg(feature = "collectors")]
-fn extract_modal(event: Event) -> Option<ModalSubmitInteraction> {
+fn extract_modal(event: &Event) -> Option<&ModalSubmitInteraction> {
     match extract_interaction(event)? {
         Interaction::ModalSubmit(modal) => Some(modal),
         _ => None,
@@ -864,7 +871,8 @@ fn extract_modal(event: Event) -> Option<ModalSubmitInteraction> {
 }
 
 #[cfg(feature = "collectors")]
-/// Collects `MESSAGE_CREATE` and `MESSAGE_UPDATE` messages.
+/// Collects `MESSAGE_CREATE` messages. (`MESSAGE_UPDATE` carries a partial
+/// message; it is not collected here.)
 pub struct MessageCollector {
     core: CollectorCore<Extracting<Message>>,
 }
@@ -1264,36 +1272,36 @@ fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, UserId, bool
 impl CollectorLogic for ReactionLogic {
     type Item = ReactionEvent;
 
-    fn handle(&mut self, event: Event) -> Step<ReactionEvent> {
-        match event {
-            Event::MessageReactionAdd(reaction) => {
-                if !self.targets_reaction(&reaction) || !passes(self.filter.as_ref(), &reaction) {
+    fn handle(&mut self, event: &Event) -> Step<ReactionEvent> {
+        match event.kind() {
+            EventKind::MessageReactionAdd(reaction) => {
+                if !self.targets_reaction(reaction) || !passes(self.filter.as_ref(), reaction) {
                     return Step::Skip;
                 }
-                let Some((key, user_id, burst)) = reaction_identity(&reaction) else {
+                let Some((key, user_id, burst)) = reaction_identity(reaction) else {
                     return Step::Skip;
                 };
                 let emoji = reaction.emoji.clone().unwrap_or_default();
                 self.collected.insert(key, emoji, user_id, burst);
-                Step::Collect(reaction)
+                Step::Collect((**reaction).clone())
             }
             // discord.js also runs the filter on disposals, so a filter that
             // scopes collection (for example to one user) scopes removal too.
-            Event::MessageReactionRemove(reaction) if self.dispose => {
-                if self.targets_reaction(&reaction) && passes(self.filter.as_ref(), &reaction) {
-                    if let Some((key, user_id, burst)) = reaction_identity(&reaction) {
+            EventKind::MessageReactionRemove(reaction) if self.dispose => {
+                if self.targets_reaction(reaction) && passes(self.filter.as_ref(), reaction) {
+                    if let Some((key, user_id, burst)) = reaction_identity(reaction) {
                         self.collected.remove_user(&key, user_id, burst);
                     }
                 }
                 Step::Skip
             }
-            Event::MessageReactionRemoveAll(event) if self.dispose => {
+            EventKind::MessageReactionRemoveAll(event) if self.dispose => {
                 if self.targets(event.message_id, event.channel_id, event.guild_id) {
                     self.collected.clear();
                 }
                 Step::Skip
             }
-            Event::MessageReactionRemoveEmoji(event) if self.dispose => {
+            EventKind::MessageReactionRemoveEmoji(event) if self.dispose => {
                 if self.targets(event.message_id, event.channel_id, event.guild_id) {
                     if let Some(key) = event.emoji.as_ref().and_then(EmojiKey::from_emoji) {
                         self.collected.remove_emoji(&key);
@@ -1301,38 +1309,37 @@ impl CollectorLogic for ReactionLogic {
                 }
                 Step::Skip
             }
-            Event::MessageDelete(event) => Self::end_if(
-                event.data.id == self.message_id,
+            EventKind::MessageDelete(data) => Self::end_if(
+                data.id == self.message_id,
                 CollectorEndReason::MessageDelete,
             ),
-            Event::MessageDeleteBulk(event) => Self::end_if(
+            EventKind::MessageDeleteBulk(event) => Self::end_if(
                 event.ids.contains(&self.message_id),
                 CollectorEndReason::MessageDelete,
             ),
             // discord.js also ends when the deleted channel is the parent of
             // the message's thread (`channel.threads.cache.has(...)`).
-            Event::ChannelDelete(event) => Self::end_if(
-                self.channel_id.as_ref() == Some(&event.channel.id)
-                    || self.parent_channel_id.as_ref() == Some(&event.channel.id),
+            EventKind::ChannelDelete(channel) => Self::end_if(
+                self.channel_id.as_ref() == Some(&channel.id)
+                    || self.parent_channel_id.as_ref() == Some(&channel.id),
                 CollectorEndReason::ChannelDelete,
             ),
-            Event::ThreadCreate(event) | Event::ThreadUpdate(event) => {
+            EventKind::ThreadCreate(event) | EventKind::ThreadUpdate(event) => {
                 self.learn_parent(&event.thread);
                 Step::Skip
             }
-            Event::ThreadListSync(event) => {
+            EventKind::ThreadListSync(event) => {
                 for thread in &event.threads {
                     self.learn_parent(thread);
                 }
                 Step::Skip
             }
-            Event::ThreadDelete(event) => Self::end_if(
+            EventKind::ThreadDelete(event) => Self::end_if(
                 self.channel_id.as_ref() == Some(&event.thread.id),
                 CollectorEndReason::ThreadDelete,
             ),
-            Event::GuildDelete(event) => Self::end_if(
-                self.guild_id.as_ref() == Some(&event.data.id)
-                    && event.data.unavailable != Some(true),
+            EventKind::GuildDelete(data) => Self::end_if(
+                self.guild_id.as_ref() == Some(&data.id) && data.unavailable != Some(true),
                 CollectorEndReason::GuildDelete,
             ),
             _ => Step::Skip,
@@ -1500,17 +1507,25 @@ mod tests {
     use serde_json::Value;
     use tokio::time;
 
-    use crate::event::{decode_event, Event};
+    use std::sync::Arc;
+
+    use crate::event::Event;
     use crate::model::{Id, IdMarker, Interaction, Message};
+
+    /// Decodes a dispatch the way the gateway pipeline does and wraps it in
+    /// the `Arc` the hub journals.
+    fn decode_event(name: &str, payload: Value) -> Result<Arc<Event>, crate::DiscordError> {
+        crate::event::decode_event(name, &payload.to_string()).map(Arc::new)
+    }
     use crate::types::Emoji;
 
     use super::{CollectorEndReason, CollectorHub, EmojiKey, ReactionCollection};
 
-    fn interaction_event(payload: Value) -> crate::event::Event {
+    fn interaction_event(payload: Value) -> Arc<crate::event::Event> {
         decode_event("INTERACTION_CREATE", payload).expect("valid interaction event")
     }
 
-    fn ping_interaction(id: &str) -> crate::event::Event {
+    fn ping_interaction(id: &str) -> Arc<crate::event::Event> {
         interaction_event(json!({
             "id": id,
             "application_id": "2",
@@ -1519,7 +1534,7 @@ mod tests {
         }))
     }
 
-    fn component_interaction(id: &str, custom_id: &str) -> crate::event::Event {
+    fn component_interaction(id: &str, custom_id: &str) -> Arc<crate::event::Event> {
         interaction_event(json!({
             "id": id,
             "application_id": "2",
@@ -1533,7 +1548,7 @@ mod tests {
         }))
     }
 
-    fn modal_interaction(id: &str, custom_id: &str) -> crate::event::Event {
+    fn modal_interaction(id: &str, custom_id: &str) -> Arc<crate::event::Event> {
         interaction_event(json!({
             "id": id,
             "application_id": "2",
@@ -1546,7 +1561,7 @@ mod tests {
         }))
     }
 
-    fn message_create(id: &str, content: &str) -> crate::event::Event {
+    fn message_create(id: &str, content: &str) -> Arc<crate::event::Event> {
         decode_event(
             "MESSAGE_CREATE",
             json!({
@@ -1651,8 +1666,17 @@ mod tests {
             .unwrap(),
         );
 
-        let message = collector.next().await.expect("matching message update");
-        assert_eq!(message.id.get(), 4);
+        hub.publish(
+            decode_event(
+                "MESSAGE_CREATE",
+                json!({ "id": "5", "channel_id": "1", "content": "keep" }),
+            )
+            .unwrap(),
+        );
+
+        // MESSAGE_UPDATE carries a partial message and is not collected here.
+        let message = collector.next().await.expect("matching message");
+        assert_eq!(message.id.get(), 5);
         assert_eq!(message.content, "keep");
     }
 
@@ -2118,7 +2142,7 @@ mod tests {
         })
     }
 
-    fn reaction_add(message_id: &str, user_id: &str, emoji: Value) -> Event {
+    fn reaction_add(message_id: &str, user_id: &str, emoji: Value) -> Arc<Event> {
         let mut payload = reaction_payload(message_id, user_id, emoji, false);
         // Only MESSAGE_REACTION_ADD carries the author, which lets a test
         // write a filter that passes adds but rejects removals.
@@ -2126,7 +2150,7 @@ mod tests {
         decode_event("MESSAGE_REACTION_ADD", payload).expect("valid reaction add")
     }
 
-    fn burst_add(message_id: &str, user_id: &str, emoji: Value) -> Event {
+    fn burst_add(message_id: &str, user_id: &str, emoji: Value) -> Arc<Event> {
         decode_event(
             "MESSAGE_REACTION_ADD",
             reaction_payload(message_id, user_id, emoji, true),
@@ -2134,7 +2158,7 @@ mod tests {
         .expect("valid burst reaction add")
     }
 
-    fn reaction_remove(message_id: &str, user_id: &str, emoji: Value, burst: bool) -> Event {
+    fn reaction_remove(message_id: &str, user_id: &str, emoji: Value, burst: bool) -> Arc<Event> {
         decode_event(
             "MESSAGE_REACTION_REMOVE",
             reaction_payload(message_id, user_id, emoji, burst),
@@ -2142,7 +2166,7 @@ mod tests {
         .expect("valid reaction remove")
     }
 
-    fn remove_all(message_id: &str) -> Event {
+    fn remove_all(message_id: &str) -> Arc<Event> {
         decode_event(
             "MESSAGE_REACTION_REMOVE_ALL",
             json!({ "channel_id": CHANNEL, "message_id": message_id, "guild_id": GUILD }),
@@ -2150,7 +2174,7 @@ mod tests {
         .expect("valid remove all")
     }
 
-    fn remove_emoji(message_id: &str, emoji: Value) -> Event {
+    fn remove_emoji(message_id: &str, emoji: Value) -> Arc<Event> {
         decode_event(
             "MESSAGE_REACTION_REMOVE_EMOJI",
             json!({
@@ -2561,11 +2585,11 @@ mod tests {
         );
     }
 
-    fn channel_delete(id: &str) -> Event {
+    fn channel_delete(id: &str) -> Arc<Event> {
         decode_event("CHANNEL_DELETE", json!({ "id": id, "type": 0 })).expect("channel delete")
     }
 
-    fn thread_delete(id: &str) -> Event {
+    fn thread_delete(id: &str) -> Arc<Event> {
         decode_event(
             "THREAD_DELETE",
             json!({ "id": id, "type": 11, "guild_id": GUILD, "parent_id": "5" }),
@@ -2573,7 +2597,7 @@ mod tests {
         .expect("thread delete")
     }
 
-    fn guild_delete(id: &str, unavailable: Option<bool>) -> Event {
+    fn guild_delete(id: &str, unavailable: Option<bool>) -> Arc<Event> {
         let mut payload = json!({ "id": id });
         if let Some(unavailable) = unavailable {
             payload["unavailable"] = json!(unavailable);
@@ -2878,7 +2902,7 @@ mod tests {
         assert_eq!(users_of(collected, "✅"), vec!["1"]);
     }
 
-    fn thread_update(id: &str, parent_id: &str) -> Event {
+    fn thread_update(id: &str, parent_id: &str) -> Arc<Event> {
         decode_event(
             "THREAD_UPDATE",
             json!({ "id": id, "type": 11, "guild_id": GUILD, "parent_id": parent_id }),

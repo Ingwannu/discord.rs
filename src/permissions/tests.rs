@@ -1229,7 +1229,9 @@ async fn populated_cache() -> CacheHandle {
     ];
     guild.threads = vec![thread_model(600, 500)];
     guild.members = vec![member_model()];
-    cache.apply_guild_create(&guild).await;
+    cache
+        .apply_guild_create(&crate::model::GuildCreate::from(guild))
+        .await;
     cache
 }
 

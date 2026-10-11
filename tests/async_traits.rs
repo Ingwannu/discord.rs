@@ -29,9 +29,10 @@ mod event_handler {
 
     use discordrs::{
         decode_event, gateway_intents, Client, Context, DiscordHttpClient, Event, EventHandler,
-        Message, ReadyPayload, TypeMap,
+        EventKind, Message, ReadyPayload, TypeMap,
     };
-    use serde_json::{json, Value};
+    use serde_json::json;
+    use serde_json::value::RawValue;
     use tokio::sync::RwLock;
 
     use super::spawnable;
@@ -60,17 +61,17 @@ mod event_handler {
     /// Overrides a few typed hooks and relies on the defaults for the rest,
     /// including the default `handle_event` routing.
     impl EventHandler for Recorder {
-        async fn ready(&self, _ctx: Context, ready: ReadyPayload) {
+        async fn ready(&self, _ctx: Context, ready: &ReadyPayload) {
             tokio::task::yield_now().await;
             self.record(format!("ready:{}", ready.session_id));
         }
 
-        async fn message_create(&self, _ctx: Context, message: Message) {
+        async fn message_create(&self, _ctx: Context, message: Arc<Message>) {
             tokio::task::yield_now().await;
             self.record(format!("message:{}", message.content));
         }
 
-        async fn raw_event(&self, _ctx: Context, event_name: String, _data: Value) {
+        async fn raw_event(&self, _ctx: Context, event_name: &str, _data: &RawValue) {
             self.record(format!("raw:{event_name}"));
         }
     }
@@ -86,14 +87,14 @@ mod event_handler {
     }
 
     impl EventHandler for Router {
-        async fn handle_event(&self, ctx: Context, event: Event) {
-            match event {
-                Event::Ready(ready) => self.ready(ctx, ready.data).await,
+        async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+            match event.kind() {
+                EventKind::Ready(ready) => self.ready(ctx, ready).await,
                 _ => self.inner.record("routed:other".to_string()),
             }
         }
 
-        async fn ready(&self, _ctx: Context, ready: ReadyPayload) {
+        async fn ready(&self, _ctx: Context, ready: &ReadyPayload) {
             self.inner
                 .record(format!("router-ready:{}", ready.session_id));
         }
@@ -106,29 +107,23 @@ mod event_handler {
         )
     }
 
-    fn ready_event() -> Event {
-        decode_event(
-            "READY",
-            json!({
-                "user": { "id": "1", "username": "bot" },
-                "session_id": "session-1",
-            }),
-        )
-        .expect("READY decodes")
+    fn ready_event() -> Arc<Event> {
+        let data = json!({
+            "user": { "id": "1", "username": "bot" },
+            "session_id": "session-1",
+        });
+        Arc::new(decode_event("READY", &data.to_string()).expect("READY decodes"))
     }
 
-    fn message_event() -> Event {
-        decode_event(
-            "MESSAGE_CREATE",
-            json!({
-                "id": "10",
-                "channel_id": "20",
-                "author": { "id": "2", "username": "user" },
-                "content": "hello",
-                "timestamp": "2026-01-01T00:00:00.000000+00:00",
-            }),
-        )
-        .expect("MESSAGE_CREATE decodes")
+    fn message_event() -> Arc<Event> {
+        let data = json!({
+            "id": "10",
+            "channel_id": "20",
+            "author": { "id": "2", "username": "user" },
+            "content": "hello",
+            "timestamp": "2026-01-01T00:00:00.000000+00:00",
+        });
+        Arc::new(decode_event("MESSAGE_CREATE", &data.to_string()).expect("MESSAGE_CREATE decodes"))
     }
 
     #[tokio::test]
@@ -137,7 +132,7 @@ mod event_handler {
         for event in [
             ready_event(),
             message_event(),
-            decode_event("SOMETHING_NEW", json!({})).expect("unknown events decode"),
+            Arc::new(decode_event("SOMETHING_NEW", "{}").expect("unknown events decode")),
         ] {
             let task_handler = Arc::clone(&handler);
             tokio::spawn(spawnable(async move {
@@ -160,7 +155,7 @@ mod event_handler {
             let message: Message =
                 serde_json::from_value(json!({ "id": "1", "channel_id": "2", "content": "" }))
                     .expect("minimal message");
-            silent.message_create(context(), message).await;
+            silent.message_create(context(), Arc::new(message)).await;
         }))
         .await
         .expect("default hooks complete");

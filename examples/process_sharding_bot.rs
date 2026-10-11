@@ -30,7 +30,8 @@ use discordrs::sharding::process::{
 };
 #[cfg(feature = "sharding")]
 use discordrs::{
-    gateway_intents, Client, Context, DiscordError, Event, EventHandler, GatewayConnectionConfig,
+    gateway_intents, Client, Context, DiscordError, Event, EventHandler, EventKind,
+    GatewayConnectionConfig,
 };
 #[cfg(feature = "sharding")]
 use serde_json::json;
@@ -43,24 +44,21 @@ struct Handler {
 
 #[cfg(feature = "sharding")]
 impl EventHandler for Handler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => {
+    async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => {
                 // Status only: IDENTIFY pacing happens inside the gateway
                 // client through the identify gate, not here.
                 let (shard_id, _) = ctx.shard_pair();
                 if let Err(error) = self.child.notify_shard_ready(shard_id) {
                     eprintln!("[child] failed to report shard {shard_id} ready: {error}");
                 }
-                eprintln!(
-                    "[child] shard {shard_id} ready as {}",
-                    ready.data.user.username
-                );
+                eprintln!("[child] shard {shard_id} ready as {}", ready.user.username);
             }
-            Event::GuildCreate(_) => {
+            EventKind::GuildCreate(_) => {
                 self.guild_count.fetch_add(1, Ordering::Relaxed);
             }
-            Event::GuildDelete(_) => {
+            EventKind::GuildDelete(_) => {
                 // Rust 1.99 renamed `fetch_update` to `try_update`; keep the
                 // old name until the crate's MSRV reaches 1.99.
                 // `Err` only means the count was already zero.

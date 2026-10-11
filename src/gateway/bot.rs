@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
-use serde_json::Value;
+use serde_json::value::RawValue;
 #[cfg(feature = "sharding")]
 use tokio::sync::watch;
 use tokio::sync::{mpsc, RwLock};
@@ -23,7 +23,7 @@ use crate::cache::{
 #[cfg(feature = "collectors")]
 use crate::collector::CollectorHub;
 use crate::error::DiscordError;
-use crate::event::Event;
+use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
 use crate::model::{ApplicationId, ChannelId, GuildId, Interaction, MessageId, RoleId, UserId};
 #[cfg(feature = "sharding")]
@@ -677,27 +677,43 @@ impl Context {
 ///
 /// Every method has a default that does nothing, so an implementation only
 /// overrides the hooks it needs. [`handle_event`](Self::handle_event)
-/// receives every event first and by default forwards it to the matching
-/// typed hook (`ready`, `message_create`, ...); unknown events go to
-/// [`raw_event`](Self::raw_event). Overriding `handle_event` replaces that
-/// routing, so the typed hooks are then only called if the override calls
-/// them.
+/// receives every event first, as the shared `Arc<Event>`, and by default
+/// forwards it to the matching typed hook (`ready`, `message_create`, ...);
+/// unknown dispatches go to [`raw_event`](Self::raw_event) and payloads that
+/// failed to decode to [`decode_failed`](Self::decode_failed). Overriding
+/// `handle_event` replaces that routing, so the typed hooks are then only
+/// called if the override calls them.
+///
+/// # How hooks receive payloads
+///
+/// The runtime decodes each event once and shares it between the cache,
+/// collectors, and this handler; no hook call copies a payload:
+///
+/// - Payloads the cache stores as they are arrive as an `Arc` you may keep
+///   or move into a task: `message_create` (`Arc<Message>`),
+///   `message_update` (`Arc<MessageUpdate>`, a partial message), and
+///   `member_add` / `member_update` (`Arc<Member>`).
+/// - Every other payload arrives as a reference into the event
+///   (`&Channel`, `&ReactionEvent`, ...). Clone what you keep beyond the
+///   call, or override `handle_event` and keep the `Arc<Event>`.
 ///
 /// # Implementing
 ///
 /// Write the methods as plain `async fn` — no attribute macro is needed:
 ///
 /// ```no_run
+/// use std::sync::Arc;
+///
 /// use discordrs::{Context, EventHandler, Message, ReadyPayload};
 ///
 /// struct Handler;
 ///
 /// impl EventHandler for Handler {
-///     async fn ready(&self, _ctx: Context, ready: ReadyPayload) {
+///     async fn ready(&self, _ctx: Context, ready: &ReadyPayload) {
 ///         println!("connected as {}", ready.user.username);
 ///     }
 ///
-///     async fn message_create(&self, _ctx: Context, message: Message) {
+///     async fn message_create(&self, _ctx: Context, message: Arc<Message>) {
 ///         println!("message: {}", message.content);
 ///     }
 /// }
@@ -715,152 +731,228 @@ impl Context {
 /// runtime stores the handler type-erased and boxes each `handle_event`
 /// future once; the typed hook it awaits is part of that future, so the
 /// default routing allocates once per event (async-trait boxed both).
+// [Decision Log]
+// - 목적과 의도: 이벤트 하나를 핸들러에 넘길 때 payload를 깊게 복제하지 않는다(기준선 핫스팟
+//   ④: 4,848 B 인라인 Event가 전달마다 상자 두 개로 복사됐다).
+// - 기존 구현 및 제약 조건: 2.x 훅은 payload를 값으로 받았고(`message: Message`), 기본
+//   handle_event가 enum을 분해해 넘겼다. 이제 이벤트는 `Arc<Event>` 하나를 캐시·컬렉터·핸들러가
+//   공유하므로 값으로 넘기려면 복제해야 한다. RPITIT 훅은 인자의 수명을 반환 future에 담는다.
+// - 검토한 주요 대안: (1) 모든 훅이 `&T`, (2) 모든 훅이 `Arc<T>`(payload마다 Arc), (3) 저장
+//   방식대로: 이벤트가 `Arc<T>`로 가진 payload는 `Arc<T>` 복제, 나머지는 `&T`, (4) 값 유지 +
+//   훅마다 clone.
+// - 선택한 방식: (3).
+// - 다른 대안 대신 이 방식을 선택한 이유: (2)는 공유하지 않는 payload까지 `Arc` 할당을 늘리고
+//   `EventKind`가 커진다. (1)은 가장 흔한 `message_create`에서 태스크로 넘기려면 깊은 복제가
+//   필요하다. (4)는 이벤트마다 깊은 복제다. (3)은 할당이 0이고, 규칙이 `EventKind`의 저장 방식
+//   하나로 설명된다.
+// - 장점, 단점 및 영향: 훅 시그니처가 깨진다(마이그레이션 노트). 참조 훅의 future는 이벤트를
+//   빌리므로 사용자는 보관할 값만 복제한다. GUILD_CREATE 훅은 `&GuildCreate`를 받는다.
 #[expect(
     missing_docs,
     reason = "one hook per Gateway event: the hook is named after the event, whose payload \
               type carries the docs"
 )]
 pub trait EventHandler: Send + Sync + 'static {
-    /// Handles one decoded Gateway event and dispatches to typed convenience hooks by default.
-    fn handle_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {
+    /// Handles one decoded Gateway event and dispatches to the typed hooks
+    /// by default (see the trait docs for how each hook receives its
+    /// payload).
+    fn handle_event(&self, ctx: Context, event: Arc<Event>) -> impl Future<Output = ()> + Send {
         async move {
-            match event {
-                Event::Ready(event) => self.ready(ctx, event.data).await,
-                Event::GuildCreate(event) => self.guild_create(ctx, event.guild).await,
-                Event::GuildUpdate(event) => self.guild_update(ctx, event.guild).await,
-                Event::GuildDelete(event) => self.guild_delete(ctx, event.data).await,
-                Event::ChannelCreate(event) => self.channel_create(ctx, event.channel).await,
-                Event::ChannelUpdate(event) => self.channel_update(ctx, event.channel).await,
-                Event::ChannelDelete(event) => self.channel_delete(ctx, event.channel).await,
-                Event::MemberAdd(event) => self.member_add(ctx, event.guild_id, event.member).await,
-                Event::MemberUpdate(event) => {
-                    self.member_update(ctx, event.guild_id, event.member).await
-                }
-                Event::MemberRemove(event) => {
-                    self.member_remove(ctx, event.data.guild_id, event.data.user)
+            match event.kind() {
+                EventKind::Ready(ready) => self.ready(ctx, ready).await,
+                EventKind::Resumed => self.resumed(ctx).await,
+                EventKind::GuildCreate(guild) => self.guild_create(ctx, guild).await,
+                EventKind::GuildUpdate(guild) => self.guild_update(ctx, guild).await,
+                EventKind::GuildDelete(data) => self.guild_delete(ctx, data).await,
+                EventKind::ChannelCreate(channel) => self.channel_create(ctx, channel).await,
+                EventKind::ChannelUpdate(channel) => self.channel_update(ctx, channel).await,
+                EventKind::ChannelDelete(channel) => self.channel_delete(ctx, channel).await,
+                EventKind::MemberAdd(payload) => {
+                    self.member_add(ctx, payload.guild_id, Arc::clone(&payload.member))
                         .await
                 }
-                Event::GuildMembersChunk(event) => self.guild_members_chunk(ctx, event).await,
-                Event::RoleCreate(event) => self.role_create(ctx, event.guild_id, event.role).await,
-                Event::RoleUpdate(event) => self.role_update(ctx, event.guild_id, event.role).await,
-                Event::RoleDelete(event) => {
-                    self.role_delete(ctx, event.data.guild_id, event.data.role_id)
+                EventKind::MemberUpdate(payload) => {
+                    self.member_update(ctx, payload.guild_id, Arc::clone(&payload.member))
                         .await
                 }
-                Event::MessageCreate(event) => self.message_create(ctx, event.message).await,
-                Event::MessageUpdate(event) => self.message_update(ctx, event.message).await,
-                Event::MessageDelete(event) => {
-                    self.message_delete(ctx, event.data.channel_id, event.data.id)
+                EventKind::MemberRemove(data) => {
+                    self.member_remove(ctx, data.guild_id, &data.user).await
+                }
+                EventKind::GuildMembersChunk(chunk) => self.guild_members_chunk(ctx, chunk).await,
+                EventKind::RoleCreate(payload) => {
+                    self.role_create(ctx, payload.guild_id, &payload.role).await
+                }
+                EventKind::RoleUpdate(payload) => {
+                    self.role_update(ctx, payload.guild_id, &payload.role).await
+                }
+                EventKind::RoleDelete(data) => {
+                    self.role_delete(ctx, data.guild_id, data.role_id).await
+                }
+                EventKind::MessageCreate(message) => {
+                    self.message_create(ctx, Arc::clone(message)).await
+                }
+                EventKind::MessageUpdate(update) => {
+                    self.message_update(ctx, Arc::clone(update)).await
+                }
+                EventKind::MessageDelete(data) => {
+                    self.message_delete(ctx, data.channel_id, data.id).await
+                }
+                EventKind::MessageDeleteBulk(payload) => {
+                    self.message_delete_bulk(ctx, payload).await
+                }
+                EventKind::ChannelPinsUpdate(payload) => {
+                    self.channel_pins_update(ctx, payload).await
+                }
+                EventKind::GuildBanAdd(payload) => self.guild_ban_add(ctx, payload).await,
+                EventKind::GuildBanRemove(payload) => self.guild_ban_remove(ctx, payload).await,
+                EventKind::GuildEmojisUpdate(payload) => {
+                    self.guild_emojis_update(ctx, payload).await
+                }
+                EventKind::GuildIntegrationsUpdate(payload) => {
+                    self.guild_integrations_update(ctx, payload).await
+                }
+                EventKind::EntitlementCreate(entitlement) => {
+                    self.entitlement_create(ctx, entitlement).await
+                }
+                EventKind::EntitlementUpdate(entitlement) => {
+                    self.entitlement_update(ctx, entitlement).await
+                }
+                EventKind::EntitlementDelete(entitlement) => {
+                    self.entitlement_delete(ctx, entitlement).await
+                }
+                EventKind::SubscriptionCreate(subscription) => {
+                    self.subscription_create(ctx, subscription).await
+                }
+                EventKind::SubscriptionUpdate(subscription) => {
+                    self.subscription_update(ctx, subscription).await
+                }
+                EventKind::SubscriptionDelete(subscription) => {
+                    self.subscription_delete(ctx, subscription).await
+                }
+                EventKind::IntegrationCreate(payload) => {
+                    self.integration_create(ctx, payload).await
+                }
+                EventKind::IntegrationUpdate(payload) => {
+                    self.integration_update(ctx, payload).await
+                }
+                EventKind::IntegrationDelete(payload) => {
+                    self.integration_delete(ctx, payload).await
+                }
+                EventKind::GuildSoundboardSoundCreate(sound) => {
+                    self.guild_soundboard_sound_create(ctx, sound).await
+                }
+                EventKind::GuildSoundboardSoundUpdate(sound) => {
+                    self.guild_soundboard_sound_update(ctx, sound).await
+                }
+                EventKind::GuildSoundboardSoundDelete(payload) => {
+                    self.guild_soundboard_sound_delete(ctx, payload).await
+                }
+                EventKind::GuildSoundboardSoundsUpdate(payload) => {
+                    self.guild_soundboard_sounds_update(ctx, payload).await
+                }
+                EventKind::SoundboardSounds(payload) => self.soundboard_sounds(ctx, payload).await,
+                EventKind::WebhooksUpdate(payload) => self.webhooks_update(ctx, payload).await,
+                EventKind::InviteCreate(payload) => self.invite_create(ctx, payload).await,
+                EventKind::InviteDelete(payload) => self.invite_delete(ctx, payload).await,
+                EventKind::VoiceStateUpdate(state) => self.voice_state_update(ctx, state).await,
+                EventKind::VoiceServerUpdate(data) => self.voice_server_update(ctx, data).await,
+                EventKind::MessageReactionAdd(reaction) => self.reaction_add(ctx, reaction).await,
+                EventKind::MessageReactionRemove(reaction) => {
+                    self.reaction_remove(ctx, reaction).await
+                }
+                EventKind::MessageReactionRemoveAll(payload) => {
+                    self.reaction_remove_all(ctx, payload).await
+                }
+                EventKind::MessageReactionRemoveEmoji(payload) => {
+                    self.reaction_remove_emoji(ctx, payload).await
+                }
+                EventKind::MessagePollVoteAdd(payload) => self.poll_vote_add(ctx, payload).await,
+                EventKind::MessagePollVoteRemove(payload) => {
+                    self.poll_vote_remove(ctx, payload).await
+                }
+                EventKind::TypingStart(payload) => self.typing_start(ctx, payload).await,
+                EventKind::PresenceUpdate(payload) => self.presence_update(ctx, payload).await,
+                EventKind::InteractionCreate(interaction) => {
+                    self.interaction_create(ctx, interaction).await
+                }
+                EventKind::UserUpdate(user) => self.user_update(ctx, user).await,
+                EventKind::ThreadCreate(payload) => self.thread_create(ctx, payload).await,
+                EventKind::ThreadUpdate(payload) => self.thread_update(ctx, payload).await,
+                EventKind::ThreadDelete(payload) => self.thread_delete(ctx, payload).await,
+                EventKind::ThreadListSync(payload) => self.thread_list_sync(ctx, payload).await,
+                EventKind::ThreadMemberUpdate(payload) => {
+                    self.thread_member_update(ctx, payload).await
+                }
+                EventKind::ThreadMembersUpdate(payload) => {
+                    self.thread_members_update(ctx, payload).await
+                }
+                EventKind::GuildStickersUpdate(payload) => {
+                    self.guild_stickers_update(ctx, payload).await
+                }
+                EventKind::GuildScheduledEventCreate(payload) => {
+                    self.guild_scheduled_event_create(ctx, payload).await
+                }
+                EventKind::GuildScheduledEventUpdate(payload) => {
+                    self.guild_scheduled_event_update(ctx, payload).await
+                }
+                EventKind::GuildScheduledEventDelete(payload) => {
+                    self.guild_scheduled_event_delete(ctx, payload).await
+                }
+                EventKind::GuildScheduledEventUserAdd(payload) => {
+                    self.guild_scheduled_event_user_add(ctx, payload).await
+                }
+                EventKind::GuildScheduledEventUserRemove(payload) => {
+                    self.guild_scheduled_event_user_remove(ctx, payload).await
+                }
+                EventKind::StageInstanceCreate(stage_instance) => {
+                    self.stage_instance_create(ctx, stage_instance).await
+                }
+                EventKind::StageInstanceUpdate(stage_instance) => {
+                    self.stage_instance_update(ctx, stage_instance).await
+                }
+                EventKind::StageInstanceDelete(stage_instance) => {
+                    self.stage_instance_delete(ctx, stage_instance).await
+                }
+                EventKind::VoiceChannelEffectSend(payload) => {
+                    self.voice_channel_effect_send(ctx, payload).await
+                }
+                EventKind::VoiceChannelStartTimeUpdate(payload) => {
+                    self.voice_channel_start_time_update(ctx, payload).await
+                }
+                EventKind::VoiceChannelStatusUpdate(payload) => {
+                    self.voice_channel_status_update(ctx, payload).await
+                }
+                EventKind::ChannelInfo(payload) => self.channel_info(ctx, payload).await,
+                EventKind::RateLimited(payload) => self.gateway_rate_limited(ctx, payload).await,
+                EventKind::ApplicationCommandPermissionsUpdate(payload) => {
+                    self.application_command_permissions_update(ctx, payload)
                         .await
                 }
-                Event::MessageDeleteBulk(event) => self.message_delete_bulk(ctx, event).await,
-                Event::ChannelPinsUpdate(event) => self.channel_pins_update(ctx, event).await,
-                Event::GuildBanAdd(event) => self.guild_ban_add(ctx, event).await,
-                Event::GuildBanRemove(event) => self.guild_ban_remove(ctx, event).await,
-                Event::GuildEmojisUpdate(event) => self.guild_emojis_update(ctx, event).await,
-                Event::GuildIntegrationsUpdate(event) => {
-                    self.guild_integrations_update(ctx, event).await
+                EventKind::AutoModerationRuleCreate(payload) => {
+                    self.auto_moderation_rule_create(ctx, payload).await
                 }
-                Event::EntitlementCreate(event) => self.entitlement_create(ctx, event).await,
-                Event::EntitlementUpdate(event) => self.entitlement_update(ctx, event).await,
-                Event::EntitlementDelete(event) => self.entitlement_delete(ctx, event).await,
-                Event::SubscriptionCreate(event) => self.subscription_create(ctx, event).await,
-                Event::SubscriptionUpdate(event) => self.subscription_update(ctx, event).await,
-                Event::SubscriptionDelete(event) => self.subscription_delete(ctx, event).await,
-                Event::IntegrationCreate(event) => self.integration_create(ctx, event).await,
-                Event::IntegrationUpdate(event) => self.integration_update(ctx, event).await,
-                Event::IntegrationDelete(event) => self.integration_delete(ctx, event).await,
-                Event::GuildSoundboardSoundCreate(event) => {
-                    self.guild_soundboard_sound_create(ctx, event).await
+                EventKind::AutoModerationRuleUpdate(payload) => {
+                    self.auto_moderation_rule_update(ctx, payload).await
                 }
-                Event::GuildSoundboardSoundUpdate(event) => {
-                    self.guild_soundboard_sound_update(ctx, event).await
+                EventKind::AutoModerationRuleDelete(payload) => {
+                    self.auto_moderation_rule_delete(ctx, payload).await
                 }
-                Event::GuildSoundboardSoundDelete(event) => {
-                    self.guild_soundboard_sound_delete(ctx, event).await
+                EventKind::AutoModerationActionExecution(payload) => {
+                    self.auto_moderation_action_execution(ctx, payload).await
                 }
-                Event::GuildSoundboardSoundsUpdate(event) => {
-                    self.guild_soundboard_sounds_update(ctx, event).await
+                EventKind::GuildAuditLogEntryCreate(payload) => {
+                    self.guild_audit_log_entry_create(ctx, payload).await
                 }
-                Event::SoundboardSounds(event) => self.soundboard_sounds(ctx, event).await,
-                Event::WebhooksUpdate(event) => self.webhooks_update(ctx, event).await,
-                Event::InviteCreate(event) => self.invite_create(ctx, event).await,
-                Event::InviteDelete(event) => self.invite_delete(ctx, event).await,
-                Event::VoiceStateUpdate(event) => self.voice_state_update(ctx, event.state).await,
-                Event::VoiceServerUpdate(event) => self.voice_server_update(ctx, event.data).await,
-                Event::Resumed(event) => self.resumed(ctx, event).await,
-                Event::MessageReactionAdd(event) => self.reaction_add(ctx, event).await,
-                Event::MessageReactionRemove(event) => self.reaction_remove(ctx, event).await,
-                Event::MessageReactionRemoveAll(event) => {
-                    self.reaction_remove_all(ctx, event).await
+                EventKind::Unknown => {
+                    if let Some(data) = event.raw() {
+                        self.raw_event(ctx, event.name(), data).await;
+                    }
                 }
-                Event::MessagePollVoteAdd(event) => self.poll_vote_add(ctx, event).await,
-                Event::MessagePollVoteRemove(event) => self.poll_vote_remove(ctx, event).await,
-                Event::TypingStart(event) => self.typing_start(ctx, event).await,
-                Event::PresenceUpdate(event) => self.presence_update(ctx, event).await,
-                Event::InteractionCreate(event) => {
-                    self.interaction_create(ctx, event.interaction).await
+                EventKind::DecodeFailed(error) => {
+                    if let Some(data) = event.raw() {
+                        self.decode_failed(ctx, event.name(), error, data).await;
+                    }
                 }
-                Event::UserUpdate(event) => self.user_update(ctx, event.user).await,
-                Event::ThreadCreate(event) => self.thread_create(ctx, event).await,
-                Event::ThreadUpdate(event) => self.thread_update(ctx, event).await,
-                Event::ThreadDelete(event) => self.thread_delete(ctx, event).await,
-                Event::ThreadListSync(event) => self.thread_list_sync(ctx, event).await,
-                Event::ThreadMemberUpdate(event) => self.thread_member_update(ctx, event).await,
-                Event::ThreadMembersUpdate(event) => self.thread_members_update(ctx, event).await,
-                Event::MessageReactionRemoveEmoji(event) => {
-                    self.reaction_remove_emoji(ctx, event).await
-                }
-                Event::GuildStickersUpdate(event) => self.guild_stickers_update(ctx, event).await,
-                Event::GuildScheduledEventCreate(event) => {
-                    self.guild_scheduled_event_create(ctx, event).await
-                }
-                Event::GuildScheduledEventUpdate(event) => {
-                    self.guild_scheduled_event_update(ctx, event).await
-                }
-                Event::GuildScheduledEventDelete(event) => {
-                    self.guild_scheduled_event_delete(ctx, event).await
-                }
-                Event::GuildScheduledEventUserAdd(event) => {
-                    self.guild_scheduled_event_user_add(ctx, event).await
-                }
-                Event::GuildScheduledEventUserRemove(event) => {
-                    self.guild_scheduled_event_user_remove(ctx, event).await
-                }
-                Event::StageInstanceCreate(event) => self.stage_instance_create(ctx, event).await,
-                Event::StageInstanceUpdate(event) => self.stage_instance_update(ctx, event).await,
-                Event::StageInstanceDelete(event) => self.stage_instance_delete(ctx, event).await,
-                Event::VoiceChannelEffectSend(event) => {
-                    self.voice_channel_effect_send(ctx, event).await
-                }
-                Event::VoiceChannelStartTimeUpdate(event) => {
-                    self.voice_channel_start_time_update(ctx, event).await
-                }
-                Event::VoiceChannelStatusUpdate(event) => {
-                    self.voice_channel_status_update(ctx, event).await
-                }
-                Event::ChannelInfo(event) => self.channel_info(ctx, event).await,
-                Event::RateLimited(event) => self.gateway_rate_limited(ctx, event).await,
-                Event::ApplicationCommandPermissionsUpdate(event) => {
-                    self.application_command_permissions_update(ctx, event)
-                        .await
-                }
-                Event::AutoModerationRuleCreate(event) => {
-                    self.auto_moderation_rule_create(ctx, event).await
-                }
-                Event::AutoModerationRuleUpdate(event) => {
-                    self.auto_moderation_rule_update(ctx, event).await
-                }
-                Event::AutoModerationRuleDelete(event) => {
-                    self.auto_moderation_rule_delete(ctx, event).await
-                }
-                Event::AutoModerationActionExecution(event) => {
-                    self.auto_moderation_action_execution(ctx, event).await
-                }
-                Event::GuildAuditLogEntryCreate(event) => {
-                    self.guild_audit_log_entry_create(ctx, event).await
-                }
-                Event::Unknown { kind, raw } => self.raw_event(ctx, kind, raw).await,
             }
         }
     }
@@ -868,49 +960,52 @@ pub trait EventHandler: Send + Sync + 'static {
     fn ready(
         &self,
         _ctx: Context,
-        _ready_data: crate::event::ReadyPayload,
+        _ready: &crate::event::ReadyPayload,
     ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn resumed(&self, _ctx: Context) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_create(
         &self,
         _ctx: Context,
-        _guild: crate::model::Guild,
+        _guild: &crate::model::GuildCreate,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_update(
         &self,
         _ctx: Context,
-        _guild: crate::model::Guild,
+        _guild: &crate::model::Guild,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_delete(
         &self,
         _ctx: Context,
-        _data: crate::event::GuildDeletePayload,
+        _data: &crate::event::GuildDeletePayload,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn channel_create(
         &self,
         _ctx: Context,
-        _channel: crate::model::Channel,
+        _channel: &crate::model::Channel,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn channel_update(
         &self,
         _ctx: Context,
-        _channel: crate::model::Channel,
+        _channel: &crate::model::Channel,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn channel_delete(
         &self,
         _ctx: Context,
-        _channel: crate::model::Channel,
+        _channel: &crate::model::Channel,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -918,7 +1013,7 @@ pub trait EventHandler: Send + Sync + 'static {
         &self,
         _ctx: Context,
         _guild_id: GuildId,
-        _member: crate::model::Member,
+        _member: Arc<crate::model::Member>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -926,7 +1021,7 @@ pub trait EventHandler: Send + Sync + 'static {
         &self,
         _ctx: Context,
         _guild_id: GuildId,
-        _member: crate::model::Member,
+        _member: Arc<crate::model::Member>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -934,14 +1029,14 @@ pub trait EventHandler: Send + Sync + 'static {
         &self,
         _ctx: Context,
         _guild_id: GuildId,
-        _user: crate::model::User,
+        _user: &crate::model::User,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_members_chunk(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildMembersChunkEvent,
+        _chunk: &crate::event::GuildMembersChunkPayload,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -949,7 +1044,7 @@ pub trait EventHandler: Send + Sync + 'static {
         &self,
         _ctx: Context,
         _guild_id: GuildId,
-        _role: crate::model::Role,
+        _role: &crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -957,7 +1052,7 @@ pub trait EventHandler: Send + Sync + 'static {
         &self,
         _ctx: Context,
         _guild_id: GuildId,
-        _role: crate::model::Role,
+        _role: &crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -972,14 +1067,14 @@ pub trait EventHandler: Send + Sync + 'static {
     fn message_create(
         &self,
         _ctx: Context,
-        _message: crate::model::Message,
+        _message: Arc<crate::model::Message>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn message_update(
         &self,
         _ctx: Context,
-        _message: crate::model::Message,
+        _update: Arc<crate::model::MessageUpdate>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -994,443 +1089,449 @@ pub trait EventHandler: Send + Sync + 'static {
     fn message_delete_bulk(
         &self,
         _ctx: Context,
-        _event: crate::event::BulkMessageDeleteEvent,
+        _event: &crate::event::BulkMessageDeleteEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn channel_pins_update(
         &self,
         _ctx: Context,
-        _event: crate::event::ChannelPinsUpdateEvent,
+        _event: &crate::event::ChannelPinsUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_ban_add(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildBanEvent,
+        _event: &crate::event::GuildBanEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_ban_remove(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildBanEvent,
+        _event: &crate::event::GuildBanEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_emojis_update(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildEmojisUpdateEvent,
+        _event: &crate::event::GuildEmojisUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_integrations_update(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildIntegrationsUpdateEvent,
+        _event: &crate::event::GuildIntegrationsUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn entitlement_create(
         &self,
         _ctx: Context,
-        _event: crate::event::EntitlementEvent,
+        _entitlement: &crate::model::Entitlement,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn entitlement_update(
         &self,
         _ctx: Context,
-        _event: crate::event::EntitlementEvent,
+        _entitlement: &crate::model::Entitlement,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn entitlement_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::EntitlementEvent,
+        _entitlement: &crate::model::Entitlement,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn subscription_create(
         &self,
         _ctx: Context,
-        _event: crate::event::SubscriptionEvent,
+        _subscription: &crate::model::Subscription,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn subscription_update(
         &self,
         _ctx: Context,
-        _event: crate::event::SubscriptionEvent,
+        _subscription: &crate::model::Subscription,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn subscription_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::SubscriptionEvent,
+        _subscription: &crate::model::Subscription,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn integration_create(
         &self,
         _ctx: Context,
-        _event: crate::event::IntegrationEvent,
+        _event: &crate::event::IntegrationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn integration_update(
         &self,
         _ctx: Context,
-        _event: crate::event::IntegrationEvent,
+        _event: &crate::event::IntegrationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn integration_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::IntegrationDeleteEvent,
+        _event: &crate::event::IntegrationDeleteEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_soundboard_sound_create(
         &self,
         _ctx: Context,
-        _event: crate::event::SoundboardSoundEvent,
+        _sound: &crate::model::SoundboardSound,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_soundboard_sound_update(
         &self,
         _ctx: Context,
-        _event: crate::event::SoundboardSoundEvent,
+        _sound: &crate::model::SoundboardSound,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_soundboard_sound_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::SoundboardSoundDeleteEvent,
+        _event: &crate::event::SoundboardSoundDeleteEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_soundboard_sounds_update(
         &self,
         _ctx: Context,
-        _event: crate::event::SoundboardSoundsEvent,
+        _event: &crate::event::SoundboardSoundsEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn soundboard_sounds(
         &self,
         _ctx: Context,
-        _event: crate::event::SoundboardSoundsEvent,
+        _event: &crate::event::SoundboardSoundsEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn webhooks_update(
         &self,
         _ctx: Context,
-        _event: crate::event::WebhooksUpdateEvent,
+        _event: &crate::event::WebhooksUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn invite_create(
         &self,
         _ctx: Context,
-        _event: crate::event::InviteEvent,
+        _event: &crate::event::InviteEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn invite_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::InviteEvent,
+        _event: &crate::event::InviteEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn voice_state_update(
         &self,
         _ctx: Context,
-        _state: crate::model::VoiceState,
+        _state: &crate::model::VoiceState,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn voice_server_update(
         &self,
         _ctx: Context,
-        _data: crate::model::VoiceServerUpdate,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn resumed(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ResumedEvent,
+        _data: &crate::model::VoiceServerUpdate,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn reaction_add(
         &self,
         _ctx: Context,
-        _data: crate::event::ReactionEvent,
+        _reaction: &crate::event::ReactionEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn reaction_remove(
         &self,
         _ctx: Context,
-        _data: crate::event::ReactionEvent,
+        _reaction: &crate::event::ReactionEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn reaction_remove_all(
         &self,
         _ctx: Context,
-        _event: crate::event::ReactionRemoveAllEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn poll_vote_add(
-        &self,
-        _ctx: Context,
-        _event: crate::event::PollVoteEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn poll_vote_remove(
-        &self,
-        _ctx: Context,
-        _event: crate::event::PollVoteEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn typing_start(
-        &self,
-        _ctx: Context,
-        _data: crate::event::TypingStartEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn presence_update(
-        &self,
-        _ctx: Context,
-        _data: crate::event::PresenceUpdateEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn interaction_create(
-        &self,
-        _ctx: Context,
-        _interaction: crate::model::Interaction,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn user_update(
-        &self,
-        _ctx: Context,
-        _user: crate::model::User,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_create(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_update(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_delete(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_list_sync(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadListSyncEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_member_update(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadMemberUpdateEvent,
-    ) -> impl Future<Output = ()> + Send {
-        async {}
-    }
-    fn thread_members_update(
-        &self,
-        _ctx: Context,
-        _event: crate::event::ThreadMembersUpdateEvent,
+        _event: &crate::event::ReactionRemoveAllEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn reaction_remove_emoji(
         &self,
         _ctx: Context,
-        _event: crate::event::ReactionRemoveEmojiEvent,
+        _event: &crate::event::ReactionRemoveEmojiEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn poll_vote_add(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::PollVoteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn poll_vote_remove(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::PollVoteEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn typing_start(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::TypingStartEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn presence_update(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::PresenceUpdateEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn interaction_create(
+        &self,
+        _ctx: Context,
+        _interaction: &crate::model::Interaction,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn user_update(
+        &self,
+        _ctx: Context,
+        _user: &crate::model::User,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_create(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_update(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_delete(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_list_sync(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadListSyncEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_member_update(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadMemberUpdateEvent,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    fn thread_members_update(
+        &self,
+        _ctx: Context,
+        _event: &crate::event::ThreadMembersUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_stickers_update(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildStickersUpdateEvent,
+        _event: &crate::event::GuildStickersUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_scheduled_event_create(
         &self,
         _ctx: Context,
-        _event: crate::event::ScheduledEvent,
+        _event: &crate::event::ScheduledEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_scheduled_event_update(
         &self,
         _ctx: Context,
-        _event: crate::event::ScheduledEvent,
+        _event: &crate::event::ScheduledEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_scheduled_event_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::ScheduledEvent,
+        _event: &crate::event::ScheduledEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_scheduled_event_user_add(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildScheduledEventUserEvent,
+        _event: &crate::event::GuildScheduledEventUserEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_scheduled_event_user_remove(
         &self,
         _ctx: Context,
-        _event: crate::event::GuildScheduledEventUserEvent,
+        _event: &crate::event::GuildScheduledEventUserEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn stage_instance_create(
         &self,
         _ctx: Context,
-        _event: crate::event::StageInstanceEvent,
+        _stage_instance: &crate::model::StageInstance,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn stage_instance_update(
         &self,
         _ctx: Context,
-        _event: crate::event::StageInstanceEvent,
+        _stage_instance: &crate::model::StageInstance,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn stage_instance_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::StageInstanceEvent,
+        _stage_instance: &crate::model::StageInstance,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn voice_channel_effect_send(
         &self,
         _ctx: Context,
-        _event: crate::event::VoiceChannelEffectEvent,
+        _event: &crate::event::VoiceChannelEffectEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn voice_channel_start_time_update(
         &self,
         _ctx: Context,
-        _event: crate::event::VoiceChannelStartTimeUpdateEvent,
+        _event: &crate::event::VoiceChannelStartTimeUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn voice_channel_status_update(
         &self,
         _ctx: Context,
-        _event: crate::event::VoiceChannelStatusUpdateEvent,
+        _event: &crate::event::VoiceChannelStatusUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
-    /// Handles typed `CHANNEL_INFO` Gateway dispatches.
     fn channel_info(
         &self,
         _ctx: Context,
-        _event: crate::event::ChannelInfoEvent,
+        _event: &crate::event::ChannelInfoEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn gateway_rate_limited(
         &self,
         _ctx: Context,
-        _event: crate::event::RateLimitedEvent,
+        _event: &crate::event::RateLimitedEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn application_command_permissions_update(
         &self,
         _ctx: Context,
-        _event: crate::event::ApplicationCommandPermissionsUpdateEvent,
+        _event: &crate::event::ApplicationCommandPermissionsUpdateEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn auto_moderation_rule_create(
         &self,
         _ctx: Context,
-        _event: crate::event::AutoModerationEvent,
+        _event: &crate::event::AutoModerationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn auto_moderation_rule_update(
         &self,
         _ctx: Context,
-        _event: crate::event::AutoModerationEvent,
+        _event: &crate::event::AutoModerationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn auto_moderation_rule_delete(
         &self,
         _ctx: Context,
-        _event: crate::event::AutoModerationEvent,
+        _event: &crate::event::AutoModerationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn auto_moderation_action_execution(
         &self,
         _ctx: Context,
-        _event: crate::event::AutoModerationEvent,
+        _event: &crate::event::AutoModerationEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn guild_audit_log_entry_create(
         &self,
         _ctx: Context,
-        _event: crate::event::AuditLogEntryEvent,
+        _event: &crate::event::AuditLogEntryEvent,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
+    /// Handles a dispatch this crate has no typed payload for
+    /// ([`EventKind::Unknown`]), with its name and raw payload.
     fn raw_event(
         &self,
         _ctx: Context,
-        _event_name: String,
-        _data: Value,
+        _event_name: &str,
+        _data: &RawValue,
+    ) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+    /// Handles a known dispatch whose payload did not decode
+    /// ([`EventKind::DecodeFailed`]). The runtime has already logged a
+    /// warning; the raw payload is passed for inspection.
+    fn decode_failed(
+        &self,
+        _ctx: Context,
+        _event_name: &str,
+        _error: &EventDecodeError,
+        _data: &RawValue,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -1462,11 +1563,11 @@ type HandlerFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 ///   컴파일 오류가 된다. 핸들러 하나의 future 크기는 가장 큰 타입 훅 future를 따른다.
 /// ```
 trait ErasedEventHandler: Send + Sync + 'static {
-    fn handle_event_boxed(&self, ctx: Context, event: Event) -> HandlerFuture<'_>;
+    fn handle_event_boxed(&self, ctx: Context, event: Arc<Event>) -> HandlerFuture<'_>;
 }
 
 impl<H: EventHandler> ErasedEventHandler for H {
-    fn handle_event_boxed(&self, ctx: Context, event: Event) -> HandlerFuture<'_> {
+    fn handle_event_boxed(&self, ctx: Context, event: Arc<Event>) -> HandlerFuture<'_> {
         Box::pin(self.handle_event(ctx, event))
     }
 }
@@ -1565,6 +1666,9 @@ struct DispatchConfig {
     max_concurrent_interactions: usize,
     interaction_admission_timeout: Duration,
     interaction_overload: Option<InteractionOverloadHook>,
+    /// Whether decoded known events keep their raw payload
+    /// ([`ClientBuilder::keep_raw_events`]).
+    keep_raw_events: bool,
 }
 
 impl Default for DispatchConfig {
@@ -1578,6 +1682,7 @@ impl Default for DispatchConfig {
             max_concurrent_interactions: DEFAULT_MAX_CONCURRENT_INTERACTIONS,
             interaction_admission_timeout: DEFAULT_INTERACTION_ADMISSION_TIMEOUT,
             interaction_overload: None,
+            keep_raw_events: false,
         }
     }
 }
@@ -1709,6 +1814,19 @@ impl ClientBuilder {
     /// 30 seconds).
     pub fn event_queue_capacity(mut self, capacity: usize) -> Self {
         self.dispatch.queue_capacity = capacity.max(1);
+        self
+    }
+
+    /// Keeps the raw JSON payload of every decoded event, readable through
+    /// [`Event::raw`] (default `false`).
+    ///
+    /// Unknown dispatches and payloads that fail to decode always keep it.
+    /// Known events otherwise drop it right after decoding, which keeps an
+    /// event's memory at its typed size (raw payloads made a MESSAGE_CREATE
+    /// five times larger); enable this only when you read fields the typed
+    /// payloads do not expose.
+    pub fn keep_raw_events(mut self, keep: bool) -> Self {
+        self.dispatch.keep_raw_events = keep;
         self
     }
 
@@ -2532,7 +2650,7 @@ async fn start_gateway_shard(
     );
     let fault = pipeline.fault();
     let ingress = pipeline.ingress();
-    let callback: EventCallback = Arc::new(move |event_name: String, data: Value| {
+    let callback: EventCallback = Arc::new(move |event_name: String, data: serde_json::Value| {
         ingress.push(GatewayDispatch::new(event_name, data));
     });
 
@@ -2619,30 +2737,33 @@ async fn start_gateway_shard(
 /// pair of the shard that received it; READY only invalidates that shard's
 /// entries because every shard of a process shares this cache (see
 /// [`CacheHandle::clear_shard`]).
+///
+/// Payloads the event holds as `Arc`s (messages, members, GUILD_CREATE's
+/// members and presences) are stored as they are; everything else is
+/// copied out of the shared event.
 async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Event) {
-    match event {
-        Event::Ready(_) => {
+    match event.kind() {
+        EventKind::Ready(_) => {
             cache.clear_shard(shard.0, shard.1).await;
         }
-        Event::GuildCreate(event) | Event::GuildUpdate(event) => {
-            cache.apply_guild_create(&event.guild).await;
+        EventKind::GuildCreate(guild) => {
+            cache.apply_guild_create(guild).await;
         }
-        Event::GuildMembersChunk(event) => {
+        EventKind::GuildUpdate(guild) => {
+            cache.apply_guild_update(guild).await;
+        }
+        EventKind::GuildMembersChunk(chunk) => {
             cache
-                .apply_members_chunk(
-                    event.data.guild_id,
-                    &event.data.members,
-                    event.data.presences.as_deref(),
-                )
+                .apply_members_chunk(chunk.guild_id, &chunk.members, chunk.presences.as_deref())
                 .await;
         }
-        Event::ThreadCreate(event) | Event::ThreadUpdate(event) => {
+        EventKind::ThreadCreate(event) | EventKind::ThreadUpdate(event) => {
             cache.upsert_channel(event.thread.clone()).await;
         }
-        Event::ThreadDelete(event) => {
+        EventKind::ThreadDelete(event) => {
             cache.remove_channel(event.thread.id).await;
         }
-        Event::ThreadListSync(event) => {
+        EventKind::ThreadListSync(event) => {
             for thread in &event.threads {
                 let mut thread = thread.clone();
                 if thread.guild_id.is_none() {
@@ -2651,85 +2772,70 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 cache.upsert_channel(thread).await;
             }
         }
-        Event::GuildDelete(event) => {
-            cache.remove_guild(event.data.id).await;
+        EventKind::GuildDelete(data) => {
+            cache.remove_guild(data.id).await;
         }
-        Event::ChannelCreate(event) | Event::ChannelUpdate(event) => {
-            cache.upsert_channel(event.channel.clone()).await;
+        EventKind::ChannelCreate(channel) | EventKind::ChannelUpdate(channel) => {
+            cache.upsert_channel((**channel).clone()).await;
         }
-        Event::ChannelDelete(event) => {
-            cache.remove_channel(event.channel.id).await;
+        EventKind::ChannelDelete(channel) => {
+            cache.remove_channel(channel.id).await;
         }
-        Event::MemberAdd(event) | Event::MemberUpdate(event) => {
+        EventKind::MemberAdd(event) | EventKind::MemberUpdate(event) => {
             if let Some(user) = event.member.user.as_ref() {
                 cache.upsert_user(user.clone()).await;
                 cache
-                    .upsert_member(event.guild_id, user.id, event.member.clone())
+                    .upsert_member(event.guild_id, user.id, Arc::clone(&event.member))
                     .await;
             }
         }
-        Event::MemberRemove(event) => {
-            cache.upsert_user(event.data.user.clone()).await;
-            cache
-                .remove_member(event.data.guild_id, event.data.user.id)
-                .await;
+        EventKind::MemberRemove(data) => {
+            cache.upsert_user(data.user.clone()).await;
+            cache.remove_member(data.guild_id, data.user.id).await;
         }
-        Event::RoleCreate(event) | Event::RoleUpdate(event) => {
+        EventKind::RoleCreate(event) | EventKind::RoleUpdate(event) => {
             cache.upsert_role(event.guild_id, event.role.clone()).await;
         }
-        Event::RoleDelete(event) => {
-            cache
-                .remove_role(event.data.guild_id, event.data.role_id)
-                .await;
+        EventKind::RoleDelete(data) => {
+            cache.remove_role(data.guild_id, data.role_id).await;
         }
-        Event::MessageCreate(event) => {
-            if let Some(author) = event.message.author.as_ref() {
+        EventKind::MessageCreate(message) => {
+            if let Some(author) = message.author.as_ref() {
                 cache.upsert_user(author.clone()).await;
             }
             // Gateway messages without a guild are DMs. Recording the DM
             // channel ties the message to shard 0 (the only shard Discord
             // sends DMs to), so that shard's READY invalidates it instead of
             // leaving an orphan whose owner cannot be determined.
-            if event.message.guild_id.is_none() {
+            if message.guild_id.is_none() {
                 cache
                     .upsert_channel_if_absent(crate::model::Channel::stub(
-                        event.message.channel_id,
+                        message.channel_id,
                         None,
                         crate::model::ChannelType::DM,
                     ))
                     .await;
             }
-            cache.upsert_message(event.message.clone()).await;
+            cache.upsert_message(Arc::clone(message)).await;
         }
-        Event::MessageUpdate(event) => {
-            if let Some(author) = event.message.author.as_ref() {
-                cache.upsert_user(author.clone()).await;
+        EventKind::MessageUpdate(update) => {
+            if let Some(author) = update.author_user() {
+                cache.upsert_user(author).await;
             }
-            if let Some(cached_message) = cache
-                .message(event.message.channel_id, event.message.id)
-                .await
-            {
-                cache
-                    .upsert_message(merge_message_update(
-                        cached_message,
-                        event.message.clone(),
-                        &MessageUpdateFields::from_raw(&event.raw),
-                    ))
-                    .await;
-            }
+            // Merges into the cached message only; an update alone is never
+            // stored as a message (its omitted fields are unknown).
+            cache.apply_message_update(update).await;
         }
-        Event::MessageDelete(event) => {
-            cache
-                .remove_message(event.data.channel_id, event.data.id)
-                .await;
+        EventKind::MessageDelete(data) => {
+            cache.remove_message(data.channel_id, data.id).await;
         }
-        Event::MessageDeleteBulk(event) => {
+        EventKind::MessageDeleteBulk(event) => {
             cache
                 .remove_messages_bulk(event.channel_id, &event.ids)
                 .await;
         }
-        Event::InteractionCreate(event) => {
-            if let Interaction::Component(component) = &event.interaction {
+        EventKind::InteractionCreate(interaction) => {
+            if let Interaction::Component(component) = &**interaction {
                 if let Some(channel_id) = component.context.channel_id {
                     // Only a stub is known here; never overwrite a full
                     // channel object already held in the cache.
@@ -2745,240 +2851,90 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 }
             }
         }
-        Event::VoiceStateUpdate(event) => {
-            if let Some(member) = event.state.member.as_ref() {
+        EventKind::VoiceStateUpdate(state) => {
+            if let Some(member) = state.member.as_ref() {
                 if let Some(user) = member.user.as_ref() {
                     cache.upsert_user(user.clone()).await;
-                    if let Some(guild_id) = event.state.guild_id {
+                    if let Some(guild_id) = state.guild_id {
                         cache.upsert_member(guild_id, user.id, member.clone()).await;
                     }
                 }
             }
-            if let (Some(guild_id), Some(user_id)) =
-                (event.state.guild_id.as_ref(), event.state.user_id.as_ref())
-            {
-                if event.state.channel_id.is_some() {
+            if let (Some(guild_id), Some(user_id)) = (state.guild_id, state.user_id) {
+                if state.channel_id.is_some() {
                     cache
-                        .upsert_voice_state(*guild_id, *user_id, event.state.clone())
+                        .upsert_voice_state(guild_id, user_id, (**state).clone())
                         .await;
                 } else {
-                    cache.remove_voice_state(*guild_id, *user_id).await;
+                    cache.remove_voice_state(guild_id, user_id).await;
                 }
             }
         }
-        Event::VoiceServerUpdate(_) => {}
-        Event::ChannelPinsUpdate(_) => {}
-        Event::GuildBanAdd(_) | Event::GuildBanRemove(_) => {}
-        Event::GuildEmojisUpdate(event) => {
+        EventKind::GuildEmojisUpdate(event) => {
             cache
                 .replace_emojis(event.guild_id, event.emojis.clone())
                 .await;
         }
-        Event::GuildIntegrationsUpdate(_)
-        | Event::IntegrationCreate(_)
-        | Event::IntegrationUpdate(_)
-        | Event::IntegrationDelete(_) => {}
-        Event::GuildSoundboardSoundCreate(event) | Event::GuildSoundboardSoundUpdate(event) => {
-            if let Some(guild_id) = event.sound.guild_id {
+        EventKind::GuildSoundboardSoundCreate(sound)
+        | EventKind::GuildSoundboardSoundUpdate(sound) => {
+            if let Some(guild_id) = sound.guild_id {
                 cache
-                    .upsert_soundboard_sound(guild_id, event.sound.clone())
+                    .upsert_soundboard_sound(guild_id, (**sound).clone())
                     .await;
             }
         }
-        Event::GuildSoundboardSoundDelete(event) => {
+        EventKind::GuildSoundboardSoundDelete(event) => {
             cache
                 .remove_soundboard_sound(event.guild_id, event.sound_id)
                 .await;
         }
-        Event::GuildSoundboardSoundsUpdate(event) | Event::SoundboardSounds(event) => {
+        EventKind::GuildSoundboardSoundsUpdate(event) | EventKind::SoundboardSounds(event) => {
             cache
                 .replace_soundboard_sounds(event.guild_id, event.soundboard_sounds.clone())
                 .await;
         }
-        Event::GuildStickersUpdate(event) => {
+        EventKind::GuildStickersUpdate(event) => {
             if let Some(guild_id) = event.guild_id {
                 cache
                     .replace_stickers(guild_id, event.stickers.clone())
                     .await;
             }
         }
-        Event::GuildScheduledEventCreate(event) | Event::GuildScheduledEventUpdate(event) => {
-            cache.upsert_scheduled_event(event.clone()).await;
+        EventKind::GuildScheduledEventCreate(event)
+        | EventKind::GuildScheduledEventUpdate(event) => {
+            cache.upsert_scheduled_event((**event).clone()).await;
         }
-        Event::GuildScheduledEventDelete(event) => {
-            if let (Some(guild_id), Some(event_id)) = (event.guild_id.as_ref(), event.id.as_ref()) {
-                cache.remove_scheduled_event(*guild_id, *event_id).await;
+        EventKind::GuildScheduledEventDelete(event) => {
+            if let (Some(guild_id), Some(event_id)) = (event.guild_id, event.id) {
+                cache.remove_scheduled_event(guild_id, event_id).await;
             }
         }
-        Event::StageInstanceCreate(event) | Event::StageInstanceUpdate(event) => {
+        EventKind::StageInstanceCreate(stage_instance)
+        | EventKind::StageInstanceUpdate(stage_instance) => {
             cache
-                .upsert_stage_instance(event.stage_instance.clone())
+                .upsert_stage_instance((**stage_instance).clone())
                 .await;
         }
-        Event::StageInstanceDelete(event) => {
+        EventKind::StageInstanceDelete(stage_instance) => {
             cache
-                .remove_stage_instance(event.stage_instance.guild_id, event.stage_instance.id)
+                .remove_stage_instance(stage_instance.guild_id, stage_instance.id)
                 .await;
         }
-        Event::EntitlementCreate(_)
-        | Event::EntitlementUpdate(_)
-        | Event::EntitlementDelete(_)
-        | Event::SubscriptionCreate(_)
-        | Event::SubscriptionUpdate(_)
-        | Event::SubscriptionDelete(_) => {}
-        Event::WebhooksUpdate(_) => {}
-        Event::InviteCreate(_) | Event::InviteDelete(_) => {}
-        Event::MessageReactionAdd(_)
-        | Event::MessageReactionRemove(_)
-        | Event::MessagePollVoteAdd(_)
-        | Event::MessagePollVoteRemove(_)
-        | Event::RateLimited(_) => {}
-        Event::MessageReactionRemoveAll(_) => {}
-        Event::TypingStart(_) => {}
-        Event::PresenceUpdate(event) => {
-            if let (Some(guild_id), Some(user_id)) =
-                (event.guild_id.as_ref(), event.user_id.as_ref())
-            {
+        EventKind::PresenceUpdate(event) => {
+            if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id) {
                 cache
-                    .upsert_presence(*guild_id, *user_id, presence_from_update(event, *user_id))
+                    .upsert_presence(guild_id, user_id, presence_from_update(event, user_id))
                     .await;
             }
         }
-        Event::UserUpdate(event) => {
-            cache.upsert_user(event.user.clone()).await;
+        EventKind::UserUpdate(user) => {
+            cache.upsert_user((**user).clone()).await;
         }
-        Event::Unknown { .. } => {}
+        // Everything else carries no cached state (bans, integrations,
+        // entitlements, invites, reactions, typing, polls, ...), or is not
+        // a known payload at all.
         _ => {}
     }
-}
-
-/// Which top-level keys a MESSAGE_UPDATE payload carried.
-///
-/// Discord may send MESSAGE_UPDATE with only some message fields; omitted
-/// fields decode to defaults on the typed [`crate::model::Message`], so the
-/// key set is the only way to tell "omitted" from "cleared". Kept as owned
-/// keys (not the raw payload) because the backend worker merges later, on
-/// another task.
-#[derive(Clone, Debug, Default)]
-struct MessageUpdateFields(std::collections::HashSet<String>);
-
-impl MessageUpdateFields {
-    fn from_raw(raw: &Value) -> Self {
-        Self(
-            raw.as_object()
-                .map(|object| object.keys().cloned().collect())
-                .unwrap_or_default(),
-        )
-    }
-
-    fn contains(&self, key: &str) -> bool {
-        self.0.contains(key)
-    }
-}
-
-/// Applies a MESSAGE_UPDATE payload to a previously complete message: every
-/// field present in the payload (even as `null`) replaces the stored value,
-/// every omitted field keeps it.
-///
-/// The destructuring below is intentionally exhaustive: adding a field to
-/// `Message` fails to compile here until the merge maps it to its wire key,
-/// so updates can never silently drop new fields again (as happened with
-/// `components` and `poll`).
-fn merge_message_update(
-    mut cached: crate::model::Message,
-    partial: crate::model::Message,
-    fields: &MessageUpdateFields,
-) -> crate::model::Message {
-    let crate::model::Message {
-        id,
-        channel_id,
-        guild_id,
-        author,
-        member,
-        content,
-        timestamp,
-        edited_timestamp,
-        mentions,
-        mention_roles,
-        attachments,
-        kind,
-        pinned,
-        tts,
-        flags,
-        webhook_id,
-        application_id,
-        application,
-        embeds,
-        reactions,
-        activity,
-        mention_everyone,
-        mention_channels,
-        sticker_items,
-        stickers,
-        position,
-        role_subscription_data,
-        message_reference,
-        message_snapshots,
-        referenced_message,
-        interaction_metadata,
-        interaction,
-        resolved,
-        components,
-        poll,
-        call,
-        shared_client_theme,
-    } = partial;
-    cached.id = id;
-    cached.channel_id = channel_id;
-
-    macro_rules! merge_present {
-        ($($field:ident => $key:literal),* $(,)?) => {
-            $(
-                if fields.contains($key) {
-                    cached.$field = $field;
-                }
-            )*
-        };
-    }
-    merge_present!(
-        guild_id => "guild_id",
-        author => "author",
-        member => "member",
-        content => "content",
-        timestamp => "timestamp",
-        edited_timestamp => "edited_timestamp",
-        mentions => "mentions",
-        mention_roles => "mention_roles",
-        attachments => "attachments",
-        kind => "type",
-        pinned => "pinned",
-        tts => "tts",
-        flags => "flags",
-        webhook_id => "webhook_id",
-        application_id => "application_id",
-        application => "application",
-        embeds => "embeds",
-        reactions => "reactions",
-        activity => "activity",
-        mention_everyone => "mention_everyone",
-        mention_channels => "mention_channels",
-        sticker_items => "sticker_items",
-        stickers => "stickers",
-        position => "position",
-        role_subscription_data => "role_subscription_data",
-        message_reference => "message_reference",
-        message_snapshots => "message_snapshots",
-        referenced_message => "referenced_message",
-        interaction_metadata => "interaction_metadata",
-        interaction => "interaction",
-        resolved => "resolved",
-        components => "components",
-        poll => "poll",
-        call => "call",
-        shared_client_theme => "shared_client_theme",
-    );
-
-    cached
 }
 
 /// The cached presence shape for a PRESENCE_UPDATE, shared by the in-memory
@@ -3004,14 +2960,14 @@ fn presence_from_update(
 async fn apply_voice_updates(voice: &Arc<RwLock<VoiceManager>>, event: &Event) {
     // Only voice events need the manager; taking the write lock for every
     // dispatch would contend with user tasks holding `ctx.voice()`.
-    match event {
-        Event::VoiceStateUpdate(event) => {
+    match event.kind() {
+        EventKind::VoiceStateUpdate(state) => {
             let mut voice = voice.write().await;
-            voice.update_voice_state(&event.state);
+            voice.update_voice_state(state);
         }
-        Event::VoiceServerUpdate(event) => {
+        EventKind::VoiceServerUpdate(data) => {
             let mut voice = voice.write().await;
-            voice.update_server(event.data.clone());
+            voice.update_server((**data).clone());
         }
         _ => {}
     }

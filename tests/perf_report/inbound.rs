@@ -1,12 +1,13 @@
 //! Inbound replica: the gateway pipeline from frame text to the `Event` a
 //! handler receives, step by step, plus the typed-decode reference.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use discordrs::model::{Message, Presence};
-use discordrs::{decode_event, CacheConfig, CacheHandle, Event};
+use discordrs::model::Presence;
+use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
 use serde_json::Value;
 
 use crate::alloc::{Mark, Recorder, Sample, Uncounted};
@@ -18,10 +19,10 @@ use crate::report::{Report, Scenario, DETERMINISTIC};
 pub(crate) const HUB_JOURNAL_CAPACITY: usize = 256;
 
 /// The state the gateway pipeline keeps per shard: the cache and the
-/// collector hub journal.
+/// collector hub journal, which shares the handler's `Arc<Event>`.
 pub(crate) struct Pipeline {
     cache: CacheHandle,
-    journal: VecDeque<Event>,
+    journal: VecDeque<Arc<Event>>,
 }
 
 impl Pipeline {
@@ -32,8 +33,8 @@ impl Pipeline {
         }
     }
 
-    /// One frame from websocket text to the `Event` a handler receives.
-    pub(crate) async fn dispatch(&mut self, frame: &str, rec: &mut Recorder) -> Event {
+    /// One frame from websocket text to the `Arc<Event>` a handler receives.
+    pub(crate) async fn dispatch(&mut self, frame: &str, rec: &mut Recorder) -> Arc<Event> {
         // gateway/compression.rs `decode_gateway_message`:
         // `WsMessage::Text(text) => text.to_string()`.
         let text = rec.step("frame_to_string", || frame.to_string());
@@ -54,59 +55,53 @@ impl Pipeline {
             drop(payload);
             drop(text);
         });
-        // gateway/bot/pipeline.rs `process_gateway_dispatch`:
-        // `decode_event(&event_name, data.clone())`.
-        let event = rec.step("decode_event", || {
-            decode_event(&event_name, data.clone()).unwrap()
+        // gateway/bot/pipeline.rs `GatewayDispatch::new`: the payload as
+        // raw text plus its metadata, queued for the processor.
+        let (metadata, raw) = rec.step("queue_payload", || {
+            (
+                EventMetadata::new(&event_name, tokio::time::Instant::now()),
+                serde_json::value::to_raw_value(&data).unwrap(),
+            )
         });
+        rec.step("drop_dispatch_value", || drop(data));
+        // pipeline.rs `process_gateway_dispatch`: `Event::decode` with the
+        // default `keep_raw_events(false)`.
+        let event = rec.step("decode_event", || Event::decode(metadata, raw, false));
         // gateway/bot.rs `apply_cache_updates`.
         let mark = rec.begin();
         apply_cache_replica(&self.cache, &event).await;
         rec.end("cache_apply", mark);
-        // pipeline.rs `ctx.collectors.publish(event.clone())` into the hub
-        // journal (collector.rs `CollectorHub::publish`).
+        // pipeline.rs `Arc::new(event)` and `ctx.collectors.publish(Arc::clone(&event))`
+        // into the hub journal (collector.rs `CollectorHub::publish`).
         rec.step("collector_publish", || {
-            self.journal.push_back(event.clone());
+            let event = Arc::new(event);
+            self.journal.push_back(Arc::clone(&event));
             if self.journal.len() > HUB_JOURNAL_CAPACITY {
                 self.journal.pop_front();
             }
-        });
-        // `data` lives until `process_gateway_dispatch` returns.
-        rec.step("drop_dispatch_value", || drop(data));
-        event
+            event
+        })
     }
 }
 
 /// gateway/bot.rs `apply_cache_updates`, for the event kinds measured here.
 async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
-    match event {
-        Event::GuildCreate(event) => cache.apply_guild_create(&event.guild).await,
-        Event::MessageCreate(event) => {
-            if let Some(author) = event.message.author.as_ref() {
+    match event.kind() {
+        EventKind::GuildCreate(guild) => cache.apply_guild_create(guild).await,
+        EventKind::MessageCreate(message) => {
+            if let Some(author) = message.author.as_ref() {
                 cache.upsert_user(author.clone()).await;
             }
             // The DM channel stub is skipped: the fixtures are guild messages.
-            cache.upsert_message(event.message.clone()).await;
+            cache.upsert_message(Arc::clone(message)).await;
         }
-        Event::MessageUpdate(event) => {
-            if let Some(author) = event.message.author.as_ref() {
-                cache.upsert_user(author.clone()).await;
+        EventKind::MessageUpdate(update) => {
+            if let Some(author) = update.author_user() {
+                cache.upsert_user(author).await;
             }
-            if let Some(cached) = cache
-                .message(event.message.channel_id, event.message.id)
-                .await
-            {
-                // `MessageUpdateFields::from_raw`: the payload's key set.
-                let fields: HashSet<String> = event
-                    .raw
-                    .as_object()
-                    .map(|object| object.keys().cloned().collect())
-                    .unwrap_or_default();
-                let merged = merge_update_replica(cached, event.message.clone(), &fields);
-                cache.upsert_message(merged).await;
-            }
+            cache.apply_message_update(update).await;
         }
-        Event::PresenceUpdate(event) => {
+        EventKind::PresenceUpdate(event) => {
             if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id) {
                 // `presence_from_update`.
                 let presence = Presence {
@@ -122,48 +117,6 @@ async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
         // Chat input interactions and unknown dispatches touch no cache state.
         _ => {}
     }
-}
-
-/// gateway/bot.rs `merge_message_update` for the keys the partial fixture
-/// carries: each present key moves the partial's field over the cached one.
-pub(crate) fn merge_update_replica(
-    mut cached: Message,
-    partial: Message,
-    fields: &HashSet<String>,
-) -> Message {
-    cached.id = partial.id;
-    cached.channel_id = partial.channel_id;
-    if fields.contains("guild_id") {
-        cached.guild_id = partial.guild_id;
-    }
-    if fields.contains("content") {
-        cached.content = partial.content;
-    }
-    if fields.contains("edited_timestamp") {
-        cached.edited_timestamp = partial.edited_timestamp;
-    }
-    if fields.contains("mentions") {
-        cached.mentions = partial.mentions;
-    }
-    if fields.contains("mention_roles") {
-        cached.mention_roles = partial.mention_roles;
-    }
-    if fields.contains("mention_everyone") {
-        cached.mention_everyone = partial.mention_everyone;
-    }
-    if fields.contains("embeds") {
-        cached.embeds = partial.embeds;
-    }
-    if fields.contains("attachments") {
-        cached.attachments = partial.attachments;
-    }
-    if fields.contains("components") {
-        cached.components = partial.components;
-    }
-    if fields.contains("flags") {
-        cached.flags = partial.flags;
-    }
-    cached
 }
 
 /// Warm-up dispatches before the measured steady-state iteration: enough to

@@ -6,6 +6,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
+use serde_json::value::RawValue;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
@@ -21,31 +22,44 @@ use super::{
     InteractionOverloadHook, InteractionOverloadReason, MemberChunkWaiters, OverloadedInteraction,
     OVERLOAD_WARNING_INTERVAL,
 };
-use crate::event::{decode_event, Event};
-use crate::model::ApplicationId;
+use crate::event::{Event, EventKind, EventMetadata, RawLength};
 
 /// How long aborted pipeline tasks get to confirm they stopped. Aborting is
 /// asynchronous: a task only stops at its next await point, so shutdown
 /// joins it afterwards instead of assuming it is gone.
 pub(super) const ABORT_CONFIRM_GRACE: Duration = Duration::from_secs(1);
 
-/// One gateway dispatch as handed over by the gateway read loop.
-#[derive(Debug)]
+/// One gateway dispatch as handed over by the gateway read loop: its
+/// metadata (name, sequence, receive time) and its payload, which the
+/// processor decodes.
 pub(super) struct GatewayDispatch {
-    pub(super) event_name: String,
-    pub(super) data: Value,
-    /// When the read loop handed the dispatch over; interaction admission
-    /// deadlines count from here.
-    pub(super) received_at: Instant,
+    pub(super) metadata: EventMetadata,
+    pub(super) data: Box<RawValue>,
 }
 
 impl GatewayDispatch {
+    /// A dispatch received now. Bridges the read loop's `Value` payload until
+    /// the read loop hands over the payload text itself.
     pub(super) fn new(event_name: String, data: Value) -> Self {
+        let data = serde_json::value::to_raw_value(&data)
+            // Serializing a `Value` cannot fail; an empty payload is the
+            // harmless fallback.
+            .unwrap_or_else(|_| RawValue::NULL.to_owned());
         Self {
-            event_name,
+            metadata: EventMetadata::new(&event_name, Instant::now()),
             data,
-            received_at: Instant::now(),
         }
+    }
+}
+
+/// Never prints the payload, which can carry interaction tokens.
+impl std::fmt::Debug for GatewayDispatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GatewayDispatch")
+            .field("metadata", &self.metadata)
+            .field("data", &RawLength(Some(&self.data)))
+            .finish()
     }
 }
 
@@ -234,7 +248,7 @@ impl EventIngress {
                      instead of continuing with a gap in its event stream",
                     self.shard_id,
                     self.events.max_capacity(),
-                    dispatch.event_name
+                    dispatch.metadata.name()
                 );
                 if self.fault.raise(reason.clone()) {
                     error!("{reason}");
@@ -296,8 +310,7 @@ impl<T> Drop for AbortOnDrop<T> {
 
 /// A processed event on its way to a handler call.
 pub(super) struct HandlerDelivery {
-    pub(super) event: Event,
-    pub(super) received_at: Instant,
+    pub(super) event: Arc<Event>,
     /// Hub position just after this event, captured when it was published
     /// and before it was queued, so collectors created by its handler
     /// replay everything published while the handler waited.
@@ -309,7 +322,7 @@ impl HandlerDelivery {
     /// The context handed to this delivery's handler call.
     fn context(&self, base: &Context) -> Context {
         let mut ctx = base.clone();
-        ctx.event_received_at = Some(self.received_at);
+        ctx.event_received_at = Some(self.event.metadata().received_at());
         #[cfg(feature = "collectors")]
         {
             ctx.event_cursor = Some(self.cursor);
@@ -483,6 +496,7 @@ pub(super) fn spawn_event_pipeline(
             overload: lane.overload.clone(),
         },
         dispatch.backlog_warn_threshold(),
+        dispatch.keep_raw_events,
         fault.clone(),
     ));
     let events = tokio::spawn(run_handler_dispatcher(
@@ -537,6 +551,7 @@ async fn run_event_processor(
     mut ingress: mpsc::Receiver<GatewayDispatch>,
     outputs: ProcessorOutputs,
     warn_at: usize,
+    keep_raw: bool,
     fault: PipelineFault,
 ) {
     let mut exit = FaultOnExit::new(
@@ -564,10 +579,11 @@ async fn run_event_processor(
             #[cfg(feature = "cache")]
             cache_backend.as_ref(),
             next,
+            keep_raw,
         )
         .await;
 
-        if matches!(delivery.event, Event::InteractionCreate(_)) {
+        if matches!(delivery.event.kind(), EventKind::InteractionCreate(_)) {
             match outputs.interactions.try_send(delivery) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(delivery)) => report_overloaded_interaction(
@@ -607,7 +623,7 @@ async fn run_event_processor(
                          fetch_members still received these events",
                         ctx.shard_id,
                         outputs.events.max_capacity(),
-                        delivery.event.kind()
+                        delivery.event.name()
                     );
                 }
             }
@@ -767,7 +783,11 @@ async fn run_interaction_dispatcher(
         let Some(delivery) = next else {
             break;
         };
-        let deadline = delivery.received_at.checked_add(lane.admission_timeout);
+        let deadline = delivery
+            .event
+            .metadata()
+            .received_at()
+            .checked_add(lane.admission_timeout);
         let expired = |now: Instant| deadline.is_some_and(|deadline| now >= deadline);
         let mut permit = None;
         if !expired(Instant::now()) {
@@ -915,8 +935,8 @@ fn report_overloaded_interaction(
     reason: InteractionOverloadReason,
 ) {
     let ctx = delivery.context(base);
-    let waited = delivery.received_at.elapsed();
-    let Event::InteractionCreate(event) = delivery.event else {
+    let waited = delivery.event.metadata().received_at().elapsed();
+    let EventKind::InteractionCreate(interaction) = delivery.event.kind() else {
         return;
     };
     let Some(hook) = hook else {
@@ -929,7 +949,9 @@ fn report_overloaded_interaction(
     };
     let overloaded = OverloadedInteraction {
         ctx,
-        interaction: event.interaction,
+        // The only copy on this path: the hook owns the interaction, while
+        // the event may still be journaled for collectors.
+        interaction: (**interaction).clone(),
         reason,
         waited,
     };
@@ -962,38 +984,32 @@ fn report_handler_outcome(shard_id: u32, outcome: Result<(), JoinError>) {
 
 /// Runs the ordered internal processing for one dispatch and returns it as
 /// a handler delivery.
+///
+/// The payload is decoded once here (never in the gateway read loop) and
+/// the resulting [`Event`] is shared as one `Arc` by the collector journal
+/// and the handler call; the cache and backend read it by reference.
 pub(super) async fn process_gateway_dispatch(
     ctx: &Context,
     #[cfg(feature = "cache")] cache_backend: Option<&CacheBackendForwarder>,
     dispatch: GatewayDispatch,
+    keep_raw: bool,
 ) -> HandlerDelivery {
-    let GatewayDispatch {
-        event_name,
-        data,
-        received_at,
-    } = dispatch;
+    let GatewayDispatch { metadata, data } = dispatch;
+    let (shard_id, shard_count) = ctx.shard_pair();
+    let event = Event::decode(metadata.with_shard(shard_id, shard_count), data, keep_raw);
 
-    if event_name == "READY" && ctx.http.application_id().is_none() {
-        if let Some(app_id) = data
-            .pointer("/application/id")
-            .and_then(|value| value.as_str())
-            .and_then(|value| value.parse::<ApplicationId>().ok())
-        {
-            ctx.http.set_application_id(app_id);
-            info!("Set application_id from READY: {app_id}");
-        }
-    }
-
-    let event = match decode_event(&event_name, data.clone()) {
-        Ok(event) => event,
-        Err(error) => {
-            warn!("Failed to decode event {event_name}: {error}");
-            Event::Unknown {
-                kind: event_name,
-                raw: data,
+    match event.kind() {
+        EventKind::Ready(ready) if ctx.http.application_id().is_none() => {
+            if let Some(application) = ready.application.as_ref() {
+                ctx.http.set_application_id(application.id);
+                info!("Set application_id from READY: {}", application.id);
             }
         }
-    };
+        EventKind::DecodeFailed(error) => {
+            warn!("Failed to decode event {}: {error}", event.name());
+        }
+        _ => {}
+    }
 
     apply_cache_updates(&ctx.cache, ctx.shard_pair(), &event).await;
     #[cfg(feature = "cache")]
@@ -1003,11 +1019,11 @@ pub(super) async fn process_gateway_dispatch(
     #[cfg(feature = "voice")]
     apply_voice_updates(&ctx.voice, &event).await;
     route_member_chunk(&ctx.member_chunk_waiters, &event);
+    let event = Arc::new(event);
     #[cfg(feature = "collectors")]
-    let cursor = ctx.collectors.publish(event.clone());
+    let cursor = ctx.collectors.publish(Arc::clone(&event));
     HandlerDelivery {
         event,
-        received_at,
         #[cfg(feature = "collectors")]
         cursor,
     }
@@ -1016,15 +1032,15 @@ pub(super) async fn process_gateway_dispatch(
 /// Hands a GUILD_MEMBERS_CHUNK to the [`Context::fetch_members`] call
 /// awaiting its nonce, if any.
 fn route_member_chunk(waiters: &MemberChunkWaiters, event: &Event) {
-    let Event::GuildMembersChunk(chunk) = event else {
+    let EventKind::GuildMembersChunk(chunk) = event.kind() else {
         return;
     };
-    let Some(nonce) = chunk.data.nonce.as_ref() else {
+    let Some(nonce) = chunk.nonce.as_ref() else {
         return;
     };
     if let Some(waiter) = lock_member_chunk_waiters(waiters).get(nonce) {
         // Fails only if `fetch_members` already gave up; its guard then
         // removes the waiter.
-        waiter.chunks.send(chunk.data.clone()).ok();
+        waiter.chunks.send((**chunk).clone()).ok();
     }
 }

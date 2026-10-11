@@ -315,20 +315,19 @@ fn guild_create() -> Value {
 fn report_decode(name: &str, event: &str, payload: &Value) {
     let text = payload.to_string();
 
-    // Gateway path today: text -> Value -> decode_event (keeps the raw Value).
-    let value: Value = serde_json::from_str(&text).unwrap();
-    let (decoded, calls, live) = measure(|| discordrs::decode_event(event, value.clone()).unwrap());
+    // Gateway path: the payload text decoded straight into the typed event
+    // (`decode_event` also keeps a copy of the raw text).
+    let (decoded, calls, live) = measure(|| discordrs::decode_event(event, &text).unwrap());
     drop(decoded);
-    let (_, clone_calls, _) = measure(|| value.clone());
     let per_decode = time_per_iter(2_000, || {
-        black_box(discordrs::decode_event(event, black_box(value.clone())).unwrap());
+        black_box(discordrs::decode_event(event, black_box(&text)).unwrap());
     });
 
     println!(
-        "{name}: payload {} bytes | decode_event (minus the Value clone it consumes): {} allocations, \
-         {} live bytes (includes the kept raw Value) | {:.1} us/decode incl. clone",
+        "{name}: payload {} bytes | decode_event: {} allocations, {} live bytes (includes the \
+         kept raw text) | {:.1} us/decode",
         text.len(),
-        calls.saturating_sub(clone_calls),
+        calls,
         live,
         per_decode,
     );

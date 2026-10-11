@@ -108,17 +108,18 @@ pub use command::{
 };
 pub use error::{DiscordError, HttpError};
 pub use event::{
-    decode_event, AuditLogEntryEvent, AutoModerationEvent, ChannelEvent, ChannelInfoChannel,
-    ChannelInfoEvent, EntitlementEvent, Event, GuildDeleteEvent, GuildDeletePayload, GuildEvent,
-    GuildMembersChunkEvent, GuildMembersChunkPayload, GuildScheduledEventUserEvent,
-    GuildStickersUpdateEvent, InteractionEvent, MemberEvent, MemberRemoveEvent,
-    MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload, MessageEvent,
-    ReactionRemoveEmojiEvent, ReadyEvent, ReadyPayload, ResumedEvent, RoleDeleteEvent,
-    RoleDeletePayload, RoleEvent, ScheduledEvent, SoundboardSoundDeleteEvent, SoundboardSoundEvent,
-    SoundboardSoundsEvent, StageInstanceEvent, ThreadEvent, ThreadListSyncEvent,
-    ThreadMemberUpdateEvent, ThreadMembersUpdateEvent, UserUpdateEvent, VoiceChannelEffectEvent,
-    VoiceChannelStartTimeUpdateEvent, VoiceChannelStatusUpdateEvent, VoiceServerEvent,
-    VoiceStateEvent,
+    decode_event, ApplicationCommandPermissionsUpdateEvent, AuditLogEntryEvent,
+    AutoModerationEvent, BulkMessageDeleteEvent, ChannelInfoChannel, ChannelInfoEvent,
+    ChannelPinsUpdateEvent, Event, EventDecodeError, EventKind, EventMetadata, GuildBanEvent,
+    GuildDeletePayload, GuildEmojisUpdateEvent, GuildIntegrationsUpdateEvent,
+    GuildMembersChunkPayload, GuildScheduledEventUserEvent, GuildStickersUpdateEvent,
+    IntegrationDeleteEvent, IntegrationEvent, InviteEvent, MemberEvent, MemberRemovePayload,
+    MessageDeletePayload, PollVoteEvent, PresenceUpdateEvent, PresenceUpdateUser, RateLimitedEvent,
+    ReactionEvent, ReactionRemoveAllEvent, ReactionRemoveEmojiEvent, ReadyApplication,
+    ReadyPayload, RoleDeletePayload, RoleEvent, ScheduledEvent, SoundboardSoundDeleteEvent,
+    SoundboardSoundsEvent, ThreadEvent, ThreadListSyncEvent, ThreadMemberUpdateEvent,
+    ThreadMembersUpdateEvent, TypingStartEvent, VoiceChannelEffectEvent,
+    VoiceChannelStartTimeUpdateEvent, VoiceChannelStatusUpdateEvent, WebhooksUpdateEvent,
 };
 pub use formatters::{
     EscapeMarkdownOptions, GuildNavigation, HeadingLevel, ListItem, MentionKind, MentionResolver,

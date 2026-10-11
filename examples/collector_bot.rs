@@ -1,5 +1,7 @@
 #[cfg(all(feature = "gateway", feature = "collectors"))]
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler, EventKind};
+#[cfg(all(feature = "gateway", feature = "collectors"))]
+use std::sync::Arc;
 #[cfg(all(feature = "gateway", feature = "collectors"))]
 use std::time::Duration;
 
@@ -8,8 +10,8 @@ struct Handler;
 
 #[cfg(all(feature = "gateway", feature = "collectors"))]
 impl EventHandler for Handler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        if matches!(event, Event::Ready(_)) {
+    async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+        if matches!(event.kind(), EventKind::Ready(_)) {
             let mut collector = ctx
                 .collectors()
                 .message_collector()

@@ -101,7 +101,8 @@ where
 
 #[derive(Clone, Default)]
 pub(super) struct CacheStore {
-    pub(super) guilds: HashMap<GuildId, Guild>,
+    /// Shared with the GUILD_CREATE events that inserted them.
+    pub(super) guilds: HashMap<GuildId, Arc<Guild>>,
     pub(super) channels: HashMap<ChannelId, Channel>,
     pub(super) users: HashMap<UserId, User>,
     pub(super) members: HashMap<(GuildId, UserId), Arc<Member>>,

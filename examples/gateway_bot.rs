@@ -1,29 +1,27 @@
 #[cfg(feature = "gateway")]
 use discordrs::{
-    gateway_intents, respond_with_message, ChatInputCommandInteraction, Client, Context,
-    CreateMessage, Event, EventHandler, Interaction,
+    gateway_intents, respond_with_message, Client, Context, CreateMessage, Event, EventHandler,
+    EventKind, Interaction,
 };
+#[cfg(feature = "gateway")]
+use std::sync::Arc;
 
 #[cfg(feature = "gateway")]
 struct Handler;
 
 #[cfg(feature = "gateway")]
 impl EventHandler for Handler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => {
-                println!("ready: {}", ready.data.user.username);
+    async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => {
+                println!("ready: {}", ready.user.username);
             }
-            Event::InteractionCreate(event) => {
-                if let Interaction::ChatInputCommand(ChatInputCommandInteraction {
-                    data,
-                    context,
-                }) = event.interaction
-                {
-                    if data.name.as_deref() == Some("hello") {
+            EventKind::InteractionCreate(interaction) => {
+                if let Interaction::ChatInputCommand(command) = &**interaction {
+                    if command.data.name.as_deref() == Some("hello") {
                         if let Err(error) = respond_with_message(
                             ctx.rest().as_ref(),
-                            &context,
+                            &command.context,
                             CreateMessage {
                                 content: Some("hello from the gateway runtime".to_string()),
                                 ..CreateMessage::default()
@@ -37,8 +35,8 @@ impl EventHandler for Handler {
                     }
                 }
             }
-            Event::MessageCreate(message) => {
-                println!("message_create: {}", message.message.content);
+            EventKind::MessageCreate(message) => {
+                println!("message_create: {}", message.content);
             }
             _ => {}
         }

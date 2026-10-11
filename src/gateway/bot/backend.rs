@@ -61,11 +61,13 @@ use tokio::time::{Duration, Instant};
 use tracing::{error, warn};
 
 use super::pipeline::{AbortOnDrop, ABORT_CONFIRM_GRACE};
-use super::{merge_message_update, presence_from_update, MessageUpdateFields};
+use super::presence_from_update;
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
-use crate::event::Event;
-use crate::model::{ChannelId, GuildId, Member, Message, MessageId, Presence, UserId};
+use crate::event::{Event, EventKind};
+use crate::model::{
+    ChannelId, GuildId, Member, Message, MessageId, MessageUpdate, Presence, UserId,
+};
 
 /// Boxed, `Send` future returned by [`ErasedCacheBackend`].
 type BackendFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, DiscordError>> + Send + 'a>>;
@@ -289,8 +291,8 @@ pub(super) enum BackendWrite {
 
 #[derive(Debug)]
 pub(super) struct BackendMessageUpdate {
-    partial: crate::model::Message,
-    fields: MessageUpdateFields,
+    /// The typed patch, shared with the event.
+    update: Arc<MessageUpdate>,
     /// The in-memory cache's merged copy, used when the backend does not
     /// hold the message.
     in_memory: Option<crate::model::Message>,
@@ -1100,21 +1102,21 @@ async fn apply_backend_write(
             contained("put_message", backend.put_message(epoch, *message)).await
         }
         BackendWrite::UpdateMessage(update) => {
-            let BackendMessageUpdate {
-                partial,
-                fields,
-                in_memory,
-            } = *update;
+            let BackendMessageUpdate { update, in_memory } = *update;
             let stored = contained(
                 "get_message",
-                backend.get_message(&partial.channel_id, &partial.id),
+                backend.get_message(&update.channel_id, &update.id),
             )
             .await;
             let merged = match stored {
-                Ok(Some(stored)) => merge_message_update(stored.as_ref().clone(), partial, &fields),
+                Ok(Some(stored)) => {
+                    let mut merged = stored.as_ref().clone();
+                    update.apply_to(&mut merged);
+                    merged
+                }
                 Ok(None) => match in_memory {
                     Some(message) => message,
-                    // Neither copy is known: the payload may be partial, so
+                    // Neither copy is known: the update is partial, so
                     // storing it would claim fields the backend never saw.
                     None => return Ok(()),
                 },
@@ -1175,52 +1177,47 @@ pub(super) async fn forward_cache_backend_updates(
     shard: ShardPair,
     event: &Event,
 ) {
-    let write = match event {
-        Event::Ready(_) => Some(BackendWrite::ClearShard),
-        Event::MemberAdd(event) | Event::MemberUpdate(event) => {
-            event
-                .member
-                .user
-                .as_ref()
-                .map(|user| BackendWrite::PutMember {
-                    guild_id: event.guild_id,
-                    user_id: user.id,
-                    member: Box::new(event.member.clone()),
-                })
-        }
-        Event::MemberRemove(event) => Some(BackendWrite::DeleteMember {
-            guild_id: event.data.guild_id,
-            user_id: event.data.user.id,
+    let write = match event.kind() {
+        EventKind::Ready(_) => Some(BackendWrite::ClearShard),
+        EventKind::MemberAdd(event) | EventKind::MemberUpdate(event) => event
+            .member
+            .user
+            .as_ref()
+            .map(|user| BackendWrite::PutMember {
+                guild_id: event.guild_id,
+                user_id: user.id,
+                member: Box::new((*event.member).clone()),
+            }),
+        EventKind::MemberRemove(data) => Some(BackendWrite::DeleteMember {
+            guild_id: data.guild_id,
+            user_id: data.user.id,
         }),
-        Event::GuildMembersChunk(event) => Some(BackendWrite::PutMembersChunk {
-            guild_id: event.data.guild_id,
-            members: event.data.members.clone(),
-            presences: event.data.presences.clone().unwrap_or_default(),
+        EventKind::GuildMembersChunk(chunk) => Some(BackendWrite::PutMembersChunk {
+            guild_id: chunk.guild_id,
+            members: chunk.members.clone(),
+            presences: chunk.presences.clone().unwrap_or_default(),
         }),
-        Event::MessageCreate(event) => {
-            Some(BackendWrite::PutMessage(Box::new(event.message.clone())))
+        EventKind::MessageCreate(message) => {
+            Some(BackendWrite::PutMessage(Box::new((**message).clone())))
         }
-        Event::MessageUpdate(event) => {
-            let in_memory = cache
-                .message(event.message.channel_id, event.message.id)
-                .await;
+        EventKind::MessageUpdate(update) => {
+            let in_memory = cache.message(update.channel_id, update.id).await;
             Some(BackendWrite::UpdateMessage(Box::new(
                 BackendMessageUpdate {
-                    partial: event.message.clone(),
-                    fields: MessageUpdateFields::from_raw(&event.raw),
+                    update: Arc::clone(update),
                     in_memory,
                 },
             )))
         }
-        Event::MessageDelete(event) => Some(BackendWrite::DeleteMessages {
-            channel_id: event.data.channel_id,
-            message_ids: vec![event.data.id],
+        EventKind::MessageDelete(data) => Some(BackendWrite::DeleteMessages {
+            channel_id: data.channel_id,
+            message_ids: vec![data.id],
         }),
-        Event::MessageDeleteBulk(event) => Some(BackendWrite::DeleteMessages {
+        EventKind::MessageDeleteBulk(event) => Some(BackendWrite::DeleteMessages {
             channel_id: event.channel_id,
             message_ids: event.ids.clone(),
         }),
-        Event::PresenceUpdate(event) => match (event.guild_id, event.user_id) {
+        EventKind::PresenceUpdate(event) => match (event.guild_id, event.user_id) {
             (Some(guild_id), Some(user_id)) => Some(BackendWrite::PutPresence {
                 presence: Box::new(presence_from_update(event, user_id)),
                 guild_id,
@@ -1228,18 +1225,16 @@ pub(super) async fn forward_cache_backend_updates(
             }),
             _ => None,
         },
-        Event::VoiceStateUpdate(event) => {
-            match (event.state.guild_id, event.state.member.as_ref()) {
-                (Some(guild_id), Some(member)) => {
-                    member.user.as_ref().map(|user| BackendWrite::PutMember {
-                        guild_id,
-                        user_id: user.id,
-                        member: Box::new(member.clone()),
-                    })
-                }
-                _ => None,
+        EventKind::VoiceStateUpdate(state) => match (state.guild_id, state.member.as_ref()) {
+            (Some(guild_id), Some(member)) => {
+                member.user.as_ref().map(|user| BackendWrite::PutMember {
+                    guild_id,
+                    user_id: user.id,
+                    member: Box::new(member.clone()),
+                })
             }
-        }
+            _ => None,
+        },
         _ => None,
     };
     if let Some(write) = write {

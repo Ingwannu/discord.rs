@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use discordrs::{
-    ApplicationId, Client, CollectorHub, Context, Event, EventHandler, GatewayConnectionConfig,
-    Intents,
+    ApplicationId, Client, CollectorHub, Context, Event, EventHandler, EventKind,
+    GatewayConnectionConfig, Intents,
 };
 use serde_json::{json, Value};
 
@@ -231,8 +231,8 @@ pub(crate) struct ProbeHandler {
 }
 
 impl EventHandler for ProbeHandler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        if matches!(event, Event::Ready(_)) {
+    async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+        if matches!(event.kind(), EventKind::Ready(_)) {
             *self.hub.lock().unwrap() = Some(ctx.collectors().clone());
         }
         drop(black_box(event));

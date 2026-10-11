@@ -265,20 +265,21 @@ fn in_guild_only_rewrites_the_constants_of_that_guild() {
 
 #[test]
 fn the_permissions_update_event_is_decoded_with_its_guild_and_application() {
+    let payload = json!({
+        "id": "1000",
+        "application_id": "1000",
+        "guild_id": "500",
+        "permissions": [
+            { "id": "500", "type": 1, "permission": false },
+            { "id": "499", "type": 3, "permission": true }
+        ]
+    });
     let event = crate::event::decode_event(
         "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
-        json!({
-            "id": "1000",
-            "application_id": "1000",
-            "guild_id": "500",
-            "permissions": [
-                { "id": "500", "type": 1, "permission": false },
-                { "id": "499", "type": 3, "permission": true }
-            ]
-        }),
+        &payload.to_string(),
     )
     .expect("event decodes");
-    let crate::event::Event::ApplicationCommandPermissionsUpdate(event) = event else {
+    let crate::event::EventKind::ApplicationCommandPermissionsUpdate(event) = event.kind() else {
         panic!("unexpected event: {event:?}");
     };
     assert_eq!(
@@ -298,10 +299,10 @@ fn the_permissions_update_event_is_decoded_with_its_guild_and_application() {
     // `guild_id` the targets stay plain.
     let bare = crate::event::decode_event(
         "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
-        json!({ "id": "1000", "permissions": [{ "id": "500", "type": 1, "permission": true }] }),
+        r#"{ "id": "1000", "permissions": [{ "id": "500", "type": 1, "permission": true }] }"#,
     )
     .expect("event decodes");
-    let crate::event::Event::ApplicationCommandPermissionsUpdate(bare) = bare else {
+    let crate::event::EventKind::ApplicationCommandPermissionsUpdate(bare) = bare.kind() else {
         panic!("unexpected event: {bare:?}");
     };
     assert_eq!(bare.id, Some(CommandPermissionsId::Command(test_id(1000))));

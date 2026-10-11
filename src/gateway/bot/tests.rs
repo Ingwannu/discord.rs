@@ -32,17 +32,15 @@ use super::{EventHandler, ShardMessenger};
 use crate::bitfield::Intents;
 use crate::cache::CacheConfig;
 use crate::event::{
-    decode_event, BulkMessageDeleteEvent, ChannelEvent, ChannelPinsUpdateEvent, Event,
-    GuildBanEvent, GuildDeleteEvent, GuildDeletePayload, GuildEmojisUpdateEvent, GuildEvent,
-    GuildIntegrationsUpdateEvent, InviteEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload,
-    MessageDeleteEvent, MessageDeletePayload, MessageEvent, PresenceUpdateEvent, RateLimitedEvent,
-    ReactionEvent, ReactionRemoveAllEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
-    RoleDeletePayload, RoleEvent, TypingStartEvent, VoiceServerEvent, VoiceStateEvent,
-    WebhooksUpdateEvent,
+    BulkMessageDeleteEvent, ChannelPinsUpdateEvent, Event, EventKind, GuildBanEvent,
+    GuildDeletePayload, GuildEmojisUpdateEvent, GuildIntegrationsUpdateEvent, InviteEvent,
+    MemberEvent, MemberRemovePayload, MessageDeletePayload, PresenceUpdateEvent, RateLimitedEvent,
+    ReactionEvent, ReactionRemoveAllEvent, ReadyPayload, RoleDeletePayload, RoleEvent,
+    TypingStartEvent, WebhooksUpdateEvent,
 };
 // Only the cache-update tests decode these events.
 #[cfg(feature = "cache")]
-use crate::event::{GuildStickersUpdateEvent, ScheduledEvent, StageInstanceEvent, UserUpdateEvent};
+use crate::event::{GuildStickersUpdateEvent, ScheduledEvent};
 use crate::gateway::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use crate::http::DiscordHttpClient;
 use crate::model::{
@@ -65,6 +63,22 @@ use crate::types::Emoji;
 #[cfg(feature = "voice")]
 use crate::voice::{AudioTrack, VoiceConnectionConfig};
 
+/// Decodes a dispatch from a `Value` payload, keeping the raw payload.
+fn decode_event(name: &str, payload: Value) -> Result<Event, crate::DiscordError> {
+    crate::event::decode_event(name, &payload.to_string())
+}
+
+/// A MESSAGE_UPDATE that only changes `content`.
+fn content_update(
+    message_id: MessageId,
+    channel_id: ChannelId,
+    content: &str,
+) -> Arc<crate::model::MessageUpdate> {
+    let mut update = crate::model::MessageUpdate::new(message_id, channel_id);
+    update.content = crate::model::Patch::Value(content.to_string());
+    Arc::new(update)
+}
+
 /// Shard pair for cache tests that model a single-shard bot.
 #[cfg(feature = "cache")]
 const SINGLE_SHARD: (u32, u32) = (0, 1);
@@ -83,7 +97,10 @@ fn typed_event_decoder_maps_message_create() {
     )
     .unwrap();
 
-    assert_eq!(event.kind(), "MESSAGE_CREATE");
+    assert_eq!(event.name(), "MESSAGE_CREATE");
+    assert!(
+        matches!(event.kind(), EventKind::MessageCreate(message) if message.content == "hello")
+    );
 }
 
 #[cfg(feature = "cache")]
@@ -113,8 +130,9 @@ async fn apply_cache_updates_clears_cache_on_ready() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::Ready(ReadyEvent {
-            data: ReadyPayload {
+        &Event::from_kind(
+            "READY",
+            EventKind::Ready(Box::new(ReadyPayload {
                 user: User {
                     id: test_id(2),
                     username: "bot".to_string(),
@@ -123,9 +141,8 @@ async fn apply_cache_updates_clears_cache_on_ready() {
                 session_id: "session".to_string(),
                 application: None,
                 resume_gateway_url: None,
-            },
-            raw: json!({ "session_id": "session" }),
-        }),
+            })),
+        ),
     )
     .await;
 
@@ -167,19 +184,10 @@ async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageUpdate(MessageEvent {
-            message: Message {
-                id: message_id,
-                channel_id,
-                content: "after".to_string(),
-                ..Message::fixture()
-            },
-            raw: json!({
-                "id": message_id,
-                "channel_id": channel_id,
-                "content": "after"
-            }),
-        }),
+        &Event::from_kind(
+            "MESSAGE_UPDATE",
+            EventKind::MessageUpdate(content_update(message_id, channel_id, "after")),
+        ),
     )
     .await;
 
@@ -200,19 +208,10 @@ async fn apply_cache_updates_ignores_partial_message_update_without_cached_messa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageUpdate(MessageEvent {
-            message: Message {
-                id: message_id,
-                channel_id,
-                content: "after".to_string(),
-                ..Message::fixture()
-            },
-            raw: json!({
-                "id": message_id,
-                "channel_id": channel_id,
-                "content": "after"
-            }),
-        }),
+        &Event::from_kind(
+            "MESSAGE_UPDATE",
+            EventKind::MessageUpdate(content_update(message_id, channel_id, "after")),
+        ),
     )
     .await;
 
@@ -241,12 +240,14 @@ async fn apply_cache_updates_evicts_bulk_deleted_messages() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageDeleteBulk(BulkMessageDeleteEvent {
-            ids: vec![first, second],
-            channel_id,
-            guild_id: None,
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "MESSAGE_DELETE_BULK",
+            EventKind::MessageDeleteBulk(BulkMessageDeleteEvent {
+                ids: vec![first, second],
+                channel_id,
+                guild_id: None,
+            }),
+        ),
     )
     .await;
 
@@ -266,14 +267,14 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::UserUpdate(UserUpdateEvent {
-            user: User {
+        &Event::from_kind(
+            "USER_UPDATE",
+            EventKind::UserUpdate(Box::new(User {
                 id: user_id,
                 username: "updated".to_string(),
                 ..User::fixture()
-            },
-            raw: json!({ "id": user_id, "username": "updated" }),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(cache.user(user_id).await.unwrap().username, "updated");
@@ -281,8 +282,9 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageCreate(MessageEvent {
-            message: Message {
+        &Event::from_kind(
+            "MESSAGE_CREATE",
+            EventKind::MessageCreate(Arc::new(Message {
                 id: message_id,
                 channel_id,
                 guild_id: Some(guild_id),
@@ -293,12 +295,8 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
                 }),
                 content: "hello".to_string(),
                 ..Message::fixture()
-            },
-            raw: json!({
-                "id": message_id,
-                "channel_id": channel_id
-            }),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(cache.user(user_id).await.unwrap().username, "author");
@@ -307,19 +305,16 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: Some(user_id),
-            guild_id: Some(guild_id),
-            status: Some(PresenceStatus::ONLINE),
-            activities: vec![Activity::new(ActivityType::PLAYING, "testing")],
-            raw: json!({
-                "user": { "id": user_id },
-                "guild_id": guild_id,
-                "status": "online",
-                "activities": [{ "name": "testing" }]
-            }),
-            ..PresenceUpdateEvent::default()
-        }),
+        &Event::from_kind(
+            "PRESENCE_UPDATE",
+            EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
+                user_id: Some(user_id),
+                guild_id: Some(guild_id),
+                status: Some(PresenceStatus::ONLINE),
+                activities: vec![Activity::new(ActivityType::PLAYING, "testing")],
+                ..PresenceUpdateEvent::default()
+            })),
+        ),
     )
     .await;
     let presence = cache.presence(guild_id, user_id).await.unwrap();
@@ -329,8 +324,9 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::VoiceStateUpdate(VoiceStateEvent {
-            state: VoiceState {
+        &Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
                 guild_id: Some(guild_id),
                 channel_id: Some(channel_id),
                 user_id: Some(user_id),
@@ -343,13 +339,8 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
                     ..Member::default()
                 }),
                 ..VoiceState::default()
-            },
-            raw: json!({
-                "guild_id": guild_id,
-                "channel_id": channel_id,
-                "user_id": user_id
-            }),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(cache.user(user_id).await.unwrap().username, "voice");
@@ -359,19 +350,15 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::VoiceStateUpdate(VoiceStateEvent {
-            state: VoiceState {
+        &Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
                 guild_id: Some(guild_id),
                 channel_id: None,
                 user_id: Some(user_id),
                 ..VoiceState::default()
-            },
-            raw: json!({
-                "guild_id": guild_id,
-                "channel_id": null,
-                "user_id": user_id
-            }),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(cache.voice_state(guild_id, user_id).await.is_none());
@@ -388,17 +375,17 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildSoundboardSoundCreate(crate::event::SoundboardSoundEvent {
-            sound: SoundboardSound {
+        &Event::from_kind(
+            "GUILD_SOUNDBOARD_SOUND_CREATE",
+            EventKind::GuildSoundboardSoundCreate(Box::new(SoundboardSound {
                 name: "one".to_string(),
                 sound_id: first_sound_id,
                 guild_id: Some(guild_id),
                 volume: 1.0,
                 available: true,
                 ..SoundboardSound::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(cache
@@ -409,18 +396,20 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::SoundboardSounds(crate::event::SoundboardSoundsEvent {
-            guild_id,
-            soundboard_sounds: vec![SoundboardSound {
-                name: "two".to_string(),
-                sound_id: second_sound_id,
-                guild_id: Some(guild_id),
-                volume: 1.0,
-                available: true,
-                ..SoundboardSound::fixture()
-            }],
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "SOUNDBOARD_SOUNDS",
+            EventKind::SoundboardSounds(crate::event::SoundboardSoundsEvent {
+                guild_id,
+                soundboard_sounds: vec![SoundboardSound {
+                    name: "two".to_string(),
+                    sound_id: second_sound_id,
+                    guild_id: Some(guild_id),
+                    volume: 1.0,
+                    available: true,
+                    ..SoundboardSound::fixture()
+                }],
+            }),
+        ),
     )
     .await;
     assert!(cache
@@ -439,11 +428,13 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildSoundboardSoundDelete(crate::event::SoundboardSoundDeleteEvent {
-            sound_id: second_sound_id,
-            guild_id,
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_SOUNDBOARD_SOUND_DELETE",
+            EventKind::GuildSoundboardSoundDelete(crate::event::SoundboardSoundDeleteEvent {
+                sound_id: second_sound_id,
+                guild_id,
+            }),
+        ),
     )
     .await;
     assert!(cache
@@ -466,15 +457,17 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id,
-            emojis: vec![Emoji {
-                id: Some(emoji_id),
-                name: Some("wave".to_string()),
-                ..Emoji::default()
-            }],
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_EMOJIS_UPDATE",
+            EventKind::GuildEmojisUpdate(GuildEmojisUpdateEvent {
+                guild_id,
+                emojis: vec![Emoji {
+                    id: Some(emoji_id),
+                    name: Some("wave".to_string()),
+                    ..Emoji::default()
+                }],
+            }),
+        ),
     )
     .await;
     assert_eq!(
@@ -490,18 +483,20 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildStickersUpdate(GuildStickersUpdateEvent {
-            guild_id: Some(guild_id),
-            stickers: vec![Sticker {
-                id: sticker_id,
-                name: "ship".to_string(),
-                kind: StickerType::STANDARD,
-                format_type: StickerFormatType::PNG,
+        &Event::from_kind(
+            "GUILD_STICKERS_UPDATE",
+            EventKind::GuildStickersUpdate(GuildStickersUpdateEvent {
                 guild_id: Some(guild_id),
-                ..Sticker::fixture()
-            }],
-            raw: json!({}),
-        }),
+                stickers: vec![Sticker {
+                    id: sticker_id,
+                    name: "ship".to_string(),
+                    kind: StickerType::STANDARD,
+                    format_type: StickerFormatType::PNG,
+                    guild_id: Some(guild_id),
+                    ..Sticker::fixture()
+                }],
+            }),
+        ),
     )
     .await;
     assert_eq!(
@@ -512,13 +507,15 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildScheduledEventCreate(ScheduledEvent {
-            id: Some(scheduled_event_id),
-            guild_id: Some(guild_id),
-            name: Some("town hall".to_string()),
-            raw: json!({}),
-            ..ScheduledEvent::default()
-        }),
+        &Event::from_kind(
+            "GUILD_SCHEDULED_EVENT_CREATE",
+            EventKind::GuildScheduledEventCreate(Box::new(ScheduledEvent {
+                id: Some(scheduled_event_id),
+                guild_id: Some(guild_id),
+                name: Some("town hall".to_string()),
+                ..ScheduledEvent::default()
+            })),
+        ),
     )
     .await;
     assert_eq!(
@@ -534,17 +531,17 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::StageInstanceCreate(StageInstanceEvent {
-            stage_instance: StageInstance {
+        &Event::from_kind(
+            "STAGE_INSTANCE_CREATE",
+            EventKind::StageInstanceCreate(Box::new(StageInstance {
                 id: stage_instance_id,
                 guild_id,
                 channel_id: stage_channel_id,
                 topic: "live".to_string(),
                 privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                 ..StageInstance::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(
@@ -559,12 +556,14 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildScheduledEventDelete(ScheduledEvent {
-            id: Some(scheduled_event_id),
-            guild_id: Some(guild_id),
-            raw: json!({}),
-            ..ScheduledEvent::default()
-        }),
+        &Event::from_kind(
+            "GUILD_SCHEDULED_EVENT_DELETE",
+            EventKind::GuildScheduledEventDelete(Box::new(ScheduledEvent {
+                id: Some(scheduled_event_id),
+                guild_id: Some(guild_id),
+                ..ScheduledEvent::default()
+            })),
+        ),
     )
     .await;
     assert!(cache
@@ -575,14 +574,14 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::StageInstanceDelete(StageInstanceEvent {
-            stage_instance: StageInstance {
+        &Event::from_kind(
+            "STAGE_INSTANCE_DELETE",
+            EventKind::StageInstanceDelete(Box::new(StageInstance {
                 id: stage_instance_id,
                 guild_id,
                 ..StageInstance::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(cache
@@ -598,21 +597,21 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
     }
 
     impl super::EventHandler for RecordingHandler {
-        async fn ready(&self, _ctx: super::Context, ready_data: ReadyPayload) {
+        async fn ready(&self, _ctx: super::Context, ready_data: &ReadyPayload) {
             self.hits
                 .lock()
                 .await
                 .push(format!("ready:{}", ready_data.user.username));
         }
 
-        async fn message_create(&self, _ctx: super::Context, message: Message) {
+        async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
             self.hits
                 .lock()
                 .await
                 .push(format!("message:{}", message.content));
         }
 
-        async fn interaction_create(&self, _ctx: super::Context, interaction: Interaction) {
+        async fn interaction_create(&self, _ctx: super::Context, interaction: &Interaction) {
             let label = match interaction {
                 Interaction::Ping(_) => "interaction:ping",
                 _ => "interaction:other",
@@ -620,14 +619,19 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
             self.hits.lock().await.push(label.to_string());
         }
 
-        async fn message_delete_bulk(&self, _ctx: super::Context, event: BulkMessageDeleteEvent) {
+        async fn message_delete_bulk(&self, _ctx: super::Context, event: &BulkMessageDeleteEvent) {
             self.hits
                 .lock()
                 .await
                 .push(format!("bulk:{}", event.ids.len()));
         }
 
-        async fn raw_event(&self, _ctx: super::Context, event_name: String, _data: Value) {
+        async fn raw_event(
+            &self,
+            _ctx: super::Context,
+            event_name: &str,
+            _data: &serde_json::value::RawValue,
+        ) {
             self.hits.lock().await.push(format!("raw:{event_name}"));
         }
     }
@@ -644,8 +648,9 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
     handler
         .handle_event(
             context.clone(),
-            Event::Ready(ReadyEvent {
-                data: ReadyPayload {
+            Arc::new(Event::from_kind(
+                "READY",
+                EventKind::Ready(Box::new(ReadyPayload {
                     user: User {
                         id: test_id(1),
                         username: "bot".to_string(),
@@ -654,58 +659,58 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
                     session_id: "session".to_string(),
                     application: None,
                     resume_gateway_url: None,
-                },
-                raw: json!({ "session_id": "session" }),
-            }),
+                })),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::MessageCreate(MessageEvent {
-                message: Message {
+            Arc::new(Event::from_kind(
+                "MESSAGE_CREATE",
+                EventKind::MessageCreate(Arc::new(Message {
                     id: test_id(2),
                     channel_id: test_id(3),
                     content: "hello".to_string(),
                     ..Message::fixture()
-                },
-                raw: json!({}),
-            }),
+                })),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            decode_event(
-                "INTERACTION_CREATE",
-                json!({
-                    "id": "4",
-                    "application_id": "5",
-                    "token": "interaction-token",
-                    "type": 1
+            Arc::new(
+                decode_event(
+                    "INTERACTION_CREATE",
+                    json!({
+                        "id": "4",
+                        "application_id": "5",
+                        "token": "interaction-token",
+                        "type": 1
+                    }),
+                )
+                .unwrap(),
+            ),
+        )
+        .await;
+    handler
+        .handle_event(
+            context.clone(),
+            Arc::new(Event::from_kind(
+                "MESSAGE_DELETE_BULK",
+                EventKind::MessageDeleteBulk(BulkMessageDeleteEvent {
+                    ids: vec![test_id(6), test_id(7)],
+                    channel_id: test_id(3),
+                    guild_id: None,
                 }),
-            )
-            .unwrap(),
-        )
-        .await;
-    handler
-        .handle_event(
-            context.clone(),
-            Event::MessageDeleteBulk(BulkMessageDeleteEvent {
-                ids: vec![test_id(6), test_id(7)],
-                channel_id: test_id(3),
-                guild_id: None,
-                raw: json!({}),
-            }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context,
-            Event::Unknown {
-                kind: "SOMETHING_NEW".to_string(),
-                raw: json!({ "surprise": true }),
-            },
+            Arc::new(decode_event("SOMETHING_NEW", json!({ "surprise": true })).unwrap()),
         )
         .await;
 
@@ -728,12 +733,12 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
     }
 
     impl super::EventHandler for OrderedHandler {
-        async fn ready(&self, _ctx: super::Context, _ready_data: ReadyPayload) {
+        async fn ready(&self, _ctx: super::Context, _ready_data: &ReadyPayload) {
             tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             self.hits.lock().await.push("ready".to_string());
         }
 
-        async fn message_create(&self, _ctx: super::Context, message: Message) {
+        async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
             self.hits
                 .lock()
                 .await
@@ -759,9 +764,9 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
     );
     let ingress = pipeline.ingress();
 
-    ingress.push(super::GatewayDispatch {
-        event_name: "READY".to_string(),
-        data: json!({
+    ingress.push(super::GatewayDispatch::new(
+        "READY".to_string(),
+        json!({
             "user": {
                 "id": "1",
                 "username": "bot"
@@ -772,19 +777,17 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
             },
             "resume_gateway_url": "wss://gateway.discord.gg"
         }),
-        received_at: tokio::time::Instant::now(),
-    });
-    ingress.push(super::GatewayDispatch {
-        event_name: "MESSAGE_CREATE".to_string(),
-        data: json!({
+    ));
+    ingress.push(super::GatewayDispatch::new(
+        "MESSAGE_CREATE".to_string(),
+        json!({
             "id": "2",
             "channel_id": "3",
             "content": "hello",
             "mentions": [],
             "attachments": []
         }),
-        received_at: tokio::time::Instant::now(),
-    });
+    ));
     drop(ingress);
     pipeline
         .shutdown(Duration::from_secs(5))
@@ -1080,37 +1083,46 @@ async fn shared_runtime_context_reuses_collectors_hub() {
         .message_collector()
         .timeout(std::time::Duration::from_secs(1));
 
-    runtime
-        .collectors
-        .publish(Event::MessageCreate(MessageEvent {
-            message: Message {
-                id: test_id(88),
-                channel_id: test_id(89),
-                content: "shared".to_string(),
-                ..Message::fixture()
-            },
-            raw: json!({}),
-        }));
+    runtime.collectors.publish(Arc::new(Event::from_kind(
+        "MESSAGE_CREATE",
+        EventKind::MessageCreate(Arc::new(Message {
+            id: test_id(88),
+            channel_id: test_id(89),
+            content: "shared".to_string(),
+            ..Message::fixture()
+        })),
+    )));
 
     assert_eq!(collector.next().await.unwrap().content, "shared");
 }
 
 #[tokio::test]
-async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_application_id() {
+async fn process_gateway_dispatch_reports_decode_failures_and_keeps_existing_application_id() {
     struct DispatchHandler {
         hits: Arc<Mutex<Vec<String>>>,
     }
 
     impl super::EventHandler for DispatchHandler {
-        async fn ready(&self, _ctx: super::Context, ready_data: ReadyPayload) {
+        async fn ready(&self, _ctx: super::Context, ready_data: &ReadyPayload) {
             self.hits
                 .lock()
                 .await
                 .push(format!("ready:{}", ready_data.session_id));
         }
 
-        async fn raw_event(&self, _ctx: super::Context, event_name: String, _data: Value) {
-            self.hits.lock().await.push(format!("raw:{event_name}"));
+        async fn decode_failed(
+            &self,
+            _ctx: super::Context,
+            event_name: &str,
+            error: &crate::event::EventDecodeError,
+            data: &serde_json::value::RawValue,
+        ) {
+            assert!(error.message().contains("guild_id"), "{error}");
+            assert!(data.get().contains("alice"), "the payload is kept");
+            self.hits
+                .lock()
+                .await
+                .push(format!("decode_failed:{event_name}"));
         }
     }
 
@@ -1124,9 +1136,9 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
     for dispatch in [
-        super::GatewayDispatch {
-            event_name: "READY".to_string(),
-            data: json!({
+        super::GatewayDispatch::new(
+            "READY".to_string(),
+            json!({
                 "user": {
                     "id": "1",
                     "username": "bot"
@@ -1136,11 +1148,10 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                     "id": "42"
                 }
             }),
-            received_at: tokio::time::Instant::now(),
-        },
-        super::GatewayDispatch {
-            event_name: "GUILD_MEMBER_ADD".to_string(),
-            data: json!({
+        ),
+        super::GatewayDispatch::new(
+            "GUILD_MEMBER_ADD".to_string(),
+            json!({
                 "member": {
                     "user": {
                         "id": "2",
@@ -1148,14 +1159,14 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                     }
                 }
             }),
-            received_at: tokio::time::Instant::now(),
-        },
+        ),
     ] {
         let event = super::process_gateway_dispatch(
             &context,
             #[cfg(feature = "cache")]
             None,
             dispatch,
+            false,
         )
         .await;
         handler.handle_event(context.clone(), event.event).await;
@@ -1166,7 +1177,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         *hits.lock().await,
         vec![
             "ready:existing".to_string(),
-            "raw:GUILD_MEMBER_ADD".to_string()
+            "decode_failed:GUILD_MEMBER_ADD".to_string()
         ]
     );
 }
@@ -1183,19 +1194,21 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildCreate(GuildEvent {
-            guild: crate::model::Guild {
-                id: guild_id,
-                name: "guild".to_string(),
-                roles: vec![Role {
-                    id: role_id,
-                    name: "admin".to_string(),
-                    ..Role::fixture()
-                }],
-                ..crate::model::Guild::fixture()
-            },
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_CREATE",
+            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(
+                crate::model::Guild {
+                    id: guild_id,
+                    name: "guild".to_string(),
+                    roles: vec![Role {
+                        id: role_id,
+                        name: "admin".to_string(),
+                        ..Role::fixture()
+                    }],
+                    ..crate::model::Guild::fixture()
+                },
+            ))),
+        ),
     )
     .await;
     assert_eq!(cache.guild(guild_id).await.unwrap().name, "guild");
@@ -1204,16 +1217,16 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::ChannelCreate(ChannelEvent {
-            channel: crate::model::Channel {
+        &Event::from_kind(
+            "CHANNEL_CREATE",
+            EventKind::ChannelCreate(Box::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..crate::model::Channel::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(
@@ -1224,19 +1237,21 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MemberAdd(MemberEvent {
-            guild_id,
-            member: Member {
-                user: Some(User {
-                    id: user_id,
-                    username: "alice".to_string(),
-                    ..User::fixture()
+        &Event::from_kind(
+            "GUILD_MEMBER_ADD",
+            EventKind::MemberAdd(MemberEvent {
+                guild_id,
+                member: Arc::new(Member {
+                    user: Some(User {
+                        id: user_id,
+                        username: "alice".to_string(),
+                        ..User::fixture()
+                    }),
+                    nick: Some("ally".to_string()),
+                    ..Member::default()
                 }),
-                nick: Some("ally".to_string()),
-                ..Member::default()
-            },
-            raw: json!({}),
-        }),
+            }),
+        ),
     )
     .await;
     assert_eq!(
@@ -1252,11 +1267,13 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MemberUpdate(MemberEvent {
-            guild_id,
-            member: Member::default(),
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_MEMBER_UPDATE",
+            EventKind::MemberUpdate(MemberEvent {
+                guild_id,
+                member: Arc::new(Member::default()),
+            }),
+        ),
     )
     .await;
     assert_eq!(
@@ -1272,10 +1289,10 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::RoleDelete(RoleDeleteEvent {
-            data: RoleDeletePayload { guild_id, role_id },
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_ROLE_DELETE",
+            EventKind::RoleDelete(RoleDeletePayload { guild_id, role_id }),
+        ),
     )
     .await;
     assert!(cache.role(guild_id, role_id).await.is_none());
@@ -1283,17 +1300,17 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MemberRemove(MemberRemoveEvent {
-            data: MemberRemovePayload {
+        &Event::from_kind(
+            "GUILD_MEMBER_REMOVE",
+            EventKind::MemberRemove(Box::new(MemberRemovePayload {
                 guild_id,
                 user: User {
                     id: user_id,
                     username: "alice".to_string(),
                     ..User::fixture()
                 },
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(cache.member(guild_id, user_id).await.is_none());
@@ -1302,8 +1319,9 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::InteractionCreate(crate::event::InteractionEvent {
-            interaction: Interaction::Component(ComponentInteraction {
+        &Event::from_kind(
+            "INTERACTION_CREATE",
+            EventKind::InteractionCreate(Box::new(Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
                     id: test_id(105),
                     application_id: test_id(106),
@@ -1317,9 +1335,8 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
                     component_type: ComponentType::BUTTON,
                     values: vec![],
                 },
-            }),
-            raw: json!({}),
-        }),
+            }))),
+        ),
     )
     .await;
 
@@ -1329,13 +1346,13 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::ChannelDelete(ChannelEvent {
-            channel: crate::model::Channel {
+        &Event::from_kind(
+            "CHANNEL_DELETE",
+            EventKind::ChannelDelete(Box::new(crate::model::Channel {
                 id: channel_id,
                 ..crate::model::Channel::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(cache.channel(channel_id).await.is_none());
@@ -1343,13 +1360,13 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildDelete(GuildDeleteEvent {
-            data: GuildDeletePayload {
+        &Event::from_kind(
+            "GUILD_DELETE",
+            EventKind::GuildDelete(GuildDeletePayload {
                 id: guild_id,
                 unavailable: None,
-            },
-            raw: json!({}),
-        }),
+            }),
+        ),
     )
     .await;
     assert!(cache.guild(guild_id).await.is_none());
@@ -1391,140 +1408,165 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         .await;
 
     let events = vec![
-        Event::VoiceStateUpdate(VoiceStateEvent {
-            state: VoiceState {
+        Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
                 guild_id: Some(guild_id),
                 channel_id: Some(channel_id),
                 user_id: Some(test_id(400)),
                 ..VoiceState::default()
-            },
-            raw: json!({}),
-        }),
-        Event::VoiceServerUpdate(VoiceServerEvent {
-            data: VoiceServerUpdate {
+            })),
+        ),
+        Event::from_kind(
+            "VOICE_SERVER_UPDATE",
+            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
                 guild_id,
                 token: "voice-token".to_string(),
                 endpoint: Some("voice.example.test".to_string()),
-            },
-            raw: json!({}),
-        }),
-        Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
-            channel_id,
-            guild_id: Some(guild_id),
-            last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
-            raw: json!({}),
-        }),
-        Event::GuildBanAdd(GuildBanEvent {
-            guild_id,
-            user: User {
-                id: test_id(401),
-                username: "banned".to_string(),
-                ..User::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildBanRemove(GuildBanEvent {
-            guild_id,
-            user: User {
-                id: test_id(402),
-                username: "unbanned".to_string(),
-                ..User::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id,
-            emojis: vec![],
-            raw: json!({}),
-        }),
-        Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-            guild_id: Some(guild_id),
-            raw: json!({}),
-        }),
-        Event::WebhooksUpdate(WebhooksUpdateEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            raw: json!({}),
-        }),
-        Event::InviteCreate(InviteEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            code: Some("invite".to_string()),
-            inviter: None,
-            uses: None,
-            max_uses: None,
-            max_age: None,
-            temporary: None,
-            created_at: None,
-            expires_at: None,
-            target_type: None,
-            target_user: None,
-            raw: json!({}),
-        }),
-        Event::InviteDelete(InviteEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            code: Some("invite".to_string()),
-            inviter: None,
-            uses: None,
-            max_uses: None,
-            max_age: None,
-            temporary: None,
-            created_at: None,
-            expires_at: None,
-            target_type: None,
-            target_user: None,
-            raw: json!({}),
-        }),
-        Event::MessageReactionAdd(ReactionEvent {
-            user_id: Some(test_id(403)),
-            channel_id: Some(channel_id),
-            message_id: Some(message_id),
-            guild_id: Some(guild_id),
-            emoji: None,
-            raw: json!({}),
-            ..ReactionEvent::default()
-        }),
-        Event::MessageReactionRemove(ReactionEvent {
-            user_id: Some(test_id(404)),
-            channel_id: Some(channel_id),
-            message_id: Some(message_id),
-            guild_id: Some(guild_id),
-            emoji: None,
-            raw: json!({}),
-            ..ReactionEvent::default()
-        }),
-        Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-            channel_id: Some(channel_id),
-            message_id: Some(message_id),
-            guild_id: Some(guild_id),
-            raw: json!({}),
-        }),
-        Event::TypingStart(TypingStartEvent {
-            channel_id: Some(channel_id),
-            guild_id: Some(guild_id),
-            user_id: Some(test_id(405)),
-            timestamp: Some(123),
-            raw: json!({}),
-        }),
-        Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: Some(test_id(406)),
-            guild_id: Some(guild_id),
-            status: Some(PresenceStatus::ONLINE),
-            raw: json!({}),
-            ..PresenceUpdateEvent::default()
-        }),
-        Event::Unknown {
-            kind: "UNKNOWN_EVENT".to_string(),
-            raw: json!({}),
-        },
+            })),
+        ),
+        Event::from_kind(
+            "CHANNEL_PINS_UPDATE",
+            EventKind::ChannelPinsUpdate(ChannelPinsUpdateEvent {
+                channel_id,
+                guild_id: Some(guild_id),
+                last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+            }),
+        ),
+        Event::from_kind(
+            "GUILD_BAN_ADD",
+            EventKind::GuildBanAdd(Box::new(GuildBanEvent {
+                guild_id,
+                user: User {
+                    id: test_id(401),
+                    username: "banned".to_string(),
+                    ..User::fixture()
+                },
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_BAN_REMOVE",
+            EventKind::GuildBanRemove(Box::new(GuildBanEvent {
+                guild_id,
+                user: User {
+                    id: test_id(402),
+                    username: "unbanned".to_string(),
+                    ..User::fixture()
+                },
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_EMOJIS_UPDATE",
+            EventKind::GuildEmojisUpdate(GuildEmojisUpdateEvent {
+                guild_id,
+                emojis: vec![],
+            }),
+        ),
+        Event::from_kind(
+            "GUILD_INTEGRATIONS_UPDATE",
+            EventKind::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
+                guild_id: Some(guild_id),
+            }),
+        ),
+        Event::from_kind(
+            "WEBHOOKS_UPDATE",
+            EventKind::WebhooksUpdate(WebhooksUpdateEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+            }),
+        ),
+        Event::from_kind(
+            "INVITE_CREATE",
+            EventKind::InviteCreate(Box::new(InviteEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                code: Some("invite".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
+            })),
+        ),
+        Event::from_kind(
+            "INVITE_DELETE",
+            EventKind::InviteDelete(Box::new(InviteEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                code: Some("invite".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_REACTION_ADD",
+            EventKind::MessageReactionAdd(Box::new(ReactionEvent {
+                user_id: Some(test_id(403)),
+                channel_id: Some(channel_id),
+                message_id: Some(message_id),
+                guild_id: Some(guild_id),
+                emoji: None,
+                ..ReactionEvent::default()
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_REACTION_REMOVE",
+            EventKind::MessageReactionRemove(Box::new(ReactionEvent {
+                user_id: Some(test_id(404)),
+                channel_id: Some(channel_id),
+                message_id: Some(message_id),
+                guild_id: Some(guild_id),
+                emoji: None,
+                ..ReactionEvent::default()
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_REACTION_REMOVE_ALL",
+            EventKind::MessageReactionRemoveAll(ReactionRemoveAllEvent {
+                channel_id: Some(channel_id),
+                message_id: Some(message_id),
+                guild_id: Some(guild_id),
+            }),
+        ),
+        Event::from_kind(
+            "TYPING_START",
+            EventKind::TypingStart(TypingStartEvent {
+                channel_id: Some(channel_id),
+                guild_id: Some(guild_id),
+                user_id: Some(test_id(405)),
+                timestamp: Some(123),
+            }),
+        ),
+        Event::from_kind(
+            "PRESENCE_UPDATE",
+            EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
+                user_id: Some(test_id(406)),
+                guild_id: Some(guild_id),
+                status: Some(PresenceStatus::ONLINE),
+                ..PresenceUpdateEvent::default()
+            })),
+        ),
+        decode_event("UNKNOWN_EVENT", json!({})).unwrap(),
     ];
 
     let context = pipeline_test_context(SINGLE_SHARD);
     for event in events {
         super::apply_cache_updates(&cache, SINGLE_SHARD, &event).await;
         // The default EventHandler hooks accept every variant as no-ops.
-        NoopEventHandler.handle_event(context.clone(), event).await;
+        NoopEventHandler
+            .handle_event(context.clone(), Arc::new(event))
+            .await;
     }
 
     assert_eq!(cache.guild(guild_id).await.unwrap().name, "guild");
@@ -1545,7 +1587,7 @@ async fn event_handler_routes_additional_typed_hooks() {
     }
 
     impl super::EventHandler for ExtendedHandler {
-        async fn member_add(&self, _ctx: super::Context, guild_id: GuildId, member: Member) {
+        async fn member_add(&self, _ctx: super::Context, guild_id: GuildId, member: Arc<Member>) {
             self.hits.lock().await.push(format!(
                 "member_add:{}:{}",
                 guild_id,
@@ -1572,33 +1614,29 @@ async fn event_handler_routes_additional_typed_hooks() {
                 .push(format!("message_delete:{}:{}", channel_id, message_id));
         }
 
-        async fn channel_pins_update(&self, _ctx: super::Context, event: ChannelPinsUpdateEvent) {
+        async fn channel_pins_update(&self, _ctx: super::Context, event: &ChannelPinsUpdateEvent) {
             self.hits.lock().await.push(format!(
                 "pins:{}:{}",
                 event.channel_id,
-                event.last_pin_timestamp.unwrap()
+                event.last_pin_timestamp.as_deref().unwrap()
             ));
         }
 
-        async fn guild_ban_add(&self, _ctx: super::Context, event: GuildBanEvent) {
+        async fn guild_ban_add(&self, _ctx: super::Context, event: &GuildBanEvent) {
             self.hits
                 .lock()
                 .await
                 .push(format!("ban_add:{}:{}", event.guild_id, event.user.id));
         }
 
-        async fn voice_server_update(&self, _ctx: super::Context, data: VoiceServerUpdate) {
+        async fn voice_server_update(&self, _ctx: super::Context, data: &VoiceServerUpdate) {
             self.hits
                 .lock()
                 .await
                 .push(format!("voice_server:{}:{}", data.guild_id, data.token));
         }
 
-        async fn reaction_remove_all(
-            &self,
-            _ctx: super::Context,
-            event: crate::event::ReactionRemoveAllEvent,
-        ) {
+        async fn reaction_remove_all(&self, _ctx: super::Context, event: &ReactionRemoveAllEvent) {
             self.hits.lock().await.push(format!(
                 "reaction_all:{}:{}",
                 event.channel_id.unwrap(),
@@ -1606,15 +1644,15 @@ async fn event_handler_routes_additional_typed_hooks() {
             ));
         }
 
-        async fn presence_update(&self, _ctx: super::Context, event: PresenceUpdateEvent) {
+        async fn presence_update(&self, _ctx: super::Context, event: &PresenceUpdateEvent) {
             self.hits.lock().await.push(format!(
                 "presence:{}:{}",
                 event.user_id.unwrap(),
-                event.status.unwrap()
+                event.status.as_ref().unwrap()
             ));
         }
 
-        async fn gateway_rate_limited(&self, _ctx: super::Context, event: RateLimitedEvent) {
+        async fn gateway_rate_limited(&self, _ctx: super::Context, event: &RateLimitedEvent) {
             self.hits
                 .lock()
                 .await
@@ -1634,115 +1672,127 @@ async fn event_handler_routes_additional_typed_hooks() {
     handler
         .handle_event(
             context.clone(),
-            Event::MemberAdd(MemberEvent {
-                guild_id: test_id(1),
-                member: Member {
-                    user: Some(User {
-                        id: test_id(2),
-                        username: "alice".to_string(),
-                        ..User::fixture()
+            Arc::new(Event::from_kind(
+                "GUILD_MEMBER_ADD",
+                EventKind::MemberAdd(MemberEvent {
+                    guild_id: test_id(1),
+                    member: Arc::new(Member {
+                        user: Some(User {
+                            id: test_id(2),
+                            username: "alice".to_string(),
+                            ..User::fixture()
+                        }),
+                        ..Member::default()
                     }),
-                    ..Member::default()
-                },
-                raw: json!({}),
-            }),
+                }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::RoleDelete(RoleDeleteEvent {
-                data: RoleDeletePayload {
+            Arc::new(Event::from_kind(
+                "GUILD_ROLE_DELETE",
+                EventKind::RoleDelete(RoleDeletePayload {
                     guild_id: test_id(3),
                     role_id: test_id(4),
-                },
-                raw: json!({}),
-            }),
+                }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::MessageDelete(MessageDeleteEvent {
-                data: MessageDeletePayload {
+            Arc::new(Event::from_kind(
+                "MESSAGE_DELETE",
+                EventKind::MessageDelete(MessageDeletePayload {
                     id: test_id(5),
                     channel_id: test_id(6),
                     guild_id: None,
-                },
-                raw: json!({}),
-            }),
+                }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
-                channel_id: test_id(7),
-                guild_id: None,
-                last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
-                raw: json!({}),
-            }),
+            Arc::new(Event::from_kind(
+                "CHANNEL_PINS_UPDATE",
+                EventKind::ChannelPinsUpdate(ChannelPinsUpdateEvent {
+                    channel_id: test_id(7),
+                    guild_id: None,
+                    last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+                }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::GuildBanAdd(GuildBanEvent {
-                guild_id: test_id(8),
-                user: User {
-                    id: test_id(9),
-                    username: "banned".to_string(),
-                    ..User::fixture()
-                },
-                raw: json!({}),
-            }),
+            Arc::new(Event::from_kind(
+                "GUILD_BAN_ADD",
+                EventKind::GuildBanAdd(Box::new(GuildBanEvent {
+                    guild_id: test_id(8),
+                    user: User {
+                        id: test_id(9),
+                        username: "banned".to_string(),
+                        ..User::fixture()
+                    },
+                })),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::VoiceServerUpdate(VoiceServerEvent {
-                data: VoiceServerUpdate {
+            Arc::new(Event::from_kind(
+                "VOICE_SERVER_UPDATE",
+                EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
                     guild_id: test_id(10),
                     token: "voice-token".to_string(),
                     endpoint: Some("voice.discord.media".to_string()),
-                },
-                raw: json!({}),
-            }),
+                })),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-                channel_id: Some(test_id(11)),
-                message_id: Some(test_id(12)),
-                guild_id: None,
-                raw: json!({}),
-            }),
+            Arc::new(Event::from_kind(
+                "MESSAGE_REACTION_REMOVE_ALL",
+                EventKind::MessageReactionRemoveAll(ReactionRemoveAllEvent {
+                    channel_id: Some(test_id(11)),
+                    message_id: Some(test_id(12)),
+                    guild_id: None,
+                }),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::PresenceUpdate(PresenceUpdateEvent {
-                user_id: Some(test_id(13)),
-                guild_id: Some(test_id(14)),
-                status: Some(PresenceStatus::ONLINE),
-                raw: json!({}),
-                ..PresenceUpdateEvent::default()
-            }),
+            Arc::new(Event::from_kind(
+                "PRESENCE_UPDATE",
+                EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
+                    user_id: Some(test_id(13)),
+                    guild_id: Some(test_id(14)),
+                    status: Some(PresenceStatus::ONLINE),
+                    ..PresenceUpdateEvent::default()
+                })),
+            )),
         )
         .await;
     handler
         .handle_event(
             context.clone(),
-            Event::RateLimited(RateLimitedEvent {
-                opcode: Some(8),
-                retry_after: Some(1.5),
-                meta: Some(json!({ "guild_id": "14" })),
-                raw: json!({}),
-            }),
+            Arc::new(Event::from_kind(
+                "RATE_LIMITED",
+                EventKind::RateLimited(Box::new(RateLimitedEvent {
+                    opcode: Some(8),
+                    retry_after: Some(1.5),
+                    meta: Some(json!({ "guild_id": "14" })),
+                })),
+            )),
         )
         .await;
 
@@ -1781,199 +1831,220 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
     let message_id = test_id(504);
 
     let events = vec![
-        Event::GuildCreate(GuildEvent {
-            guild: crate::model::Guild {
-                id: guild_id,
-                name: "guild".to_string(),
-                ..crate::model::Guild::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildUpdate(GuildEvent {
-            guild: crate::model::Guild {
+        Event::from_kind(
+            "GUILD_CREATE",
+            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(
+                crate::model::Guild {
+                    id: guild_id,
+                    name: "guild".to_string(),
+                    ..crate::model::Guild::fixture()
+                },
+            ))),
+        ),
+        Event::from_kind(
+            "GUILD_UPDATE",
+            EventKind::GuildUpdate(Box::new(crate::model::Guild {
                 id: guild_id,
                 name: "guild-updated".to_string(),
                 ..crate::model::Guild::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildDelete(GuildDeleteEvent {
-            data: GuildDeletePayload {
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_DELETE",
+            EventKind::GuildDelete(GuildDeletePayload {
                 id: guild_id,
                 unavailable: Some(true),
-            },
-            raw: json!({}),
-        }),
-        Event::ChannelCreate(ChannelEvent {
-            channel: crate::model::Channel {
+            }),
+        ),
+        Event::from_kind(
+            "CHANNEL_CREATE",
+            EventKind::ChannelCreate(Box::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..crate::model::Channel::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::ChannelUpdate(ChannelEvent {
-            channel: crate::model::Channel {
+            })),
+        ),
+        Event::from_kind(
+            "CHANNEL_UPDATE",
+            EventKind::ChannelUpdate(Box::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
                 name: Some("general-2".to_string()),
                 ..crate::model::Channel::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::ChannelDelete(ChannelEvent {
-            channel: crate::model::Channel {
+            })),
+        ),
+        Event::from_kind(
+            "CHANNEL_DELETE",
+            EventKind::ChannelDelete(Box::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
                 ..crate::model::Channel::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::MemberUpdate(MemberEvent {
-            guild_id,
-            member: Member {
-                user: Some(User {
-                    id: user_id,
-                    username: "member".to_string(),
-                    ..User::fixture()
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_MEMBER_UPDATE",
+            EventKind::MemberUpdate(MemberEvent {
+                guild_id,
+                member: Arc::new(Member {
+                    user: Some(User {
+                        id: user_id,
+                        username: "member".to_string(),
+                        ..User::fixture()
+                    }),
+                    ..Member::default()
                 }),
-                ..Member::default()
-            },
-            raw: json!({}),
-        }),
-        Event::MemberRemove(MemberRemoveEvent {
-            data: MemberRemovePayload {
+            }),
+        ),
+        Event::from_kind(
+            "GUILD_MEMBER_REMOVE",
+            EventKind::MemberRemove(Box::new(MemberRemovePayload {
                 guild_id,
                 user: User {
                     id: user_id,
                     username: "member".to_string(),
                     ..User::fixture()
                 },
-            },
-            raw: json!({}),
-        }),
-        Event::RoleCreate(RoleEvent {
-            guild_id,
-            role: Role {
-                id: role_id,
-                name: "role".to_string(),
-                ..Role::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::RoleUpdate(RoleEvent {
-            guild_id,
-            role: Role {
-                id: role_id,
-                name: "role-updated".to_string(),
-                ..Role::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::MessageUpdate(MessageEvent {
-            message: Message {
-                id: message_id,
-                channel_id,
-                content: "updated".to_string(),
-                ..Message::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildBanRemove(GuildBanEvent {
-            guild_id,
-            user: User {
-                id: user_id,
-                username: "member".to_string(),
-                ..User::fixture()
-            },
-            raw: json!({}),
-        }),
-        Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id,
-            emojis: vec![],
-            raw: json!({}),
-        }),
-        Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-            guild_id: Some(guild_id),
-            raw: json!({}),
-        }),
-        Event::WebhooksUpdate(WebhooksUpdateEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            raw: json!({}),
-        }),
-        Event::InviteCreate(InviteEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            code: Some("invite-create".to_string()),
-            inviter: None,
-            uses: None,
-            max_uses: None,
-            max_age: None,
-            temporary: None,
-            created_at: None,
-            expires_at: None,
-            target_type: None,
-            target_user: None,
-            raw: json!({}),
-        }),
-        Event::InviteDelete(InviteEvent {
-            guild_id: Some(guild_id),
-            channel_id: Some(channel_id),
-            code: Some("invite-delete".to_string()),
-            inviter: None,
-            uses: None,
-            max_uses: None,
-            max_age: None,
-            temporary: None,
-            created_at: None,
-            expires_at: None,
-            target_type: None,
-            target_user: None,
-            raw: json!({}),
-        }),
-        Event::VoiceStateUpdate(VoiceStateEvent {
-            state: VoiceState {
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_ROLE_CREATE",
+            EventKind::RoleCreate(Box::new(RoleEvent {
+                guild_id,
+                role: Role {
+                    id: role_id,
+                    name: "role".to_string(),
+                    ..Role::fixture()
+                },
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_ROLE_UPDATE",
+            EventKind::RoleUpdate(Box::new(RoleEvent {
+                guild_id,
+                role: Role {
+                    id: role_id,
+                    name: "role-updated".to_string(),
+                    ..Role::fixture()
+                },
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_UPDATE",
+            EventKind::MessageUpdate(content_update(message_id, channel_id, "updated")),
+        ),
+        Event::from_kind(
+            "GUILD_BAN_REMOVE",
+            EventKind::GuildBanRemove(Box::new(GuildBanEvent {
+                guild_id,
+                user: User {
+                    id: user_id,
+                    username: "member".to_string(),
+                    ..User::fixture()
+                },
+            })),
+        ),
+        Event::from_kind(
+            "GUILD_EMOJIS_UPDATE",
+            EventKind::GuildEmojisUpdate(GuildEmojisUpdateEvent {
+                guild_id,
+                emojis: vec![],
+            }),
+        ),
+        Event::from_kind(
+            "GUILD_INTEGRATIONS_UPDATE",
+            EventKind::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
+                guild_id: Some(guild_id),
+            }),
+        ),
+        Event::from_kind(
+            "WEBHOOKS_UPDATE",
+            EventKind::WebhooksUpdate(WebhooksUpdateEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+            }),
+        ),
+        Event::from_kind(
+            "INVITE_CREATE",
+            EventKind::InviteCreate(Box::new(InviteEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                code: Some("invite-create".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
+            })),
+        ),
+        Event::from_kind(
+            "INVITE_DELETE",
+            EventKind::InviteDelete(Box::new(InviteEvent {
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                code: Some("invite-delete".to_string()),
+                inviter: None,
+                uses: None,
+                max_uses: None,
+                max_age: None,
+                temporary: None,
+                created_at: None,
+                expires_at: None,
+                target_type: None,
+                target_user: None,
+            })),
+        ),
+        Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
                 guild_id: Some(guild_id),
                 channel_id: Some(channel_id),
                 user_id: Some(user_id),
                 ..VoiceState::default()
-            },
-            raw: json!({}),
-        }),
-        Event::MessageReactionAdd(ReactionEvent {
-            user_id: Some(user_id),
-            channel_id: Some(channel_id),
-            message_id: Some(message_id),
-            guild_id: Some(guild_id),
-            emoji: None,
-            raw: json!({}),
-            ..ReactionEvent::default()
-        }),
-        Event::MessageReactionRemove(ReactionEvent {
-            user_id: Some(user_id),
-            channel_id: Some(channel_id),
-            message_id: Some(message_id),
-            guild_id: Some(guild_id),
-            emoji: None,
-            raw: json!({}),
-            ..ReactionEvent::default()
-        }),
-        Event::TypingStart(TypingStartEvent {
-            channel_id: Some(channel_id),
-            guild_id: Some(test_id(500)),
-            user_id: Some(test_id(502)),
-            timestamp: Some(321),
-            raw: json!({}),
-        }),
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_REACTION_ADD",
+            EventKind::MessageReactionAdd(Box::new(ReactionEvent {
+                user_id: Some(user_id),
+                channel_id: Some(channel_id),
+                message_id: Some(message_id),
+                guild_id: Some(guild_id),
+                emoji: None,
+                ..ReactionEvent::default()
+            })),
+        ),
+        Event::from_kind(
+            "MESSAGE_REACTION_REMOVE",
+            EventKind::MessageReactionRemove(Box::new(ReactionEvent {
+                user_id: Some(user_id),
+                channel_id: Some(channel_id),
+                message_id: Some(message_id),
+                guild_id: Some(guild_id),
+                emoji: None,
+                ..ReactionEvent::default()
+            })),
+        ),
+        Event::from_kind(
+            "TYPING_START",
+            EventKind::TypingStart(TypingStartEvent {
+                channel_id: Some(channel_id),
+                guild_id: Some(test_id(500)),
+                user_id: Some(test_id(502)),
+                timestamp: Some(321),
+            }),
+        ),
     ];
 
     for event in events {
-        handler.handle_event(context.clone(), event).await;
+        handler.handle_event(context.clone(), Arc::new(event)).await;
     }
 }
 
@@ -1989,15 +2060,17 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::RoleCreate(RoleEvent {
-            guild_id,
-            role: Role {
-                id: role_id,
-                name: "reader".to_string(),
-                ..Role::fixture()
-            },
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_ROLE_CREATE",
+            EventKind::RoleCreate(Box::new(RoleEvent {
+                guild_id,
+                role: Role {
+                    id: role_id,
+                    name: "reader".to_string(),
+                    ..Role::fixture()
+                },
+            })),
+        ),
     )
     .await;
     assert_eq!(cache.role(guild_id, role_id).await.unwrap().name, "reader");
@@ -2005,15 +2078,17 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::RoleUpdate(RoleEvent {
-            guild_id,
-            role: Role {
-                id: role_id,
-                name: "writer".to_string(),
-                ..Role::fixture()
-            },
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_ROLE_UPDATE",
+            EventKind::RoleUpdate(Box::new(RoleEvent {
+                guild_id,
+                role: Role {
+                    id: role_id,
+                    name: "writer".to_string(),
+                    ..Role::fixture()
+                },
+            })),
+        ),
     )
     .await;
     assert_eq!(cache.role(guild_id, role_id).await.unwrap().name, "writer");
@@ -2021,16 +2096,16 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageCreate(MessageEvent {
-            message: Message {
+        &Event::from_kind(
+            "MESSAGE_CREATE",
+            EventKind::MessageCreate(Arc::new(Message {
                 id: message_id,
                 channel_id,
                 guild_id: Some(guild_id),
                 content: "created".to_string(),
                 ..Message::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert_eq!(
@@ -2041,14 +2116,14 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::MessageDelete(MessageDeleteEvent {
-            data: MessageDeletePayload {
+        &Event::from_kind(
+            "MESSAGE_DELETE",
+            EventKind::MessageDelete(MessageDeletePayload {
                 id: message_id,
                 channel_id,
                 guild_id: Some(guild_id),
-            },
-            raw: json!({}),
-        }),
+            }),
+        ),
     )
     .await;
     assert!(cache.message(channel_id, message_id).await.is_none());
@@ -2057,8 +2132,9 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::InteractionCreate(crate::event::InteractionEvent {
-            interaction: Interaction::Component(ComponentInteraction {
+        &Event::from_kind(
+            "INTERACTION_CREATE",
+            EventKind::InteractionCreate(Box::new(Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
                     id: test_id(705),
                     application_id: test_id(706),
@@ -2072,9 +2148,8 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
                     component_type: ComponentType::BUTTON,
                     values: vec![],
                 },
-            }),
-            raw: json!({}),
-        }),
+            }))),
+        ),
     )
     .await;
     assert!(cache.channel(missing_channel_id).await.is_none());
@@ -2242,27 +2317,16 @@ fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
         webhook_id: Some(test_id(30)),
         ..Message::fixture()
     };
-    let partial = Message {
-        id: test_id(1),
-        channel_id: test_id(10),
-        guild_id: None,
-        content: "after".to_string(),
-        author: None,
-        pinned: Some(false),
-        tts: Some(false),
-        flags: Some(0),
-        webhook_id: None,
-        ..Message::fixture()
-    };
 
-    let merged = super::merge_message_update(
-        cached,
-        partial,
-        &super::MessageUpdateFields::from_raw(&json!({
-            "content": "after",
-            "pinned": false
-        })),
-    );
+    let update: crate::model::MessageUpdate = serde_json::from_value(json!({
+        "id": "1",
+        "channel_id": "10",
+        "content": "after",
+        "pinned": false
+    }))
+    .unwrap();
+    let mut merged = cached;
+    assert!(update.apply_to(&mut merged));
 
     assert_eq!(merged.content, "after");
     assert_eq!(merged.pinned, Some(false));
@@ -2316,65 +2380,25 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
         }],
         ..Message::fixture()
     };
-    let partial = Message {
-        id: test_id(1),
-        channel_id: test_id(10),
-        guild_id: Some(test_id(21)),
-        author: Some(User {
-            id: test_id(6),
-            username: "eve".to_string(),
-            ..User::fixture()
-        }),
-        member: Some(Member {
-            nick: Some("eve-nick".to_string()),
-            ..Member::default()
-        }),
-        timestamp: Some("after-ts".to_string()),
-        edited_timestamp: Some("after-edit".to_string()),
-        mentions: vec![User {
-            id: test_id(7),
-            username: "mallory".to_string(),
-            ..User::fixture()
-        }],
-        attachments: vec![Attachment {
-            id: test_id(8),
-            filename: "new.txt".to_string(),
-            ..Attachment::fixture()
-        }],
-        kind: Some(MessageType::REPLY),
-        pinned: Some(false),
-        tts: Some(false),
-        flags: Some(0),
-        webhook_id: Some(test_id(9)),
-        embeds: vec![Embed {
-            title: Some("new".to_string()),
-            ..Embed::default()
-        }],
-        reactions: vec![Reaction {
-            count: 9,
-            me: false,
-            ..Reaction::default()
-        }],
-        ..Message::fixture()
-    };
 
-    let merged = super::merge_message_update(
-        cached,
-        partial,
-        &super::MessageUpdateFields::from_raw(&json!({
-            "guild_id": "21",
-            "author": { "id": "6", "username": "eve" },
-            "member": { "nick": "eve-nick" },
-            "timestamp": "after-ts",
-            "mentions": [{ "id": "7", "username": "mallory" }],
-            "attachments": [{ "id": "8", "filename": "new.txt" }],
-            "type": 19,
-            "tts": false,
-            "flags": 0,
-            "embeds": [{ "title": "new" }],
-            "reactions": [{ "count": 9, "me": false }]
-        })),
-    );
+    let update: crate::model::MessageUpdate = serde_json::from_value(json!({
+        "id": "1",
+        "channel_id": "10",
+        "guild_id": "21",
+        "author": { "id": "6", "username": "eve" },
+        "member": { "nick": "eve-nick" },
+        "timestamp": "after-ts",
+        "mentions": [{ "id": "7", "username": "mallory" }],
+        "attachments": [{ "id": "8", "filename": "new.txt" }],
+        "type": 19,
+        "tts": false,
+        "flags": 0,
+        "embeds": [{ "title": "new" }],
+        "reactions": [{ "count": 9, "me": false }]
+    }))
+    .unwrap();
+    let mut merged = cached;
+    assert!(update.apply_to(&mut merged));
 
     assert_eq!(merged.guild_id, Some(test_id(21)));
     assert_eq!(merged.author.unwrap().username, "eve");
@@ -2449,20 +2473,19 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         .timeout(std::time::Duration::from_secs(1));
 
     for dispatch in [
-        super::GatewayDispatch {
-            event_name: "MESSAGE_CREATE".to_string(),
-            data: json!({
+        super::GatewayDispatch::new(
+            "MESSAGE_CREATE".to_string(),
+            json!({
                 "id": "201",
                 "channel_id": "202",
                 "content": "collector-message",
                 "mentions": [],
                 "attachments": []
             }),
-            received_at: tokio::time::Instant::now(),
-        },
-        super::GatewayDispatch {
-            event_name: "INTERACTION_CREATE".to_string(),
-            data: json!({
+        ),
+        super::GatewayDispatch::new(
+            "INTERACTION_CREATE".to_string(),
+            json!({
                 "id": "203",
                 "application_id": "204",
                 "token": "token",
@@ -2475,14 +2498,14 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                     "values": ["one"]
                 }
             }),
-            received_at: tokio::time::Instant::now(),
-        },
+        ),
     ] {
         let event = super::process_gateway_dispatch(
             &context,
             #[cfg(feature = "cache")]
             None,
             dispatch,
+            false,
         )
         .await;
         handler.handle_event(context.clone(), event.event).await;
@@ -2519,8 +2542,9 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
 
     super::apply_voice_updates(
         &context.voice(),
-        &Event::VoiceStateUpdate(VoiceStateEvent {
-            state: VoiceState {
+        &Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
                 guild_id: Some(test_id(301)),
                 channel_id: Some(test_id(302)),
                 user_id: Some(user_id),
@@ -2528,21 +2552,20 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
                 self_mute: false,
                 self_deaf: false,
                 ..VoiceState::default()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     super::apply_voice_updates(
         &context.voice(),
-        &Event::VoiceServerUpdate(VoiceServerEvent {
-            data: VoiceServerUpdate {
+        &Event::from_kind(
+            "VOICE_SERVER_UPDATE",
+            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
                 guild_id: test_id(301),
                 token: "voice-token".to_string(),
                 endpoint: Some("voice.discord.media".to_string()),
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
 
@@ -2559,8 +2582,9 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
 
     super::apply_voice_updates(
         &context.voice(),
-        &Event::Ready(ReadyEvent {
-            data: ReadyPayload {
+        &Event::from_kind(
+            "READY",
+            EventKind::Ready(Box::new(ReadyPayload {
                 user: User {
                     id: test_id(1),
                     username: "bot".to_string(),
@@ -2569,9 +2593,8 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
                 session_id: "session".to_string(),
                 application: None,
                 resume_gateway_url: None,
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
     assert!(context
@@ -2599,15 +2622,15 @@ async fn apply_voice_updates_ignores_non_voice_events_and_runtime_connect_requir
         .await;
     super::apply_voice_updates(
         &context.voice(),
-        &Event::MessageCreate(MessageEvent {
-            message: Message {
+        &Event::from_kind(
+            "MESSAGE_CREATE",
+            EventKind::MessageCreate(Arc::new(Message {
                 id: test_id(403),
                 channel_id: test_id(402),
                 content: "noop".to_string(),
                 ..Message::fixture()
-            },
-            raw: json!({}),
-        }),
+            })),
+        ),
     )
     .await;
 
@@ -3081,10 +3104,10 @@ async fn apply_cache_updates_populates_entities_from_guild_create() {
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
-        &Event::GuildCreate(crate::event::GuildEvent {
-            guild,
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_CREATE",
+            EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(guild))),
+        ),
     )
     .await;
 
@@ -3445,52 +3468,57 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     let backend: Arc<dyn super::ErasedCacheBackend> = recorder.clone();
     let cache = crate::cache::CacheHandle::new();
 
-    let member_event = Event::MemberAdd(MemberEvent {
-        guild_id: test_id(1),
-        member: Member {
-            user: Some(User {
-                id: test_id(2),
-                username: "wumpus".to_string(),
-                ..User::fixture()
+    let member_event = Event::from_kind(
+        "GUILD_MEMBER_ADD",
+        EventKind::MemberAdd(MemberEvent {
+            guild_id: test_id(1),
+            member: Arc::new(Member {
+                user: Some(User {
+                    id: test_id(2),
+                    username: "wumpus".to_string(),
+                    ..User::fixture()
+                }),
+                ..Member::default()
             }),
-            ..Member::default()
-        },
-        raw: json!({}),
-    });
-    let message_event = Event::MessageCreate(MessageEvent {
-        message: Message {
+        }),
+    );
+    let message_event = Event::from_kind(
+        "MESSAGE_CREATE",
+        EventKind::MessageCreate(Arc::new(Message {
             id: test_id(11),
             channel_id: test_id(10),
             content: "hello".to_string(),
             ..Message::fixture()
-        },
-        raw: json!({}),
-    });
-    let presence_event = Event::PresenceUpdate(PresenceUpdateEvent {
-        guild_id: Some(test_id(1)),
-        user_id: Some(test_id(2)),
-        status: Some(PresenceStatus::ONLINE),
-        ..PresenceUpdateEvent::default()
-    });
-    let message_delete_event = Event::MessageDelete(MessageDeleteEvent {
-        data: MessageDeletePayload {
+        })),
+    );
+    let presence_event = Event::from_kind(
+        "PRESENCE_UPDATE",
+        EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
+            guild_id: Some(test_id(1)),
+            user_id: Some(test_id(2)),
+            status: Some(PresenceStatus::ONLINE),
+            ..PresenceUpdateEvent::default()
+        })),
+    );
+    let message_delete_event = Event::from_kind(
+        "MESSAGE_DELETE",
+        EventKind::MessageDelete(MessageDeletePayload {
             id: test_id(11),
             channel_id: test_id(10),
             guild_id: None,
-        },
-        raw: json!({}),
-    });
-    let member_remove_event = Event::MemberRemove(MemberRemoveEvent {
-        data: MemberRemovePayload {
+        }),
+    );
+    let member_remove_event = Event::from_kind(
+        "GUILD_MEMBER_REMOVE",
+        EventKind::MemberRemove(Box::new(MemberRemovePayload {
             guild_id: test_id(1),
             user: User {
                 id: test_id(2),
                 username: "wumpus".to_string(),
                 ..User::fixture()
             },
-        },
-        raw: json!({}),
-    });
+        })),
+    );
 
     let (forwarder, _worker) =
         super::CacheBackendForwarder::spawn(backend, 16, Duration::from_secs(5));
@@ -3510,11 +3538,13 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         &forwarder,
         &cache,
         SINGLE_SHARD,
-        &Event::RoleCreate(RoleEvent {
-            guild_id: test_id(1),
-            role: Role::fixture(),
-            raw: json!({}),
-        }),
+        &Event::from_kind(
+            "GUILD_ROLE_CREATE",
+            EventKind::RoleCreate(Box::new(RoleEvent {
+                guild_id: test_id(1),
+                role: Role::fixture(),
+            })),
+        ),
     )
     .await;
     forwarder.flush().await;
@@ -3542,8 +3572,9 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
     let recorder = Arc::new(RecordingBackend::default());
     let backend: Arc<dyn super::ErasedCacheBackend> = recorder.clone();
 
-    let ready_event = Event::Ready(ReadyEvent {
-        data: ReadyPayload {
+    let ready_event = Event::from_kind(
+        "READY",
+        EventKind::Ready(Box::new(ReadyPayload {
             user: User {
                 id: test_id(2),
                 username: "bot".to_string(),
@@ -3552,11 +3583,11 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
             session_id: "session".to_string(),
             application: None,
             resume_gateway_url: None,
-        },
-        raw: json!({ "session_id": "session" }),
-    });
-    let chunk_event = Event::GuildMembersChunk(crate::event::GuildMembersChunkEvent {
-        data: crate::event::GuildMembersChunkPayload {
+        })),
+    );
+    let chunk_event = Event::from_kind(
+        "GUILD_MEMBERS_CHUNK",
+        EventKind::GuildMembersChunk(Box::new(crate::event::GuildMembersChunkPayload {
             guild_id: test_id(1),
             members: vec![
                 Member {
@@ -3587,9 +3618,8 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
                 client_status: None,
             }]),
             nonce: None,
-        },
-        raw: json!({}),
-    });
+        })),
+    );
 
     let cache = crate::cache::CacheHandle::new();
     let (forwarder, _worker) =
@@ -3753,8 +3783,9 @@ async fn wait_for_cached_message(cache: &crate::cache::CacheHandle, id: &str) {
 
 #[cfg(feature = "cache")]
 fn ready_dispatch_event() -> Event {
-    Event::Ready(ReadyEvent {
-        data: ReadyPayload {
+    Event::from_kind(
+        "READY",
+        EventKind::Ready(Box::new(ReadyPayload {
             user: User {
                 id: test_id(2),
                 username: "bot".to_string(),
@@ -3763,9 +3794,8 @@ fn ready_dispatch_event() -> Event {
             session_id: "session".to_string(),
             application: None,
             resume_gateway_url: None,
-        },
-        raw: json!({ "session_id": "session" }),
-    })
+        })),
+    )
 }
 
 // Observes that internal processing ran ahead by reading the cache; without
@@ -3778,7 +3808,7 @@ async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
     }
 
     impl super::EventHandler for FetchingHandler {
-        async fn message_create(&self, ctx: super::Context, _message: Message) {
+        async fn message_create(&self, ctx: super::Context, _message: Arc<Message>) {
             let result = ctx
                 .fetch_members_with_timeout(test_id(42), None, None, Duration::from_secs(5))
                 .await
@@ -3846,7 +3876,7 @@ async fn serial_handler_can_await_a_collector_for_later_events() {
     }
 
     impl super::EventHandler for CollectingHandler {
-        async fn message_create(&self, ctx: super::Context, message: Message) {
+        async fn message_create(&self, ctx: super::Context, message: Arc<Message>) {
             if message.content != "first" {
                 return;
             }
@@ -3936,14 +3966,14 @@ struct GatedHandler {
 }
 
 impl super::EventHandler for GatedHandler {
-    async fn message_create(&self, _ctx: super::Context, message: Message) {
+    async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
         self.probe.enter();
         let _ = self.started.send(message.content.clone());
         if self.gated.is_empty() || self.gated.contains(&message.content.as_str()) {
             self.gate.acquire().await.expect("gate open").forget();
         }
         tokio::task::yield_now().await;
-        self.probe.exit(message.content);
+        self.probe.exit(message.content.clone());
     }
 }
 
@@ -4150,12 +4180,12 @@ async fn handler_panics_are_contained_and_later_events_still_run() {
     }
 
     impl super::EventHandler for PanickingHandler {
-        async fn message_create(&self, _ctx: super::Context, message: Message) {
+        async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
             if message.content == "boom" {
                 panic!("handler failure under test");
             }
             self.probe.enter();
-            self.probe.exit(message.content);
+            self.probe.exit(message.content.clone());
         }
     }
 
@@ -4192,7 +4222,7 @@ async fn pipeline_shutdown_aborts_handlers_that_outlive_the_timeout() {
     }
 
     impl super::EventHandler for StuckHandler {
-        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+        async fn message_create(&self, _ctx: super::Context, _message: Arc<Message>) {
             let _flag = DropFlag(Arc::clone(&self.dropped));
             let _ = self.started.send(());
             std::future::pending::<()>().await;
@@ -4392,10 +4422,10 @@ async fn ready_on_one_shard_keeps_the_guilds_of_other_shards() {
         super::apply_cache_updates(
             &cache,
             shard,
-            &Event::GuildCreate(crate::event::GuildEvent {
-                guild,
-                raw: json!({}),
-            }),
+            &Event::from_kind(
+                "GUILD_CREATE",
+                EventKind::GuildCreate(Box::new(crate::model::GuildCreate::from(guild))),
+            ),
         )
         .await;
     }
@@ -4676,11 +4706,9 @@ fn merge_message_update_applies_every_field_present_in_the_payload() {
         ..Message::fixture()
     };
 
-    let merged = super::merge_message_update(
-        cached,
-        partial.clone(),
-        &super::MessageUpdateFields::from_raw(&payload),
-    );
+    let update: crate::model::MessageUpdate = serde_json::from_value(payload.clone()).unwrap();
+    let mut merged = cached;
+    assert!(update.apply_to(&mut merged));
     // Any field the merge skipped would still hold the cached default.
     assert_eq!(
         serde_json::to_value(&merged).unwrap(),
@@ -4699,11 +4727,9 @@ fn merge_message_update_applies_every_field_present_in_the_payload() {
 fn merge_message_update_keeps_fields_the_payload_omits() {
     let full: Message = serde_json::from_value(full_message_update_payload()).unwrap();
     let sparse = json!({ "id": "1", "channel_id": "2", "content": "edited", "poll": null });
-    let merged = super::merge_message_update(
-        full.clone(),
-        serde_json::from_value(sparse.clone()).unwrap(),
-        &super::MessageUpdateFields::from_raw(&sparse),
-    );
+    let update: crate::model::MessageUpdate = serde_json::from_value(sparse).unwrap();
+    let mut merged = full.clone();
+    assert!(update.apply_to(&mut merged));
 
     let mut expected = full;
     expected.content = "edited".to_string();
@@ -4892,7 +4918,7 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
     }
 
     impl super::EventHandler for StuckHandler {
-        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+        async fn message_create(&self, _ctx: super::Context, _message: Arc<Message>) {
             let _flag = TaskDropFlag(Arc::clone(&self.dropped));
             self.started.notify_one();
             std::future::pending::<()>().await;
@@ -5340,6 +5366,7 @@ async fn fetch_members_fails_instead_of_returning_a_list_with_a_missing_chunk() 
             #[cfg(feature = "cache")]
             None,
             members_chunk_dispatch("42", &nonce, index, 3, user),
+            false,
         )
         .await;
     }
@@ -5471,7 +5498,7 @@ async fn collectors_created_by_a_queued_handler_replay_events_published_before_i
     }
 
     impl super::EventHandler for LateCollectingHandler {
-        async fn message_create(&self, ctx: super::Context, message: Message) {
+        async fn message_create(&self, ctx: super::Context, message: Arc<Message>) {
             if message.content != "first" {
                 return;
             }
@@ -5529,15 +5556,15 @@ async fn collectors_created_by_a_queued_handler_replay_events_published_before_i
 async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag() {
     let hub = crate::collector::CollectorHub::with_capacity(2);
     let message = |id: &str| {
-        Event::MessageCreate(MessageEvent {
-            message: Message {
+        Arc::new(Event::from_kind(
+            "MESSAGE_CREATE",
+            EventKind::MessageCreate(Arc::new(Message {
                 id: named_id(id),
                 channel_id: test_id(1),
                 content: id.to_string(),
                 ..Message::fixture()
-            },
-            raw: json!({}),
-        })
+            })),
+        ))
     };
 
     let start = hub.cursor();
@@ -5548,12 +5575,12 @@ async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag
     let mut subscription = hub.subscribe_from(after_first);
     assert!(matches!(
         subscription.recv().await,
-        Ok(Event::MessageCreate(event)) if event.message.content == "b"
+        Ok(event) if matches!(event.kind(), EventKind::MessageCreate(message) if message.content == "b")
     ));
     hub.publish(message("c"));
     assert!(matches!(
         subscription.recv().await,
-        Ok(Event::MessageCreate(event)) if event.message.content == "c"
+        Ok(event) if matches!(event.kind(), EventKind::MessageCreate(message) if message.content == "c")
     ));
 
     // `start` points at "a", which the two-event journal has evicted.
@@ -5565,14 +5592,16 @@ async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag
 
     // Reaction collectors replay from a cursor too.
     let reaction_start = hub.cursor();
-    hub.publish(Event::MessageReactionAdd(ReactionEvent {
-        user_id: Some(test_id(7)),
-        message_id: Some(test_id(99)),
-        channel_id: Some(test_id(1)),
-        emoji: Some(Emoji::unicode("👍")),
-        raw: json!({}),
-        ..ReactionEvent::default()
-    }));
+    hub.publish(Arc::new(Event::from_kind(
+        "MESSAGE_REACTION_ADD",
+        EventKind::MessageReactionAdd(Box::new(ReactionEvent {
+            user_id: Some(test_id(7)),
+            message_id: Some(test_id(99)),
+            channel_id: Some(test_id(1)),
+            emoji: Some(Emoji::unicode("👍")),
+            ..ReactionEvent::default()
+        })),
+    )));
     {
         let mut handler_ctx = pipeline_test_context((0, 1));
         handler_ctx.collectors = hub.clone();
@@ -5622,8 +5651,8 @@ struct LaneHandler {
 }
 
 impl super::EventHandler for LaneHandler {
-    async fn interaction_create(&self, ctx: super::Context, interaction: Interaction) {
-        let id = interaction_custom_id(&interaction);
+    async fn interaction_create(&self, ctx: super::Context, interaction: &Interaction) {
+        let id = interaction_custom_id(interaction);
         assert!(ctx.event_received_at().is_some());
         let _ = self.started.send(id.clone());
         if self.gated.contains(&id.as_str()) {
@@ -5631,7 +5660,7 @@ impl super::EventHandler for LaneHandler {
         }
     }
 
-    async fn message_create(&self, _ctx: super::Context, message: Message) {
+    async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
         let _ = self.started.send(format!("message:{}", message.content));
         if message.content == "stuck" {
             self.gate.acquire().await.expect("gate open").forget();
@@ -6192,7 +6221,7 @@ async fn pipeline_shutdown_reports_handlers_that_cannot_be_cancelled() {
     }
 
     impl super::EventHandler for BlockingHandler {
-        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+        async fn message_create(&self, _ctx: super::Context, _message: Arc<Message>) {
             let _ = self.started.send(());
             // Blocks the thread without ever yielding, so abort cannot land.
             std::thread::sleep(std::time::Duration::from_millis(1_500));
@@ -6769,7 +6798,7 @@ async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
     }
 
     impl super::EventHandler for StuckOnMessage {
-        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+        async fn message_create(&self, _ctx: super::Context, _message: Arc<Message>) {
             self.started.notify_one();
             std::future::pending::<()>().await;
         }
@@ -6964,10 +6993,7 @@ async fn a_subscription_never_misses_the_last_event_published_before_the_hub_clo
             (first.is_ok(), second.is_err())
         });
         let publisher = std::thread::spawn(move || {
-            hub.publish(Event::Unknown {
-                kind: "LAST".to_string(),
-                raw: json!({}),
-            });
+            hub.publish(Arc::new(decode_event("LAST", json!({})).unwrap()));
             drop(hub);
         });
         publisher.join().unwrap();

@@ -7,9 +7,9 @@ use tokio::sync::RwLock;
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, ChannelId, EmojiId, Guild, GuildId, Member, Message, MessageId, Presence, Role,
-    RoleId, ScheduledEventId, SoundboardSound, SoundboardSoundId, StageInstance, StageInstanceId,
-    Sticker, StickerId, User, UserId, VoiceState,
+    Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, Member, Message, MessageId,
+    MessageUpdate, Presence, Role, RoleId, ScheduledEventId, SoundboardSound, SoundboardSoundId,
+    StageInstance, StageInstanceId, Sticker, StickerId, User, UserId, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -85,6 +85,16 @@ fn clear_store(store: &mut CacheStore) {
     store.member_counts.clear();
     store.message_counts.clear();
     store.last_prune = None;
+}
+
+/// Stores a guild's roles (keyed by guild and role id).
+#[cfg(feature = "cache")]
+fn insert_roles(store: &mut CacheStore, guild_id: GuildId, roles: &[Role]) {
+    for role in roles {
+        let key = (guild_id, role.id);
+        store.roles.insert(key, role.clone());
+        remember_key(&mut store.role_order, key);
+    }
 }
 
 #[derive(Clone, Default)]
@@ -206,7 +216,7 @@ impl CacheHandle {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
@@ -228,7 +238,7 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub(crate) async fn fenced_upsert_message(&self, epoch: u64, message: Message) {
+    pub(crate) async fn fenced_upsert_message(&self, epoch: u64, message: Arc<Message>) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
             self.upsert_message_locked(&mut store, message);
@@ -254,7 +264,7 @@ impl CacheHandle {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
@@ -285,7 +295,8 @@ impl CacheHandle {
     pub async fn purge_expired(&self) {}
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_guild(&self, guild: Guild) {
+    pub async fn upsert_guild(&self, guild: impl Into<Arc<Guild>>) {
+        let guild = guild.into();
         let mut store = self.store.write().await;
         let guild_id = guild.id;
         store.guilds.insert(guild_id, guild);
@@ -294,7 +305,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_guild(&self, _guild: Guild) {}
+    pub async fn upsert_guild(&self, _guild: impl Into<Arc<Guild>>) {}
 
     #[cfg(feature = "cache")]
     pub async fn remove_guild(&self, guild_id: GuildId) {
@@ -307,7 +318,12 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn guild(&self, guild_id: GuildId) -> Option<Guild> {
-        self.store.read().await.guilds.get(&guild_id).cloned()
+        self.store
+            .read()
+            .await
+            .guilds
+            .get(&guild_id)
+            .map(|guild| guild.as_ref().clone())
     }
 
     #[cfg(not(feature = "cache"))]
@@ -317,7 +333,13 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn guilds(&self) -> Vec<Guild> {
-        self.store.read().await.guilds.values().cloned().collect()
+        self.store
+            .read()
+            .await
+            .guilds
+            .values()
+            .map(|guild| guild.as_ref().clone())
+            .collect()
     }
 
     #[cfg(not(feature = "cache"))]
@@ -360,35 +382,29 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn upsert_channel_if_absent(&self, _channel: Channel) {}
 
-    /// Distributes a full GUILD_CREATE payload into the per-entity stores —
+    /// Distributes a GUILD_CREATE into the per-entity stores — guild, roles,
     /// channels, threads, members, users, voice states, presences, emojis,
-    /// stickers, and stage instances — under a single write lock, then
-    /// stores the guild itself with the bulk collections stripped so the
-    /// data is not held twice.
+    /// stickers, stage instances, and soundboard sounds — under a single
+    /// write lock.
+    ///
+    /// The guild, its members, and its presences are stored as the `Arc`s
+    /// the payload holds, shared with the event instead of copied; the other
+    /// entities are copied. [`GuildCreate`] has already set every channel's
+    /// and voice state's `guild_id` and every presence's `user_id`. Build
+    /// one from a [`Guild`] with `GuildCreate::from(guild)`.
     #[cfg(feature = "cache")]
-    pub async fn apply_guild_create(&self, guild: &Guild) {
+    pub async fn apply_guild_create(&self, guild: &GuildCreate) {
         let mut store = self.store.write().await;
-        let guild_id = guild.id;
+        let guild_id = guild.id();
         let now = Instant::now();
 
-        store
-            .guilds
-            .insert(guild_id, guild.without_create_collections());
+        store.guilds.insert(guild_id, Arc::clone(&guild.guild));
         remember_key(&mut store.guild_order, guild_id);
-
-        for role in &guild.roles {
-            let key = (guild_id, role.id);
-            store.roles.insert(key, role.clone());
-            remember_key(&mut store.role_order, key);
-        }
+        insert_roles(&mut store, guild_id, &guild.guild.roles);
 
         for channel in guild.channels.iter().chain(guild.threads.iter()) {
-            let mut channel = channel.clone();
-            if channel.guild_id.is_none() {
-                channel.guild_id = Some(guild_id);
-            }
             let channel_id = channel.id;
-            store.channels.insert(channel_id, channel);
+            store.channels.insert(channel_id, channel.clone());
             remember_key(&mut store.channel_order, channel_id);
         }
 
@@ -399,34 +415,24 @@ impl CacheHandle {
             let user_id = user.id;
             store.users.insert(user_id, user.clone());
             remember_key(&mut store.user_order, user_id);
-            let key = (guild_id, user_id);
-            insert_member_entry(&mut store, key, Arc::new(member.clone()), now);
+            insert_member_entry(&mut store, (guild_id, user_id), Arc::clone(member), now);
         }
 
         for voice_state in &guild.voice_states {
             let Some(user_id) = voice_state.user_id else {
                 continue;
             };
-            let mut voice_state = voice_state.clone();
-            if voice_state.guild_id.is_none() {
-                voice_state.guild_id = Some(guild_id);
-            }
             let key = (guild_id, user_id);
-            store.voice_states.insert(key, voice_state);
+            store.voice_states.insert(key, voice_state.clone());
             remember_key(&mut store.voice_state_order, key);
         }
 
         for presence in &guild.presences {
-            let user_id = presence
-                .user_id
-                .or_else(|| presence.user.as_ref().map(|user| user.id));
-            let Some(user_id) = user_id else {
+            let Some(user_id) = presence.user_id else {
                 continue;
             };
-            let mut presence = presence.clone();
-            presence.user_id = Some(user_id);
             let key = (guild_id, user_id);
-            store.presences.insert(key, Arc::new(presence));
+            store.presences.insert(key, Arc::clone(presence));
             store.presence_seen.insert(key, now);
             remember_key(&mut store.presence_order, key);
         }
@@ -470,10 +476,7 @@ impl CacheHandle {
         for key in ordered_overflow_keys(&mut store.user_order, user_len, self.config.max_users) {
             store.users.remove(&key);
         }
-        let role_len = store.roles.len();
-        for key in ordered_overflow_keys(&mut store.role_order, role_len, self.config.max_roles) {
-            store.roles.remove(&key);
-        }
+        self.enforce_role_limit(&mut store);
         if let Some(max) = self.config.max_presences {
             while store.presences.len() > max {
                 let Some(key) = store.presence_order.pop_front() else {
@@ -494,7 +497,33 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn apply_guild_create(&self, _guild: &Guild) {}
+    pub async fn apply_guild_create(&self, _guild: &GuildCreate) {}
+
+    /// Applies a GUILD_UPDATE: replaces the cached guild (without any
+    /// GUILD_CREATE-only collections it carries) and refreshes its roles.
+    #[cfg(feature = "cache")]
+    pub async fn apply_guild_update(&self, guild: &Guild) {
+        let mut store = self.store.write().await;
+        let guild_id = guild.id;
+        store
+            .guilds
+            .insert(guild_id, Arc::new(guild.without_create_collections()));
+        remember_key(&mut store.guild_order, guild_id);
+        insert_roles(&mut store, guild_id, &guild.roles);
+        enforce_guild_limit(&mut store, &self.config);
+        self.enforce_role_limit(&mut store);
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_guild_update(&self, _guild: &Guild) {}
+
+    #[cfg(feature = "cache")]
+    fn enforce_role_limit(&self, store: &mut CacheStore) {
+        let role_len = store.roles.len();
+        for key in ordered_overflow_keys(&mut store.role_order, role_len, self.config.max_roles) {
+            store.roles.remove(&key);
+        }
+    }
 
     /// Stores every member (and its user) from a GUILD_MEMBERS_CHUNK
     /// payload, plus any presences it carries, under a single write lock —
@@ -643,8 +672,17 @@ impl CacheHandle {
         self.user(user_id).await.is_some()
     }
 
+    /// Stores a member. Pass the `Arc` an event holds (for example
+    /// [`MemberEvent::member`](crate::event::MemberEvent::member)) to share
+    /// it instead of copying; a plain [`Member`] is wrapped.
     #[cfg(feature = "cache")]
-    pub async fn upsert_member(&self, guild_id: GuildId, user_id: UserId, member: Member) {
+    pub async fn upsert_member(
+        &self,
+        guild_id: GuildId,
+        user_id: UserId,
+        member: impl Into<Arc<Member>>,
+    ) {
+        let member = member.into();
         let mut store = self.store.write().await;
         self.upsert_member_locked(&mut store, guild_id, user_id, member);
     }
@@ -655,17 +693,23 @@ impl CacheHandle {
         store: &mut CacheStore,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) {
         let now = Instant::now();
         let key = (guild_id, user_id);
-        insert_member_entry(store, key, Arc::new(member), now);
+        insert_member_entry(store, key, member, now);
         maybe_prune_expired(store, &self.config, now);
         enforce_member_limit(store, &self.config, guild_id);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_member(&self, _guild_id: GuildId, _user_id: UserId, _member: Member) {}
+    pub async fn upsert_member(
+        &self,
+        _guild_id: GuildId,
+        _user_id: UserId,
+        _member: impl Into<Arc<Member>>,
+    ) {
+    }
 
     #[cfg(feature = "cache")]
     pub async fn remove_member(&self, guild_id: GuildId, user_id: UserId) {
@@ -747,24 +791,60 @@ impl CacheHandle {
         self.member(guild_id, user_id).await.is_some()
     }
 
+    /// Stores a message. Pass the `Arc` an event holds
+    /// ([`EventKind::MessageCreate`](crate::event::EventKind::MessageCreate))
+    /// to share it instead of copying; a plain [`Message`] is wrapped.
     #[cfg(feature = "cache")]
-    pub async fn upsert_message(&self, message: Message) {
+    pub async fn upsert_message(&self, message: impl Into<Arc<Message>>) {
+        let message = message.into();
         let mut store = self.store.write().await;
         self.upsert_message_locked(&mut store, message);
     }
 
     #[cfg(feature = "cache")]
-    fn upsert_message_locked(&self, store: &mut CacheStore, message: Message) {
+    fn upsert_message_locked(&self, store: &mut CacheStore, message: Arc<Message>) {
         let channel_id = message.channel_id;
         let now = Instant::now();
         let key = (channel_id, message.id);
-        insert_message_entry(store, key, Arc::new(message), now);
+        insert_message_entry(store, key, message, now);
         maybe_prune_expired(store, &self.config, now);
         enforce_message_limits(store, &self.config, channel_id);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_message(&self, _message: Message) {}
+    pub async fn upsert_message(&self, _message: impl Into<Arc<Message>>) {}
+
+    /// Merges a MESSAGE_UPDATE into the cached message and returns the
+    /// merged message, or `None` when the message is not cached (or has
+    /// expired). An update alone is never stored: its omitted fields are
+    /// unknown.
+    ///
+    /// The cached `Arc` is updated copy-on-write under the write lock: in
+    /// place when the cache holds the only reference, otherwise into a new
+    /// snapshot, so an earlier event, collector, or handler holding the old
+    /// `Arc<Message>` keeps seeing the message as it was.
+    #[cfg(feature = "cache")]
+    pub async fn apply_message_update(&self, update: &MessageUpdate) -> Option<Arc<Message>> {
+        let key = (update.channel_id, update.id);
+        let now = Instant::now();
+        let mut store = self.store.write().await;
+        if seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
+            return None;
+        }
+        let cached = store.messages.get_mut(&key)?;
+        update.apply_to(Arc::make_mut(cached));
+        let merged = Arc::clone(cached);
+        // Refresh recency and TTL as replacing the entry did in 2.x.
+        store.message_seen.insert(key, now);
+        store.message_order.touch(key);
+        maybe_prune_expired(&mut store, &self.config, now);
+        Some(merged)
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_message_update(&self, _update: &MessageUpdate) -> Option<Arc<Message>> {
+        None
+    }
 
     #[cfg(feature = "cache")]
     pub async fn remove_message(&self, channel_id: ChannelId, message_id: MessageId) {
@@ -928,8 +1008,16 @@ impl CacheHandle {
         self.role(guild_id, role_id).await.is_some()
     }
 
+    /// Stores a presence; an `Arc` is stored as it is, a plain [`Presence`]
+    /// is wrapped.
     #[cfg(feature = "cache")]
-    pub async fn upsert_presence(&self, guild_id: GuildId, user_id: UserId, presence: Presence) {
+    pub async fn upsert_presence(
+        &self,
+        guild_id: GuildId,
+        user_id: UserId,
+        presence: impl Into<Arc<Presence>>,
+    ) {
+        let presence = presence.into();
         let mut store = self.store.write().await;
         self.upsert_presence_locked(&mut store, guild_id, user_id, presence);
     }
@@ -940,11 +1028,11 @@ impl CacheHandle {
         store: &mut CacheStore,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) {
         let now = Instant::now();
         let key = (guild_id, user_id);
-        store.presences.insert(key, Arc::new(presence));
+        store.presences.insert(key, presence);
         store.presence_seen.insert(key, now);
         remember_key(&mut store.presence_order, key);
         maybe_prune_expired(store, &self.config, now);
@@ -960,7 +1048,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_presence(&self, _guild_id: GuildId, _user_id: UserId, _presence: Presence) {
+    pub async fn upsert_presence(
+        &self,
+        _guild_id: GuildId,
+        _user_id: UserId,
+        _presence: impl Into<Arc<Presence>>,
+    ) {
     }
 
     #[cfg(feature = "cache")]

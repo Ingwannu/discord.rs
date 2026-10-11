@@ -240,7 +240,7 @@ impl CacheBackend for CacheHandle {
         user_id: UserId,
         member: Member,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_member(epoch, guild_id, user_id, member)
+        self.fenced_upsert_member(epoch, guild_id, user_id, Arc::new(member))
             .await;
         Ok(())
     }
@@ -268,7 +268,7 @@ impl CacheBackend for CacheHandle {
     }
 
     async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError> {
-        self.fenced_upsert_message(epoch, message).await;
+        self.fenced_upsert_message(epoch, Arc::new(message)).await;
         Ok(())
     }
 
@@ -305,7 +305,7 @@ impl CacheBackend for CacheHandle {
         user_id: UserId,
         presence: Presence,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_presence(epoch, guild_id, user_id, presence)
+        self.fenced_upsert_presence(epoch, guild_id, user_id, Arc::new(presence))
             .await;
         Ok(())
     }

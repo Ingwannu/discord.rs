@@ -1,6 +1,39 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+//! Gateway events: the [`Event`] envelope every handler and collector
+//! receives, its decoded [`EventKind`], and the per-event payload types.
+//!
+//! ```text
+//! [Decision Log]
+//! - 목적과 의도: 수신 이벤트 하나를 핸들러·컬렉터·캐시가 복제 없이 공유하고, 원본 payload는
+//!   필요할 때만 한 곳에 둔다(설계 §3 "이벤트 API", "4단계 실행 결정" 체크포인트 A).
+//! - 기존 구현 및 제약 조건: 2.x `Event`는 4,848 B 인라인 enum이었고 variant마다 원본
+//!   `Value`(raw)를 품었다. 저널·컬렉터·핸들러 레인이 이벤트를 통째로 복제했고(기준선 핫스팟
+//!   ①③④), MESSAGE_UPDATE 병합은 raw의 키 집합을 읽었다. 핸들러 trait는 RPITIT + 비공개
+//!   `ErasedEventHandler` 형태를 유지해야 한다(async-trait 없음, MSRV 1.88).
+//! - 검토한 주요 대안: (1) enum 유지 + `Arc<Event>`만 전달, (2) 봉투 struct + 작은 `EventKind`
+//!   + 선택적 `Box<RawValue>`, (3) 이벤트마다 별도 타입과 trait 객체. raw: (a) 항상 보관,
+//!   (b) 알려진 이벤트는 옵션, 알 수 없음·디코드 실패는 항상, (c) 보관하지 않음.
+//! - 선택한 방식: (2) + (b). `Event { kind, metadata, raw }`, 필드는 비공개이고 생성자
+//!   `Event::decode`가 raw 규칙을 강제한다. 캐시와 공유하는 payload는 `Arc<T>`, 큰 비공유 payload는
+//!   `Box<T>`, 작은 ID·삭제 이벤트는 인라인이다. `Debug`는 raw 내용을 출력하지 않는다.
+//! - 다른 대안 대신 이 방식을 선택한 이유: (1)은 enum 크기와 raw 복제가 그대로다. (3)은 컬렉터의
+//!   참조 필터와 `match`가 어려워진다. (a)는 MESSAGE_CREATE 이벤트 힙이 5배, GUILD_CREATE가
+//!   3.8배가 된다(기준선 §5). (c)는 미래의 디스패치와 깨진 payload를 잃는다.
+//! - 장점, 단점 및 영향: `size_of::<Event>()`가 4,848 B에서 192 B 이하로, 전달은 포인터 복사가
+//!   된다(레이아웃 테스트로 고정). 공개 API가 깨진다: `match event` 대신 `match event.kind()`,
+//!   `event.raw()`는 `Option<&RawValue>`이고 기본은 `None`이다(`keep_raw_events(true)`).
+//!   일부 payload 래퍼 타입(`MessageEvent` 등)이 없어지고 모델 타입을 바로 담는다.
+//! ```
 
+use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
+use serde_json::Value;
+use tokio::time::Instant;
+
+use crate::error::DiscordError;
 use crate::model::{
     Activity, ApplicationCommandPermission, ApplicationId, AuditLogActionType, AuditLogEntry,
     AuditLogEntryId, AutoModerationAction, AutoModerationEventType, AutoModerationRuleId,
@@ -31,20 +64,6 @@ pub struct ReadyPayload {
     pub resume_gateway_url: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `ReadyEvent`.
-pub struct ReadyEvent {
-    pub data: ReadyPayload,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `GuildEvent`.
-pub struct GuildEvent {
-    pub guild: Guild,
-    pub raw: Value,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildDeletePayload`.
 pub struct GuildDeletePayload {
@@ -54,25 +73,11 @@ pub struct GuildDeletePayload {
 }
 
 #[derive(Clone, Debug)]
-/// Typed Discord API object for `GuildDeleteEvent`.
-pub struct GuildDeleteEvent {
-    pub data: GuildDeletePayload,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `ChannelEvent`.
-pub struct ChannelEvent {
-    pub channel: Channel,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
 /// Typed Discord API object for `MemberEvent`.
 pub struct MemberEvent {
     pub guild_id: GuildId,
-    pub member: Member,
-    pub raw: Value,
+    /// Shared with the cache, which stores this `Arc` as it is.
+    pub member: Arc<Member>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,13 +85,6 @@ pub struct MemberEvent {
 pub struct MemberRemovePayload {
     pub guild_id: GuildId,
     pub user: User,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `MemberRemoveEvent`.
-pub struct MemberRemoveEvent {
-    pub data: MemberRemovePayload,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,19 +103,11 @@ pub struct GuildMembersChunkPayload {
     pub nonce: Option<String>,
 }
 
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `GuildMembersChunkEvent`.
-pub struct GuildMembersChunkEvent {
-    pub data: GuildMembersChunkPayload,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 /// Typed Discord API object for `RoleEvent`.
 pub struct RoleEvent {
     pub guild_id: GuildId,
     pub role: Role,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,20 +115,6 @@ pub struct RoleEvent {
 pub struct RoleDeletePayload {
     pub guild_id: GuildId,
     pub role_id: RoleId,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `RoleDeleteEvent`.
-pub struct RoleDeleteEvent {
-    pub data: RoleDeletePayload,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `MessageEvent`.
-pub struct MessageEvent {
-    pub message: Message,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,46 +127,11 @@ pub struct MessageDeletePayload {
 }
 
 #[derive(Clone, Debug)]
-/// Typed Discord API object for `MessageDeleteEvent`.
-pub struct MessageDeleteEvent {
-    pub data: MessageDeletePayload,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `InteractionEvent`.
-pub struct InteractionEvent {
-    pub interaction: Interaction,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `VoiceStateEvent`.
-pub struct VoiceStateEvent {
-    pub state: VoiceState,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `VoiceServerEvent`.
-pub struct VoiceServerEvent {
-    pub data: VoiceServerUpdate,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `ResumedEvent`.
-pub struct ResumedEvent {
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
 /// Typed Discord API object for `BulkMessageDeleteEvent`.
 pub struct BulkMessageDeleteEvent {
     pub ids: Vec<MessageId>,
     pub channel_id: ChannelId,
     pub guild_id: Option<GuildId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -199,15 +140,13 @@ pub struct ChannelPinsUpdateEvent {
     pub channel_id: ChannelId,
     pub guild_id: Option<GuildId>,
     pub last_pin_timestamp: Option<String>,
-    pub raw: Value,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 /// Typed Discord API object for `GuildBanEvent`.
 pub struct GuildBanEvent {
     pub guild_id: GuildId,
     pub user: User,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -215,21 +154,6 @@ pub struct GuildBanEvent {
 pub struct GuildEmojisUpdateEvent {
     pub guild_id: GuildId,
     pub emojis: Vec<Emoji>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `EntitlementEvent`.
-pub struct EntitlementEvent {
-    pub entitlement: Entitlement,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `SubscriptionEvent`.
-pub struct SubscriptionEvent {
-    pub subscription: Subscription,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -237,7 +161,6 @@ pub struct SubscriptionEvent {
 pub struct IntegrationEvent {
     pub integration: Integration,
     pub guild_id: Option<GuildId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -246,7 +169,6 @@ pub struct IntegrationDeleteEvent {
     pub id: Option<IntegrationId>,
     pub guild_id: Option<GuildId>,
     pub application_id: Option<ApplicationId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -257,22 +179,13 @@ pub struct PollVoteEvent {
     pub message_id: Option<MessageId>,
     pub guild_id: Option<GuildId>,
     pub answer_id: Option<PollAnswerId>,
-    pub raw: Value,
 }
 
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `SoundboardSoundEvent`.
-pub struct SoundboardSoundEvent {
-    pub sound: SoundboardSound,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 /// Typed Discord API object for `SoundboardSoundDeleteEvent`.
 pub struct SoundboardSoundDeleteEvent {
     pub sound_id: SoundboardSoundId,
     pub guild_id: GuildId,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -280,7 +193,6 @@ pub struct SoundboardSoundDeleteEvent {
 pub struct SoundboardSoundsEvent {
     pub guild_id: GuildId,
     pub soundboard_sounds: Vec<SoundboardSound>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -302,7 +214,6 @@ pub struct InviteEvent {
     /// Target type for voice-channel invites (stream or embedded app).
     pub target_type: Option<InviteTargetType>,
     pub target_user: Option<User>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -318,9 +229,9 @@ pub struct ReactionEvent {
     pub burst: Option<bool>,
     pub burst_colors: Vec<String>,
     /// Normal or burst reaction. `None` when absent or not a valid reaction
-    /// type (the value stays in `raw`).
+    /// type (the original stays readable through [`Event::raw`] when raw
+    /// payloads are kept).
     pub reaction_type: Option<ReactionType>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -329,7 +240,6 @@ pub struct ReactionRemoveAllEvent {
     pub channel_id: Option<ChannelId>,
     pub message_id: Option<MessageId>,
     pub guild_id: Option<GuildId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -339,7 +249,6 @@ pub struct TypingStartEvent {
     pub guild_id: Option<GuildId>,
     pub user_id: Option<UserId>,
     pub timestamp: Option<u64>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -351,7 +260,6 @@ pub struct PresenceUpdateEvent {
     pub status: Option<PresenceStatus>,
     pub activities: Vec<Activity>,
     pub client_status: Option<ClientStatus>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -359,14 +267,6 @@ pub struct PresenceUpdateEvent {
 pub struct PresenceUpdateUser {
     pub id: UserId,
     pub username: Option<String>,
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `UserUpdateEvent`.
-pub struct UserUpdateEvent {
-    pub user: User,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -374,14 +274,12 @@ pub struct UserUpdateEvent {
 pub struct WebhooksUpdateEvent {
     pub guild_id: Option<GuildId>,
     pub channel_id: Option<ChannelId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildIntegrationsUpdateEvent`.
 pub struct GuildIntegrationsUpdateEvent {
     pub guild_id: Option<GuildId>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -391,7 +289,6 @@ pub struct ThreadEvent {
     /// Set on THREAD_CREATE when the gateway marks the thread as newly
     /// created (as opposed to one the current user was just added to).
     pub newly_created: Option<bool>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -402,7 +299,6 @@ pub struct ThreadMemberUpdateEvent {
     pub user_id: Option<UserId>,
     pub join_timestamp: Option<String>,
     pub flags: Option<u64>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -413,7 +309,6 @@ pub struct ThreadMembersUpdateEvent {
     pub added_members: Option<Vec<ThreadMember>>,
     pub removed_member_ids: Option<Vec<UserId>>,
     pub member_count: Option<u64>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -426,7 +321,6 @@ pub struct ThreadListSyncEvent {
     pub threads: Vec<Channel>,
     /// Thread member objects for the threads the current user has joined.
     pub members: Vec<ThreadMember>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -436,7 +330,6 @@ pub struct ReactionRemoveEmojiEvent {
     pub message_id: Option<MessageId>,
     pub guild_id: Option<GuildId>,
     pub emoji: Option<Emoji>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -444,7 +337,6 @@ pub struct ReactionRemoveEmojiEvent {
 pub struct GuildStickersUpdateEvent {
     pub guild_id: Option<GuildId>,
     pub stickers: Vec<Sticker>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -466,7 +358,6 @@ pub struct ScheduledEvent {
     pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     pub user_count: Option<u64>,
     pub image: Option<String>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -479,15 +370,6 @@ pub struct GuildScheduledEventUserEvent {
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
-    #[serde(skip)]
-    pub raw: Value,
-}
-
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `StageInstanceEvent`.
-pub struct StageInstanceEvent {
-    pub stage_instance: StageInstance,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -506,7 +388,6 @@ pub struct ApplicationCommandPermissionsUpdateEvent {
     pub application_id: Option<ApplicationId>,
     pub guild_id: Option<GuildId>,
     pub permissions: Vec<ApplicationCommandPermission>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -520,7 +401,6 @@ pub struct VoiceChannelEffectEvent {
     pub animation_id: Option<u64>,
     pub sound_id: Option<SoundboardSoundId>,
     pub sound_volume: Option<f64>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -529,7 +409,6 @@ pub struct VoiceChannelStartTimeUpdateEvent {
     pub channel_id: Option<ChannelId>,
     pub guild_id: Option<GuildId>,
     pub voice_channel_start_time: Option<String>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -538,7 +417,6 @@ pub struct VoiceChannelStatusUpdateEvent {
     pub channel_id: Option<ChannelId>,
     pub guild_id: Option<GuildId>,
     pub status: Option<String>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -550,8 +428,6 @@ pub struct ChannelInfoChannel {
     pub status: Option<String>,
     /// Optional voice-channel start time value.
     pub voice_start_time: Option<String>,
-    /// Raw channel-info object for forward-compatible access.
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -561,8 +437,6 @@ pub struct ChannelInfoEvent {
     pub guild_id: GuildId,
     /// Channel metadata objects included by Discord.
     pub channels: Vec<ChannelInfoChannel>,
-    /// Raw event payload for forward-compatible access.
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -571,7 +445,6 @@ pub struct RateLimitedEvent {
     pub opcode: Option<u64>,
     pub retry_after: Option<f64>,
     pub meta: Option<Value>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -599,7 +472,6 @@ pub struct AutoModerationEvent {
     pub content: Option<String>,
     pub matched_keyword: Option<String>,
     pub matched_content: Option<String>,
-    pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
@@ -615,350 +487,416 @@ pub struct AuditLogEntryEvent {
     pub changes: Option<Vec<Value>>,
     pub options: Option<Value>,
     pub reason: Option<String>,
-    pub raw: Value,
 }
 
+/// Where and when the gateway received an event.
+///
+/// `received_at` is taken in the gateway read loop when the frame arrives,
+/// before the event waits in any queue, so interaction handlers can measure
+/// Discord's three-second response window from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventMetadata {
+    name: Cow<'static, str>,
+    shard_id: u32,
+    shard_count: u32,
+    sequence: Option<u64>,
+    received_at: Instant,
+}
+
+impl EventMetadata {
+    /// Metadata for dispatch `name` received at `received_at`, on shard 0 of
+    /// 1 and without a sequence number. Known dispatch names are stored
+    /// without allocating.
+    pub fn new(name: &str, received_at: Instant) -> Self {
+        Self {
+            name: decode::intern_dispatch_name(name),
+            shard_id: 0,
+            shard_count: 1,
+            sequence: None,
+            received_at,
+        }
+    }
+
+    /// Sets the receiving shard (`shard_id` of `shard_count`).
+    pub fn with_shard(mut self, shard_id: u32, shard_count: u32) -> Self {
+        self.shard_id = shard_id;
+        self.shard_count = shard_count.max(1);
+        self
+    }
+
+    /// Sets the gateway sequence number the dispatch carried.
+    pub fn with_sequence(mut self, sequence: u64) -> Self {
+        self.sequence = Some(sequence);
+        self
+    }
+
+    /// The dispatch name (`t`), for example `"MESSAGE_CREATE"`.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The receiving shard as `(shard_id, shard_count)`.
+    pub fn shard(&self) -> (u32, u32) {
+        (self.shard_id, self.shard_count)
+    }
+
+    /// The gateway sequence number (`s`), if the dispatch carried one.
+    pub fn sequence(&self) -> Option<u64> {
+        self.sequence
+    }
+
+    /// When the gateway read loop received the frame.
+    pub fn received_at(&self) -> Instant {
+        self.received_at
+    }
+}
+
+/// Why a known dispatch could not be decoded into its typed payload.
+///
+/// The event still reaches handlers and collectors as
+/// [`EventKind::DecodeFailed`], with the original payload in
+/// [`Event::raw`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventDecodeError {
+    message: Box<str>,
+}
+
+impl EventDecodeError {
+    pub(crate) fn new(message: impl fmt::Display) -> Self {
+        Self {
+            message: message.to_string().into_boxed_str(),
+        }
+    }
+
+    /// The decoder's error message.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for EventDecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for EventDecodeError {}
+
+impl From<serde_json::Error> for EventDecodeError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(error)
+    }
+}
+
+impl From<DiscordError> for EventDecodeError {
+    fn from(error: DiscordError) -> Self {
+        Self::new(error)
+    }
+}
+
+/// The decoded payload of one gateway dispatch: one variant per dispatch
+/// name.
+///
+/// Payload storage follows one rule, so the enum stays small (64 bytes on
+/// 64-bit targets, fixed by a layout test) and delivery never copies a
+/// payload:
+///
+/// - payloads the cache keeps as they are — messages, members, and
+///   GUILD_CREATE's members and presences — are `Arc`s the cache shares;
+/// - other large payloads are boxed;
+/// - small id-only and delete events are stored inline.
+///
+/// [`Unknown`](Self::Unknown) is a dispatch this crate has no type for, and
+/// [`DecodeFailed`](Self::DecodeFailed) a known one whose payload did not
+/// match; both keep the payload in [`Event::raw`].
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-/// Typed Discord API enum for `Event`.
-pub enum Event {
-    /// Discord API enum variant `Ready`.
-    Ready(ReadyEvent),
-    /// Discord API enum variant `GuildCreate`.
-    GuildCreate(GuildEvent),
-    /// Discord API enum variant `GuildUpdate`.
-    GuildUpdate(GuildEvent),
-    /// Discord API enum variant `GuildDelete`.
-    GuildDelete(GuildDeleteEvent),
-    /// Discord API enum variant `ChannelCreate`.
-    ChannelCreate(ChannelEvent),
-    /// Discord API enum variant `ChannelUpdate`.
-    ChannelUpdate(ChannelEvent),
-    /// Discord API enum variant `ChannelDelete`.
-    ChannelDelete(ChannelEvent),
-    /// Discord API enum variant `MemberAdd`.
+pub enum EventKind {
+    /// READY.
+    Ready(Box<ReadyPayload>),
+    /// RESUMED.
+    Resumed,
+    /// GUILD_CREATE, split into the units the cache stores.
+    GuildCreate(Box<crate::model::GuildCreate>),
+    /// GUILD_UPDATE.
+    GuildUpdate(Box<Guild>),
+    /// GUILD_DELETE.
+    GuildDelete(GuildDeletePayload),
+    /// CHANNEL_CREATE.
+    ChannelCreate(Box<Channel>),
+    /// CHANNEL_UPDATE.
+    ChannelUpdate(Box<Channel>),
+    /// CHANNEL_DELETE.
+    ChannelDelete(Box<Channel>),
+    /// GUILD_MEMBER_ADD.
     MemberAdd(MemberEvent),
-    /// Discord API enum variant `MemberUpdate`.
+    /// GUILD_MEMBER_UPDATE.
     MemberUpdate(MemberEvent),
-    /// Discord API enum variant `MemberRemove`.
-    MemberRemove(MemberRemoveEvent),
-    /// Discord API enum variant `GuildMembersChunk`.
-    GuildMembersChunk(GuildMembersChunkEvent),
-    /// Discord API enum variant `RoleCreate`.
-    RoleCreate(RoleEvent),
-    /// Discord API enum variant `RoleUpdate`.
-    RoleUpdate(RoleEvent),
-    /// Discord API enum variant `RoleDelete`.
-    RoleDelete(RoleDeleteEvent),
-    /// Discord API enum variant `MessageCreate`.
-    MessageCreate(MessageEvent),
-    /// Discord API enum variant `MessageUpdate`.
-    MessageUpdate(MessageEvent),
-    /// Discord API enum variant `MessageDelete`.
-    MessageDelete(MessageDeleteEvent),
-    /// Discord API enum variant `MessageDeleteBulk`.
+    /// GUILD_MEMBER_REMOVE.
+    MemberRemove(Box<MemberRemovePayload>),
+    /// GUILD_MEMBERS_CHUNK.
+    GuildMembersChunk(Box<GuildMembersChunkPayload>),
+    /// GUILD_ROLE_CREATE.
+    RoleCreate(Box<RoleEvent>),
+    /// GUILD_ROLE_UPDATE.
+    RoleUpdate(Box<RoleEvent>),
+    /// GUILD_ROLE_DELETE.
+    RoleDelete(RoleDeletePayload),
+    /// MESSAGE_CREATE; the cache stores this `Arc`.
+    MessageCreate(Arc<Message>),
+    /// MESSAGE_UPDATE, a partial message (see
+    /// [`MessageUpdate`](crate::model::MessageUpdate)); shared with the cache
+    /// backend worker that merges it.
+    MessageUpdate(Arc<crate::model::MessageUpdate>),
+    /// MESSAGE_DELETE.
+    MessageDelete(MessageDeletePayload),
+    /// MESSAGE_DELETE_BULK.
     MessageDeleteBulk(BulkMessageDeleteEvent),
-    /// Discord API enum variant `ChannelPinsUpdate`.
+    /// CHANNEL_PINS_UPDATE.
     ChannelPinsUpdate(ChannelPinsUpdateEvent),
-    /// Discord API enum variant `GuildBanAdd`.
-    GuildBanAdd(GuildBanEvent),
-    /// Discord API enum variant `GuildBanRemove`.
-    GuildBanRemove(GuildBanEvent),
-    /// Discord API enum variant `GuildEmojisUpdate`.
+    /// GUILD_BAN_ADD.
+    GuildBanAdd(Box<GuildBanEvent>),
+    /// GUILD_BAN_REMOVE.
+    GuildBanRemove(Box<GuildBanEvent>),
+    /// GUILD_EMOJIS_UPDATE.
     GuildEmojisUpdate(GuildEmojisUpdateEvent),
-    /// Discord API enum variant `GuildIntegrationsUpdate`.
+    /// GUILD_INTEGRATIONS_UPDATE.
     GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent),
-    /// Discord API enum variant `EntitlementCreate`.
-    EntitlementCreate(EntitlementEvent),
-    /// Discord API enum variant `EntitlementUpdate`.
-    EntitlementUpdate(EntitlementEvent),
-    /// Discord API enum variant `EntitlementDelete`.
-    EntitlementDelete(EntitlementEvent),
-    /// Discord API enum variant `SubscriptionCreate`.
-    SubscriptionCreate(SubscriptionEvent),
-    /// Discord API enum variant `SubscriptionUpdate`.
-    SubscriptionUpdate(SubscriptionEvent),
-    /// Discord API enum variant `SubscriptionDelete`.
-    SubscriptionDelete(SubscriptionEvent),
-    /// Discord API enum variant `IntegrationCreate`.
-    IntegrationCreate(IntegrationEvent),
-    /// Discord API enum variant `IntegrationUpdate`.
-    IntegrationUpdate(IntegrationEvent),
-    /// Discord API enum variant `IntegrationDelete`.
+    /// ENTITLEMENT_CREATE.
+    EntitlementCreate(Box<Entitlement>),
+    /// ENTITLEMENT_UPDATE.
+    EntitlementUpdate(Box<Entitlement>),
+    /// ENTITLEMENT_DELETE.
+    EntitlementDelete(Box<Entitlement>),
+    /// SUBSCRIPTION_CREATE.
+    SubscriptionCreate(Box<Subscription>),
+    /// SUBSCRIPTION_UPDATE.
+    SubscriptionUpdate(Box<Subscription>),
+    /// SUBSCRIPTION_DELETE.
+    SubscriptionDelete(Box<Subscription>),
+    /// INTEGRATION_CREATE.
+    IntegrationCreate(Box<IntegrationEvent>),
+    /// INTEGRATION_UPDATE.
+    IntegrationUpdate(Box<IntegrationEvent>),
+    /// INTEGRATION_DELETE.
     IntegrationDelete(IntegrationDeleteEvent),
-    /// Discord API enum variant `GuildSoundboardSoundCreate`.
-    GuildSoundboardSoundCreate(SoundboardSoundEvent),
-    /// Discord API enum variant `GuildSoundboardSoundUpdate`.
-    GuildSoundboardSoundUpdate(SoundboardSoundEvent),
-    /// Discord API enum variant `GuildSoundboardSoundDelete`.
+    /// GUILD_SOUNDBOARD_SOUND_CREATE.
+    GuildSoundboardSoundCreate(Box<SoundboardSound>),
+    /// GUILD_SOUNDBOARD_SOUND_UPDATE.
+    GuildSoundboardSoundUpdate(Box<SoundboardSound>),
+    /// GUILD_SOUNDBOARD_SOUND_DELETE.
     GuildSoundboardSoundDelete(SoundboardSoundDeleteEvent),
-    /// Discord API enum variant `GuildSoundboardSoundsUpdate`.
+    /// GUILD_SOUNDBOARD_SOUNDS_UPDATE.
     GuildSoundboardSoundsUpdate(SoundboardSoundsEvent),
-    /// Discord API enum variant `SoundboardSounds`.
+    /// SOUNDBOARD_SOUNDS.
     SoundboardSounds(SoundboardSoundsEvent),
-    /// Discord API enum variant `WebhooksUpdate`.
+    /// WEBHOOKS_UPDATE.
     WebhooksUpdate(WebhooksUpdateEvent),
-    /// Discord API enum variant `InviteCreate`.
-    InviteCreate(InviteEvent),
-    /// Discord API enum variant `InviteDelete`.
-    InviteDelete(InviteEvent),
-    /// Discord API enum variant `MessageReactionAdd`.
-    MessageReactionAdd(ReactionEvent),
-    /// Discord API enum variant `MessageReactionRemove`.
-    MessageReactionRemove(ReactionEvent),
-    /// Discord API enum variant `MessageReactionRemoveAll`.
+    /// INVITE_CREATE.
+    InviteCreate(Box<InviteEvent>),
+    /// INVITE_DELETE.
+    InviteDelete(Box<InviteEvent>),
+    /// MESSAGE_REACTION_ADD.
+    MessageReactionAdd(Box<ReactionEvent>),
+    /// MESSAGE_REACTION_REMOVE.
+    MessageReactionRemove(Box<ReactionEvent>),
+    /// MESSAGE_REACTION_REMOVE_ALL.
     MessageReactionRemoveAll(ReactionRemoveAllEvent),
-    /// Discord API enum variant `TypingStart`.
+    /// MESSAGE_REACTION_REMOVE_EMOJI.
+    MessageReactionRemoveEmoji(Box<ReactionRemoveEmojiEvent>),
+    /// TYPING_START.
     TypingStart(TypingStartEvent),
-    /// Discord API enum variant `PresenceUpdate`.
-    PresenceUpdate(PresenceUpdateEvent),
-    /// Discord API enum variant `UserUpdate`.
-    UserUpdate(UserUpdateEvent),
-    /// Discord API enum variant `InteractionCreate`.
-    InteractionCreate(InteractionEvent),
-    /// Discord API enum variant `VoiceStateUpdate`.
-    VoiceStateUpdate(VoiceStateEvent),
-    /// Discord API enum variant `VoiceServerUpdate`.
-    VoiceServerUpdate(VoiceServerEvent),
-    /// Discord API enum variant `Resumed`.
-    Resumed(ResumedEvent),
-    /// Discord API enum variant `ThreadCreate`.
-    ThreadCreate(ThreadEvent),
-    /// Discord API enum variant `ThreadUpdate`.
-    ThreadUpdate(ThreadEvent),
-    /// Discord API enum variant `ThreadDelete`.
-    ThreadDelete(ThreadEvent),
-    /// Discord API enum variant `ThreadListSync`.
-    ThreadListSync(ThreadListSyncEvent),
-    /// Discord API enum variant `ThreadMemberUpdate`.
-    ThreadMemberUpdate(ThreadMemberUpdateEvent),
-    /// Discord API enum variant `ThreadMembersUpdate`.
-    ThreadMembersUpdate(ThreadMembersUpdateEvent),
-    /// Discord API enum variant `MessageReactionRemoveEmoji`.
-    MessageReactionRemoveEmoji(ReactionRemoveEmojiEvent),
-    /// Discord API enum variant `MessagePollVoteAdd`.
+    /// PRESENCE_UPDATE.
+    PresenceUpdate(Box<PresenceUpdateEvent>),
+    /// USER_UPDATE.
+    UserUpdate(Box<User>),
+    /// INTERACTION_CREATE.
+    InteractionCreate(Box<Interaction>),
+    /// VOICE_STATE_UPDATE.
+    VoiceStateUpdate(Box<VoiceState>),
+    /// VOICE_SERVER_UPDATE.
+    VoiceServerUpdate(Box<VoiceServerUpdate>),
+    /// THREAD_CREATE.
+    ThreadCreate(Box<ThreadEvent>),
+    /// THREAD_UPDATE.
+    ThreadUpdate(Box<ThreadEvent>),
+    /// THREAD_DELETE.
+    ThreadDelete(Box<ThreadEvent>),
+    /// THREAD_LIST_SYNC.
+    ThreadListSync(Box<ThreadListSyncEvent>),
+    /// THREAD_MEMBER_UPDATE.
+    ThreadMemberUpdate(Box<ThreadMemberUpdateEvent>),
+    /// THREAD_MEMBERS_UPDATE.
+    ThreadMembersUpdate(Box<ThreadMembersUpdateEvent>),
+    /// MESSAGE_POLL_VOTE_ADD.
     MessagePollVoteAdd(PollVoteEvent),
-    /// Discord API enum variant `MessagePollVoteRemove`.
+    /// MESSAGE_POLL_VOTE_REMOVE.
     MessagePollVoteRemove(PollVoteEvent),
-    /// Discord API enum variant `GuildStickersUpdate`.
+    /// GUILD_STICKERS_UPDATE.
     GuildStickersUpdate(GuildStickersUpdateEvent),
-    /// Discord API enum variant `GuildScheduledEventCreate`.
-    GuildScheduledEventCreate(ScheduledEvent),
-    /// Discord API enum variant `GuildScheduledEventUpdate`.
-    GuildScheduledEventUpdate(ScheduledEvent),
-    /// Discord API enum variant `GuildScheduledEventDelete`.
-    GuildScheduledEventDelete(ScheduledEvent),
-    /// Discord API enum variant `GuildScheduledEventUserAdd`.
-    GuildScheduledEventUserAdd(GuildScheduledEventUserEvent),
-    /// Discord API enum variant `GuildScheduledEventUserRemove`.
-    GuildScheduledEventUserRemove(GuildScheduledEventUserEvent),
-    /// Discord API enum variant `StageInstanceCreate`.
-    StageInstanceCreate(StageInstanceEvent),
-    /// Discord API enum variant `StageInstanceUpdate`.
-    StageInstanceUpdate(StageInstanceEvent),
-    /// Discord API enum variant `StageInstanceDelete`.
-    StageInstanceDelete(StageInstanceEvent),
-    /// Discord API enum variant `VoiceChannelEffectSend`.
-    VoiceChannelEffectSend(VoiceChannelEffectEvent),
-    /// Discord API enum variant `VoiceChannelStartTimeUpdate`.
+    /// GUILD_SCHEDULED_EVENT_CREATE.
+    GuildScheduledEventCreate(Box<ScheduledEvent>),
+    /// GUILD_SCHEDULED_EVENT_UPDATE.
+    GuildScheduledEventUpdate(Box<ScheduledEvent>),
+    /// GUILD_SCHEDULED_EVENT_DELETE.
+    GuildScheduledEventDelete(Box<ScheduledEvent>),
+    /// GUILD_SCHEDULED_EVENT_USER_ADD.
+    GuildScheduledEventUserAdd(Box<GuildScheduledEventUserEvent>),
+    /// GUILD_SCHEDULED_EVENT_USER_REMOVE.
+    GuildScheduledEventUserRemove(Box<GuildScheduledEventUserEvent>),
+    /// STAGE_INSTANCE_CREATE.
+    StageInstanceCreate(Box<StageInstance>),
+    /// STAGE_INSTANCE_UPDATE.
+    StageInstanceUpdate(Box<StageInstance>),
+    /// STAGE_INSTANCE_DELETE.
+    StageInstanceDelete(Box<StageInstance>),
+    /// VOICE_CHANNEL_EFFECT_SEND.
+    VoiceChannelEffectSend(Box<VoiceChannelEffectEvent>),
+    /// VOICE_CHANNEL_START_TIME_UPDATE.
     VoiceChannelStartTimeUpdate(VoiceChannelStartTimeUpdateEvent),
-    /// Discord API enum variant `VoiceChannelStatusUpdate`.
+    /// VOICE_CHANNEL_STATUS_UPDATE.
     VoiceChannelStatusUpdate(VoiceChannelStatusUpdateEvent),
-    /// Discord API enum variant `ChannelInfo`.
+    /// CHANNEL_INFO.
     ChannelInfo(ChannelInfoEvent),
-    /// Discord API enum variant `RateLimited`.
-    RateLimited(RateLimitedEvent),
-    /// Discord API enum variant `ApplicationCommandPermissionsUpdate`.
-    ApplicationCommandPermissionsUpdate(ApplicationCommandPermissionsUpdateEvent),
-    /// Discord API enum variant `AutoModerationRuleCreate`.
-    AutoModerationRuleCreate(AutoModerationEvent),
-    /// Discord API enum variant `AutoModerationRuleUpdate`.
-    AutoModerationRuleUpdate(AutoModerationEvent),
-    /// Discord API enum variant `AutoModerationRuleDelete`.
-    AutoModerationRuleDelete(AutoModerationEvent),
-    /// Discord API enum variant `AutoModerationActionExecution`.
-    AutoModerationActionExecution(AutoModerationEvent),
-    /// Discord API enum variant `GuildAuditLogEntryCreate`.
-    GuildAuditLogEntryCreate(AuditLogEntryEvent),
-    /// Discord API enum variant `Unknown`.
-    Unknown {
-        /// Raw Discord dispatch type.
-        kind: String,
-        /// Raw dispatch payload for unsupported event types.
-        raw: Value,
-    },
+    /// RATE_LIMITED.
+    RateLimited(Box<RateLimitedEvent>),
+    /// APPLICATION_COMMAND_PERMISSIONS_UPDATE.
+    ApplicationCommandPermissionsUpdate(Box<ApplicationCommandPermissionsUpdateEvent>),
+    /// AUTO_MODERATION_RULE_CREATE.
+    AutoModerationRuleCreate(Box<AutoModerationEvent>),
+    /// AUTO_MODERATION_RULE_UPDATE.
+    AutoModerationRuleUpdate(Box<AutoModerationEvent>),
+    /// AUTO_MODERATION_RULE_DELETE.
+    AutoModerationRuleDelete(Box<AutoModerationEvent>),
+    /// AUTO_MODERATION_ACTION_EXECUTION.
+    AutoModerationActionExecution(Box<AutoModerationEvent>),
+    /// GUILD_AUDIT_LOG_ENTRY_CREATE.
+    GuildAuditLogEntryCreate(Box<AuditLogEntryEvent>),
+    /// A dispatch this crate has no typed payload for; its name is in
+    /// [`Event::name`] and its payload in [`Event::raw`].
+    Unknown,
+    /// A known dispatch whose payload did not decode; the payload is in
+    /// [`Event::raw`].
+    DecodeFailed(EventDecodeError),
+}
+
+/// One gateway dispatch as handlers and collectors receive it, shared as
+/// `Arc<Event>`.
+///
+/// - [`kind`](Self::kind): the decoded payload.
+/// - [`metadata`](Self::metadata): dispatch name, shard, sequence, and when
+///   the frame arrived.
+/// - [`raw`](Self::raw): the original JSON payload. Known events keep it
+///   only when the client was built with `keep_raw_events(true)`; unknown
+///   dispatches and payloads that failed to decode always keep it, so
+///   nothing Discord sends is lost. It is kept in exactly one place, and
+///   `Debug` prints only its length (payloads can carry interaction tokens).
+#[derive(Clone)]
+pub struct Event {
+    kind: EventKind,
+    metadata: EventMetadata,
+    raw: Option<Box<RawValue>>,
 }
 
 impl Event {
-    pub fn kind(&self) -> &str {
-        match self {
-            Event::Ready(_) => "READY",
-            Event::GuildCreate(_) => "GUILD_CREATE",
-            Event::GuildUpdate(_) => "GUILD_UPDATE",
-            Event::GuildDelete(_) => "GUILD_DELETE",
-            Event::ChannelCreate(_) => "CHANNEL_CREATE",
-            Event::ChannelUpdate(_) => "CHANNEL_UPDATE",
-            Event::ChannelDelete(_) => "CHANNEL_DELETE",
-            Event::MemberAdd(_) => "GUILD_MEMBER_ADD",
-            Event::MemberUpdate(_) => "GUILD_MEMBER_UPDATE",
-            Event::MemberRemove(_) => "GUILD_MEMBER_REMOVE",
-            Event::GuildMembersChunk(_) => "GUILD_MEMBERS_CHUNK",
-            Event::RoleCreate(_) => "GUILD_ROLE_CREATE",
-            Event::RoleUpdate(_) => "GUILD_ROLE_UPDATE",
-            Event::RoleDelete(_) => "GUILD_ROLE_DELETE",
-            Event::MessageCreate(_) => "MESSAGE_CREATE",
-            Event::MessageUpdate(_) => "MESSAGE_UPDATE",
-            Event::MessageDelete(_) => "MESSAGE_DELETE",
-            Event::MessageDeleteBulk(_) => "MESSAGE_DELETE_BULK",
-            Event::ChannelPinsUpdate(_) => "CHANNEL_PINS_UPDATE",
-            Event::GuildBanAdd(_) => "GUILD_BAN_ADD",
-            Event::GuildBanRemove(_) => "GUILD_BAN_REMOVE",
-            Event::GuildEmojisUpdate(_) => "GUILD_EMOJIS_UPDATE",
-            Event::GuildIntegrationsUpdate(_) => "GUILD_INTEGRATIONS_UPDATE",
-            Event::EntitlementCreate(_) => "ENTITLEMENT_CREATE",
-            Event::EntitlementUpdate(_) => "ENTITLEMENT_UPDATE",
-            Event::EntitlementDelete(_) => "ENTITLEMENT_DELETE",
-            Event::SubscriptionCreate(_) => "SUBSCRIPTION_CREATE",
-            Event::SubscriptionUpdate(_) => "SUBSCRIPTION_UPDATE",
-            Event::SubscriptionDelete(_) => "SUBSCRIPTION_DELETE",
-            Event::IntegrationCreate(_) => "INTEGRATION_CREATE",
-            Event::IntegrationUpdate(_) => "INTEGRATION_UPDATE",
-            Event::IntegrationDelete(_) => "INTEGRATION_DELETE",
-            Event::GuildSoundboardSoundCreate(_) => "GUILD_SOUNDBOARD_SOUND_CREATE",
-            Event::GuildSoundboardSoundUpdate(_) => "GUILD_SOUNDBOARD_SOUND_UPDATE",
-            Event::GuildSoundboardSoundDelete(_) => "GUILD_SOUNDBOARD_SOUND_DELETE",
-            Event::GuildSoundboardSoundsUpdate(_) => "GUILD_SOUNDBOARD_SOUNDS_UPDATE",
-            Event::SoundboardSounds(_) => "SOUNDBOARD_SOUNDS",
-            Event::WebhooksUpdate(_) => "WEBHOOKS_UPDATE",
-            Event::InviteCreate(_) => "INVITE_CREATE",
-            Event::InviteDelete(_) => "INVITE_DELETE",
-            Event::MessageReactionAdd(_) => "MESSAGE_REACTION_ADD",
-            Event::MessageReactionRemove(_) => "MESSAGE_REACTION_REMOVE",
-            Event::MessageReactionRemoveAll(_) => "MESSAGE_REACTION_REMOVE_ALL",
-            Event::TypingStart(_) => "TYPING_START",
-            Event::PresenceUpdate(_) => "PRESENCE_UPDATE",
-            Event::UserUpdate(_) => "USER_UPDATE",
-            Event::InteractionCreate(_) => "INTERACTION_CREATE",
-            Event::VoiceStateUpdate(_) => "VOICE_STATE_UPDATE",
-            Event::VoiceServerUpdate(_) => "VOICE_SERVER_UPDATE",
-            Event::Resumed(_) => "RESUMED",
-            Event::ThreadCreate(_) => "THREAD_CREATE",
-            Event::ThreadUpdate(_) => "THREAD_UPDATE",
-            Event::ThreadDelete(_) => "THREAD_DELETE",
-            Event::ThreadListSync(_) => "THREAD_LIST_SYNC",
-            Event::ThreadMemberUpdate(_) => "THREAD_MEMBER_UPDATE",
-            Event::ThreadMembersUpdate(_) => "THREAD_MEMBERS_UPDATE",
-            Event::MessageReactionRemoveEmoji(_) => "MESSAGE_REACTION_REMOVE_EMOJI",
-            Event::MessagePollVoteAdd(_) => "MESSAGE_POLL_VOTE_ADD",
-            Event::MessagePollVoteRemove(_) => "MESSAGE_POLL_VOTE_REMOVE",
-            Event::GuildStickersUpdate(_) => "GUILD_STICKERS_UPDATE",
-            Event::GuildScheduledEventCreate(_) => "GUILD_SCHEDULED_EVENT_CREATE",
-            Event::GuildScheduledEventUpdate(_) => "GUILD_SCHEDULED_EVENT_UPDATE",
-            Event::GuildScheduledEventDelete(_) => "GUILD_SCHEDULED_EVENT_DELETE",
-            Event::GuildScheduledEventUserAdd(_) => "GUILD_SCHEDULED_EVENT_USER_ADD",
-            Event::GuildScheduledEventUserRemove(_) => "GUILD_SCHEDULED_EVENT_USER_REMOVE",
-            Event::StageInstanceCreate(_) => "STAGE_INSTANCE_CREATE",
-            Event::StageInstanceUpdate(_) => "STAGE_INSTANCE_UPDATE",
-            Event::StageInstanceDelete(_) => "STAGE_INSTANCE_DELETE",
-            Event::VoiceChannelEffectSend(_) => "VOICE_CHANNEL_EFFECT_SEND",
-            Event::VoiceChannelStartTimeUpdate(_) => "VOICE_CHANNEL_START_TIME_UPDATE",
-            Event::VoiceChannelStatusUpdate(_) => "VOICE_CHANNEL_STATUS_UPDATE",
-            Event::ChannelInfo(_) => "CHANNEL_INFO",
-            Event::RateLimited(_) => "RATE_LIMITED",
-            Event::ApplicationCommandPermissionsUpdate(_) => {
-                "APPLICATION_COMMAND_PERMISSIONS_UPDATE"
-            }
-            Event::AutoModerationRuleCreate(_) => "AUTO_MODERATION_RULE_CREATE",
-            Event::AutoModerationRuleUpdate(_) => "AUTO_MODERATION_RULE_UPDATE",
-            Event::AutoModerationRuleDelete(_) => "AUTO_MODERATION_RULE_DELETE",
-            Event::AutoModerationActionExecution(_) => "AUTO_MODERATION_ACTION_EXECUTION",
-            Event::GuildAuditLogEntryCreate(_) => "GUILD_AUDIT_LOG_ENTRY_CREATE",
-            Event::Unknown { kind, .. } => kind.as_str(),
+    /// Decodes one dispatch payload. Never fails: an unknown dispatch name
+    /// gives [`EventKind::Unknown`] and a payload that does not match its
+    /// type gives [`EventKind::DecodeFailed`]; both keep `data` as
+    /// [`raw`](Self::raw). A decoded known event keeps it only when
+    /// `keep_raw` is `true`.
+    pub fn decode(metadata: EventMetadata, data: Box<RawValue>, keep_raw: bool) -> Self {
+        let kind = decode::decode_kind(metadata.name(), data.get())
+            .unwrap_or_else(EventKind::DecodeFailed);
+        let keep = keep_raw || matches!(kind, EventKind::Unknown | EventKind::DecodeFailed(_));
+        Self {
+            kind,
+            metadata,
+            raw: keep.then_some(data),
         }
     }
 
-    pub fn raw(&self) -> &Value {
-        match self {
-            Event::Ready(event) => &event.raw,
-            Event::GuildCreate(event) | Event::GuildUpdate(event) => &event.raw,
-            Event::GuildDelete(event) => &event.raw,
-            Event::ChannelCreate(event)
-            | Event::ChannelUpdate(event)
-            | Event::ChannelDelete(event) => &event.raw,
-            Event::MemberAdd(event) | Event::MemberUpdate(event) => &event.raw,
-            Event::MemberRemove(event) => &event.raw,
-            Event::GuildMembersChunk(event) => &event.raw,
-            Event::RoleCreate(event) | Event::RoleUpdate(event) => &event.raw,
-            Event::RoleDelete(event) => &event.raw,
-            Event::MessageCreate(event) | Event::MessageUpdate(event) => &event.raw,
-            Event::MessageDelete(event) => &event.raw,
-            Event::MessageDeleteBulk(event) => &event.raw,
-            Event::ChannelPinsUpdate(event) => &event.raw,
-            Event::GuildBanAdd(event) | Event::GuildBanRemove(event) => &event.raw,
-            Event::GuildEmojisUpdate(event) => &event.raw,
-            Event::GuildIntegrationsUpdate(event) => &event.raw,
-            Event::EntitlementCreate(event)
-            | Event::EntitlementUpdate(event)
-            | Event::EntitlementDelete(event) => &event.raw,
-            Event::SubscriptionCreate(event)
-            | Event::SubscriptionUpdate(event)
-            | Event::SubscriptionDelete(event) => &event.raw,
-            Event::IntegrationCreate(event) | Event::IntegrationUpdate(event) => &event.raw,
-            Event::IntegrationDelete(event) => &event.raw,
-            Event::GuildSoundboardSoundCreate(event) | Event::GuildSoundboardSoundUpdate(event) => {
-                &event.raw
-            }
-            Event::GuildSoundboardSoundDelete(event) => &event.raw,
-            Event::GuildSoundboardSoundsUpdate(event) | Event::SoundboardSounds(event) => {
-                &event.raw
-            }
-            Event::WebhooksUpdate(event) => &event.raw,
-            Event::InviteCreate(event) | Event::InviteDelete(event) => &event.raw,
-            Event::MessageReactionAdd(event) | Event::MessageReactionRemove(event) => &event.raw,
-            Event::MessageReactionRemoveAll(event) => &event.raw,
-            Event::TypingStart(event) => &event.raw,
-            Event::PresenceUpdate(event) => &event.raw,
-            Event::UserUpdate(event) => &event.raw,
-            Event::InteractionCreate(event) => &event.raw,
-            Event::VoiceStateUpdate(event) => &event.raw,
-            Event::VoiceServerUpdate(event) => &event.raw,
-            Event::Resumed(event) => &event.raw,
-            Event::ThreadCreate(event)
-            | Event::ThreadUpdate(event)
-            | Event::ThreadDelete(event) => &event.raw,
-            Event::ThreadListSync(event) => &event.raw,
-            Event::ThreadMemberUpdate(event) => &event.raw,
-            Event::ThreadMembersUpdate(event) => &event.raw,
-            Event::MessageReactionRemoveEmoji(event) => &event.raw,
-            Event::MessagePollVoteAdd(event) | Event::MessagePollVoteRemove(event) => &event.raw,
-            Event::GuildStickersUpdate(event) => &event.raw,
-            Event::GuildScheduledEventCreate(event)
-            | Event::GuildScheduledEventUpdate(event)
-            | Event::GuildScheduledEventDelete(event) => &event.raw,
-            Event::GuildScheduledEventUserAdd(event)
-            | Event::GuildScheduledEventUserRemove(event) => &event.raw,
-            Event::StageInstanceCreate(event)
-            | Event::StageInstanceUpdate(event)
-            | Event::StageInstanceDelete(event) => &event.raw,
-            Event::VoiceChannelEffectSend(event) => &event.raw,
-            Event::VoiceChannelStartTimeUpdate(event) => &event.raw,
-            Event::VoiceChannelStatusUpdate(event) => &event.raw,
-            Event::ChannelInfo(event) => &event.raw,
-            Event::RateLimited(event) => &event.raw,
-            Event::ApplicationCommandPermissionsUpdate(event) => &event.raw,
-            Event::AutoModerationRuleCreate(event)
-            | Event::AutoModerationRuleUpdate(event)
-            | Event::AutoModerationRuleDelete(event)
-            | Event::AutoModerationActionExecution(event) => &event.raw,
-            Event::GuildAuditLogEntryCreate(event) => &event.raw,
-            Event::Unknown { raw, .. } => raw,
+    /// The decoded payload.
+    pub fn kind(&self) -> &EventKind {
+        &self.kind
+    }
+
+    /// Takes the decoded payload, dropping the metadata and raw payload.
+    pub fn into_kind(self) -> EventKind {
+        self.kind
+    }
+
+    /// Dispatch name, shard, sequence, and receive time.
+    pub fn metadata(&self) -> &EventMetadata {
+        &self.metadata
+    }
+
+    /// The dispatch name (`t`), for example `"MESSAGE_CREATE"`.
+    pub fn name(&self) -> &str {
+        self.metadata.name()
+    }
+
+    /// The original JSON payload (`d`): always present for
+    /// [`EventKind::Unknown`] and [`EventKind::DecodeFailed`], and for known
+    /// events only when raw payloads are kept (`keep_raw_events(true)`).
+    pub fn raw(&self) -> Option<&RawValue> {
+        self.raw.as_deref()
+    }
+}
+
+#[cfg(all(test, feature = "gateway"))]
+impl Event {
+    /// An event built straight from a decoded kind (no raw payload), for
+    /// tests that exercise the pipeline with hand-made payloads.
+    pub(crate) fn from_kind(name: &str, kind: EventKind) -> Self {
+        Self {
+            kind,
+            metadata: EventMetadata::new(name, Instant::now()),
+            raw: None,
         }
     }
+}
+
+/// Prints the kind and metadata; the raw payload only as its length.
+impl fmt::Debug for Event {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Event")
+            .field("kind", &self.kind)
+            .field("metadata", &self.metadata)
+            .field("raw", &RawLength(self.raw.as_deref()))
+            .finish()
+    }
+}
+
+/// `Debug` view of an optional raw payload that never shows its content.
+pub(crate) struct RawLength<'a>(pub(crate) Option<&'a RawValue>);
+
+impl fmt::Debug for RawLength<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(raw) => write!(formatter, "Some(<{} bytes>)", raw.get().len()),
+            None => formatter.write_str("None"),
+        }
+    }
+}
+
+/// Decodes a dispatch from JSON text, keeping the raw payload, with
+/// metadata for shard 0 of 1 received now. For tests and tooling; the
+/// gateway uses [`Event::decode`].
+///
+/// Fails only when `data` is not valid JSON; a payload that does not match
+/// gives [`EventKind::DecodeFailed`].
+pub fn decode_event(event_name: &str, data: &str) -> Result<Event, DiscordError> {
+    let data = RawValue::from_string(data.to_owned())?;
+    Ok(Event::decode(
+        EventMetadata::new(event_name, Instant::now()),
+        data,
+        true,
+    ))
 }
 
 #[path = "event/decode.rs"]
 mod decode;
-pub use decode::decode_event;
 
 #[cfg(test)]
 #[path = "event/tests.rs"]

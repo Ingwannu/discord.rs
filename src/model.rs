@@ -21,6 +21,7 @@ mod entity;
 #[cfg(test)]
 mod fixtures;
 mod gateway;
+mod gateway_payload;
 mod guild;
 mod guild_aux;
 mod id;
@@ -76,6 +77,7 @@ pub use entity::DiscordModel;
 pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
+pub use gateway_payload::{GuildCreate, MessageUpdate, PartialUser};
 pub use guild::{
     CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
     CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole, CurrentUserGuild,

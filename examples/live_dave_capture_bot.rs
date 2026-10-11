@@ -89,7 +89,7 @@ impl Handler {
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 impl EventHandler for Handler {
-    async fn ready(&self, ctx: Context, ready: ReadyPayload) {
+    async fn ready(&self, ctx: Context, ready: &ReadyPayload) {
         {
             let mut state = self.state.lock().expect("capture state mutex poisoned");
             state.user_id = Some(ready.user.id);
@@ -108,7 +108,7 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn voice_state_update(&self, _ctx: Context, state: VoiceState) {
+    async fn voice_state_update(&self, _ctx: Context, state: &VoiceState) {
         let Some(guild_id) = state.guild_id else {
             return;
         };
@@ -130,7 +130,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        if let Some(session_id) = state.session_id {
+        if let Some(session_id) = state.session_id.clone() {
             let mut capture = self.state.lock().expect("capture state mutex poisoned");
             capture.session_id = Some(session_id);
             drop(capture);
@@ -138,13 +138,13 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn voice_server_update(&self, _ctx: Context, server: VoiceServerUpdate) {
+    async fn voice_server_update(&self, _ctx: Context, server: &VoiceServerUpdate) {
         if server.guild_id != self.guild_id {
             return;
         }
 
         let mut capture = self.state.lock().expect("capture state mutex poisoned");
-        capture.server = Some(server);
+        capture.server = Some(server.clone());
         drop(capture);
         self.print_if_ready();
     }
