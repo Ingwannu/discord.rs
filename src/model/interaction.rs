@@ -151,9 +151,30 @@ impl ResolvedData {
     }
 }
 
+/// The guild an interaction was sent from, as the partial guild object the
+/// interaction carries (`guild`).
+///
+/// Discord documents it only as a "partial guild object"; interactions send
+/// its `id`, `locale`, and `features`, which is what this models. A full
+/// [`Guild`](super::Guild) is not used because it requires `name`, which
+/// the partial object does not have.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InteractionGuild {
+    /// ID of the guild (the same as the interaction's `guild_id`).
+    pub id: GuildId,
+    /// The guild's preferred locale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Enabled guild features.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+}
+
 // `Debug` is implemented by hand below so the token never reaches logs.
 #[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `InteractionContextData`.
+/// The fields every interaction shares: who invoked it, where, and how to
+/// answer it (Discord: Interaction Structure, everything but `type` and
+/// `data`).
 pub struct InteractionContextData {
     pub id: InteractionId,
     pub application_id: ApplicationId,
@@ -162,8 +183,22 @@ pub struct InteractionContextData {
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
+    /// The guild the interaction was sent from, as a partial guild.
+    /// Boxed, like `channel` and `message`, so the fields an interaction
+    /// often lacks cost one pointer each.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guild: Option<Box<InteractionGuild>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_id: Option<ChannelId>,
+    /// The channel the interaction was sent from, as a partial channel
+    /// (with the app's computed `permissions`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<Box<Channel>>,
+    /// The invoking user. Discord sends `user` only for an interaction
+    /// outside a guild; for a guild interaction the decoder fills it with a
+    /// copy of `member.user`, so handlers find the invoker in one place
+    /// (one `User` clone per guild interaction; the copy is not written
+    /// back).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,6 +215,17 @@ pub struct InteractionContextData {
     pub context: Option<InteractionContextType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorizing_integration_owners: Option<AuthorizingIntegrationOwners>,
+    /// For a component interaction, or a modal opened from a component, the
+    /// message the component was attached to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<Box<Message>>,
+    /// Largest attachment the response may upload, in bytes (depends on
+    /// the guild's boosts and the user's Nitro).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_size_limit: Option<u64>,
+    /// Read-only interaction format version; Discord always sends `1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u8>,
     /// Shared response-state handle. Created once during parsing so every
     /// clone of the same interaction observes the same acknowledgement state.
     #[serde(skip)]
@@ -200,7 +246,9 @@ impl std::fmt::Debug for InteractionContextData {
             application_id,
             token: _,
             guild_id,
+            guild,
             channel_id,
+            channel,
             user,
             member,
             app_permissions,
@@ -209,6 +257,9 @@ impl std::fmt::Debug for InteractionContextData {
             entitlements,
             context,
             authorizing_integration_owners,
+            message,
+            attachment_size_limit,
+            version,
             response_state,
         } = self;
         f.debug_struct("InteractionContextData")
@@ -216,7 +267,9 @@ impl std::fmt::Debug for InteractionContextData {
             .field("application_id", application_id)
             .field("token", &format_args!("[redacted]"))
             .field("guild_id", guild_id)
+            .field("guild", guild)
             .field("channel_id", channel_id)
+            .field("channel", channel)
             .field("user", user)
             .field("member", member)
             .field("app_permissions", app_permissions)
@@ -228,6 +281,9 @@ impl std::fmt::Debug for InteractionContextData {
                 "authorizing_integration_owners",
                 authorizing_integration_owners,
             )
+            .field("message", message)
+            .field("attachment_size_limit", attachment_size_limit)
+            .field("version", version)
             .field("response_state", response_state)
             .finish()
     }

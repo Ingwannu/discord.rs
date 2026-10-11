@@ -149,7 +149,9 @@ impl InteractionContextData {
             application_id: placeholder(),
             token: String::new(),
             guild_id: None,
+            guild: None,
             channel_id: None,
+            channel: None,
             user: None,
             member: None,
             app_permissions: None,
@@ -158,6 +160,9 @@ impl InteractionContextData {
             entitlements: None,
             context: None,
             authorizing_integration_owners: None,
+            message: None,
+            attachment_size_limit: None,
+            version: None,
             response_state: InteractionResponseState::new(),
         }
     }

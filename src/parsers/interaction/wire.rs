@@ -58,12 +58,13 @@ use serde_json::value::RawValue;
 
 use crate::bitfield::Permissions;
 use crate::model::{
-    ApplicationId, AuthorizingIntegrationOwners, AutocompleteInteraction, ChannelId,
+    ApplicationId, AuthorizingIntegrationOwners, AutocompleteInteraction, Channel, ChannelId,
     ChatInputCommandInteraction, CommandInteractionData, CommandType, ComponentInteraction,
     ComponentInteractionData, Entitlement, GuildId, GuildInstallOwner, Interaction,
-    InteractionContextData, InteractionContextType, InteractionId, InteractionResponseState,
-    InteractionType, Member, MessageContextMenuInteraction, ModalSubmitInteraction,
-    PingInteraction, ResolvedData, User, UserContextMenuInteraction, UserId,
+    InteractionContextData, InteractionContextType, InteractionGuild, InteractionId,
+    InteractionResponseState, InteractionType, Member, Message, MessageContextMenuInteraction,
+    ModalSubmitInteraction, PingInteraction, ResolvedData, User, UserContextMenuInteraction,
+    UserId,
 };
 use crate::parsers::modal::{ModalDataRef, ModalDataSeed};
 use crate::parsers::V2ModalSubmission;
@@ -96,6 +97,12 @@ enum InteractionField {
     Entitlements,
     Context,
     AuthorizingIntegrationOwners,
+    Guild,
+    Channel,
+    Message,
+    AttachmentSizeLimit,
+    Version,
+    // Undocumented keys, such as the deprecated `entitlement_sku_ids`.
     #[serde(other)]
     Other,
 }
@@ -173,6 +180,11 @@ impl<'de> Visitor<'de> for InteractionVisitor {
         let mut entitlements: Option<Option<Vec<Entitlement>>> = None;
         let mut context: Option<Option<InteractionContextType>> = None;
         let mut owners: Option<Option<AuthorizingIntegrationOwners>> = None;
+        let mut guild: Option<Option<Box<InteractionGuild>>> = None;
+        let mut channel: Option<Option<Box<Channel>>> = None;
+        let mut message: Option<Option<Box<Message>>> = None;
+        let mut attachment_size_limit: Option<Option<u64>> = None;
+        let mut version: Option<Option<u8>> = None;
 
         while let Some(field) = map.next_key::<InteractionField>()? {
             match field {
@@ -215,6 +227,17 @@ impl<'de> Visitor<'de> for InteractionVisitor {
                 InteractionField::AuthorizingIntegrationOwners => {
                     set_once(&mut owners, "authorizing_integration_owners", &mut map)?;
                 }
+                InteractionField::Guild => set_once(&mut guild, "guild", &mut map)?,
+                InteractionField::Channel => set_once(&mut channel, "channel", &mut map)?,
+                InteractionField::Message => set_once(&mut message, "message", &mut map)?,
+                InteractionField::AttachmentSizeLimit => {
+                    set_once(
+                        &mut attachment_size_limit,
+                        "attachment_size_limit",
+                        &mut map,
+                    )?;
+                }
+                InteractionField::Version => set_once(&mut version, "version", &mut map)?,
                 InteractionField::Other => {
                     map.next_value::<IgnoredAny>()?;
                 }
@@ -236,7 +259,9 @@ impl<'de> Visitor<'de> for InteractionVisitor {
             token: token
                 .ok_or_else(|| de::Error::custom("missing or invalid interaction.token"))?,
             guild_id: guild_id.flatten(),
+            guild: guild.flatten(),
             channel_id: channel_id.flatten(),
+            channel: channel.flatten(),
             user,
             member,
             app_permissions: app_permissions.flatten(),
@@ -245,6 +270,9 @@ impl<'de> Visitor<'de> for InteractionVisitor {
             entitlements: entitlements.flatten(),
             context: context.flatten(),
             authorizing_integration_owners: owners.flatten(),
+            message: message.flatten(),
+            attachment_size_limit: attachment_size_limit.flatten(),
+            version: version.flatten(),
             response_state: InteractionResponseState::new(),
         };
         build_interaction(context, kind, data).map_err(de::Error::custom)
@@ -470,7 +498,9 @@ impl Serialize for Interaction {
             application_id,
             token,
             guild_id,
+            guild,
             channel_id,
+            channel,
             user,
             member,
             app_permissions,
@@ -479,6 +509,9 @@ impl Serialize for Interaction {
             entitlements,
             context: context_type,
             authorizing_integration_owners,
+            message,
+            attachment_size_limit,
+            version,
             response_state: _,
         } = context;
         map.serialize_entry("id", id)?;
@@ -489,7 +522,9 @@ impl Serialize for Interaction {
         }
         map.serialize_entry("token", token)?;
         entry_if_some(&mut map, "guild_id", guild_id)?;
+        entry_if_some(&mut map, "guild", guild)?;
         entry_if_some(&mut map, "channel_id", channel_id)?;
+        entry_if_some(&mut map, "channel", channel)?;
         let member_user = member.as_ref().and_then(|member| member.user.as_ref());
         if member_user.is_none() {
             entry_if_some(&mut map, "user", user)?;
@@ -505,6 +540,9 @@ impl Serialize for Interaction {
             "authorizing_integration_owners",
             authorizing_integration_owners,
         )?;
+        entry_if_some(&mut map, "message", message)?;
+        entry_if_some(&mut map, "attachment_size_limit", attachment_size_limit)?;
+        entry_if_some(&mut map, "version", version)?;
         map.end()
     }
 }

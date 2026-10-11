@@ -102,10 +102,11 @@ pub use guild_aux::{
 pub use interaction::{
     AuthorizingIntegrationOwners, AutocompleteInteraction, ChatInputCommandInteraction,
     CommandInteractionData, CommandInteractionOption, ComponentInteraction,
-    ComponentInteractionData, Interaction, InteractionCallbackInteraction,
-    InteractionCallbackResource, InteractionCallbackResponse, InteractionCallbackResult,
-    InteractionContextData, MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction,
-    ResolvedData, UserContextMenuInteraction,
+    ComponentInteractionData, Interaction, InteractionCallbackActivityInstance,
+    InteractionCallbackInteraction, InteractionCallbackResource, InteractionCallbackResponse,
+    InteractionCallbackResult, InteractionContextData, InteractionGuild,
+    MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction, ResolvedData,
+    UserContextMenuInteraction,
 };
 pub use invite::{CreateChannelInvite, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus};
 pub use lobby::{

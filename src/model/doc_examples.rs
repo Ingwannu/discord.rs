@@ -942,3 +942,58 @@ fn documented_modal_submit_interactions_keep_resolved_data() {
         check(&modal);
     }
 }
+
+/// Every documented top-level interaction field is read and written back:
+/// the message a component was attached to, the partial channel and guild,
+/// `version`, and `attachment_size_limit` (the only undocumented key left
+/// out is the deprecated `entitlement_sku_ids`).
+#[test]
+fn documented_interaction_fields_round_trip() {
+    let mut payload = interaction_with(3, r#"{"component_type":2,"custom_id":"click_me"}"#);
+    payload["message"] = parse("message", payloads::MESSAGE);
+    let mut channel = parse("channel", payloads::GUILD_TEXT_CHANNEL);
+    channel["permissions"] = json!("2251799813685247");
+    payload["channel"] = channel;
+    payload["guild"] = json!({
+        "id": "290926798626357999",
+        "locale": "en-US",
+        "features": ["COMMUNITY", "NEWS"]
+    });
+    payload["attachment_size_limit"] = json!(10_485_760);
+    payload["entitlement_sku_ids"] = json!([]);
+
+    let (interaction, written) = decode_every_way("component interaction", &payload);
+    let mut expected = payload.clone();
+    if let Some(object) = expected.as_object_mut() {
+        object.remove("entitlement_sku_ids");
+    }
+    compare("component interaction", "$", &written, &expected);
+    for key in [
+        "message",
+        "channel",
+        "guild",
+        "version",
+        "attachment_size_limit",
+    ] {
+        assert!(written.get(key).is_some(), "writes {key}");
+    }
+    assert!(written.get("entitlement_sku_ids").is_none());
+
+    let context = interaction.context();
+    assert_eq!(context.version, Some(1));
+    assert_eq!(context.attachment_size_limit, Some(10_485_760));
+    let guild = context
+        .guild
+        .as_deref()
+        .map(|guild| (guild.id.get(), guild.features.len()));
+    assert_eq!(guild, Some((290_926_798_626_357_999, 2)));
+    assert_eq!(
+        context
+            .channel
+            .as_deref()
+            .and_then(|channel| channel.name.as_deref()),
+        Some("general")
+    );
+    let message = context.message.as_deref().map(|message| message.kind);
+    assert_eq!(message, Some(Some(MessageType::DEFAULT)));
+}
