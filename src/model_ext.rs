@@ -42,25 +42,12 @@ use crate::http::RestClient;
 use crate::model::{
     Channel, ChannelId, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
     CreateGuildRole, CreateMessage, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member,
-    Message, MessageReference, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, RoleId, User,
-    UserId,
+    Message, MessageReference, MfaLevel, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role,
+    RoleId, User, UserId,
 };
 
 /// Discord CDN base used by the synchronous URL helpers.
 const CDN_BASE: &str = "https://cdn.discordapp.com";
-
-// Channel type constants (Discord `type` field). `ChannelType` in
-// `model::channel` does not include the thread variants, and `Channel.kind`
-// is a plain `u8`, so the classification helpers work on raw values.
-const CHANNEL_TEXT: u8 = 0;
-const CHANNEL_DM: u8 = 1;
-const CHANNEL_VOICE: u8 = 2;
-const CHANNEL_GROUP_DM: u8 = 3;
-const CHANNEL_NEWS: u8 = 5;
-const CHANNEL_ANNOUNCEMENT_THREAD: u8 = 10;
-const CHANNEL_PUBLIC_THREAD: u8 = 11;
-const CHANNEL_PRIVATE_THREAD: u8 = 12;
-const CHANNEL_STAGE_VOICE: u8 = 13;
 
 // ---------------------------------------------------------------------------
 // Pure request-body / URL builders (extracted so they are unit-testable).
@@ -468,7 +455,7 @@ impl Guild {
     pub async fn set_mfa_level(
         &self,
         http: &RestClient,
-        level: u64,
+        level: MfaLevel,
     ) -> Result<GuildMfaLevel, DiscordError> {
         http.modify_guild_mfa_level(self.id, level).await
     }
@@ -563,35 +550,28 @@ impl Channel {
         format!("<#{}>", self.id)
     }
 
-    /// Whether messages can be sent in this channel (matches discord.js's
-    /// `isTextBased()`: text, DM, group DM, announcement, threads, and
-    /// voice/stage channels with text-in-voice).
+    /// Whether this kind of channel carries a message timeline; shorthand
+    /// for [`ChannelType::is_text_based`](crate::ChannelType::is_text_based)
+    /// on [`Self::kind`] (discord.js `isTextBased()`).
+    ///
+    /// This classifies the channel type only. It does not mean the bot can
+    /// send here: permissions, archived or locked threads, timeouts, and
+    /// obfuscated channels can still forbid it (see
+    /// [`crate::permissions`]).
     pub fn is_text_based(&self) -> bool {
-        matches!(
-            self.kind,
-            CHANNEL_TEXT
-                | CHANNEL_DM
-                | CHANNEL_VOICE
-                | CHANNEL_GROUP_DM
-                | CHANNEL_NEWS
-                | CHANNEL_ANNOUNCEMENT_THREAD
-                | CHANNEL_PUBLIC_THREAD
-                | CHANNEL_PRIVATE_THREAD
-                | CHANNEL_STAGE_VOICE
-        )
+        self.kind.is_text_based()
     }
 
-    /// Whether this is a voice or stage channel.
+    /// Whether this is a voice or stage channel; shorthand for
+    /// [`ChannelType::is_voice_based`](crate::ChannelType::is_voice_based).
     pub fn is_voice_based(&self) -> bool {
-        matches!(self.kind, CHANNEL_VOICE | CHANNEL_STAGE_VOICE)
+        self.kind.is_voice_based()
     }
 
-    /// Whether this is an announcement, public, or private thread.
+    /// Whether this is an announcement, public, or private thread; shorthand
+    /// for [`ChannelType::is_thread`](crate::ChannelType::is_thread).
     pub fn is_thread(&self) -> bool {
-        matches!(
-            self.kind,
-            CHANNEL_ANNOUNCEMENT_THREAD | CHANNEL_PUBLIC_THREAD | CHANNEL_PRIVATE_THREAD
-        )
+        self.kind.is_thread()
     }
 }
 
@@ -921,9 +901,11 @@ mod tests {
 
     #[test]
     fn channel_mention_and_type_classification() {
+        // Wire numbers on purpose: the helpers must agree with Discord's
+        // documented type values, not just with the constants' names.
         let channel = |kind: u8| Channel {
             id: test_id(5),
-            kind,
+            kind: crate::ChannelType::new(kind),
             ..Channel::fixture()
         };
         assert_eq!(channel(0).mention(), "<#5>");

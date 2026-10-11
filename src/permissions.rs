@@ -67,8 +67,8 @@ use crate::bitfield::{permissions as flag, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, ChannelId, Guild, GuildId, Member, OverwriteTarget, PermissionOverwrite, Role, RoleId,
-    UserId,
+    Channel, ChannelId, ChannelType, Guild, GuildId, Member, OverwriteTarget, PermissionOverwrite,
+    Role, RoleId, UserId,
 };
 
 /// Permissions that cannot be set in channel overwrites (no T/V/S column in
@@ -104,9 +104,6 @@ const SEND_DEPENDENT: u64 = flag::MENTION_EVERYONE.bits()
     | flag::SEND_TTS_MESSAGES.bits()
     | flag::ATTACH_FILES.bits()
     | flag::EMBED_LINKS.bits();
-
-/// Discord channel type `GUILD_DIRECTORY`, which cannot contain threads.
-const GUILD_DIRECTORY: u8 = 14;
 
 /// Why a [`ComputedPermissions`] holds what it holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -251,15 +248,18 @@ pub enum ChannelClass {
 }
 
 impl ChannelClass {
-    /// Classifies a Discord channel `type`. Returns `None` for DM (1) and
-    /// group DM (3), which have no guild permissions.
-    pub fn from_channel_type(kind: u8) -> Option<Self> {
+    /// Classifies a Discord channel `type`. Returns `None` for `DM` and
+    /// `GROUP_DM`, which have no guild permissions.
+    pub fn from_channel_type(kind: ChannelType) -> Option<Self> {
         Some(match kind {
-            1 | 3 => return None,
-            0 | 5 | 15 | 16 => Self::Text,
-            2 | 13 => Self::Voice,
-            4 => Self::Category,
-            10..=12 => Self::Thread,
+            ChannelType::DM | ChannelType::GROUP_DM => return None,
+            ChannelType::GUILD_TEXT
+            | ChannelType::GUILD_ANNOUNCEMENT
+            | ChannelType::GUILD_FORUM
+            | ChannelType::GUILD_MEDIA => Self::Text,
+            _ if kind.is_voice_based() => Self::Voice,
+            ChannelType::GUILD_CATEGORY => Self::Category,
+            _ if kind.is_thread() => Self::Thread,
             _ => Self::Other,
         })
     }
@@ -571,7 +571,7 @@ fn validate_target(
     let impossible = matches!(
         parent_class,
         ChannelClass::Voice | ChannelClass::Category | ChannelClass::Thread
-    ) || parent.kind == GUILD_DIRECTORY;
+    ) || parent.kind == ChannelType::GUILD_DIRECTORY;
     if impossible {
         return Err(PermissionDataError::InvalidParentChannel {
             thread_id: channel.id,
@@ -689,7 +689,7 @@ pub enum PermissionDataError {
         /// The channel.
         channel_id: ChannelId,
         /// Its Discord channel type.
-        kind: u8,
+        kind: ChannelType,
     },
     /// The channel belongs to another guild.
     GuildMismatch {
@@ -717,7 +717,7 @@ pub enum PermissionDataError {
         /// The supplied parent.
         parent_id: ChannelId,
         /// The parent's Discord channel type.
-        kind: u8,
+        kind: ChannelType,
     },
     /// `communication_disabled_until` is not an ISO 8601 timestamp.
     InvalidTimestamp {
@@ -767,7 +767,7 @@ impl fmt::Display for PermissionDataError {
             Self::NotGuildChannel { channel_id, kind } => {
                 write!(
                     f,
-                    "channel {channel_id} (type {kind}) is not a guild channel"
+                    "channel {channel_id} (type {kind:?}) is not a guild channel"
                 )
             }
             Self::GuildMismatch {
@@ -792,7 +792,7 @@ impl fmt::Display for PermissionDataError {
                 kind,
             } => write!(
                 f,
-                "channel {parent_id} (type {kind}) cannot be the parent of thread {thread_id}"
+                "channel {parent_id} (type {kind:?}) cannot be the parent of thread {thread_id}"
             ),
             Self::InvalidTimestamp { value } => {
                 write!(

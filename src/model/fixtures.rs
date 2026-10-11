@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use super::{
-    Attachment, AutocompleteInteraction, Channel, ChatInputCommandInteraction,
+    Attachment, AutocompleteInteraction, Channel, ChannelType, ChatInputCommandInteraction,
     CommandInteractionData, ComponentInteraction, ComponentInteractionData, Entitlement, ForumTag,
     Guild, Id, IdMarker, Integration, InteractionContextData, InteractionResponseState, Message,
     MessageContextMenuInteraction, Role, SoundboardSound, StageInstance, Sticker, Subscription,
@@ -209,7 +209,7 @@ impl ComponentInteraction {
 fn every_fixture_builds() {
     assert_eq!(Message::fixture().id.get(), FIXTURE_ID);
     assert_eq!(User::fixture().username, "");
-    assert_eq!(Channel::fixture().kind, 0);
+    assert_eq!(Channel::fixture().kind, ChannelType::GUILD_TEXT);
     assert_eq!(Role::fixture().name, "");
     assert_eq!(Guild::fixture().name, "");
     assert_eq!(StageInstance::fixture().topic, "");

@@ -1,4 +1,4 @@
-use crate::model::test_id;
+use crate::model::{test_id, ChannelType};
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -1207,7 +1207,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
             channel: crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..crate::model::Channel::fixture()
             },
@@ -1374,7 +1374,7 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         .upsert_channel(crate::model::Channel {
             id: channel_id,
             guild_id: Some(guild_id),
-            kind: 0,
+            kind: ChannelType::GUILD_TEXT,
             name: Some("general".to_string()),
             ..crate::model::Channel::fixture()
         })
@@ -1807,7 +1807,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             channel: crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..crate::model::Channel::fixture()
             },
@@ -1817,7 +1817,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             channel: crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general-2".to_string()),
                 ..crate::model::Channel::fixture()
             },
@@ -1827,7 +1827,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             channel: crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 ..crate::model::Channel::fixture()
             },
             raw: json!({}),
@@ -2105,7 +2105,7 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
         .upsert_channel(crate::model::Channel {
             id: channel_id,
             guild_id: Some(guild_id),
-            kind: 0,
+            kind: ChannelType::GUILD_TEXT,
             name: Some("general".to_string()),
             ..crate::model::Channel::fixture()
         })
@@ -3156,7 +3156,7 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
     cache
         .upsert_channel(crate::model::Channel {
             id: channel_id,
-            kind: 5,
+            kind: ChannelType::GUILD_ANNOUNCEMENT,
             name: Some("announcements".to_string()),
             ..crate::model::Channel::fixture()
         })
@@ -3177,7 +3177,11 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
     super::apply_cache_updates(&cache, SINGLE_SHARD, &interaction).await;
 
     let channel = cache.channel(channel_id).await.expect("channel kept");
-    assert_eq!(channel.kind, 5, "stub must not overwrite the cached type");
+    assert_eq!(
+        channel.kind,
+        ChannelType::GUILD_ANNOUNCEMENT,
+        "stub must not overwrite the cached type"
+    );
     assert_eq!(channel.name.as_deref(), Some("announcements"));
 }
 
@@ -5946,7 +5950,10 @@ async fn dm_messages_are_tied_to_shard_zero_and_cleared_by_its_ready() {
     )
     .unwrap();
     super::apply_cache_updates(&cache, (0, 2), &dm).await;
-    assert_eq!(cache.channel(test_id(30)).await.unwrap().kind, 1);
+    assert_eq!(
+        cache.channel(test_id(30)).await.unwrap().kind,
+        ChannelType::DM
+    );
 
     super::apply_cache_updates(&cache, (1, 2), &ready_dispatch_event()).await;
     assert!(cache.message(test_id(30), test_id(31)).await.is_some());

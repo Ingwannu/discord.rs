@@ -163,12 +163,12 @@ impl RestClient {
     pub async fn modify_guild_mfa_level(
         &self,
         guild_id: GuildId,
-        level: u64,
+        level: crate::model::MfaLevel,
     ) -> Result<crate::model::GuildMfaLevel, DiscordError> {
         self.request_typed(
             Method::POST,
             &format!("/guilds/{}/mfa", guild_id),
-            Some(&crate::model::GuildMfaLevel { level }),
+            Some(&crate::model::GuildMfaLevel::new(level)),
         )
         .await
     }

@@ -6,7 +6,7 @@ use crate::types::Emoji;
 
 use super::{
     is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, Channel, ChannelId,
-    CreatePoll, Embed, GuildId, InteractionId, Member, MessageComponent, MessageId,
+    ChannelType, CreatePoll, Embed, GuildId, InteractionId, Member, MessageComponent, MessageId,
     MessageReferenceType, PartialApplication, Poll, ResolvedData, RoleId,
     RoleSubscriptionListingId, Sticker, StickerId, StickerItem, ThreadMember, User, UserId,
     WebhookId,
@@ -308,7 +308,7 @@ pub struct ChannelMention {
     pub id: ChannelId,
     pub guild_id: GuildId,
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: ChannelType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

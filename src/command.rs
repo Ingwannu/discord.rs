@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
-    ApplicationCommandOptionChoice, ApplicationIntegrationType, InteractionContextType,
-    PermissionsBitField,
+    ApplicationCommandOptionChoice, ApplicationIntegrationType, ChannelType,
+    InteractionContextType, PermissionsBitField,
 };
 
 /// Discord's documented application-command limits, used by the builders'
@@ -905,11 +905,11 @@ impl CommandOptionBuilder {
         self
     }
 
-    /// Restricts a `CHANNEL` option to these channel types (raw values, for
-    /// example `0` for guild text and `2` for guild voice).
+    /// Restricts a `CHANNEL` option to these channel types, for example
+    /// `[ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE]`.
     pub fn channel_types<I>(mut self, channel_types: I) -> Self
     where
-        I: IntoIterator<Item = u8>,
+        I: IntoIterator<Item = ChannelType>,
     {
         self.inner.channel_types = Some(channel_types.into_iter().collect());
         self
@@ -1321,7 +1321,7 @@ mod tests {
         UserCommandBuilder,
     };
     use crate::model::{
-        ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType,
+        ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType, ChannelType,
         InteractionContextType, PermissionsBitField,
     };
 
@@ -2395,14 +2395,15 @@ mod tests {
 
     #[test]
     fn channel_types_are_only_accepted_on_channel_options() {
-        let option = CommandOptionBuilder::channel("where", "Target channel").channel_types([0, 2]);
+        let option = CommandOptionBuilder::channel("where", "Target channel")
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE]);
         option.clone().validate().expect("CHANNEL option");
         let value = serde_json::to_value(option.build()).expect("json");
         assert_eq!(value["channel_types"], json!([0, 2]));
 
         expect_model_error(
             CommandOptionBuilder::string("where", "desc")
-                .channel_types([0])
+                .channel_types([ChannelType::GUILD_TEXT])
                 .try_build(),
             "option \"where\" sets channel_types, which only CHANNEL options accept",
         );

@@ -1519,7 +1519,7 @@ pub use managers::{
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
-    use crate::model::test_id;
+    use crate::model::{test_id, ChannelType};
     use crate::model::{ChannelId, GuildId, MessageId, UserId};
     use std::sync::Arc;
     use std::time::Duration;
@@ -1772,7 +1772,7 @@ mod tests {
         cache
             .upsert_channel(Channel {
                 id: dm_channel,
-                kind: 1,
+                kind: ChannelType::DM,
                 ..Channel::fixture()
             })
             .await;
@@ -2036,7 +2036,7 @@ mod tests {
             .upsert_channel(Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..Channel::fixture()
             })
@@ -2045,7 +2045,7 @@ mod tests {
             .upsert_channel(Channel {
                 id: other_channel_id,
                 guild_id: Some(other_guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("other-general".to_string()),
                 ..Channel::fixture()
             })
@@ -2053,7 +2053,7 @@ mod tests {
         cache
             .upsert_channel(Channel {
                 id: dm_channel_id,
-                kind: 1,
+                kind: ChannelType::DM,
                 name: Some("dm".to_string()),
                 ..Channel::fixture()
             })
@@ -2249,7 +2249,7 @@ mod tests {
             .upsert_channel(Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..Channel::fixture()
             })
@@ -3098,7 +3098,7 @@ mod tests {
                 .upsert_channel(Channel {
                     id: test_id(id),
                     guild_id: Some(guild_id),
-                    kind: 0,
+                    kind: ChannelType::GUILD_TEXT,
                     ..Channel::fixture()
                 })
                 .await;
@@ -3299,7 +3299,7 @@ mod tests {
         cache
             .upsert_channel(Channel {
                 id: channel_id,
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("general".to_string()),
                 ..Channel::fixture()
             })
@@ -3307,7 +3307,7 @@ mod tests {
         cache
             .upsert_channel(Channel {
                 id: other_channel_id,
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("random".to_string()),
                 ..Channel::fixture()
             })
@@ -3378,7 +3378,7 @@ mod tests {
                 .upsert_channel(Channel {
                     id,
                     guild_id: guild,
-                    kind: 0,
+                    kind: ChannelType::GUILD_TEXT,
                     name: Some(name.to_string()),
                     ..Channel::fixture()
                 })
@@ -3486,7 +3486,7 @@ mod tests {
         let channel = Channel {
             id: channel_id,
             guild_id: Some(guild_id),
-            kind: 0,
+            kind: ChannelType::GUILD_TEXT,
             name: Some("general".to_string()),
             ..Channel::fixture()
         };
@@ -3637,7 +3637,7 @@ mod tests {
             .upsert_channel(Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
-                kind: 0,
+                kind: ChannelType::GUILD_TEXT,
                 name: Some("cached-channel".to_string()),
                 ..Channel::fixture()
             })

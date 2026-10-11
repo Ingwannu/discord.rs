@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::{
-    ApplicationCommandHandlerType, ApplicationId, ApplicationIntegrationType, ChannelId, CommandId,
-    CommandPermissionType, CommandVersionId, GenericId, GuildId, InteractionContextType, InvalidId,
-    PermissionsBitField, RoleId, UserId,
+    ApplicationCommandHandlerType, ApplicationId, ApplicationIntegrationType, ChannelId,
+    ChannelType, CommandId, CommandPermissionType, CommandVersionId, GenericId, GuildId,
+    InteractionContextType, InvalidId, PermissionsBitField, RoleId, UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -79,9 +79,9 @@ pub struct ApplicationCommandOption {
     /// (max 10). Discord checks only the file name, not the contents.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_types: Option<Vec<String>>,
-    /// Channel types a `CHANNEL` option offers (raw channel type values).
+    /// Channel types a `CHANNEL` option offers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel_types: Option<Vec<u8>>,
+    pub channel_types: Option<Vec<ChannelType>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

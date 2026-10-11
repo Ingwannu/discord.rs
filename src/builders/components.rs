@@ -4,7 +4,9 @@ use serde_json::Value;
 use crate::command::validation;
 use crate::constants::{button_style, component_type};
 use crate::error::DiscordError;
-use crate::model::{ChannelId, ComponentId, MentionableId, RoleId, SelectDefaultValue, UserId};
+use crate::model::{
+    ChannelId, ChannelType, ComponentId, MentionableId, RoleId, SelectDefaultValue, UserId,
+};
 use crate::types::{to_json_value, Emoji, SelectOption};
 
 use super::container::{ContainerBuilder, SeparatorBuilder, TextDisplayBuilder};
@@ -266,7 +268,7 @@ pub struct SelectMenuBuilder {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     default_values: Vec<SelectDefaultValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    channel_types: Option<Vec<u8>>,
+    channel_types: Option<Vec<ChannelType>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -412,8 +414,9 @@ impl SelectMenuBuilder {
         self.default_value(SelectDefaultValue::from(id))
     }
 
-    pub fn channel_types(mut self, channel_types: Vec<u8>) -> Self {
-        self.channel_types = Some(channel_types);
+    /// Restricts a channel select to these channel types.
+    pub fn channel_types(mut self, channel_types: impl IntoIterator<Item = ChannelType>) -> Self {
+        self.channel_types = Some(channel_types.into_iter().collect());
         self
     }
 
@@ -642,7 +645,7 @@ mod tests {
     };
     use crate::constants::{button_style, component_type, text_input_style};
     use crate::model::test_id;
-    use crate::model::ComponentId;
+    use crate::model::{ChannelType, ComponentId};
     use crate::types::{Emoji, MediaGalleryItem, SelectOption};
     use serde_json::json;
 
@@ -705,10 +708,13 @@ mod tests {
 
         let select = SelectMenuBuilder::channel("channels")
             .add_option(SelectOption::new("Ignored", "ignored"))
-            .channel_types(vec![0, 2])
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
             .build_typed();
         assert!(select.options.is_empty());
-        assert_eq!(select.channel_types, Some(vec![0, 2]));
+        assert_eq!(
+            select.channel_types,
+            Some(vec![ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
+        );
 
         let row = ActionRowBuilder::new()
             .add_component(json!({ "type": 99 }))
@@ -722,7 +728,7 @@ mod tests {
     fn string_select_omits_channel_types() {
         let payload = SelectMenuBuilder::string("menu")
             .add_option(SelectOption::new("One", "one"))
-            .channel_types(vec![0, 2])
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
             .build();
 
         assert_eq!(
@@ -737,7 +743,7 @@ mod tests {
     fn channel_select_omits_options() {
         let payload = SelectMenuBuilder::channel("menu")
             .add_option(SelectOption::new("One", "one"))
-            .channel_types(vec![0, 2])
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
             .build();
 
         assert_eq!(
@@ -758,7 +764,7 @@ mod tests {
     fn non_string_non_channel_select_omits_variant_specific_fields() {
         let payload = SelectMenuBuilder::role("menu")
             .add_option(SelectOption::new("One", "one"))
-            .channel_types(vec![0, 2])
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
             .build();
 
         assert_eq!(
@@ -927,7 +933,7 @@ mod tests {
         let payload = SelectMenuBuilder::mentionable("menu")
             .placeholder("Pick a target")
             .add_option(SelectOption::new("One", "one"))
-            .channel_types(vec![0, 2])
+            .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
             .default_user(test_id(42))
             .default_role(test_id(43))
             .required(false)

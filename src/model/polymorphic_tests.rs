@@ -135,7 +135,7 @@ fn overwrite_target_conversions_and_wire_parts_agree() {
     );
     assert_eq!(
         super::EditChannelPermission::for_target(member).kind,
-        OverwriteType::MEMBER.get()
+        OverwriteType::MEMBER
     );
 }
 

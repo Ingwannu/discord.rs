@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use crate::types::Emoji;
 
 use super::{
-    ApplicationId, Channel, ChannelId, GuildId, Member, PermissionsBitField, Presence, Role,
-    SoundboardSound, StageInstance, Sticker, UserId, VoiceState,
+    ApplicationId, Channel, ChannelId, ChannelType, DefaultMessageNotificationLevel,
+    ExplicitContentFilterLevel, GuildId, GuildNsfwLevel, Member, MfaLevel, OverwriteType,
+    PermissionsBitField, PremiumTier, Presence, Role, SoundboardSound, StageInstance, Sticker,
+    UserId, VerificationLevel, VoiceState,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -23,11 +25,11 @@ pub struct CreateGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification_level: Option<u64>,
+    pub verification_level: Option<VerificationLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_message_notifications: Option<u64>,
+    pub default_message_notifications: Option<DefaultMessageNotificationLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub explicit_content_filter: Option<u64>,
+    pub explicit_content_filter: Option<ExplicitContentFilterLevel>,
     /// Roles to create; the first entry edits `@everyone`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roles: Option<Vec<CreateGuildPlaceholderRole>>,
@@ -98,7 +100,7 @@ pub struct CreateGuildPlaceholderChannel {
     pub id: Option<CreateGuildPlaceholderId>,
     pub name: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<ChannelType>,
     /// Placeholder of a category channel listed earlier.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<CreateGuildPlaceholderId>,
@@ -112,8 +114,10 @@ pub struct CreateGuildPlaceholderChannel {
 pub struct CreateGuildPlaceholderOverwrite {
     /// Placeholder of a role in [`CreateGuild::roles`].
     pub id: CreateGuildPlaceholderId,
+    /// Always [`OverwriteType::ROLE`] in practice: the legacy route only
+    /// lets overwrites point at role placeholders.
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: OverwriteType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow: Option<PermissionsBitField>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,9 +134,18 @@ pub struct CreateGuildFromTemplate {
 }
 
 /// Request body and response shape for `POST /guilds/{id}/mfa`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+///
+/// No `Default`: `level` is required and has no protocol default.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GuildMfaLevel {
-    pub level: u64,
+    pub level: MfaLevel,
+}
+
+impl GuildMfaLevel {
+    /// A body that sets the guild's moderation MFA requirement to `level`.
+    pub const fn new(level: MfaLevel) -> Self {
+        Self { level }
+    }
 }
 
 /// Request body for modifying a guild.
@@ -147,11 +160,11 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification_level: Option<Option<u64>>,
+    pub verification_level: Option<Option<VerificationLevel>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_message_notifications: Option<Option<u64>>,
+    pub default_message_notifications: Option<Option<DefaultMessageNotificationLevel>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub explicit_content_filter: Option<Option<u64>>,
+    pub explicit_content_filter: Option<Option<ExplicitContentFilterLevel>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_channel_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,7 +219,7 @@ pub struct Guild {
     #[serde(default)]
     pub features: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub premium_tier: Option<u8>,
+    pub premium_tier: Option<PremiumTier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,13 +239,13 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub verification_level: Option<u64>,
+    pub verification_level: Option<VerificationLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_message_notifications: Option<u64>,
+    pub default_message_notifications: Option<DefaultMessageNotificationLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub explicit_content_filter: Option<u64>,
+    pub explicit_content_filter: Option<ExplicitContentFilterLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mfa_level: Option<u64>,
+    pub mfa_level: Option<MfaLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,7 +253,7 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_updates_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nsfw_level: Option<u64>,
+    pub nsfw_level: Option<GuildNsfwLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_subscription_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

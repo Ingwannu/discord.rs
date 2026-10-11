@@ -201,10 +201,10 @@ impl RestClient {
         target: OverwriteTarget,
         body: &EditChannelPermission,
     ) -> Result<(), DiscordError> {
-        if body.kind != target.kind().get() {
+        if body.kind != target.kind() {
             return Err(DiscordError::model(format!(
                 "EditChannelPermission.kind {} does not match the overwrite target type {}",
-                body.kind,
+                body.kind.get(),
                 target.kind().get()
             )));
         }

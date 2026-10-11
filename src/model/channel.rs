@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationId, AttachmentId, ChannelId, EmojiId, ForumTagId, GenericId, GuildId, MessageId,
-    OverwriteType, PermissionsBitField, RoleId, ThreadMetadata, UserId, WebhookId,
+    ApplicationId, AttachmentId, ChannelId, ChannelType, EmojiId, ForumLayout, ForumSortOrder,
+    ForumTagId, GenericId, GuildId, MessageId, OverwriteType, PermissionsBitField, RoleId,
+    ThreadMetadata, UserId, VideoQualityMode, WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,9 +80,9 @@ pub enum OverwriteTarget {
 impl OverwriteTarget {
     /// Interprets a wire `id` according to the overwrite `type`.
     pub const fn from_wire(kind: OverwriteType, id: GenericId) -> Self {
-        match kind.get() {
-            0 => Self::Role(id.cast()),
-            1 => Self::Member(id.cast()),
+        match kind {
+            OverwriteType::ROLE => Self::Role(id.cast()),
+            OverwriteType::MEMBER => Self::Member(id.cast()),
             _ => Self::Unknown { kind, id },
         }
     }
@@ -198,7 +199,7 @@ impl From<PermissionOverwrite> for PermissionOverwriteWire {
 pub struct CreateGuildChannel {
     pub name: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<ChannelType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -218,7 +219,7 @@ pub struct CreateGuildChannel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtc_region: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_quality_mode: Option<Option<u64>>,
+    pub video_quality_mode: Option<Option<VideoQualityMode>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_auto_archive_duration: Option<Option<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,22 +227,23 @@ pub struct CreateGuildChannel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_tags: Option<Option<Vec<ForumTag>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_sort_order: Option<Option<u64>>,
+    pub default_sort_order: Option<Option<ForumSortOrder>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_forum_layout: Option<Option<u64>>,
+    pub default_forum_layout: Option<Option<ForumLayout>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_thread_rate_limit_per_user: Option<Option<u64>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `EditChannelPermission`.
 ///
 /// `kind` must match the [`OverwriteTarget`] passed to
 /// [`RestClient::edit_channel_permissions_typed`](crate::http::RestClient::edit_channel_permissions_typed);
-/// [`EditChannelPermission::for_target`] fills it in.
+/// [`EditChannelPermission::for_target`] fills it in. No `Default`: `type`
+/// is required and 2.x's default (`0`, a role overwrite) was a guess.
 pub struct EditChannelPermission {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: OverwriteType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow: Option<PermissionsBitField>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,7 +254,7 @@ impl EditChannelPermission {
     /// A body whose `type` matches `target`, allowing and denying nothing yet.
     pub const fn for_target(target: OverwriteTarget) -> Self {
         Self {
-            kind: target.kind().get(),
+            kind: target.kind(),
             allow: None,
             deny: None,
         }
@@ -266,7 +268,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: ChannelType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -296,7 +298,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rtc_region: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_quality_mode: Option<u64>,
+    pub video_quality_mode: Option<VideoQualityMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_auto_archive_duration: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -320,9 +322,9 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_thread_rate_limit_per_user: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_sort_order: Option<u64>,
+    pub default_sort_order: Option<ForumSortOrder>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_forum_layout: Option<u64>,
+    pub default_forum_layout: Option<ForumLayout>,
 }
 
 impl Channel {
@@ -336,7 +338,7 @@ impl Channel {
     /// than a `..` fill, makes a newly added field a compile error until its
     /// stub value is chosen.
     #[cfg(feature = "gateway")]
-    pub(crate) fn stub(id: ChannelId, guild_id: Option<GuildId>, kind: u8) -> Self {
+    pub(crate) fn stub(id: ChannelId, guild_id: Option<GuildId>, kind: ChannelType) -> Self {
         Self {
             id,
             guild_id,

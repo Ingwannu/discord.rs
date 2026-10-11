@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::types::Emoji;
 
-use super::{AttachmentId, ChannelId, ComponentId, GenericId, RoleId, SkuId, UserId};
+use super::{AttachmentId, ChannelId, ChannelType, ComponentId, GenericId, RoleId, SkuId, UserId};
 
 /// A single component attached to a received message, modal, or snapshot.
 ///
@@ -60,7 +60,7 @@ pub struct MessageComponent {
     pub options: Vec<MessageSelectOption>,
     /// Channel types a channel select menu is limited to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub channel_types: Vec<u8>,
+    pub channel_types: Vec<ChannelType>,
     /// Placeholder text for selects and text inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,

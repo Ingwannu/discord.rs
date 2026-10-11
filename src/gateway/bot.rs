@@ -2695,7 +2695,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                     .upsert_channel_if_absent(crate::model::Channel::stub(
                         event.message.channel_id,
                         None,
-                        1,
+                        crate::model::ChannelType::DM,
                     ))
                     .await;
             }
@@ -2737,7 +2737,9 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                         .upsert_channel_if_absent(crate::model::Channel::stub(
                             channel_id,
                             component.context.guild_id,
-                            0,
+                            // The interaction does not say which kind of
+                            // channel; this placeholder is what 2.x stored.
+                            crate::model::ChannelType::GUILD_TEXT,
                         ))
                         .await;
                 }

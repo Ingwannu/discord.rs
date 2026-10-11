@@ -10,7 +10,7 @@ use crate::bitfield::{permissions as p, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Guild, GuildId, Id, IdMarker, Member, OverwriteTarget, OverwriteType,
+    Channel, ChannelType, Guild, GuildId, Id, IdMarker, Member, OverwriteTarget, OverwriteType,
     PermissionOverwrite, PermissionsBitField, Role, RoleId, User, UserId,
 };
 
@@ -21,10 +21,10 @@ const OTHER_MEMBER: u64 = 3;
 const ROLE_A: u64 = 300;
 const ROLE_B: u64 = 301;
 const ROLE_C: u64 = 302;
-const TEXT: u8 = 0;
-const VOICE: u8 = 2;
-const CATEGORY: u8 = 4;
-const PUBLIC_THREAD: u8 = 11;
+const TEXT: ChannelType = ChannelType::GUILD_TEXT;
+const VOICE: ChannelType = ChannelType::GUILD_VOICE;
+const CATEGORY: ChannelType = ChannelType::GUILD_CATEGORY;
+const PUBLIC_THREAD: ChannelType = ChannelType::PUBLIC_THREAD;
 
 fn sf<M: IdMarker>(id: u64) -> Id<M> {
     test_id(id)
@@ -35,16 +35,21 @@ fn bits(permissions: Permissions) -> u64 {
 }
 
 fn role_overwrite(id: u64, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
-    overwrite(id, 0, allow, deny)
+    overwrite(id, OverwriteType::ROLE, allow, deny)
 }
 
 fn member_overwrite(id: u64, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
-    overwrite(id, 1, allow, deny)
+    overwrite(id, OverwriteType::MEMBER, allow, deny)
 }
 
-fn overwrite(id: u64, kind: u8, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
+fn overwrite(
+    id: u64,
+    kind: OverwriteType,
+    allow: Permissions,
+    deny: Permissions,
+) -> PermissionOverwrite {
     PermissionOverwrite {
-        target: OverwriteTarget::from_wire(OverwriteType::new(kind), sf(id)),
+        target: OverwriteTarget::from_wire(kind, sf(id)),
         allow: Some(PermissionsBitField(allow.bits())),
         deny: Some(PermissionsBitField(deny.bits())),
     }
@@ -283,7 +288,12 @@ fn overwrite_kind_must_match_target() {
 #[test]
 fn unknown_overwrite_kinds_are_ignored() {
     let fx = Fixture::new();
-    let overwrites = [overwrite(MEMBER, 7, none(), p::VIEW_CHANNEL)];
+    let overwrites = [overwrite(
+        MEMBER,
+        OverwriteType::new(7),
+        none(),
+        p::VIEW_CHANNEL,
+    )];
     let computed = known(fx.input(base_everyone()).in_channel(&text(&overwrites)));
     assert!(computed.has(p::VIEW_CHANNEL));
 }
@@ -608,9 +618,11 @@ fn channel_types_are_classified() {
         (16, Some(ChannelClass::Text)),
         (99, Some(ChannelClass::Other)),
     ];
+    // Wire numbers on purpose: the classification must follow Discord's
+    // documented values, including ones this crate has no name for.
     for (kind, expected) in cases {
         assert_eq!(
-            ChannelClass::from_channel_type(kind),
+            ChannelClass::from_channel_type(ChannelType::new(kind)),
             expected,
             "type {kind}"
         );
@@ -660,7 +672,7 @@ fn member_model() -> Member {
     }
 }
 
-fn channel_model(id: u64, kind: u8, overwrites: Vec<PermissionOverwrite>) -> Channel {
+fn channel_model(id: u64, kind: ChannelType, overwrites: Vec<PermissionOverwrite>) -> Channel {
     Channel {
         id: sf(id),
         guild_id: Some(sf(GUILD)),
@@ -798,12 +810,12 @@ fn owner_model_gets_everything() {
 #[test]
 fn from_channel_rejects_dms_and_foreign_channels() {
     let guild = sf(GUILD);
-    let dm = channel_model(500, 1, vec![]);
+    let dm = channel_model(500, ChannelType::DM, vec![]);
     assert_eq!(
         ChannelPermissionInput::from_channel(guild, &dm, None).unwrap_err(),
         PermissionDataError::NotGuildChannel {
             channel_id: sf(500),
-            kind: 1
+            kind: ChannelType::DM
         }
     );
 
@@ -895,7 +907,7 @@ fn from_channel_validates_thread_parents() {
         }
     );
 
-    let dm_parent = channel_model(500, 1, vec![]);
+    let dm_parent = channel_model(500, ChannelType::DM, vec![]);
     assert!(matches!(
         ChannelPermissionInput::from_channel(guild, &thread, Some(&dm_parent)),
         Err(PermissionDataError::NotGuildChannel { .. })
@@ -1069,9 +1081,9 @@ fn errors_render_the_missing_object() {
         (
             PermissionDataError::NotGuildChannel {
                 channel_id: sf(5),
-                kind: 1,
+                kind: ChannelType::DM,
             },
-            "channel 5 (type 1) is not a guild channel",
+            "channel 5 (type DM) is not a guild channel",
         ),
         (
             PermissionDataError::GuildMismatch {
@@ -1093,9 +1105,9 @@ fn errors_render_the_missing_object() {
             PermissionDataError::InvalidParentChannel {
                 thread_id: sf(6),
                 parent_id: sf(5),
-                kind: 11,
+                kind: ChannelType::PUBLIC_THREAD,
             },
-            "channel 5 (type 11) cannot be the parent of thread 6",
+            "channel 5 (type PUBLIC_THREAD) cannot be the parent of thread 6",
         ),
         (
             PermissionDataError::InvalidTimestamp {
@@ -1476,7 +1488,7 @@ fn owner_still_gets_contradiction_errors() {
         Err(PermissionDataError::GuildMismatch { .. })
     ));
 
-    let dm = channel_model(501, 1, vec![]);
+    let dm = channel_model(501, ChannelType::DM, vec![]);
     assert!(matches!(
         permissions_for(&guild_model(), &member, &dm, None, now()),
         Err(PermissionDataError::NotGuildChannel { .. })
@@ -1553,7 +1565,12 @@ fn without_admin_the_first_missing_piece_is_reported() {
 fn thread_parents_must_be_able_to_hold_threads() {
     let guild = sf(GUILD);
     let thread = thread_model(600, 500);
-    for kind in [VOICE, 13, CATEGORY, 14] {
+    for kind in [
+        VOICE,
+        ChannelType::GUILD_STAGE_VOICE,
+        CATEGORY,
+        ChannelType::GUILD_DIRECTORY,
+    ] {
         let parent = channel_model(500, kind, vec![]);
         assert_eq!(
             ChannelPermissionInput::from_channel(guild, &thread, Some(&parent)).unwrap_err(),
@@ -1562,15 +1579,21 @@ fn thread_parents_must_be_able_to_hold_threads() {
                 parent_id: sf(500),
                 kind
             },
-            "parent type {kind}"
+            "parent type {kind:?}"
         );
     }
     // Text, announcement, forum, media, and types this crate does not know.
-    for kind in [TEXT, 5, 15, 16, 99] {
+    for kind in [
+        TEXT,
+        ChannelType::GUILD_ANNOUNCEMENT,
+        ChannelType::GUILD_FORUM,
+        ChannelType::GUILD_MEDIA,
+        ChannelType::new(99),
+    ] {
         let parent = channel_model(500, kind, vec![]);
         assert!(
             ChannelPermissionInput::from_channel(guild, &thread, Some(&parent)).is_ok(),
-            "parent type {kind}"
+            "parent type {kind:?}"
         );
     }
 }

@@ -1,4 +1,4 @@
-use crate::model::test_id;
+use crate::model::{test_id, ChannelType};
 use serde_json::{json, Value};
 
 use super::*;
@@ -37,7 +37,7 @@ fn guild(id: &str, name: &str) -> Guild {
 fn channel(id: &str) -> Channel {
     Channel {
         id: snowflake(id),
-        kind: 0,
+        kind: ChannelType::GUILD_TEXT,
         ..Channel::fixture()
     }
 }
@@ -875,7 +875,7 @@ fn decode_event_covers_remaining_success_variants() {
     {
         Event::ChannelUpdate(event) => {
             assert_eq!(event.channel.id, snowflake("53"));
-            assert_eq!(event.channel.kind, 0);
+            assert_eq!(event.channel.kind, ChannelType::GUILD_TEXT);
         }
         other => panic!("unexpected channel update event: {other:?}"),
     }
@@ -891,7 +891,7 @@ fn decode_event_covers_remaining_success_variants() {
     {
         Event::ChannelDelete(event) => {
             assert_eq!(event.channel.id, snowflake("54"));
-            assert_eq!(event.channel.kind, 0);
+            assert_eq!(event.channel.kind, ChannelType::GUILD_TEXT);
         }
         other => panic!("unexpected channel delete event: {other:?}"),
     }

@@ -18,11 +18,11 @@ use super::{
     ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
     ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
     ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite,
-    PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId,
-    PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors,
-    SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse, ThreadMember,
-    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteType,
+    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
+    PollAnswerId, PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData, Role,
+    RoleColors, SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse,
+    ThreadMember, ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
@@ -147,7 +147,7 @@ fn permissions_bitfield_helpers_cover_mutation_and_invalid_wire_values() {
 fn channel_and_create_message_keep_wire_aliases_and_omit_absent_optionals() {
     let channel = Channel {
         id: test_id(10),
-        kind: 5,
+        kind: ChannelType::GUILD_ANNOUNCEMENT,
         name: Some("announcements".to_string()),
         ..Channel::fixture()
     };
@@ -204,7 +204,7 @@ fn forum_channel_fields_decode_tags_and_default_reaction() {
 
     let serialized = serde_json::to_value(Channel {
         id: test_id(20),
-        kind: 15,
+        kind: ChannelType::GUILD_FORUM,
         available_tags: Some(vec![ForumTag {
             id: test_id(21),
             name: "News".to_string(),
@@ -531,7 +531,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
 
     let channel = CreateGuildChannel {
         name: "rules".to_string(),
-        kind: Some(ChannelType::GUILD_TEXT.get()),
+        kind: Some(ChannelType::GUILD_TEXT),
         topic: Some(Some("read first".to_string())),
         permission_overwrites: Some(Some(vec![PermissionOverwrite {
             target: super::OverwriteTarget::Role(test_id(300)),
@@ -1005,7 +1005,7 @@ fn discord_model_trait_returns_ids_for_core_models() {
     };
     let channel = Channel {
         id: test_id(12),
-        kind: 0,
+        kind: ChannelType::GUILD_TEXT,
         ..Channel::fixture()
     };
     let message = Message {
@@ -1608,7 +1608,10 @@ fn message_components_v2_tree_decodes_typed() {
 
     let channel_select = &container.components[6].components[0];
     assert_eq!(channel_select.kind, MessageComponent::CHANNEL_SELECT);
-    assert_eq!(channel_select.channel_types, vec![0, 5]);
+    assert_eq!(
+        channel_select.channel_types,
+        vec![ChannelType::GUILD_TEXT, ChannelType::GUILD_ANNOUNCEMENT]
+    );
     assert_eq!(
         channel_select.default_values[0],
         super::SelectDefaultValue::Channel(test_id(42))
@@ -1716,7 +1719,7 @@ fn resolved_data_decodes_all_six_maps_with_lookups() {
     );
     assert_eq!(resolved.role(test_id(77)).unwrap().name, "Admins");
     let channel = resolved.channel(test_id(88)).unwrap();
-    assert_eq!(channel.kind, 11);
+    assert_eq!(channel.kind, ChannelType::PUBLIC_THREAD);
     assert_eq!(channel.name.as_deref(), Some("release-thread"));
     assert_eq!(resolved.message(test_id(99)).unwrap().content, "hello");
     assert_eq!(
@@ -1967,7 +1970,7 @@ fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
             CreateGuildPlaceholderChannel {
                 id: Some(category),
                 name: "general".to_string(),
-                kind: Some(4),
+                kind: Some(ChannelType::GUILD_CATEGORY),
                 ..CreateGuildPlaceholderChannel::default()
             },
             CreateGuildPlaceholderChannel {
@@ -1976,7 +1979,7 @@ fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
                 parent_id: Some(category),
                 permission_overwrites: Some(vec![CreateGuildPlaceholderOverwrite {
                     id: everyone,
-                    kind: 0,
+                    kind: OverwriteType::ROLE,
                     allow: None,
                     deny: None,
                 }]),

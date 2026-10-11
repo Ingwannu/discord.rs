@@ -1,4 +1,4 @@
-use crate::model::test_id;
+use crate::model::{test_id, ChannelType, MfaLevel, OverwriteType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -3536,7 +3536,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
             test_id(100),
             OverwriteTarget::Member(test_id(201)),
             &EditChannelPermission {
-                kind: 1,
+                kind: OverwriteType::MEMBER,
                 allow: Some(PermissionsBitField(8)),
                 deny: None,
             },
@@ -3971,7 +3971,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
             test_id(100),
             OverwriteTarget::Role(test_id(300)),
             &EditChannelPermission {
-                kind: 0,
+                kind: OverwriteType::ROLE,
                 allow: Some(PermissionsBitField(1024)),
                 deny: Some(PermissionsBitField(2048)),
             },
@@ -6210,7 +6210,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
             test_id(200),
             &CreateGuildChannel {
                 name: "rules".to_string(),
-                kind: Some(0),
+                kind: Some(ChannelType::GUILD_TEXT),
                 topic: Some(Some("read first".to_string())),
                 parent_id: Some(None),
                 default_reaction_emoji: Some(None),
@@ -7515,10 +7515,10 @@ async fn new_guild_lifecycle_routes_have_expected_shapes() {
         .await
         .expect("create guild from template");
     let mfa = client
-        .modify_guild_mfa_level(test_id(2), 1)
+        .modify_guild_mfa_level(test_id(2), MfaLevel::ELEVATED)
         .await
         .expect("modify mfa");
-    assert_eq!(mfa.level, 1);
+    assert_eq!(mfa.level, MfaLevel::ELEVATED);
     task.await.expect("server task");
 
     let requests = captured.lock().expect("captured");
