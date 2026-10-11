@@ -20,14 +20,22 @@ HTTP `/interactions` 콜백 처리 모드입니다.
 2. 서명 헤더와 본문 검증
 3. 인터랙션 타입·컨텍스트로 파싱
 4. 핸들러 실행
-5. 반환된 최초 응답을 인터랙션의 공유 응답 상태에 기록(타입드 엔드포인트)
-6. 인터랙션 응답 JSON 반환
+5. 최초 응답을 어느 전송 경로가 소유할지 결정(타입드 엔드포인트)
+6. 인터랙션 응답 JSON을 `200`으로 반환하거나, 응답을 REST로 보내는 경우 본문 없는 `202` 반환
 
 ## 응답 상태 (3.0)
 
-타입드 엔드포인트(`try_typed_interactions_endpoint`, `typed_interactions_endpoint`)는 핸들러에 하나의 `InteractionResponseState`를 공유하는 컨텍스트와 인터랙션을 넘깁니다([HTTP 및 헬퍼](./http-and-helpers.md) 문서의 "공유 응답 상태" 참고). 핸들러가 최초 응답(`Pong`이나 `type`이 1인 `Raw` 페이로드를 제외한 모든 응답)을 반환하면 엔드포인트가 Discord에 답하기 전에 이를 기록합니다. 지연 응답 타입(5, 6)은 `Deferred`, 나머지는 `Replied`가 됩니다.
+타입드 엔드포인트(`try_typed_interactions_endpoint`, `typed_interactions_endpoint`)는 핸들러에 하나의 `InteractionResponseState`를 공유하는 컨텍스트와 인터랙션을 넘깁니다([HTTP 및 헬퍼](./http-and-helpers.md) 문서의 "공유 응답 상태" 참고). 최초 응답은 정확히 하나의 전송 경로만 소유하며, 인라인 응답과 REST 콜백은 같은 슬롯을 원자적으로 선점합니다.
 
-따라서 spawn한 작업이 보관한 복제본도 인터랙션이 확인(acknowledged)된 것으로 보고 REST로 나머지 작업을 마칠 수 있습니다.
+| 핸들러 동작 | 엔드포인트 응답 | 공유 상태 |
+|---|---|---|
+| 최초 응답을 반환했고 REST 응답은 보내지 않음 | 그 응답을 `200`으로 반환 | `Deferred`(타입 5, 6) 또는 `Replied` |
+| 최초 응답을 REST로 보냈거나 보내는 중 | 본문 없는 `202 Accepted`. 반환한 응답은 경고와 함께 버림 | REST 응답의 결과에 따름 |
+| `InteractionResponse::Accepted` 반환 | 본문 없는 `202 Accepted` | 변화 없음. 나중에 보내는 REST 응답(예: spawn한 작업)이 소유 |
+
+Discord는 HTTP로 받은 인터랙션의 응답을 콜백 엔드포인트로 보낼 때 본문 없는 `202`로 답하도록 규정합니다. 핸들러가 REST로 응답한다면 항상 `InteractionResponse::Accepted`를 반환해 엔드포인트가 응답을 버릴 일이 없게 합니다.
+
+인라인 응답 뒤에는 spawn한 작업이 보관한 복제본도 인터랙션이 확인(acknowledged)된 것으로 보고 REST로 나머지 작업을 마칠 수 있습니다.
 
 ```rust
 use discordrs::prelude::*;
@@ -50,7 +58,7 @@ let app = AppFramework::builder()
 참고:
 
 - 인라인 응답은 Discord가 보낸 요청에 대한 응답 본문이므로, 핸들러가 반환하는 시점에 전달된 것으로 봅니다. Discord가 그 본문을 읽기 직전에 보낸 follow-up은 Discord가 거부할 수 있습니다.
-- 핸들러가 이미 REST로 응답했거나(또는 응답이 아직 전송 중이거나) 그 뒤에 또 최초 응답을 반환하면, Discord의 요청에는 답해야 하므로 엔드포인트는 페이로드를 그대로 반환하지만 상태는 REST 응답이 정한 대로 두고 경고 로그를 남깁니다. Discord는 최초 응답을 하나만 받습니다. 인라인으로 반환하거나 REST로 보내거나 둘 중 하나만 사용합니다.
+- `InteractionResponse::Accepted`를 쓰면 Discord의 3초 제한 안에 REST 응답을 보내야 하며, 그렇지 않으면 인터랙션이 실패합니다.
 - raw 엔드포인트(`InteractionHandler`, `InteractionContext`)에는 공유 응답 상태가 없습니다. ID와 토큰만 받는 헬퍼는 상태를 공유하지 않습니다.
 - 인터랙션 컨텍스트의 `Debug` 출력(타입드·raw, raw 페이로드 포함)은 인터랙션 토큰 대신 `[redacted]`를 표시합니다.
 

@@ -3,7 +3,7 @@ use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
@@ -22,7 +22,7 @@ use crate::parsers::{
     parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
     InteractionContext, RawInteraction,
 };
-use crate::response::AckKind;
+use crate::response::{AckKind, InteractionResponsePhase};
 use crate::types::invalid_data_error;
 
 /// Typed Discord API enum for `InteractionResponse`.
@@ -43,16 +43,25 @@ pub enum InteractionResponse {
     UpdateMessage(Value),
     /// Discord API enum variant `LaunchActivity`.
     LaunchActivity,
+    /// Answers Discord's HTTP request with `202 Accepted` and no body: the
+    /// initial response is sent through the REST callback endpoint instead,
+    /// before the handler returns or from a task it spawned (for example
+    /// with `InteractionResponder::defer`). Discord specifies exactly this
+    /// answer when the callback endpoint is used for an interaction received
+    /// over HTTP. If nothing is sent over REST within 3 seconds, the
+    /// interaction fails.
+    Accepted,
     /// Discord API enum variant `Raw`.
     Raw(Value),
 }
 
 impl InteractionResponse {
     /// Acknowledgement Discord records when it accepts this response, or
-    /// `None` for `Pong` and raw payloads without a numeric `type`.
+    /// `None` for `Pong`, `Accepted`, and raw payloads without a numeric
+    /// `type`.
     fn ack_kind(&self) -> Option<AckKind> {
         match self {
-            Self::Pong => None,
+            Self::Pong | Self::Accepted => None,
             Self::DeferredMessage | Self::DeferredUpdate => Some(AckKind::Deferred),
             Self::ChannelMessage(_)
             | Self::AutocompleteResult(_)
@@ -81,11 +90,17 @@ pub trait InteractionHandler: Send + Sync {
 /// Trait for `TypedInteractionHandler` behavior.
 ///
 /// The `ctx` and `interaction` passed to the handler share one response
-/// state with each other and with every clone made from them. When the
-/// handler returns an initial response, the endpoint records it in that
-/// state before answering Discord, so a clone kept by a spawned task sees the
-/// interaction as acknowledged and can call `follow_up` or `edit_reply` over
-/// REST afterwards.
+/// state with each other and with every clone made from them, and exactly
+/// one transport owns the initial response:
+///
+/// - The handler returns an initial response: the endpoint claims the state
+///   for it and answers Discord with `200` and that response, so a clone kept
+///   by a spawned task sees the interaction as acknowledged and can call
+///   `follow_up` or `edit_reply` over REST afterwards.
+/// - The handler sent (or started sending) the initial response over REST,
+///   or returns [`InteractionResponse::Accepted`]: the endpoint answers
+///   `202 Accepted` with no body, as Discord specifies, and any other
+///   response the handler returned is discarded with a warning.
 #[async_trait]
 pub trait TypedInteractionHandler: Send + Sync {
     /// Handles one verified typed Discord interaction.
@@ -225,8 +240,11 @@ pub fn verify_discord_signature(
     verify_signature_with_key(&verifying_key, signature, timestamp, body)
 }
 
-fn interaction_response_payload(response: InteractionResponse) -> Value {
-    match response {
+/// Builds the body of an inline answer; `None` for
+/// [`InteractionResponse::Accepted`], which has no body.
+fn interaction_response_payload(response: InteractionResponse) -> Option<Value> {
+    Some(match response {
+        InteractionResponse::Accepted => return None,
         InteractionResponse::Pong => serde_json::json!({ "type": 1 }),
         InteractionResponse::ChannelMessage(data) => serde_json::json!({
             "type": 4,
@@ -248,6 +266,31 @@ fn interaction_response_payload(response: InteractionResponse) -> Value {
         }),
         InteractionResponse::LaunchActivity => serde_json::json!({ "type": 12 }),
         InteractionResponse::Raw(data) => data,
+    })
+}
+
+/// How the endpoint answers Discord's HTTP request.
+#[derive(Debug, PartialEq)]
+enum EndpointAnswer {
+    /// `200 OK` with this interaction response as the body.
+    Inline(Value),
+    /// `202 Accepted` with no body: the initial response goes (or went)
+    /// through the REST callback endpoint.
+    Accepted,
+}
+
+impl IntoResponse for EndpointAnswer {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Inline(payload) => (StatusCode::OK, Json(payload)).into_response(),
+            Self::Accepted => StatusCode::ACCEPTED.into_response(),
+        }
+    }
+}
+
+impl EndpointAnswer {
+    fn from_response(response: InteractionResponse) -> Self {
+        interaction_response_payload(response).map_or(Self::Accepted, Self::Inline)
     }
 }
 
@@ -313,9 +356,9 @@ where
         }
     };
 
+    // Raw handlers have no shared response state: they own the answer.
     let response = state.handler.handle(context, interaction).await;
-    let response_payload = interaction_response_payload(response);
-    (StatusCode::OK, Json(response_payload)).into_response()
+    EndpointAnswer::from_response(response).into_response()
 }
 
 /// Provides the `try_interactions_endpoint` helper.
@@ -400,40 +443,49 @@ where
     let response_state = context.response_state.clone();
 
     let response = state.handler.handle_typed(context, interaction).await;
-    record_inline_response(&response_state, &interaction_id, &response);
-    let response_payload = interaction_response_payload(response);
-    (StatusCode::OK, Json(response_payload)).into_response()
+    typed_endpoint_answer(&response_state, &interaction_id, response).into_response()
 }
 
-/// Records the handler's inline response in the shared response state, the
-/// same state the REST response methods use (see the decision log in
-/// `response.rs`).
+/// Decides which transport owns the initial response and answers Discord
+/// accordingly (see the decision log in `response.rs`).
+///
+/// An inline initial response claims the shared state with the same
+/// compare-and-set the REST methods use, so it is sent only when no REST
+/// response was sent, is in flight, or may have landed. Otherwise REST owns
+/// the response and Discord gets `202` with no body; sending the inline
+/// response as well would be a second initial response, and its acceptance
+/// by Discord would contradict whatever the REST attempt settles to.
 ///
 /// The inline response is the body of Discord's own request, so there is no
-/// delivery outcome to wait for: the state moves straight to acknowledged.
-/// A follow-up sent by a retained clone in the moment between this call and
-/// Discord reading the body can still be rejected by Discord.
-///
-/// When the handler already responded over REST (or such a response is in
-/// flight), the payload is still returned unchanged — Discord's request must
-/// be answered — but the state keeps describing the REST response and a
-/// warning is logged, because Discord accepts only one initial response.
-fn record_inline_response(
+/// delivery outcome to wait for: the state moves straight to acknowledged. A
+/// follow-up sent by a retained clone in the moment before Discord reads the
+/// body can still be rejected by Discord.
+fn typed_endpoint_answer(
     state: &InteractionResponseState,
     interaction_id: &Snowflake,
-    response: &InteractionResponse,
-) {
-    let Some(kind) = response.ack_kind() else {
-        return;
-    };
-    if !state.commit_inline(kind) {
-        warn!(
-            interaction_id = %interaction_id,
-            phase = ?state.phase(),
-            "interaction handler returned an inline initial response after responding over REST; \
-             Discord accepts only one initial response"
-        );
+    response: InteractionResponse,
+) -> EndpointAnswer {
+    if matches!(response, InteractionResponse::Accepted) {
+        return EndpointAnswer::Accepted;
     }
+    let inline_owns = match response.ack_kind() {
+        Some(kind) => state.commit_inline(kind),
+        // Not an initial response (e.g. a raw payload without a callback
+        // type): it cannot compete for the slot, so only REST ownership
+        // matters.
+        None => state.phase() == InteractionResponsePhase::Unacknowledged,
+    };
+    if inline_owns {
+        return EndpointAnswer::from_response(response);
+    }
+    warn!(
+        interaction_id = %interaction_id,
+        phase = ?state.phase(),
+        "discarding the handler's inline response: the initial response is handled over REST, \
+         so Discord is answered with 202 and no body (return InteractionResponse::Accepted to \
+         silence this)"
+    );
+    EndpointAnswer::Accepted
 }
 
 /// Provides the `try_typed_interactions_endpoint` helper.
@@ -475,10 +527,10 @@ where
 mod tests {
     use super::{
         current_unix_timestamp, decode_verifying_key, handle_interactions_request,
-        handle_typed_interactions_request, interaction_response_payload, record_inline_response,
-        try_interactions_endpoint, try_typed_interactions_endpoint,
+        handle_typed_interactions_request, interaction_response_payload, try_interactions_endpoint,
+        try_typed_interactions_endpoint, typed_endpoint_answer,
         verify_discord_request_signature_at_time, verify_discord_signature,
-        verify_signature_with_key_at_time, InteractionHandler, InteractionResponse,
+        verify_signature_with_key_at_time, EndpointAnswer, InteractionHandler, InteractionResponse,
         InteractionsState, TypedInteractionHandler, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
     use crate::builders::ModalBuilder;
@@ -504,6 +556,10 @@ mod tests {
         Arc, Mutex,
     };
     const TEST_NOW_UNIX_TIMESTAMP: i64 = 1_700_000_000;
+
+    fn inline_payload(response: InteractionResponse) -> Value {
+        interaction_response_payload(response).expect("inline response has a body")
+    }
 
     #[derive(Clone)]
     struct TestHandler;
@@ -592,13 +648,13 @@ mod tests {
 
     #[test]
     fn interaction_response_payload_supports_deferred_update() {
-        let payload = interaction_response_payload(InteractionResponse::DeferredUpdate);
+        let payload = inline_payload(InteractionResponse::DeferredUpdate);
         assert_eq!(payload["type"], 6);
     }
 
     #[test]
     fn interaction_response_payload_supports_autocomplete_choices() {
-        let payload = interaction_response_payload(InteractionResponse::AutocompleteResult(vec![
+        let payload = inline_payload(InteractionResponse::AutocompleteResult(vec![
             ApplicationCommandOptionChoice {
                 name: "Support".to_string(),
                 name_localizations: None,
@@ -613,7 +669,7 @@ mod tests {
 
     #[test]
     fn interaction_response_payload_supports_launch_activity() {
-        let payload = interaction_response_payload(InteractionResponse::LaunchActivity);
+        let payload = inline_payload(InteractionResponse::LaunchActivity);
         assert_eq!(payload["type"], 12);
     }
 
@@ -853,11 +909,11 @@ mod tests {
     #[test]
     fn interaction_response_payload_covers_remaining_response_variants() {
         assert_eq!(
-            interaction_response_payload(InteractionResponse::Pong),
+            inline_payload(InteractionResponse::Pong),
             json!({ "type": 1 })
         );
         assert_eq!(
-            interaction_response_payload(InteractionResponse::ChannelMessage(
+            inline_payload(InteractionResponse::ChannelMessage(
                 json!({ "content": "hello" })
             )),
             json!({
@@ -866,7 +922,7 @@ mod tests {
             })
         );
         assert_eq!(
-            interaction_response_payload(InteractionResponse::UpdateMessage(
+            inline_payload(InteractionResponse::UpdateMessage(
                 json!({ "content": "updated" })
             )),
             json!({
@@ -875,13 +931,13 @@ mod tests {
             })
         );
         assert_eq!(
-            interaction_response_payload(InteractionResponse::Modal(ModalBuilder::new(
+            inline_payload(InteractionResponse::Modal(ModalBuilder::new(
                 "feedback", "Feedback"
             )))["type"],
             json!(9)
         );
         assert_eq!(
-            interaction_response_payload(InteractionResponse::Raw(json!({ "type": 99 }))),
+            inline_payload(InteractionResponse::Raw(json!({ "type": 99 }))),
             json!({ "type": 99 })
         );
     }
@@ -1201,8 +1257,12 @@ mod tests {
         assert!(matches!(records[1].1, Interaction::Unknown { .. }));
     }
 
+    fn answer(state: &InteractionResponseState, response: InteractionResponse) -> EndpointAnswer {
+        typed_endpoint_answer(state, &Snowflake::from("1"), response)
+    }
+
     #[test]
-    fn inline_responses_record_the_matching_phase() {
+    fn inline_responses_claim_the_state_with_the_matching_phase() {
         let cases = [
             (
                 InteractionResponse::Pong,
@@ -1255,33 +1315,69 @@ mod tests {
         ];
         for (response, expected) in cases {
             let state = InteractionResponseState::new();
-            record_inline_response(&state, &Snowflake::from("1"), &response);
+            assert!(matches!(
+                answer(&state, response),
+                EndpointAnswer::Inline(_)
+            ));
             assert_eq!(state.phase(), expected);
         }
     }
 
     #[test]
-    fn inline_response_after_a_rest_response_keeps_the_rest_state() {
+    fn accepted_answers_202_and_leaves_the_slot_to_rest() {
+        assert_eq!(
+            interaction_response_payload(InteractionResponse::Accepted),
+            None
+        );
         let state = InteractionResponseState::new();
-        state
-            .begin(AckKind::Deferred)
+        assert_eq!(
+            answer(&state, InteractionResponse::Accepted),
+            EndpointAnswer::Accepted
+        );
+        assert_eq!(state.phase(), InteractionResponsePhase::Unacknowledged);
+        // A REST response sent later (e.g. from a spawned task) owns it.
+        assert!(state.begin(AckKind::Deferred).is_ok());
+    }
+
+    /// Regression: when REST already owned the initial response, the endpoint
+    /// still answered 200 with the handler's payload, i.e. a second initial
+    /// response.
+    #[test]
+    fn inline_response_yields_to_a_rest_owned_initial_response() {
+        let sent = InteractionResponseState::new();
+        sent.begin(AckKind::Deferred)
             .unwrap()
             .settle(CallbackOutcome::Accepted);
-        record_inline_response(
-            &state,
-            &Snowflake::from("1"),
-            &InteractionResponse::ChannelMessage(json!({ "content": "late" })),
+        assert_eq!(
+            answer(
+                &sent,
+                InteractionResponse::ChannelMessage(json!({ "content": "late" }))
+            ),
+            EndpointAnswer::Accepted
         );
-        assert!(state.is_deferred());
+        assert!(sent.is_deferred());
 
+        // In flight: the inline response must not be sent, so a later REST
+        // rejection truthfully leaves nothing acknowledged.
         let in_flight = InteractionResponseState::new();
-        let _claim = in_flight.begin(AckKind::Replied).unwrap();
-        record_inline_response(
-            &in_flight,
-            &Snowflake::from("1"),
-            &InteractionResponse::DeferredMessage,
+        let claim = in_flight.begin(AckKind::Replied).unwrap();
+        assert_eq!(
+            answer(&in_flight, InteractionResponse::DeferredMessage),
+            EndpointAnswer::Accepted
         );
-        assert_eq!(in_flight.phase(), InteractionResponsePhase::InFlight);
+        claim.settle(CallbackOutcome::Rejected);
+        assert_eq!(in_flight.phase(), InteractionResponsePhase::Unacknowledged);
+
+        let uncertain = InteractionResponseState::new();
+        uncertain
+            .begin(AckKind::Replied)
+            .unwrap()
+            .settle(CallbackOutcome::Ambiguous);
+        assert_eq!(
+            answer(&uncertain, InteractionResponse::Raw(Value::Null)),
+            EndpointAnswer::Accepted
+        );
+        assert_eq!(uncertain.phase(), InteractionResponsePhase::Uncertain);
     }
 
     fn command_body(token: &str) -> Vec<u8> {
@@ -1358,8 +1454,10 @@ mod tests {
         }
     }
 
+    /// Discord: "If you send this request for an interaction received over
+    /// HTTP, respond to the original HTTP request with a 202 and no body."
     #[tokio::test]
-    async fn typed_endpoint_still_answers_when_the_handler_responded_over_rest() {
+    async fn typed_endpoint_answers_202_without_body_when_rest_owns_the_response() {
         let body = command_body("token");
         let response = handle_typed_interactions_request(
             State(InteractionsState {
@@ -1369,11 +1467,43 @@ mod tests {
             signed_headers_for_body(&body),
             Bytes::from(body),
         )
-        .await;
-        assert_eq!(
-            json_response(response).await,
-            json!({ "type": 4, "data": { "content": "inline" } })
-        );
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty());
+    }
+
+    #[derive(Clone)]
+    struct AcceptedRawHandler;
+
+    #[async_trait]
+    impl InteractionHandler for AcceptedRawHandler {
+        async fn handle(
+            &self,
+            _ctx: InteractionContext,
+            _interaction: RawInteraction,
+        ) -> InteractionResponse {
+            InteractionResponse::Accepted
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_endpoint_answers_202_without_body_for_accepted() {
+        let body = command_body("token");
+        let response = handle_interactions_request(
+            State(InteractionsState {
+                verifying_key: test_signing_key().verifying_key(),
+                handler: AcceptedRawHandler,
+            }),
+            signed_headers_for_body(&body),
+            Bytes::from(body),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(body.is_empty());
     }
 
     #[tokio::test]

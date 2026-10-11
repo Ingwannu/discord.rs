@@ -35,7 +35,7 @@ let app = AppFramework::builder()
     .build();
 ```
 
-Send the initial response either inline (the return value) or over REST (`ctx.reply(...)`), not both: Discord accepts one initial response, and the endpoint logs a warning when a route does both. `AppContext`'s `Debug` output shows `[redacted]` instead of the interaction token.
+Send the initial response either inline (the return value) or over REST (`ctx.reply(...)`), not both. A route that responds over REST should return `InteractionResponse::Accepted`: the endpoint then answers Discord with `202` and no body, as Discord specifies. If a route responded over REST but returned another response anyway, the endpoint still answers `202`, discards that response, and logs a warning. `AppContext`'s `Debug` output shows `[redacted]` instead of the interaction token.
 
 ## Guards and Cooldowns
 

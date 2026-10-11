@@ -37,7 +37,9 @@ pub enum RouteKey {
 /// keep (or move into a spawned task) a clone to send follow-ups later. All
 /// clones share one response state with the interaction: once the endpoint
 /// returns the route's inline response, `follow_up` and `edit_reply` on a
-/// retained clone are accepted. `Debug` output never contains the token.
+/// retained clone are accepted. A route that sends its initial response over
+/// REST should return [`InteractionResponse::Accepted`], which the endpoint
+/// answers with `202` and no body. `Debug` output never contains the token.
 #[derive(Clone, Debug)]
 pub struct AppContext {
     /// Parsed interaction context, including user/member and installation data.
@@ -132,7 +134,8 @@ impl AppFramework {
     ///
     /// Returns the route's inline response without sending it. Through the
     /// typed interactions endpoint, the endpoint sends it and records it in
-    /// the interaction's shared response state.
+    /// the interaction's shared response state, or answers `202` with no body
+    /// when the route already responded over REST.
     pub async fn dispatch(
         &self,
         context: InteractionContextData,

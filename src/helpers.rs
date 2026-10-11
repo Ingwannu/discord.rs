@@ -157,7 +157,9 @@ pub async fn respond_to_interaction(
 
 /// Replies (type 4) with a message, optionally ephemeral.
 ///
-/// State-aware: delegates to [`InteractionContextData::reply`]. Prefer
+/// State-aware: delegates to [`InteractionContextData::reply`]. Fails before
+/// any request when `message` sets channel-message-only fields (see
+/// [`InteractionReplyData`]'s `TryFrom<CreateMessage>`). Prefer
 /// `reply`/`reply_ephemeral` on the interaction; this helper will be
 /// deprecated once the bundled examples have moved off it.
 pub async fn respond_with_message(
@@ -166,17 +168,16 @@ pub async fn respond_with_message(
     message: CreateMessage,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    context.reply(http, reply_data(message, ephemeral)).await
+    context.reply(http, reply_data(message, ephemeral)?).await
 }
 
 /// Converts a `CreateMessage` into reply data, adding the ephemeral flag.
-fn reply_data(message: CreateMessage, ephemeral: bool) -> InteractionReplyData {
-    let data = InteractionReplyData::from(message);
-    if ephemeral {
-        data.ephemeral()
-    } else {
-        data
-    }
+fn reply_data(
+    message: CreateMessage,
+    ephemeral: bool,
+) -> Result<InteractionReplyData, DiscordError> {
+    let data = InteractionReplyData::try_from(message)?;
+    Ok(if ephemeral { data.ephemeral() } else { data })
 }
 
 /// Replies (type 4) to a component interaction with a Components V2
@@ -265,7 +266,7 @@ pub async fn followup_message(
     ephemeral: bool,
 ) -> Result<Message, DiscordError> {
     context
-        .follow_up(http, reply_data(message, ephemeral))
+        .follow_up(http, reply_data(message, ephemeral)?)
         .await
 }
 
@@ -297,7 +298,9 @@ pub async fn edit_original_response(
     context: &InteractionContextData,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
-    context.edit_reply(http, message).await
+    context
+        .edit_reply(http, InteractionReplyData::try_from(message)?)
+        .await
 }
 
 /// Deletes the original response.
@@ -342,7 +345,9 @@ pub async fn edit_followup_response(
     message_id: &str,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
-    context.edit_follow_up(http, message_id, message).await
+    context
+        .edit_follow_up(http, message_id, InteractionReplyData::try_from(message)?)
+        .await
 }
 
 /// Provides the `edit_message_with_container` helper.
@@ -459,7 +464,9 @@ pub async fn update_interaction_message(
     context: &InteractionContextData,
     message: CreateMessage,
 ) -> Result<(), DiscordError> {
-    context.update_message(http, message).await
+    context
+        .update_message(http, InteractionReplyData::try_from(message)?)
+        .await
 }
 
 /// Sends autocomplete choices (type 8).
@@ -969,5 +976,38 @@ mod tests {
             assert_model_error_contains(error, "already acknowledged");
         }
         assert!(context.is_deferred());
+    }
+
+    #[tokio::test]
+    async fn create_message_helpers_reject_channel_message_only_fields() {
+        let http = sample_http(123);
+        let context = acknowledged(sample_context("456", "followup-token"));
+        let referencing = || CreateMessage {
+            message_reference: Some(crate::model::MessageReference::default()),
+            ..sample_message()
+        };
+
+        for error in [
+            respond_with_message(&http, &sample_context("456", "t"), referencing(), false)
+                .await
+                .unwrap_err(),
+            followup_message(&http, &context, referencing(), false)
+                .await
+                .map(drop)
+                .unwrap_err(),
+            edit_original_response(&http, &context, referencing())
+                .await
+                .map(drop)
+                .unwrap_err(),
+            super::edit_followup_response(&http, &context, "30", referencing())
+                .await
+                .map(drop)
+                .unwrap_err(),
+            update_interaction_message(&http, &sample_context("456", "t"), referencing())
+                .await
+                .unwrap_err(),
+        ] {
+            assert_model_error_contains(error, "message_reference");
+        }
     }
 }

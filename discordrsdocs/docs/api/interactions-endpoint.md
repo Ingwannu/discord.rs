@@ -24,14 +24,22 @@ discordrs = { version = "2.2.0", features = ["interactions"] }
 2. Verify signature headers/body
 3. Parse into interaction type/context
 4. Execute handler logic
-5. Record the returned initial response in the interaction's shared response state (typed endpoint)
-6. Return interaction response JSON
+5. Decide which transport owns the initial response (typed endpoint)
+6. Return the interaction response JSON with `200`, or `202` with no body when the response is sent over REST
 
 ## Response State (3.0)
 
-The typed endpoint (`try_typed_interactions_endpoint`, `typed_interactions_endpoint`) passes the handler a context and an interaction that share one `InteractionResponseState` (see [HTTP and Helpers](./http-and-helpers.md#shared-response-state)). When the handler returns an initial response (anything except `Pong`, or a `Raw` payload whose `type` is not 1), the endpoint records it before answering Discord: deferred types (5, 6) become `Deferred`, every other type `Replied`.
+The typed endpoint (`try_typed_interactions_endpoint`, `typed_interactions_endpoint`) passes the handler a context and an interaction that share one `InteractionResponseState` (see [HTTP and Helpers](./http-and-helpers.md#shared-response-state)). Exactly one transport owns the initial response; the inline answer and the REST callback claim the same slot atomically:
 
-A clone kept by a spawned task therefore sees the interaction as acknowledged and can finish the work over REST:
+| Handler did | Endpoint answers | Shared state |
+|---|---|---|
+| Returned an initial response, no REST response sent | `200` with that response | `Deferred` (types 5, 6) or `Replied` |
+| Sent (or started sending) the initial response over REST | `202 Accepted`, no body; the returned response is discarded with a warning | whatever the REST response settles to |
+| Returned `InteractionResponse::Accepted` | `202 Accepted`, no body | unchanged; a REST response sent later (e.g. from a spawned task) owns it |
+
+Discord specifies the `202` with no body for interactions received over HTTP whose response goes through the callback endpoint. Return `InteractionResponse::Accepted` whenever the handler responds over REST, so the endpoint never has to discard a response.
+
+A clone kept by a spawned task after an inline response sees the interaction as acknowledged and can finish the work over REST:
 
 ```rust
 use discordrs::prelude::*;
@@ -54,7 +62,7 @@ let app = AppFramework::builder()
 Notes:
 
 - The inline response is the body of Discord's own request, so it counts as delivered when the handler returns it. A follow-up sent in the instant before Discord has read that body can still be rejected by Discord.
-- If the handler already responded over REST (or such a response is still in flight) and then returns another initial response, the endpoint still returns the payload, because Discord's request must be answered, but leaves the state as the REST response set it and logs a warning: Discord accepts only one initial response. Return the response inline *or* send it over REST, not both.
+- With `InteractionResponse::Accepted`, the REST response must be sent within Discord's 3-second window, or the interaction fails.
 - The raw endpoint (`InteractionHandler`, `InteractionContext`) has no shared response state; helpers that take only an id and token are stateless.
 - `Debug` output of interaction contexts (typed and raw, including the raw payload) shows `[redacted]` instead of the interaction token.
 

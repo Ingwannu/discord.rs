@@ -122,7 +122,9 @@ where
 
 ### Reply data
 
-`InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`. It carries every field that interaction responses accept: `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `poll` (3.0; 2.2.0 dropped `poll`). `CreateMessage` fields that exist only for channel messages (`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`) are not carried, because Discord's interaction bodies have no such fields.
+`InteractionReplyData` converts from `&str`, `String`, and `MessageBuilder`, and carries every field that interaction responses accept: `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `poll` (3.0; 2.2.0 dropped `poll`).
+
+A `CreateMessage` converts with `InteractionReplyData::try_from(message)?` (3.0; it was an infallible `From` in 2.2.0). The conversion fails when the message sets a field that only channel messages accept (`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`), because Discord's interaction bodies have no such fields and silently dropping them would change the message. The helpers that take a `CreateMessage` fail the same way before sending anything.
 
 ### Shared response state
 
@@ -133,16 +135,21 @@ Each parsed interaction owns one `InteractionResponseState`, shared by every clo
 | `Unacknowledged` | Nothing sent, or Discord rejected the last attempt | allowed | fail locally |
 | `InFlight` | An initial response is being sent | fails locally | **wait** for the outcome |
 | `Deferred` / `Replied` | Discord accepted the response | fails locally | allowed |
+| `Acknowledged` | Discord holds an initial response, but its kind is unknown | fails locally | allowed |
 | `Uncertain` | The outcome was lost (timeout, 5xx, failed response read, or the sending future was dropped) | allowed (safe retry) | passed to Discord |
 
 - The slot moves to `Deferred`/`Replied` only after Discord accepts the callback, so a follow-up from another clone can no longer race ahead of the reply.
 - A 4xx, a 429, local validation, or a connection that was never established rolls back to `Unacknowledged`, so the reply can be retried.
-- A timeout, 5xx, failed response read, or cancellation leaves `Uncertain`. Retrying the initial response is safe: if the earlier attempt landed, Discord answers error 40060 ("already acknowledged") and the state becomes acknowledged without a second response. A successful `edit_reply`, `fetch_reply`, or `delete_reply` also settles it.
-- `is_replied()`, `is_deferred()`, and `is_acknowledged()` report only what Discord confirmed; they are false while `InFlight` or `Uncertain`.
+- A timeout, 5xx, failed response read, or cancellation leaves `Uncertain`, which remembers every kind (deferred or reply) that may have landed. Retrying the initial response with any kind is safe: if an earlier attempt landed, Discord answers error 40060 ("already acknowledged") and the state becomes acknowledged without a second response. 40060 does not say *which* attempt landed, so the kind is known only if all uncertain attempts had the same kind; otherwise the phase is `Acknowledged` (kind unknown). A successful `edit_reply` (→ `Replied`), `fetch_reply`, or `delete_reply` also settles it, even when it completes while a retry is in flight.
+- `is_replied()`, `is_deferred()`, and `is_acknowledged()` report only what Discord confirmed; they are false while `InFlight` or `Uncertain`, and only `is_acknowledged()` is true in `Acknowledged`.
 - `edit_reply` on a deferred interaction promotes it to replied, as in discord.js.
-- The typed HTTP interactions endpoint records the inline response a handler returns in the same state, so a retained clone can `follow_up` after the endpoint answered.
+- The typed HTTP interactions endpoint competes for the same slot: exactly one of the inline response and a REST response owns the initial response (see "Response State" in [Interactions Endpoint](./interactions-endpoint.md)).
+
+Waiting for an in-flight response has no timeout of its own: it ends when the future sending the initial response completes or is dropped. Do not keep a partially polled initial-response future alive in the same task while awaiting a follow-up (for example after a `select!` branch lost); drop it or keep polling it, otherwise the follow-up waits forever.
 
 The state is local to the process. A context rebuilt from storage with serde starts `Unacknowledged`; send follow-ups for it with the `RestClient` methods (`create_followup_message_with_application_id`, ...) instead.
+
+"A connect failure or a final 4xx means the callback was never delivered" holds for clients from `RestClient::new` and `RestClientBuilder::build`, which never follow redirects or replay a callback. A client passed to `RestClientBuilder::use_client` that follows redirects, or `retry_non_idempotent_requests(true)`, breaks that assumption: the state can then read `Unacknowledged` for a delivered response, until the next initial response gets 40060 and settles it.
 
 ### Helper functions: state-aware and stateless
 

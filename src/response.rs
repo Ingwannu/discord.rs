@@ -138,8 +138,10 @@ impl InteractionResponseBuilder {
 ///
 /// Holds the message fields that initial responses, follow-ups, and
 /// `@original` edits all accept. Converts from `&str`/`String`
-/// (content-only), [`MessageBuilder`], and [`CreateMessage`], so both
-/// `interaction.reply(&http, "hi")` and fully built payloads work.
+/// (content-only) and [`MessageBuilder`], so both
+/// `interaction.reply(&http, "hi")` and built payloads work. A
+/// [`CreateMessage`] converts with `InteractionReplyData::try_from`, which
+/// rejects channel-message-only fields instead of dropping them.
 pub struct InteractionReplyData {
     /// Message text content.
     pub content: Option<String>,
@@ -241,22 +243,12 @@ impl From<String> for InteractionReplyData {
     }
 }
 
+/// Lossless: `MessageBuilder` only has setters for fields interaction
+/// responses accept (content, components, flags). If a setter for a
+/// channel-message-only field is ever added, this conversion must become
+/// fallible like the `CreateMessage` one.
 impl From<MessageBuilder> for InteractionReplyData {
     fn from(builder: MessageBuilder) -> Self {
-        Self::from(builder.build())
-    }
-}
-
-/// Keeps every field that interaction responses accept.
-///
-/// `message_reference`, `sticker_ids`, `nonce`, and `enforce_nonce` exist only
-/// on `POST /channels/{id}/messages`; Discord's interaction callback, follow-up,
-/// and `@original` edit bodies have no such fields, so they are not carried.
-impl From<CreateMessage> for InteractionReplyData {
-    fn from(message: CreateMessage) -> Self {
-        // Exhaustive on purpose: a field added to `CreateMessage` must be
-        // either carried or listed as channel-message-only here. 2.2.0 copied
-        // five named fields and silently dropped `poll`.
         let CreateMessage {
             content,
             components,
@@ -264,11 +256,12 @@ impl From<CreateMessage> for InteractionReplyData {
             embeds,
             allowed_mentions,
             poll,
+            // Never set by `MessageBuilder` (see above).
             message_reference: _,
             sticker_ids: _,
             nonce: _,
             enforce_nonce: _,
-        } = message;
+        } = builder.inner;
         Self {
             content,
             embeds,
@@ -277,6 +270,60 @@ impl From<CreateMessage> for InteractionReplyData {
             allowed_mentions,
             poll,
         }
+    }
+}
+
+/// Converts a channel-message body, carrying every field interaction
+/// responses accept.
+///
+/// Fails with `DiscordError::Model` when the message sets a field that only
+/// `POST /channels/{id}/messages` accepts: `message_reference`,
+/// `sticker_ids`, `nonce`, or `enforce_nonce`. Interaction callback,
+/// follow-up, and `@original` edit bodies have no such fields, so dropping
+/// them would silently change the message (an intended reply would arrive
+/// as a plain response, stickers would vanish). 2.2.0 had an infallible
+/// `From` that did exactly that, and also dropped `poll`.
+impl TryFrom<CreateMessage> for InteractionReplyData {
+    type Error = DiscordError;
+
+    fn try_from(message: CreateMessage) -> Result<Self, Self::Error> {
+        // Exhaustive on purpose: a field added to `CreateMessage` must be
+        // either carried or rejected here, never dropped by accident.
+        let CreateMessage {
+            content,
+            components,
+            flags,
+            embeds,
+            allowed_mentions,
+            poll,
+            message_reference,
+            sticker_ids,
+            nonce,
+            enforce_nonce,
+        } = message;
+        let unsupported: Vec<&str> = [
+            ("message_reference", message_reference.is_some()),
+            ("sticker_ids", sticker_ids.is_some()),
+            ("nonce", nonce.is_some()),
+            ("enforce_nonce", enforce_nonce),
+        ]
+        .into_iter()
+        .filter_map(|(field, set)| set.then_some(field))
+        .collect();
+        if !unsupported.is_empty() {
+            return Err(DiscordError::model(format!(
+                "interaction responses do not accept CreateMessage fields: {}",
+                unsupported.join(", ")
+            )));
+        }
+        Ok(Self {
+            content,
+            embeds,
+            components,
+            flags,
+            allowed_mentions,
+            poll,
+        })
     }
 }
 
@@ -365,7 +412,8 @@ fn autocomplete_callback(
 //   and rejects follow-ups and `@original` edits until one exists. Every
 //   clone of an interaction (handler, collector, spawned task) must agree on
 //   whether that response exists, across both transports: the REST callback
-//   (gateway bots) and the inline HTTP response (interactions endpoint).
+//   (gateway bots, or HTTP bots that answer Discord with 202) and the inline
+//   HTTP response (interactions endpoint).
 // - Existing implementation and constraints (2.2.0): one `AtomicU8` ladder
 //   (unacknowledged / deferred / replied). The slot jumped to replied or
 //   deferred *before* the HTTP call finished, so another clone could send a
@@ -378,36 +426,49 @@ fn autocomplete_callback(
 // - Alternatives considered: (1) keep the ladder and only fix rollback;
 //   (2) a global registry of interaction ids; (3) a per-interaction phase
 //   with an explicit in-flight phase, an "outcome unknown" phase, a drop
-//   guard, and a watch channel so dependent calls can wait.
-// - Chosen: (3). `Unacknowledged → InFlight → Deferred | Replied`, with
-//   `InFlight → Unacknowledged` when Discord provably did not apply the
+//   guard, and a watch channel so dependent calls can wait. For uncertain
+//   retries: (a) only allow retrying with the same callback kind, (b) track
+//   every kind that may have landed and admit "acknowledged, kind unknown".
+// - Chosen: (3) with (b). `Unacknowledged → InFlight → Deferred | Replied`,
+//   with `InFlight → Unacknowledged` when Discord provably did not apply the
 //   callback (4xx, 429, local validation, connect failure) and
 //   `InFlight → Uncertain` when it may have (timeout, 5xx, failed body read,
-//   dropped future). Follow-ups and `@original` operations started while a
-//   response is in flight wait for its outcome instead of failing.
+//   dropped future). `Uncertain` remembers every kind that may have landed.
+//   A retry refused with 40060 proves *an* earlier attempt landed, not which
+//   one, so it settles to that kind only when exactly one kind was possible
+//   and to "acknowledged, kind unknown" otherwise. A successful `@original`
+//   operation is proof that the response exists; when it arrives while a
+//   retry is in flight it is kept in the in-flight phase and applied on top
+//   of the retry's outcome, so the stronger evidence always wins. The inline
+//   HTTP response and the REST callback compete for the same slot with one
+//   compare-and-set, so exactly one transport owns the initial response.
+//   Follow-ups and `@original` operations started while a response is in
+//   flight wait for its outcome instead of failing.
 // - Why: a registry would need eviction and cannot see stateless id/token
 //   calls either. Waiting (rather than failing) makes the natural
 //   `join!(defer, follow_up)` / spawned-follow-up patterns correct without
-//   retry loops, and the wait is bounded by the REST client's request
-//   timeout because the in-flight future either completes or is dropped.
-//   `Uncertain` is safe to leave by retrying the initial response: if the
-//   earlier attempt landed, Discord answers 40060 "already acknowledged",
-//   which this state machine reads as proof of acknowledgement, so a retry
-//   can never produce a second response.
+//   retry loops. `Uncertain` is safe to leave by retrying the initial
+//   response: if an earlier attempt landed, Discord answers 40060 "already
+//   acknowledged", so a retry can never produce a second response. Tracking
+//   the possible kinds keeps any retry kind allowed (restricting retries to
+//   one kind would block "defer timed out, now reply") without ever
+//   reporting a kind Discord may not hold.
 // - Trade-offs and impact: `is_acknowledged()` is false while in flight or
-//   uncertain (it reports only what Discord has confirmed). A future that is
-//   polled until it claims the slot and then parked forever (never polled,
-//   never dropped) blocks waiters in the same way an unfinished request
-//   would. Contexts rebuilt with serde start `Unacknowledged` because the
-//   state is process-local; use the `RestClient` follow-up methods for them.
-//   A connect failure is read as "not delivered"; that holds for the
-//   redirect-free clients `RestClient` builds, while a client passed to
-//   `RestClientBuilder::use_client` may follow a redirect after delivery.
-//   `RestClient` does not expose which transport it uses, so such a client
-//   can see `Unacknowledged` for a delivered response; the next initial
-//   response then gets 40060 and settles the state. Likewise, with
-//   `retry_non_idempotent_requests(true)` the client may replay a callback
-//   and report only the last attempt's error.
+//   uncertain (it reports only what Discord has confirmed), and
+//   `is_deferred()`/`is_replied()` are both false when the kind is unknown.
+//   Waiting is not bounded by any timeout: it ends when the in-flight future
+//   completes or is dropped. A task that keeps a partially polled
+//   initial-response future alive (neither polling nor dropping it) and then
+//   awaits a follow-up waits forever. Contexts rebuilt with serde start
+//   `Unacknowledged` because the state is process-local; use the
+//   `RestClient` follow-up methods for them. "Connect failure or final 4xx
+//   means not delivered" holds for the redirect-free clients `RestClient`
+//   builds; a client passed to `RestClientBuilder::use_client` may follow a
+//   redirect after delivery, and `retry_non_idempotent_requests(true)` may
+//   replay a callback and report only the last attempt's error. `RestClient`
+//   does not expose either setting here, so such clients can see
+//   `Unacknowledged` for a delivered response; the next initial response
+//   then gets 40060 and settles the state.
 
 /// What an accepted initial response did to an interaction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -439,19 +500,80 @@ impl AckKind {
     }
 }
 
+/// Set of initial-response kinds that may have reached Discord.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PossibleKinds {
+    deferred: bool,
+    replied: bool,
+}
+
+impl PossibleKinds {
+    fn with(mut self, kind: AckKind) -> Self {
+        match kind {
+            AckKind::Deferred => self.deferred = true,
+            AckKind::Replied => self.replied = true,
+        }
+        self
+    }
+
+    fn is_empty(self) -> bool {
+        !self.deferred && !self.replied
+    }
+
+    /// The kind Discord holds when it is known to hold one of these: the
+    /// single possible kind, or `None` when several (or none) are possible.
+    fn only(self) -> Option<AckKind> {
+        match (self.deferred, self.replied) {
+            (true, false) => Some(AckKind::Deferred),
+            (false, true) => Some(AckKind::Replied),
+            _ => None,
+        }
+    }
+}
+
+/// Evidence from a successful `@original` operation. Ordered by strength:
+/// an edit also proves the response is now a reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OriginalSeen {
+    /// A fetch or delete of `@original` succeeded.
+    Exists,
+    /// An edit of `@original` succeeded.
+    Edited,
+}
+
 /// Internal phase; [`InteractionResponsePhase`] is its public projection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Unacknowledged,
-    /// `claimed` is what Discord records if this attempt is accepted;
-    /// `prior` is the kind of an earlier attempt whose outcome was lost.
     InFlight {
+        /// What Discord records if this attempt is accepted.
         claimed: AckKind,
-        prior: Option<AckKind>,
+        /// Kinds of earlier attempts whose outcome was lost.
+        prior: PossibleKinds,
+        /// Strongest `@original` success seen while this attempt was in
+        /// flight; applied on top of the attempt's outcome.
+        original: Option<OriginalSeen>,
     },
-    Acknowledged(AckKind),
-    /// Holds the kind of the most recent attempt that may have landed.
-    Uncertain(AckKind),
+    /// Discord holds an initial response; `None` when its kind is unknown.
+    Acknowledged(Option<AckKind>),
+    /// Every kind that may have landed (never empty).
+    Uncertain(PossibleKinds),
+}
+
+impl Phase {
+    /// Applies proof that `@original` exists to a settled phase.
+    fn with_original(self, seen: OriginalSeen) -> Self {
+        match (self, seen) {
+            (_, OriginalSeen::Edited) => Self::Acknowledged(Some(AckKind::Replied)),
+            (Self::Acknowledged(kind), OriginalSeen::Exists) => Self::Acknowledged(kind),
+            (Self::Uncertain(possible), OriginalSeen::Exists) => {
+                Self::Acknowledged(possible.only())
+            }
+            // Acknowledged outside this state (e.g. by a stateless helper).
+            (Self::Unacknowledged, OriginalSeen::Exists) => Self::Acknowledged(None),
+            (in_flight @ Self::InFlight { .. }, OriginalSeen::Exists) => in_flight,
+        }
+    }
 }
 
 /// Where the initial response of one interaction stands.
@@ -465,18 +587,32 @@ pub enum InteractionResponsePhase {
     Unacknowledged,
     /// An initial response is being sent. Follow-ups and `@original`
     /// operations wait for its outcome; another initial response fails.
+    ///
+    /// The wait has no timeout of its own: it ends when the future sending
+    /// the initial response completes or is dropped. If a task keeps a
+    /// partially polled initial-response future alive without polling it
+    /// (for example a `select!` branch that lost) and then awaits a
+    /// follow-up, that follow-up waits forever. Drop such futures or keep
+    /// polling them.
     InFlight,
     /// Discord accepted a deferred response (callback type 5 or 6).
     Deferred,
     /// Discord accepted a reply, message update, modal, autocomplete result,
     /// or activity launch, or a deferred response was edited.
     Replied,
+    /// Discord holds an initial response, but which kind is unknown: a retry
+    /// was refused with error 40060 after attempts of different kinds had
+    /// lost their outcome, or the response was sent outside this state (for
+    /// example by a stateless helper). `is_acknowledged()` is true;
+    /// `is_deferred()` and `is_replied()` are false.
+    Acknowledged,
     /// An initial response may have reached Discord, but its outcome was
     /// lost (timeout, 5xx, failed response read, or the sending future was
     /// dropped). Retrying the initial response is safe: Discord answers a
     /// duplicate with error 40060, which settles the phase to acknowledged.
     /// Follow-ups and `@original` operations are passed to Discord, which
-    /// rejects them if no response exists.
+    /// rejects them if no response exists; a successful `@original`
+    /// operation settles the phase.
     Uncertain,
 }
 
@@ -485,8 +621,9 @@ impl From<Phase> for InteractionResponsePhase {
         match phase {
             Phase::Unacknowledged => Self::Unacknowledged,
             Phase::InFlight { .. } => Self::InFlight,
-            Phase::Acknowledged(AckKind::Deferred) => Self::Deferred,
-            Phase::Acknowledged(AckKind::Replied) => Self::Replied,
+            Phase::Acknowledged(Some(AckKind::Deferred)) => Self::Deferred,
+            Phase::Acknowledged(Some(AckKind::Replied)) => Self::Replied,
+            Phase::Acknowledged(None) => Self::Acknowledged,
             Phase::Uncertain(_) => Self::Uncertain,
         }
     }
@@ -498,8 +635,23 @@ impl From<Phase> for InteractionResponsePhase {
 /// response sent through one clone is visible to all of them. Both
 /// transports record into it: the REST methods on [`InteractionContextData`]
 /// and [`InteractionResponder`], and the typed HTTP interactions endpoint
-/// for the inline response a handler returns. See
-/// [`InteractionResponsePhase`] for the phases.
+/// for the inline response a handler returns. Exactly one of them owns the
+/// initial response. See [`InteractionResponsePhase`] for the phases.
+///
+/// # Delivery assumptions
+///
+/// A failed initial response counts as "not delivered" (and may be sent
+/// again) only when it failed to connect or Discord answered 4xx/429. That
+/// holds for the clients `RestClient::new` and `RestClientBuilder::build`
+/// create, which never follow redirects and never replay an interaction
+/// callback. It does not hold for a client passed to
+/// `RestClientBuilder::use_client` that follows redirects (the request may
+/// have been delivered before the redirect failed), nor with
+/// `RestClientBuilder::retry_non_idempotent_requests(true)` (an earlier
+/// attempt may have been applied and only the last attempt's error is
+/// reported). With such clients the state can read `Unacknowledged` for a
+/// delivered response; the next initial response then gets error 40060,
+/// which settles it.
 #[derive(Clone)]
 pub struct InteractionResponseState(Arc<watch::Sender<Phase>>);
 
@@ -531,14 +683,14 @@ impl InteractionResponseState {
     /// Returns true when Discord accepted a deferred response that has not
     /// been edited yet.
     pub fn is_deferred(&self) -> bool {
-        self.load() == Phase::Acknowledged(AckKind::Deferred)
+        self.load() == Phase::Acknowledged(Some(AckKind::Deferred))
     }
 
     /// Returns true when Discord accepted a reply, message update, modal,
     /// autocomplete result, or activity launch, or a deferred response was
     /// edited.
     pub fn is_replied(&self) -> bool {
-        self.load() == Phase::Acknowledged(AckKind::Replied)
+        self.load() == Phase::Acknowledged(Some(AckKind::Replied))
     }
 
     /// Returns true when Discord confirmed an initial response of any kind.
@@ -551,16 +703,18 @@ impl InteractionResponseState {
         *self.0.borrow()
     }
 
-    /// Atomically claims the initial-response slot for one attempt.
+    /// Atomically claims the initial-response slot for one REST attempt.
     ///
-    /// Exactly one caller wins when several race. Claiming is allowed from
-    /// `Unacknowledged` and from `Uncertain` (a retry; see the decision log).
+    /// Exactly one caller wins when several race, including against the
+    /// inline HTTP response ([`Self::commit_inline`]). Claiming is allowed
+    /// from `Unacknowledged` and from `Uncertain` (a retry; see the decision
+    /// log).
     pub(crate) fn begin(&self, kind: AckKind) -> Result<InitialResponseClaim, DiscordError> {
         let mut claim = Err(DiscordError::model("interaction was already acknowledged"));
         self.0.send_if_modified(|phase| {
             let prior = match *phase {
-                Phase::Unacknowledged => None,
-                Phase::Uncertain(prior) => Some(prior),
+                Phase::Unacknowledged => PossibleKinds::default(),
+                Phase::Uncertain(possible) => possible,
                 Phase::InFlight { .. } => {
                     claim = Err(DiscordError::model(
                         "interaction was already acknowledged: an initial response is in flight",
@@ -572,6 +726,7 @@ impl InteractionResponseState {
             *phase = Phase::InFlight {
                 claimed: kind,
                 prior,
+                original: None,
             };
             claim = Ok(prior);
             true
@@ -585,6 +740,9 @@ impl InteractionResponseState {
     }
 
     /// Waits until no initial response is in flight and returns the phase.
+    ///
+    /// Not bounded by a timeout: it returns once the in-flight future
+    /// completes or is dropped (see [`InteractionResponsePhase::InFlight`]).
     async fn settled(&self) -> Phase {
         let mut receiver = self.0.subscribe();
         let settled = receiver
@@ -608,38 +766,50 @@ impl InteractionResponseState {
     }
 
     /// Records that an `@original` operation succeeded, which proves Discord
-    /// holds an initial response. `edited` marks an edit, which turns a
-    /// deferred response into a reply (as in discord.js).
+    /// holds an initial response; an edit also turns a deferred response
+    /// into a reply (as in discord.js).
     ///
-    /// Follow-up successes deliberately do not settle `Uncertain`: only
-    /// `@original` is unambiguous evidence of the initial response.
-    pub(crate) fn confirm_original(&self, edited: bool) {
+    /// While a retry is in flight the evidence is stored in the in-flight
+    /// phase and applied when the retry settles, so a rejected or ambiguous
+    /// retry cannot discard it. Follow-up successes deliberately do not count
+    /// as evidence: only `@original` is unambiguous proof of the initial
+    /// response.
+    pub(crate) fn confirm_original(&self, seen: OriginalSeen) {
         self.0.send_if_modified(|phase| {
             let next = match *phase {
-                Phase::Acknowledged(AckKind::Deferred) if edited => {
-                    Phase::Acknowledged(AckKind::Replied)
-                }
-                Phase::Uncertain(_) if edited => Phase::Acknowledged(AckKind::Replied),
-                Phase::Uncertain(kind) => Phase::Acknowledged(kind),
-                _ => return false,
+                Phase::InFlight {
+                    claimed,
+                    prior,
+                    original,
+                } => Phase::InFlight {
+                    claimed,
+                    prior,
+                    original: Some(original.map_or(seen, |earlier| earlier.max(seen))),
+                },
+                settled => settled.with_original(seen),
             };
+            if next == *phase {
+                return false;
+            }
             *phase = next;
             true
         });
     }
 
-    /// Records an initial response returned inline from the HTTP
-    /// interactions endpoint. Returns false (and changes nothing) when
-    /// another response was already sent or is in flight over REST.
+    /// Claims the initial response for the inline HTTP response of the
+    /// interactions endpoint. Returns false, changing nothing, when a REST
+    /// response already claimed it (sent, in flight, or uncertain); the
+    /// endpoint must then answer Discord with 202 and no body.
     ///
-    /// The inline response has no observable delivery outcome — it is the
-    /// body of Discord's own request — so it moves straight to acknowledged
-    /// when the handler hands it to the HTTP server.
+    /// Uses the same compare-and-set as [`Self::begin`], so the inline and
+    /// REST transports cannot both own the initial response. The inline
+    /// response has no observable delivery outcome — it is the body of
+    /// Discord's own request — so it moves straight to acknowledged.
     #[cfg(any(feature = "interactions", test))]
     pub(crate) fn commit_inline(&self, kind: AckKind) -> bool {
         self.0.send_if_modified(|phase| {
             if *phase == Phase::Unacknowledged {
-                *phase = Phase::Acknowledged(kind);
+                *phase = Phase::Acknowledged(Some(kind));
                 true
             } else {
                 false
@@ -694,41 +864,42 @@ impl CallbackOutcome {
 
 /// One claimed initial-response attempt. Settles the shared state exactly
 /// once: through [`Self::settle`], or — when the sending future is dropped
-/// mid-flight — through `Drop`, which records `Uncertain` because the
-/// request may already have reached Discord.
+/// mid-flight — through `Drop`, which records the attempt as possibly
+/// delivered because the request may already have reached Discord.
 pub(crate) struct InitialResponseClaim {
     state: InteractionResponseState,
     claimed: AckKind,
-    prior: Option<AckKind>,
+    prior: PossibleKinds,
     settled: bool,
 }
 
 impl InitialResponseClaim {
     pub(crate) fn settle(mut self, outcome: CallbackOutcome) {
         self.settled = true;
-        let next = match outcome {
-            CallbackOutcome::Accepted => Phase::Acknowledged(self.claimed),
-            // This attempt was refused because an earlier one landed: the
-            // earlier uncertain attempt if there was one, otherwise a
-            // response sent outside this state (e.g. a stateless helper),
-            // whose kind is unknown and recorded as a reply.
-            CallbackOutcome::AlreadyAcknowledged => {
-                Phase::Acknowledged(self.prior.unwrap_or(AckKind::Replied))
-            }
-            CallbackOutcome::Rejected => self.prior.map_or(Phase::Unacknowledged, Phase::Uncertain),
-            CallbackOutcome::Ambiguous => Phase::Uncertain(self.claimed),
-        };
-        self.finish(next);
+        self.finish(outcome);
     }
 
-    fn finish(&self, next: Phase) {
+    fn finish(&self, outcome: CallbackOutcome) {
+        let next = match outcome {
+            CallbackOutcome::Accepted => Phase::Acknowledged(Some(self.claimed)),
+            // This attempt was refused because an earlier one landed — one
+            // of the uncertain attempts, or a response sent outside this
+            // state. 40060 does not say which, so the kind is known only if
+            // a single kind was possible.
+            CallbackOutcome::AlreadyAcknowledged => Phase::Acknowledged(self.prior.only()),
+            CallbackOutcome::Rejected if self.prior.is_empty() => Phase::Unacknowledged,
+            CallbackOutcome::Rejected => Phase::Uncertain(self.prior),
+            CallbackOutcome::Ambiguous => Phase::Uncertain(self.prior.with(self.claimed)),
+        };
         self.state.0.send_if_modified(|phase| {
-            if matches!(phase, Phase::InFlight { .. }) {
-                *phase = next;
-                true
-            } else {
-                false
-            }
+            let Phase::InFlight { original, .. } = *phase else {
+                return false;
+            };
+            *phase = match original {
+                Some(seen) => next.with_original(seen),
+                None => next,
+            };
+            true
         });
     }
 }
@@ -736,7 +907,7 @@ impl InitialResponseClaim {
 impl Drop for InitialResponseClaim {
     fn drop(&mut self) {
         if !self.settled {
-            self.finish(Phase::Uncertain(self.claimed));
+            self.finish(CallbackOutcome::Ambiguous);
         }
     }
 }
@@ -905,7 +1076,7 @@ impl InteractionContextData {
                 &data.into_create_message(),
             )
             .await?;
-        self.response_state.confirm_original(true);
+        self.response_state.confirm_original(OriginalSeen::Edited);
         Ok(message)
     }
 
@@ -919,7 +1090,7 @@ impl InteractionContextData {
                 &self.token,
             )
             .await?;
-        self.response_state.confirm_original(false);
+        self.response_state.confirm_original(OriginalSeen::Exists);
         Ok(message)
     }
 
@@ -934,7 +1105,7 @@ impl InteractionContextData {
             &self.token,
         )
         .await?;
-        self.response_state.confirm_original(false);
+        self.response_state.confirm_original(OriginalSeen::Exists);
         Ok(())
     }
 
@@ -1036,6 +1207,16 @@ impl InteractionContextData {
 /// generic `R: InteractionResponder`, so a responder call can be moved into
 /// `tokio::spawn`. Implementors only provide [`Self::responder_context`];
 /// an override must return a `Send` future as well.
+///
+/// # Waiting for an in-flight initial response
+///
+/// Follow-up and `@original` methods called while another clone is sending
+/// the initial response wait for that response's outcome. The wait has no
+/// timeout of its own; it ends when the sending future completes or is
+/// dropped. Do not keep a partially polled initial-response future alive in
+/// the same task while awaiting a follow-up (for example after a `select!`
+/// branch lost): drop it or keep polling it, otherwise the follow-up waits
+/// forever. See [`InteractionResponsePhase::InFlight`].
 pub trait InteractionResponder {
     /// The shared context (id, token, response state) used for responding.
     fn responder_context(&self) -> &InteractionContextData;
@@ -1282,7 +1463,8 @@ mod tests {
         autocomplete_callback, deferred_message_callback, deferred_update_callback,
         message_callback, modal_callback, AckKind, AutocompleteChoice, CallbackOutcome,
         InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
-        InteractionResponsePhase, InteractionResponseState, MessageBuilder, Phase,
+        InteractionResponsePhase, InteractionResponseState, MessageBuilder, OriginalSeen, Phase,
+        PossibleKinds,
     };
 
     const MESSAGE_JSON: &str = r#"{"id":"30","channel_id":"40","content":"ok"}"#;
@@ -1575,13 +1757,14 @@ mod tests {
         assert_eq!(from_builder.content.as_deref(), Some("built"));
         assert_eq!(from_builder.flags, Some(1 << 6));
 
-        let from_message = InteractionReplyData::from(CreateMessage {
+        let from_message = InteractionReplyData::try_from(CreateMessage {
             content: Some("full".to_string()),
             embeds: Some(vec![json!({"title": "t"})]),
             components: Some(vec![json!({"type": 1, "components": []})]),
             flags: Some(1 << 2),
             ..CreateMessage::default()
-        });
+        })
+        .unwrap();
         assert_eq!(from_message.content.as_deref(), Some("full"));
         assert_eq!(from_message.embeds.as_ref().unwrap().len(), 1);
         assert_eq!(from_message.components.as_ref().unwrap().len(), 1);
@@ -1607,32 +1790,25 @@ mod tests {
         }
     }
 
-    /// Regression: 2.2.0 copied five fields and silently dropped `poll`.
-    #[test]
-    fn reply_data_from_create_message_keeps_every_interaction_field() {
-        let message = CreateMessage {
+    fn interaction_message() -> CreateMessage {
+        CreateMessage {
             content: Some("vote".to_string()),
             components: Some(vec![json!({"type": 1, "components": []})]),
             flags: Some(1 << 12),
             embeds: Some(vec![json!({"title": "poll"})]),
             allowed_mentions: Some(AllowedMentions::default()),
             poll: Some(sample_poll()),
-            // Channel-message-only fields, which interaction bodies lack.
-            message_reference: Some(MessageReference::default()),
-            sticker_ids: Some(vec![Snowflake::from("9")]),
-            nonce: Some("nonce".to_string()),
-            enforce_nonce: true,
-        };
-        let expected = serde_json::to_value(CreateMessage {
-            message_reference: None,
-            sticker_ids: None,
-            nonce: None,
-            enforce_nonce: false,
-            ..message.clone()
-        })
-        .unwrap();
+            ..CreateMessage::default()
+        }
+    }
 
-        let data = InteractionReplyData::from(message);
+    /// Regression: 2.2.0 copied five fields and silently dropped `poll`.
+    #[test]
+    fn reply_data_try_from_create_message_keeps_every_interaction_field() {
+        let message = interaction_message();
+        let expected = serde_json::to_value(&message).unwrap();
+
+        let data = InteractionReplyData::try_from(message).unwrap();
         assert!(data.poll.is_some());
         assert!(data.allowed_mentions.is_some());
 
@@ -1647,6 +1823,58 @@ mod tests {
             expected["poll"]["question"]["text"],
             json!("Lunch?"),
             "poll must reach the callback body"
+        );
+    }
+
+    /// Regression: the infallible conversion silently dropped channel-only
+    /// fields, e.g. turning an intended reply-to-message into a plain reply.
+    #[test]
+    fn reply_data_try_from_rejects_channel_message_only_fields() {
+        let cases = [
+            (
+                CreateMessage {
+                    message_reference: Some(MessageReference::default()),
+                    ..interaction_message()
+                },
+                "message_reference",
+            ),
+            (
+                CreateMessage {
+                    sticker_ids: Some(vec![Snowflake::from("9")]),
+                    ..interaction_message()
+                },
+                "sticker_ids",
+            ),
+            (
+                CreateMessage {
+                    nonce: Some("nonce".to_string()),
+                    ..interaction_message()
+                },
+                "nonce",
+            ),
+            (
+                CreateMessage {
+                    enforce_nonce: true,
+                    ..interaction_message()
+                },
+                "enforce_nonce",
+            ),
+        ];
+        for (message, field) in cases {
+            let error = InteractionReplyData::try_from(message).unwrap_err();
+            assert_model_error(&error, field);
+        }
+
+        let all = CreateMessage {
+            message_reference: Some(MessageReference::default()),
+            sticker_ids: Some(Vec::new()),
+            nonce: Some("n".to_string()),
+            enforce_nonce: true,
+            ..CreateMessage::default()
+        };
+        assert_model_error(
+            &InteractionReplyData::try_from(all).unwrap_err(),
+            "message_reference, sticker_ids, nonce, enforce_nonce",
         );
     }
 
@@ -1781,11 +2009,11 @@ mod tests {
                 CallbackOutcome::Ambiguous,
                 InteractionResponsePhase::Uncertain,
             ),
-            // Acknowledged elsewhere with an unknown kind: recorded as replied.
+            // Acknowledged elsewhere: the kind is unknown.
             (
                 AckKind::Deferred,
                 CallbackOutcome::AlreadyAcknowledged,
-                InteractionResponsePhase::Replied,
+                InteractionResponsePhase::Acknowledged,
             ),
         ];
         for (kind, outcome, expected) in cases {
@@ -1823,7 +2051,10 @@ mod tests {
             .begin(AckKind::Replied)
             .unwrap()
             .settle(CallbackOutcome::Rejected);
-        assert_eq!(state.load(), Phase::Uncertain(AckKind::Deferred));
+        assert_eq!(
+            state.load(),
+            Phase::Uncertain(PossibleKinds::default().with(AckKind::Deferred))
+        );
 
         // A retry that succeeds settles to its own kind.
         state
@@ -1935,19 +2166,60 @@ mod tests {
         assert_eq!(state.phase(), InteractionResponsePhase::Uncertain);
     }
 
+    /// Regression (review P2): a deferral lands but its response is lost, a
+    /// retried reply also loses its response, and a third attempt gets 40060.
+    /// 40060 proves *an* attempt landed, not which: the state must not claim
+    /// "replied" while Discord may hold the deferral.
+    #[test]
+    fn already_acknowledged_after_mixed_uncertain_attempts_keeps_the_kind_unknown() {
+        let state = InteractionResponseState::new();
+        state
+            .begin(AckKind::Deferred)
+            .unwrap()
+            .settle(CallbackOutcome::Ambiguous);
+        state
+            .begin(AckKind::Replied)
+            .unwrap()
+            .settle(CallbackOutcome::Ambiguous);
+        assert_eq!(state.phase(), InteractionResponsePhase::Uncertain);
+        // A dropped retry also widens, never narrows, the possible kinds.
+        drop(state.begin(AckKind::Replied).unwrap());
+        state
+            .begin(AckKind::Replied)
+            .unwrap()
+            .settle(CallbackOutcome::AlreadyAcknowledged);
+
+        assert_eq!(state.phase(), InteractionResponsePhase::Acknowledged);
+        assert!(state.is_acknowledged());
+        assert!(!state.is_deferred());
+        assert!(!state.is_replied());
+        assert_eq!(
+            format!("{state:?}"),
+            "InteractionResponseState(Acknowledged)"
+        );
+        // Further initial responses are refused; an edit settles the kind.
+        assert!(state.begin(AckKind::Replied).is_err());
+        state.confirm_original(OriginalSeen::Exists);
+        assert_eq!(state.phase(), InteractionResponsePhase::Acknowledged);
+        state.confirm_original(OriginalSeen::Edited);
+        assert!(state.is_replied());
+    }
+
     #[test]
     fn original_operations_confirm_and_promote_the_state() {
+        // Proof of an original response outside this state: kind unknown.
         let state = InteractionResponseState::new();
-        state.confirm_original(true);
-        assert_eq!(state.phase(), InteractionResponsePhase::Unacknowledged);
+        state.confirm_original(OriginalSeen::Exists);
+        assert_eq!(state.phase(), InteractionResponsePhase::Acknowledged);
 
+        let state = InteractionResponseState::new();
         state
             .begin(AckKind::Deferred)
             .unwrap()
             .settle(CallbackOutcome::Accepted);
-        state.confirm_original(false);
+        state.confirm_original(OriginalSeen::Exists);
         assert!(state.is_deferred());
-        state.confirm_original(true);
+        state.confirm_original(OriginalSeen::Edited);
         assert!(state.is_replied());
 
         let state = InteractionResponseState::new();
@@ -1955,7 +2227,7 @@ mod tests {
             .begin(AckKind::Deferred)
             .unwrap()
             .settle(CallbackOutcome::Ambiguous);
-        state.confirm_original(false);
+        state.confirm_original(OriginalSeen::Exists);
         assert!(state.is_deferred());
 
         let state = InteractionResponseState::new();
@@ -1963,8 +2235,72 @@ mod tests {
             .begin(AckKind::Deferred)
             .unwrap()
             .settle(CallbackOutcome::Ambiguous);
-        state.confirm_original(true);
+        state.confirm_original(OriginalSeen::Edited);
         assert!(state.is_replied());
+    }
+
+    /// Evidence recorded while a retry is in flight survives any outcome of
+    /// that retry, and the stronger evidence wins.
+    #[test]
+    fn original_evidence_during_a_retry_survives_its_settlement() {
+        let uncertain_deferral = || {
+            let state = InteractionResponseState::new();
+            state
+                .begin(AckKind::Deferred)
+                .unwrap()
+                .settle(CallbackOutcome::Ambiguous);
+            state
+        };
+        for (outcome, seen, expected) in [
+            (
+                CallbackOutcome::Rejected,
+                OriginalSeen::Edited,
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                CallbackOutcome::Ambiguous,
+                OriginalSeen::Edited,
+                InteractionResponsePhase::Replied,
+            ),
+            (
+                CallbackOutcome::Rejected,
+                OriginalSeen::Exists,
+                InteractionResponsePhase::Deferred,
+            ),
+            (
+                CallbackOutcome::AlreadyAcknowledged,
+                OriginalSeen::Exists,
+                InteractionResponsePhase::Deferred,
+            ),
+            (
+                CallbackOutcome::Accepted,
+                OriginalSeen::Exists,
+                InteractionResponsePhase::Replied,
+            ),
+        ] {
+            let state = uncertain_deferral();
+            let claim = state.begin(AckKind::Replied).unwrap();
+            state.confirm_original(seen);
+            assert_eq!(state.phase(), InteractionResponsePhase::InFlight);
+            claim.settle(outcome);
+            assert_eq!(state.phase(), expected, "{outcome:?} after {seen:?}");
+        }
+
+        // The stronger evidence is kept when both arrive.
+        let state = uncertain_deferral();
+        let claim = state.begin(AckKind::Replied).unwrap();
+        state.confirm_original(OriginalSeen::Edited);
+        state.confirm_original(OriginalSeen::Exists);
+        drop(claim);
+        assert!(state.is_replied());
+
+        // Proof of a response someone else sent, seen during a fresh attempt
+        // that Discord then rejects.
+        let state = InteractionResponseState::new();
+        let claim = state.begin(AckKind::Replied).unwrap();
+        state.confirm_original(OriginalSeen::Exists);
+        claim.settle(CallbackOutcome::Rejected);
+        assert_eq!(state.phase(), InteractionResponsePhase::Acknowledged);
     }
 
     #[test]
@@ -2133,6 +2469,59 @@ mod tests {
             InteractionResponsePhase::Unacknowledged
         );
         assert!(!server.has_pending_request());
+    }
+
+    /// Regression (review P3): an `@original` edit starts from `Uncertain`,
+    /// another clone starts an initial-response retry, the edit succeeds
+    /// while the retry is in flight, then the retry is rejected. The edit's
+    /// proof that the original exists must not be lost.
+    #[tokio::test]
+    async fn edit_success_during_a_rejected_retry_keeps_the_proof() {
+        let (release_edit, held_edit) = tokio::sync::oneshot::channel();
+        let (release_retry, held_retry) = tokio::sync::oneshot::channel();
+        let mut server = mock::spawn(vec![
+            mock::Reply::Held(held_edit),
+            mock::Reply::Held(held_retry),
+        ])
+        .await;
+        let http = mock_client(&server, Duration::from_secs(10));
+        let context = sample_context();
+        context
+            .response_state
+            .begin(AckKind::Deferred)
+            .unwrap()
+            .settle(CallbackOutcome::Ambiguous);
+
+        let edit = tokio::spawn({
+            let (context, http) = (context.clone(), http.clone());
+            async move { context.edit_reply(&http, "edited").await }
+        });
+        assert_eq!(
+            server.next_request().await,
+            "PATCH /webhooks/2/token/messages/@original"
+        );
+        let retry = tokio::spawn({
+            let (context, http) = (context.clone(), http.clone());
+            async move { context.reply(&http, "retry").await }
+        });
+        assert_eq!(
+            server.next_request().await,
+            "POST /interactions/1/token/callback"
+        );
+        assert_eq!(context.response_phase(), InteractionResponsePhase::InFlight);
+
+        release_edit.send((200, MESSAGE_JSON)).unwrap();
+        edit.await.unwrap().unwrap();
+        assert_eq!(context.response_phase(), InteractionResponsePhase::InFlight);
+
+        release_retry
+            .send((400, r#"{"code":50035,"message":"Invalid Form Body"}"#))
+            .unwrap();
+        assert!(retry.await.unwrap().is_err());
+        assert!(
+            context.is_replied(),
+            "the successful edit proves a (now edited) original response"
+        );
     }
 
     /// Regression: cancelling a deferral mid-flight left 2.2.0's state

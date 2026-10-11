@@ -81,7 +81,9 @@ where
 
 ### 응답 데이터
 
-`InteractionReplyData`는 `&str`, `String`, `MessageBuilder`, `CreateMessage`에서 변환됩니다. 인터랙션 응답이 받는 모든 필드(`content`, `embeds`, `components`, `flags`, `allowed_mentions`, `poll`)를 그대로 옮깁니다(3.0. 2.2.0은 `poll`을 버렸습니다). 채널 메시지에만 있는 `CreateMessage` 필드(`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`)는 Discord 인터랙션 본문에 해당 필드가 없으므로 옮기지 않습니다.
+`InteractionReplyData`는 `&str`, `String`, `MessageBuilder`에서 변환되며, 인터랙션 응답이 받는 모든 필드(`content`, `embeds`, `components`, `flags`, `allowed_mentions`, `poll`)를 옮깁니다(3.0. 2.2.0은 `poll`을 버렸습니다).
+
+`CreateMessage`는 `InteractionReplyData::try_from(message)?`로 변환합니다(3.0. 2.2.0에서는 실패하지 않는 `From`이었습니다). 채널 메시지에만 있는 필드(`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`)가 설정되어 있으면 변환이 실패합니다. Discord 인터랙션 본문에는 해당 필드가 없어서, 조용히 버리면 메시지 의미가 바뀌기 때문입니다. `CreateMessage`를 받는 헬퍼도 요청을 보내기 전에 같은 이유로 실패합니다.
 
 ### 공유 응답 상태
 
@@ -92,16 +94,21 @@ where
 | `Unacknowledged` | 아직 보내지 않았거나 Discord가 마지막 시도를 거부함 | 허용 | 로컬에서 실패 |
 | `InFlight` | 최초 응답을 보내는 중 | 로컬에서 실패 | 결과가 나올 때까지 **대기** |
 | `Deferred` / `Replied` | Discord가 응답을 수락함 | 로컬에서 실패 | 허용 |
+| `Acknowledged` | Discord에 최초 응답이 있으나 종류를 알 수 없음 | 로컬에서 실패 | 허용 |
 | `Uncertain` | 결과를 알 수 없음(타임아웃, 5xx, 응답 본문 읽기 실패, 보내던 future가 drop됨) | 허용(안전한 재시도) | Discord에 그대로 전달 |
 
 - 슬롯은 Discord가 콜백을 수락한 뒤에만 `Deferred`/`Replied`가 되므로, 다른 복제본의 follow-up이 reply보다 먼저 나가는 경합이 없어졌습니다.
 - 4xx, 429, 로컬 검증 실패, 연결 자체가 맺어지지 않은 경우는 `Unacknowledged`로 되돌려 다시 시도할 수 있습니다.
-- 타임아웃, 5xx, 응답 본문 읽기 실패, 취소는 `Uncertain`으로 남깁니다. 최초 응답을 다시 보내도 안전합니다. 앞선 시도가 이미 도착했다면 Discord가 40060("already acknowledged")으로 답하고, 두 번째 응답 없이 상태가 확인됨(acknowledged)으로 정리됩니다. `edit_reply`, `fetch_reply`, `delete_reply`가 성공해도 정리됩니다.
-- `is_replied()`, `is_deferred()`, `is_acknowledged()`는 Discord가 확인한 내용만 보고하므로 `InFlight`·`Uncertain` 동안에는 false입니다.
+- 타임아웃, 5xx, 응답 본문 읽기 실패, 취소는 `Uncertain`으로 남기며, 도착했을 수 있는 응답 종류(defer 또는 reply)를 모두 기억합니다. 어떤 종류로든 최초 응답을 다시 보내도 안전합니다. 앞선 시도가 도착했다면 Discord가 40060("already acknowledged")으로 답하고, 두 번째 응답 없이 상태가 확인됨(acknowledged)으로 정리됩니다. 40060은 *어느* 시도가 도착했는지 알려 주지 않으므로, 불확실한 시도가 모두 같은 종류였을 때만 종류를 알 수 있고 아니면 `Acknowledged`(종류 미상)가 됩니다. `edit_reply`(→ `Replied`), `fetch_reply`, `delete_reply`가 성공해도 정리되며, 재시도가 전송 중일 때 성공해도 그 증거는 유지됩니다.
+- `is_replied()`, `is_deferred()`, `is_acknowledged()`는 Discord가 확인한 내용만 보고하므로 `InFlight`·`Uncertain` 동안에는 false이고, `Acknowledged`에서는 `is_acknowledged()`만 true입니다.
 - defer된 인터랙션은 discord.js와 같이 `edit_reply` 시 replied로 승격됩니다.
-- 타입드 HTTP 인터랙션 엔드포인트도 핸들러가 반환한 인라인 응답을 같은 상태에 기록하므로, 엔드포인트가 응답한 뒤 보관해 둔 복제본으로 `follow_up`할 수 있습니다.
+- 타입드 HTTP 인터랙션 엔드포인트도 같은 슬롯을 두고 경쟁합니다. 인라인 응답과 REST 응답 중 정확히 하나만 최초 응답을 소유합니다([인터랙션 엔드포인트](./interactions-endpoint.md) 문서의 "응답 상태" 참고).
+
+전송 중인 응답을 기다리는 데에는 자체 타임아웃이 없습니다. 최초 응답을 보내는 future가 끝나거나 drop되어야 대기가 끝납니다. 같은 작업(task)에서 일부만 poll한 최초 응답 future를 살려 둔 채 follow-up을 기다리지 마십시오(예: `select!`에서 진 분기). 그 future를 drop하거나 계속 poll하지 않으면 follow-up은 영원히 기다립니다.
 
 상태는 프로세스 안에서만 유지됩니다. serde로 저장소에서 다시 만든 컨텍스트는 `Unacknowledged`로 시작하므로 `RestClient` 메서드(`create_followup_message_with_application_id` 등)로 follow-up을 보냅니다.
+
+"연결 실패나 최종 4xx는 콜백이 전달되지 않았다는 뜻"이라는 가정은 리다이렉트를 따르지 않고 콜백을 재전송하지 않는 `RestClient::new`·`RestClientBuilder::build` 클라이언트에서만 성립합니다. 리다이렉트를 따르는 클라이언트를 `RestClientBuilder::use_client`로 넘기거나 `retry_non_idempotent_requests(true)`를 켜면 이 가정이 깨집니다. 이 경우 전달된 응답에 대해 상태가 `Unacknowledged`로 보일 수 있으며, 다음 최초 응답이 40060을 받으면 정리됩니다.
 
 ### 헬퍼 함수: 상태 공유형과 상태 비공유형
 
