@@ -25,7 +25,7 @@ pub use crate::helpers::{
 };
 // Deprecated in 3.0 in favour of `InteractionResponder`; kept so existing
 // prelude users keep compiling (with a deprecation warning at the call site).
-#[allow(deprecated)]
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use crate::helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
     delete_original_response, edit_followup_response, edit_original_response, followup_message,
@@ -73,7 +73,7 @@ pub use crate::model::{
     ApplicationId, ChannelId, GenericId, GuildId, InvalidId, MessageId, RoleId, UserId,
 };
 // Deprecated 2.x name; glob importers get a note pointing at the typed IDs.
-#[allow(deprecated)]
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use crate::model::Snowflake;
 pub use crate::oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,

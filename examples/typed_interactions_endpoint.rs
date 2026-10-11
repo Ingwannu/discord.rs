@@ -2,8 +2,8 @@
 use axum::Router;
 #[cfg(feature = "interactions")]
 use discordrs::{
-    typed_interactions_endpoint, ChatInputCommandInteraction, CreateMessage, Interaction,
-    InteractionContextData, InteractionResponse, TypedInteractionHandler,
+    try_typed_interactions_endpoint, ChatInputCommandInteraction, CreateMessage, DiscordError,
+    Interaction, InteractionContextData, InteractionResponse, TypedInteractionHandler,
 };
 
 #[cfg(feature = "interactions")]
@@ -35,14 +35,15 @@ impl TypedInteractionHandler for Handler {
 }
 
 #[cfg(feature = "interactions")]
-fn build_router(public_key: &str) -> Router {
-    typed_interactions_endpoint(public_key, Handler)
+fn build_router(public_key: &str) -> Result<Router, DiscordError> {
+    try_typed_interactions_endpoint(public_key, Handler)
 }
 
 #[cfg(feature = "interactions")]
-fn main() {
+fn main() -> Result<(), DiscordError> {
     let public_key = std::env::var("DISCORD_PUBLIC_KEY").unwrap_or_default();
-    let _router = build_router(&public_key);
+    let _router = build_router(&public_key)?;
+    Ok(())
 }
 
 #[cfg(not(feature = "interactions"))]

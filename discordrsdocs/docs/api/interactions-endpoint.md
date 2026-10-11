@@ -18,6 +18,8 @@ discordrs = { version = "2.2.0", features = ["interactions"] }
 - Structured response encoding (`Pong`, message, deferred, modal, update)
 - Optional `AppFramework` routing for commands, components, and modals
 
+Build the router with `try_interactions_endpoint` / `try_typed_interactions_endpoint`, which return an error for an invalid public key. The non-`try_` wrappers panic on that error and are deprecated since 3.0.
+
 ## Typical Flow
 
 1. Receive `/interactions` HTTP request
@@ -29,7 +31,7 @@ discordrs = { version = "2.2.0", features = ["interactions"] }
 
 ## Response State (3.0)
 
-The typed endpoint (`try_typed_interactions_endpoint`, `typed_interactions_endpoint`) passes the handler a context and an interaction that share one `InteractionResponseState` (see [HTTP and Helpers](./http-and-helpers.md#shared-response-state)). Exactly one transport owns the initial response; the inline answer and the REST callback claim the same slot atomically:
+The typed endpoint (`try_typed_interactions_endpoint`) passes the handler a context and an interaction that share one `InteractionResponseState` (see [HTTP and Helpers](./http-and-helpers.md#shared-response-state)). Exactly one transport owns the initial response; the inline answer and the REST callback claim the same slot atomically:
 
 | Handler did | Endpoint answers | Shared state |
 |---|---|---|

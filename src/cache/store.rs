@@ -82,12 +82,12 @@ where
     }
 
     /// Used by tests; the store tracks entity counts in its own maps.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.queue.len()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.queue.is_empty()
     }

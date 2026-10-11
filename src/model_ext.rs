@@ -381,7 +381,7 @@ impl Guild {
         since = "3.0.0",
         note = "Discord removed bot guild ownership in 2025; see RestClient::delete_guild"
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated, reason = "wraps the deprecated route it mirrors")]
     pub async fn delete(&self, http: &RestClient) -> Result<(), DiscordError> {
         http.delete_guild(self.id).await
     }
@@ -458,7 +458,7 @@ impl Guild {
         since = "3.0.0",
         note = "Discord removed bot guild ownership in 2025; see RestClient::modify_guild_mfa_level"
     )]
-    #[allow(deprecated)]
+    #[expect(deprecated, reason = "wraps the deprecated route it mirrors")]
     pub async fn set_mfa_level(
         &self,
         http: &RestClient,

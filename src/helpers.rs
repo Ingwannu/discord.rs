@@ -599,7 +599,7 @@ pub async fn respond_component_with_components_v2(
 
 // The deprecated helpers stay covered until they are removed.
 #[cfg(test)]
-#[allow(deprecated)]
+#[expect(deprecated, reason = "covers the deprecated helpers")]
 mod tests {
     use crate::model::test_id;
     use serde_json::json;

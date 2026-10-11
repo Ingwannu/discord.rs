@@ -188,7 +188,7 @@ pub use model::{
 };
 // The deprecated 2.x name, kept so `discordrs::Snowflake` users get a
 // deprecation note pointing at the typed IDs instead of "not found".
-#[allow(deprecated)]
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use model::Snowflake;
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
@@ -276,7 +276,7 @@ pub use helpers::{
 };
 // Deprecated in 3.0 in favour of `InteractionResponder`; re-exported so
 // existing imports keep compiling (with a deprecation warning at the call site).
-#[allow(deprecated)]
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use helpers::{
     defer_interaction, defer_update_interaction, delete_followup_response,
     delete_original_response, edit_followup_response, edit_original_response, followup_message,
@@ -296,10 +296,13 @@ pub use gateway::{
 
 #[cfg(feature = "interactions")]
 pub use interactions::{
-    interactions_endpoint, try_interactions_endpoint, try_typed_interactions_endpoint,
-    typed_interactions_endpoint, verify_discord_signature, InteractionHandler, InteractionResponse,
-    TypedInteractionHandler,
+    try_interactions_endpoint, try_typed_interactions_endpoint, verify_discord_signature,
+    InteractionHandler, InteractionResponse, TypedInteractionHandler,
 };
+// Deprecated in 3.0: they panic on an invalid public key.
+#[cfg(feature = "interactions")]
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
+pub use interactions::{interactions_endpoint, typed_interactions_endpoint};
 
 #[cfg(feature = "collectors")]
 pub use collector::{

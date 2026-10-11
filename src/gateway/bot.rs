@@ -714,7 +714,11 @@ impl Context {
 /// runtime stores the handler type-erased and boxes each `handle_event`
 /// future once; the typed hook it awaits is part of that future, so the
 /// default routing allocates once per event (async-trait boxed both).
-#[allow(missing_docs)]
+#[expect(
+    missing_docs,
+    reason = "one hook per Gateway event: the hook is named after the event, whose payload \
+              type carries the docs"
+)]
 pub trait EventHandler: Send + Sync + 'static {
     /// Handles one decoded Gateway event and dispatches to typed convenience hooks by default.
     fn handle_event(&self, ctx: Context, event: Event) -> impl Future<Output = ()> + Send {

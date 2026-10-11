@@ -8,6 +8,8 @@ HTTP `/interactions` 콜백 처리 모드입니다.
 - Axum 라우팅
 - 타입 파싱 + 구조화 응답
 
+라우터는 잘못된 공개 키를 오류로 돌려주는 `try_interactions_endpoint` / `try_typed_interactions_endpoint`로 만듭니다. `try_`가 없는 래퍼는 그 오류에서 패닉하며 3.0부터 deprecated입니다.
+
 ## 사용 시점
 
 - Slash Command 중심 앱
@@ -25,7 +27,7 @@ HTTP `/interactions` 콜백 처리 모드입니다.
 
 ## 응답 상태 (3.0)
 
-타입드 엔드포인트(`try_typed_interactions_endpoint`, `typed_interactions_endpoint`)는 핸들러에 하나의 `InteractionResponseState`를 공유하는 컨텍스트와 인터랙션을 넘깁니다([HTTP 및 헬퍼](./http-and-helpers.md) 문서의 "공유 응답 상태" 참고). 최초 응답은 정확히 하나의 전송 경로만 소유하며, 인라인 응답과 REST 콜백은 같은 슬롯을 원자적으로 선점합니다.
+타입드 엔드포인트(`try_typed_interactions_endpoint`)는 핸들러에 하나의 `InteractionResponseState`를 공유하는 컨텍스트와 인터랙션을 넘깁니다([HTTP 및 헬퍼](./http-and-helpers.md) 문서의 "공유 응답 상태" 참고). 최초 응답은 정확히 하나의 전송 경로만 소유하며, 인라인 응답과 REST 콜백은 같은 슬롯을 원자적으로 선점합니다.
 
 | 핸들러 동작 | 엔드포인트 응답 | 공유 상태 |
 |---|---|---|

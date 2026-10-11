@@ -406,6 +406,19 @@ where
 }
 
 /// Provides the `interactions_endpoint` helper.
+///
+/// # Panics
+///
+/// Panics if `public_key` is not a valid hex-encoded Ed25519 public key.
+/// [`try_interactions_endpoint`] returns that error instead.
+#[deprecated(
+    since = "3.0.0",
+    note = "panics on an invalid public key; use try_interactions_endpoint and handle the error"
+)]
+#[expect(
+    clippy::panic,
+    reason = "the documented contract of this deprecated wrapper"
+)]
 pub fn interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
@@ -539,6 +552,20 @@ where
 }
 
 /// Provides the `typed_interactions_endpoint` helper.
+///
+/// # Panics
+///
+/// Panics if `public_key` is not a valid hex-encoded Ed25519 public key.
+/// [`try_typed_interactions_endpoint`] returns that error instead.
+#[deprecated(
+    since = "3.0.0",
+    note = "panics on an invalid public key; use try_typed_interactions_endpoint and handle the \
+            error"
+)]
+#[expect(
+    clippy::panic,
+    reason = "the documented contract of this deprecated wrapper"
+)]
 pub fn typed_interactions_endpoint<H>(public_key: &str, handler: H) -> Router
 where
     H: TypedInteractionHandler + Clone + Send + Sync + 'static,
