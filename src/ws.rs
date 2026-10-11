@@ -162,6 +162,12 @@ pub type IdentifyPermitFuture<'a> =
 /// (`shard_id % max_concurrency`) per 5 seconds, measured from the previous
 /// [`IdentifyOutcome::Sent`]. An error from `acquire` stops that shard:
 /// `GatewayClient::run` returns it.
+///
+/// A wait may last long (until a bucket frees up or the daily session
+/// budget resets). Meanwhile the client keeps serving its control channel,
+/// so a shutdown ends the wait at once. Once granted, connection setup
+/// (connect, WebSocket upgrade, and HELLO) is bounded to 15 seconds; an
+/// attempt that runs over is reported as [`IdentifyOutcome::Abandoned`].
 pub trait IdentifyGate: Send + Sync {
     /// Waits until `shard_id` (of `shard_count`) may IDENTIFY.
     fn acquire(&self, shard_id: u32, shard_count: u32) -> IdentifyPermitFuture<'_>;

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{sleep, timeout, timeout_at, Duration, Instant};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{
@@ -35,11 +35,12 @@ const OP_HEARTBEAT_ACK: u64 = 11;
 pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Discord allows at most one IDENTIFY per shard per 5 seconds.
 const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
-/// Upper bound on dialing while an IDENTIFY permit is held. The permit
-/// blocks every other shard in the bucket, so a hung TCP/TLS connect gives
-/// it back (as abandoned) and retries through the normal backoff, instead of
-/// holding the bucket until the gate's own timeout.
-const GATED_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Upper bound on connection setup (TCP/TLS connect, WebSocket upgrade, and
+/// HELLO) while an IDENTIFY permit is held. The permit blocks every other
+/// shard in the bucket, so a hung connect or a server that never sends
+/// HELLO gives it back (as abandoned) and retries through the normal
+/// backoff, instead of holding the bucket until the gate's own watchdog.
+const GATED_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// A connection that dies faster than this is treated as unhealthy and
 /// re-dialed with escalating backoff instead of immediately.
 const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
@@ -65,6 +66,16 @@ pub(crate) struct GatewayClient {
     /// already sleeps before disconnecting, and IDENTIFY pacing bounds the
     /// identify rate — while unsolicited short-lived disconnects back off.
     server_directed_reconnect: bool,
+    /// [`GATED_SETUP_TIMEOUT`]; a field so tests can shorten it.
+    gated_setup_timeout: Duration,
+}
+
+/// Result of waiting for an IDENTIFY permit.
+enum PermitWait {
+    /// Proceed; `Some` when a gate granted a permit for this attempt.
+    Ready(Option<IdentifyPermit>),
+    /// A `Shutdown` command arrived while waiting.
+    Shutdown,
 }
 
 // Callback type for dispatching events
@@ -101,6 +112,7 @@ impl GatewayClient {
             heartbeat_ack_received: Arc::new(AtomicBool::new(true)),
             last_identify: None,
             server_directed_reconnect: false,
+            gated_setup_timeout: GATED_SETUP_TIMEOUT,
         }
     }
 
@@ -224,20 +236,41 @@ impl GatewayClient {
     }
 
     /// Asks the configured IDENTIFY gate for a permit when the next
-    /// connection will IDENTIFY (no session to resume). `Ok(None)` means no
-    /// gate is configured or the connection will RESUME.
-    async fn acquire_identify_permit(
-        &self,
-    ) -> Result<Option<IdentifyPermit>, crate::error::DiscordError> {
+    /// connection will IDENTIFY (no session to resume).
+    ///
+    /// The wait can last until a bucket frees up or the daily session budget
+    /// resets, so the control channel keeps being served meanwhile:
+    /// `Shutdown` ends the wait at once, other commands are deferred to the
+    /// connection, and `Reconnect` is moot because this attempt is already a
+    /// fresh session.
+    async fn acquire_identify_permit(&mut self) -> Result<PermitWait, crate::error::DiscordError> {
         if self.session_id.is_some() {
-            return Ok(None);
+            return Ok(PermitWait::Ready(None));
         }
         let Some(gate) = self.gateway_config.identify_gate_ref().cloned() else {
-            return Ok(None);
+            return Ok(PermitWait::Ready(None));
         };
         let [shard_id, shard_count] = self.shard_info.unwrap_or([0, 1]);
         debug!("Waiting for IDENTIFY permit for shard {shard_id}/{shard_count}");
-        gate.acquire(shard_id, shard_count).await.map(Some)
+        let acquire = gate.acquire(shard_id, shard_count);
+        tokio::pin!(acquire);
+        let mut listening = self.command_rx.is_some();
+        loop {
+            tokio::select! {
+                permit = &mut acquire => return permit.map(|permit| PermitWait::Ready(Some(permit))),
+                command = async {
+                    match self.command_rx.as_mut() {
+                        Some(command_rx) => command_rx.recv().await,
+                        None => None,
+                    }
+                }, if listening => match command {
+                    Some(GatewayCommand::Shutdown) => return Ok(PermitWait::Shutdown),
+                    Some(GatewayCommand::Reconnect) => {}
+                    Some(command) => self.deferred_commands.push_back(command),
+                    None => listening = false,
+                },
+            }
+        }
     }
 
     async fn connect_and_run(
@@ -250,20 +283,27 @@ impl GatewayClient {
         // the gate. Every early return below drops the permit, which reports
         // the attempt as abandoned.
         let mut identify_permit = match self.acquire_identify_permit().await {
-            Ok(permit) => permit,
+            Ok(PermitWait::Ready(permit)) => permit,
+            Ok(PermitWait::Shutdown) => return Ok(ReconnectAction::Shutdown),
             Err(error) => return Ok(ReconnectAction::Fatal(error)),
         };
-        let (ws_stream, _) = if identify_permit.is_some() {
-            timeout(GATED_CONNECT_TIMEOUT, connect_async(url))
+        // While a permit is held, connect + upgrade + HELLO share one
+        // deadline.
+        let gated_setup_timeout = self.gated_setup_timeout;
+        let setup_deadline = identify_permit
+            .as_ref()
+            .map(|_| Instant::now() + gated_setup_timeout);
+        let setup_timed_out = || {
+            crate::error::DiscordError::gateway(format!(
+                "gateway connection setup (connect and HELLO) took longer than \
+                 {gated_setup_timeout:?} while holding an IDENTIFY permit"
+            ))
+        };
+        let (ws_stream, _) = match setup_deadline {
+            Some(deadline) => timeout_at(deadline, connect_async(url))
                 .await
-                .map_err(|_| {
-                    crate::error::DiscordError::gateway(format!(
-                        "gateway connect took longer than {GATED_CONNECT_TIMEOUT:?} \
-                         while holding an IDENTIFY permit"
-                    ))
-                })??
-        } else {
-            connect_async(url).await?
+                .map_err(|_| setup_timed_out())??,
+            None => connect_async(url).await?,
         };
         let (mut write, mut read) = ws_stream.split();
         let mut compression_decoder = GatewayCompressionDecoder::new(
@@ -277,7 +317,13 @@ impl GatewayClient {
 
         // Wait for Hello
         let hello_text = loop {
-            let hello = read.next().await.ok_or_else(|| {
+            let next = match setup_deadline {
+                Some(deadline) => timeout_at(deadline, read.next())
+                    .await
+                    .map_err(|_| setup_timed_out())?,
+                None => read.next().await,
+            };
+            let hello = next.ok_or_else(|| {
                 crate::error::DiscordError::gateway("gateway closed before Hello")
             })??;
             // Discord can reject a connection before HELLO (for example 4012
@@ -2184,6 +2230,86 @@ mod tests {
             *gate.outcomes.lock().unwrap(),
             vec![crate::ws::IdentifyOutcome::Abandoned]
         );
+    }
+
+    /// Gate that never grants, like one waiting for a daily budget reset.
+    struct PendingGate;
+
+    impl crate::ws::IdentifyGate for PendingGate {
+        fn acquire(
+            &self,
+            _shard_id: u32,
+            _shard_count: u32,
+        ) -> crate::ws::IdentifyPermitFuture<'_> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    /// Regression: the client awaited the gate without serving its control
+    /// channel, so `Shutdown` could wait until the next budget reset.
+    #[tokio::test]
+    async fn shutdown_ends_a_pending_identify_gate_wait() {
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let gate: Arc<dyn crate::ws::IdentifyGate> = Arc::new(PendingGate);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::default().identify_gate(gate))
+            .control(command_rx);
+        command_tx
+            .send(GatewayCommand::UpdatePresence("idle".into()))
+            .await
+            .unwrap();
+        command_tx.send(GatewayCommand::Reconnect).await.unwrap();
+        command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+
+        // Nothing listens on this URL: the gate is never passed, so the
+        // client must not dial.
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("Shutdown must end the wait for an IDENTIFY permit");
+        assert!(result.is_ok());
+        // Other commands are kept for the connection, not lost.
+        assert!(matches!(
+            client.deferred_commands.front(),
+            Some(GatewayCommand::UpdatePresence(status)) if status == "idle"
+        ));
+        assert_eq!(client.deferred_commands.len(), 1);
+    }
+
+    /// Regression: only the TCP/TLS connect was bounded while a permit was
+    /// held; an upgraded socket that never sent HELLO kept the bucket until
+    /// the parent's kill watchdog fired.
+    #[tokio::test]
+    async fn gated_setup_gives_up_when_hello_never_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ws = accept_async(stream).await.unwrap();
+            // Upgraded, but silent: no HELLO until the test is done.
+            let _ = release_rx.await;
+        });
+        let gate = Arc::new(RecordingGate::default());
+        let mut client = gated_client(&gate);
+        client.gated_setup_timeout = Duration::from_millis(200);
+
+        let started = Instant::now();
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.connect_and_run(&url, Arc::new(|_, _| {})),
+        )
+        .await
+        .expect("a silent server must not hold the permit")
+        .err()
+        .expect("the attempt must fail");
+        assert!(error.to_string().contains("HELLO"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            *gate.outcomes.lock().unwrap(),
+            vec![crate::ws::IdentifyOutcome::Abandoned]
+        );
+        let _ = release_tx.send(());
+        server.await.unwrap();
     }
 
     #[tokio::test]

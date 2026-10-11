@@ -173,7 +173,8 @@ async fn run_parent(token: String) -> Result<(), DiscordError> {
         }
     });
 
-    // Returns an error if a child could not be confirmed stopped.
+    // Returns an error naming every child that stopped for good for any
+    // reason other than a requested shutdown (gave up, unconfirmed kill, ...).
     manager.wait().await
 }
 

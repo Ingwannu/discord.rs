@@ -101,9 +101,14 @@ Discord allows one IDENTIFY per bucket every 5 seconds, where the bucket is `sha
 - **Every fresh IDENTIFY goes through the parent.** With `GatewayConnectionConfig::identify_gate(child.identify_gate())`, the gateway client asks for a permit before each connection that will IDENTIFY. That covers the first connect and every fresh session after INVALID_SESSION, close codes 4007/4009, or a reconnect before READY. RESUME needs no permit. READY handlers play no part in pacing.
 - **The client reports each outcome.** It sends `Sent` right after the IDENTIFY write (also when the write fails or is cancelled midway), or `Abandoned` when the attempt ended before the write, such as a connect failure or a close before HELLO.
 - **The next grant waits for that outcome.** After `Sent`, the next grant in the bucket comes `identify_interval` later. After `Abandoned`, it comes at once and the session start is refunded.
-- **The permit is taken before dialing.** This client heartbeats only after IDENTIFY/RESUME, so a queue wait after HELLO could outlast `heartbeat_interval`. The permit therefore also covers connect + HELLO; a connect attempt is abandoned after 15s while holding one.
+- **The permit is taken before dialing.** This client heartbeats only after IDENTIFY/RESUME, so a queue wait after HELLO could outlast `heartbeat_interval`. The permit therefore also covers connection setup. Setup (TCP/TLS connect, WebSocket upgrade, and HELLO) is bounded to 15s while a permit is held; an attempt that runs over is abandoned and retried with backoff.
+- **Waiting for a permit never blocks shutdown.** The client keeps serving its control channel while it waits, even until a budget reset: `Shutdown` ends the wait at once, and other commands are kept for the connection.
 - **The parent keeps the bucket until it hears the outcome or the child is confirmed dead.** A child that holds a permit longer than `identify_permit_timeout` is killed. The bucket is reused only after its exit is confirmed, so a stalled child can never IDENTIFY next to the shard that got its slot. A child that dies while holding a permit counts as having sent its IDENTIFY.
-- **The session budget is counted conservatively,** one start per grant. When it runs out, grants pause until the reset, then `spawn_auto` reads `/gateway/bot` again. With `Fixed(..)`, the budget is assumed to be back at `total` after the reset. The count is per manager: several managers sharing one token must split the budget themselves.
+- **The session budget is counted conservatively.** Every grant takes a reservation, settled once when the attempt is reported: `Abandoned` refunds it, and the refund immediately wakes a grant that is waiting for budget.
+  - When the budget runs out, grants pause until a refund or the reset. At the reset, `spawn_auto` reads `/gateway/bot` again and counts every reservation still outstanding (granted in any bucket but not yet reported) against the new window. The count may go negative, so a later refund cannot create a start Discord does not have.
+  - A failed refresh keeps grants paused and retries with backoff; it never assumes a reset.
+  - With `Fixed(..)`, there is nothing to refresh from, so after the reset the budget is assumed to be back at `total` minus outstanding reservations.
+  - The count is per manager: several managers sharing one token must split the budget themselves.
 - **Custom gateways** can use `IdentifyGate` directly. `child.acquire_identify(shard_id)` returns an `IdentifyPermit`: call `finish(IdentifyOutcome::Sent)` after writing IDENTIFY, and dropping it reports `Abandoned`.
 
 `ClientBuilder` has no dedicated setter yet; pass the gate through `ClientBuilder::gateway_config(...)` as shown above.
@@ -142,7 +147,13 @@ Children also receive `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`, `DISCORDRS
 
 - `manager.children()` reports per-child `ChildStatus` (`Starting` → `Ready`/`Running` → `Respawning`/`Stopped`).
 - `manager.shutdown().await` is the completion API. It sends the `shutdown` op ahead of any queued data, closes stdin, keeps reading the child's stdout, and kills the child when `shutdown_timeout` (measured from the shutdown request) passes. A child that stopped reading stdin cannot delay this, and it cannot stall `broadcast` either: a full data queue answers `null` immediately.
-- `manager.wait()` and `manager.shutdown()` share one completion state, so any number of concurrent callers all return only after every child monitor has finished, with the same result. That result is an error if a killed child's exit could not be confirmed (its IDENTIFY permits then stay held until it does exit), if a monitor panicked, or if the runtime shut down underneath it.
+- `manager.wait()` and `manager.shutdown()` share one completion state, so any number of concurrent callers all return only after every child monitor has finished, with the same result. The result is `Ok` only if every child ended by request (or, with respawn disabled, by a successful exit). Otherwise the error lists each terminal outcome:
+  - a child that gave up after `max_respawns`;
+  - an unsuccessful exit with respawn disabled;
+  - a spawn failure;
+  - a failed `child.wait()`, after which the child is killed and its exit confirmed before its IDENTIFY buckets are returned;
+  - a killed child whose exit could not be confirmed (its permits then stay held until it does exit);
+  - a panicked monitor, or a runtime that shut down underneath one.
 - Broadcast entries are `null` for children that are down, respawning, not yet serving, at their handler limit, or not answering within `broadcast_timeout`.
 - Children observe shutdown through `shutdown_signal()`, which also resolves when stdin closes. That stops *cooperative* children, the ones awaiting the signal. A child that ignores it is killed by the parent's shutdown deadline, but if the parent process itself dies abruptly, nothing kills such a child.
 - Dropping the manager without `shutdown()` stops the children in the background only while the Tokio runtime keeps running. Otherwise `kill_on_drop` is the only cleanup.

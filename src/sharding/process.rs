@@ -140,15 +140,21 @@
 //   released only by an acknowledged outcome or a confirmed child exit,
 //   with kill-and-reap as the timeout recovery, and the gateway asking for a
 //   permit per IDENTIFY attempt through `IdentifyGate`.
-// - Chosen approach: (3), plus a conservative budget counter that consumes
-//   one start per grant, refunds `Abandoned` attempts, and waits for the
-//   reset (then refreshes from `/gateway/bot`) when it reaches zero.
+// - Chosen approach: (3), plus a conservative budget: every grant takes a
+//   reservation that is settled exactly once (`Abandoned` refunds it, which
+//   wakes a waiting reserver). A refresh from `/gateway/bot` counts all
+//   still-outstanding reservations against the new window, and the count
+//   may go negative, so refunds never create starts Discord lacks. A failed
+//   refresh keeps the budget closed and retries with backoff.
 // - Why: lease IDs and expiry cannot stop a process that is merely slow;
 //   only its confirmed death proves it will not IDENTIFY later. Asking per
 //   attempt, from inside the gateway client, is the only way to cover the
 //   client's own re-IDENTIFYs.
-// - Trade-offs: a child stuck in connect for longer than the permit timeout
-//   is killed and respawned, taking every shard in that process with it.
+// - Trade-offs: a child whose gateway client is stuck for longer than the
+//   permit timeout (beyond the client's own 15s connect+HELLO bound) is
+//   killed and respawned, taking every shard in that process with it. A
+//   refresh may count a reservation twice (once as sent, once as
+//   outstanding); that start comes back at the next refresh.
 //   The budget is counted per manager: several managers sharing one token
 //   must split the budget themselves.
 //
@@ -166,6 +172,10 @@
 //   control-priority queue and a bounded data queue. One deadline covers
 //   write + wait before the kill. A `watch` state counts live monitors and
 //   collects their failures, and every waiter reads the same final state.
+//   Every terminal outcome other than a requested shutdown (or a successful
+//   exit with respawn disabled) is a failure: give-up after `max_respawns`,
+//   failed exit with respawn disabled, spawn failure, a `child.wait()` error
+//   (the child is killed and confirmed dead first), and an unconfirmed kill.
 // - Why: write timeouts still stall the loop. Handle ownership makes waiters
 //   race. A failure recorded on drop also covers panics and runtime shutdown.
 // - Trade-offs: a child that reads stdin too slowly gets `null` broadcast
@@ -590,7 +600,8 @@ pub enum SessionStartBudget {
     FromGateway,
     /// Start from these numbers (e.g. from your own `/gateway/bot` call).
     /// After `reset_after` passes, the budget is assumed to be back at
-    /// `total` (with nothing to refresh from).
+    /// `total`, minus reservations still outstanding (there is nothing to
+    /// refresh from).
     Fixed(SessionStartLimit),
     /// Do not track the session-start budget. Only bucket pacing applies.
     Unchecked,
@@ -650,8 +661,9 @@ pub struct ProcessShardManagerConfig {
     pub identify_interval: Duration,
     /// How long a child may hold an IDENTIFY permit before the parent kills
     /// it (default 30s). The bucket is reused only after that child has
-    /// exited. The gateway client gives up a connect attempt after 15s while
-    /// holding a permit, so this only fires for a stuck child.
+    /// exited. The gateway client gives up connection setup (connect and
+    /// HELLO) after 15s while holding a permit, so this only fires for a
+    /// stuck child.
     pub identify_permit_timeout: Duration,
     /// Per-child response deadline used by [`ProcessShardManager::broadcast`]
     /// (default 10s). Children cancel request handlers after the same time.
@@ -734,30 +746,94 @@ pub struct ChildStatus {
 // IDENTIFY coordination (parent side)
 // ---------------------------------------------------------------------------
 
-/// Daily session-start budget, counted conservatively: one start per grant,
-/// refunded only for attempts reported as never sent.
+/// Daily session-start budget, counted conservatively.
+///
+/// Every grant takes a reservation. `available` is what may still be
+/// reserved: Discord's `remaining` at the last refresh, minus every
+/// reservation that could still IDENTIFY against that window. That includes
+/// reservations that were outstanding when the refresh happened, because
+/// they can still send after it. Each reservation is settled exactly once:
+/// `Sent` keeps the start consumed and `Abandoned` gives it back.
+///
+/// Outstanding reservations are always part of the current count, so a
+/// refund is always relative to a count that includes it, even across
+/// refreshes. `available` may go negative to remember that debt; without
+/// that, a refund after a refresh could hand out a start Discord no longer
+/// has.
 struct SessionBudget {
     state: StdMutex<BudgetState>,
-    /// Serializes consumers so only one of them waits for a reset and
-    /// refreshes.
-    consume_lock: AsyncMutex<()>,
+    /// Serializes reservers: one of them waits for a refund or the reset
+    /// (and refreshes), and the rest queue behind it in order.
+    reserve_lock: AsyncMutex<()>,
+    /// Bumped on every refund so a waiting reserver rechecks at once instead
+    /// of sleeping until the reset.
+    changed: watch::Sender<()>,
     refresher: Option<RestClient>,
+    /// Base delay for retrying a failed or still-exhausted refresh.
+    retry_delay: Duration,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct BudgetState {
-    remaining: u32,
+    /// Starts that may still be reserved. Negative while outstanding
+    /// reservations exceed what Discord reported at the last refresh.
+    available: i64,
     total: u32,
+    /// Granted reservations that are not settled yet.
+    outstanding: u32,
     reset_at: Instant,
+    /// Consecutive failed refreshes, for the retry backoff.
+    refresh_failures: u32,
 }
 
 impl BudgetState {
     fn from_limit(limit: &SessionStartLimit) -> Self {
         Self {
-            remaining: limit.remaining,
+            available: i64::from(limit.remaining),
             total: limit.total.max(limit.remaining).max(1),
+            outstanding: 0,
             reset_at: deadline_after(Duration::from_millis(limit.reset_after)),
+            refresh_failures: 0,
         }
+    }
+
+    /// Takes Discord's fresh numbers while keeping every outstanding
+    /// reservation counted against the new window.
+    fn reconcile(&mut self, limit: &SessionStartLimit, retry_delay: Duration) {
+        self.total = limit.total.max(limit.remaining).max(1);
+        self.available = i64::from(limit.remaining) - i64::from(self.outstanding);
+        self.refresh_failures = 0;
+        let mut reset_in = Duration::from_millis(limit.reset_after);
+        if self.available <= 0 {
+            // Still exhausted: do not ask again right away.
+            reset_in = reset_in.max(retry_delay);
+        }
+        self.reset_at = deadline_after(reset_in);
+    }
+}
+
+/// One reserved session start. It is settled exactly once; dropping it
+/// unsettled (the holder died) counts as sent.
+struct BudgetReservation {
+    budget: Arc<SessionBudget>,
+    settled: bool,
+}
+
+impl BudgetReservation {
+    fn settle(mut self, outcome: IdentifyOutcome) {
+        self.settle_once(outcome);
+    }
+
+    fn settle_once(&mut self, outcome: IdentifyOutcome) {
+        if !std::mem::replace(&mut self.settled, true) {
+            self.budget.settle(outcome);
+        }
+    }
+}
+
+impl Drop for BudgetReservation {
+    fn drop(&mut self) {
+        self.settle_once(IdentifyOutcome::Sent);
     }
 }
 
@@ -765,65 +841,105 @@ impl SessionBudget {
     fn new(state: BudgetState, refresher: Option<RestClient>) -> Self {
         Self {
             state: StdMutex::new(state),
-            consume_lock: AsyncMutex::new(()),
+            reserve_lock: AsyncMutex::new(()),
+            changed: watch::channel(()).0,
             refresher,
+            retry_delay: BUDGET_RETRY_DELAY,
         }
     }
 
-    /// Takes one session start, waiting for the reset when none are left.
-    /// Cancel-safe: the count only changes in synchronous sections.
-    async fn consume(&self) {
-        let _serialized = self.consume_lock.lock().await;
+    /// Reserves one session start, waiting for a refund or the reset when
+    /// none are left. Cancel-safe: the counters only change in synchronous
+    /// sections, and the reservation is returned without another await.
+    async fn reserve(self: &Arc<Self>) -> BudgetReservation {
+        let _serialized = self.reserve_lock.lock().await;
+        let mut changes = self.changed.subscribe();
+        let mut logged = false;
         loop {
+            // Mark refunds seen *before* checking, so one that lands after
+            // the check still wakes the wait below.
+            changes.borrow_and_update();
             let reset_at = {
                 let mut state = lock_or_recover(&self.state);
-                if state.remaining > 0 {
-                    state.remaining -= 1;
-                    return;
+                if state.available > 0 {
+                    state.available -= 1;
+                    state.outstanding += 1;
+                    return BudgetReservation {
+                        budget: Arc::clone(self),
+                        settled: false,
+                    };
                 }
                 state.reset_at
             };
-            warn!(
-                wait_ms = reset_at
-                    .saturating_duration_since(Instant::now())
-                    .as_millis() as u64,
-                "session start budget exhausted; holding IDENTIFY grants until it resets"
-            );
-            sleep_until(reset_at).await;
-            self.refresh().await;
+            if !logged {
+                warn!(
+                    wait_ms = reset_at
+                        .saturating_duration_since(Instant::now())
+                        .as_millis() as u64,
+                    "session start budget exhausted; holding IDENTIFY grants until a refund \
+                     or the reset"
+                );
+                logged = true;
+            }
+            tokio::select! {
+                () = sleep_until(reset_at) => self.refresh().await,
+                // A refund freed a start. The sender lives in `self`, so
+                // this cannot report a closed channel while we run.
+                _ = changes.changed() => {}
+            }
         }
     }
 
     async fn refresh(&self) {
-        let fresh = match &self.refresher {
-            Some(rest) => match rest.get_gateway_bot().await {
-                Ok(gateway_bot) => Some(BudgetState::from_limit(&gateway_bot.session_start_limit)),
-                Err(error) => {
-                    warn!("refreshing the session start limit failed: {error}; assuming it reset");
-                    None
-                }
-            },
-            None => None,
+        let Some(rest) = &self.refresher else {
+            // A fixed budget has nothing to ask: assume Discord restored the
+            // daily total, with outstanding reservations still counted.
+            let mut state = lock_or_recover(&self.state);
+            state.available = i64::from(state.total) - i64::from(state.outstanding);
+            state.reset_at = deadline_after(BUDGET_FALLBACK_WINDOW);
+            return;
         };
+        let fetched = rest.get_gateway_bot().await;
         let mut state = lock_or_recover(&self.state);
-        *state = fresh.unwrap_or_else(|| BudgetState {
-            remaining: state.total,
-            total: state.total,
-            reset_at: deadline_after(BUDGET_FALLBACK_WINDOW),
-        });
-        if state.remaining == 0 && state.reset_at <= Instant::now() {
-            state.reset_at = deadline_after(BUDGET_RETRY_DELAY);
+        match fetched {
+            Ok(gateway_bot) => {
+                state.reconcile(&gateway_bot.session_start_limit, self.retry_delay);
+                info!(
+                    available = state.available,
+                    outstanding = state.outstanding,
+                    total = state.total,
+                    "session start budget refreshed"
+                );
+            }
+            Err(error) => {
+                // Without fresh numbers the budget stays closed: assuming a
+                // reset could start sessions Discord would refuse.
+                let delay = respawn_backoff(self.retry_delay, state.refresh_failures);
+                state.refresh_failures = state.refresh_failures.saturating_add(1);
+                state.reset_at = deadline_after(delay);
+                warn!(
+                    retry_ms = delay.as_millis() as u64,
+                    "refreshing the session start limit failed: {error}; keeping IDENTIFY \
+                     grants paused"
+                );
+            }
         }
-        info!(
-            remaining = state.remaining,
-            total = state.total,
-            "session start budget refreshed"
-        );
     }
 
-    fn refund(&self) {
-        let mut state = lock_or_recover(&self.state);
-        state.remaining = state.remaining.saturating_add(1);
+    fn settle(&self, outcome: IdentifyOutcome) {
+        let refunded = {
+            let mut state = lock_or_recover(&self.state);
+            state.outstanding = state.outstanding.saturating_sub(1);
+            if outcome == IdentifyOutcome::Abandoned {
+                state.available += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if refunded {
+            self.changed.send_replace(());
+        }
     }
 }
 
@@ -846,13 +962,14 @@ struct BucketState {
     available_at: Instant,
 }
 
-/// Ownership of a bucket for one granted IDENTIFY attempt. It ends with the
-/// attempt's reported outcome, or, when dropped without one (the child
-/// exited or was killed while holding it), as `Sent`, the safe assumption.
+/// Ownership of a bucket, plus its session-start reservation, for one
+/// granted IDENTIFY attempt. It ends with the attempt's reported outcome,
+/// or, when dropped without one (the child exited or was killed while
+/// holding it), as `Sent`, the safe assumption.
 struct BucketLease {
     bucket: Option<OwnedMutexGuard<BucketState>>,
     interval: Duration,
-    budget: Option<Arc<SessionBudget>>,
+    reservation: Option<BudgetReservation>,
 }
 
 impl BucketLease {
@@ -861,16 +978,14 @@ impl BucketLease {
     }
 
     fn end(&mut self, outcome: IdentifyOutcome) {
+        if let Some(reservation) = self.reservation.take() {
+            reservation.settle(outcome);
+        }
         let Some(mut bucket) = self.bucket.take() else {
             return;
         };
-        match outcome {
-            IdentifyOutcome::Sent => bucket.available_at = deadline_after(self.interval),
-            IdentifyOutcome::Abandoned => {
-                if let Some(budget) = &self.budget {
-                    budget.refund();
-                }
-            }
+        if outcome == IdentifyOutcome::Sent {
+            bucket.available_at = deadline_after(self.interval);
         }
     }
 }
@@ -917,13 +1032,14 @@ impl IdentifyScheduler {
         // `available_at` or the budget, which is correct because nothing
         // was granted.
         sleep_until(guard.available_at).await;
-        if let Some(budget) = &self.budget {
-            budget.consume().await;
-        }
+        let reservation = match &self.budget {
+            Some(budget) => Some(budget.reserve().await),
+            None => None,
+        };
         BucketLease {
             bucket: Some(guard),
             interval: self.interval,
-            budget: self.budget.clone(),
+            reservation,
         }
     }
 }
@@ -1385,11 +1501,21 @@ impl ProcessShardManager {
     /// `shutdown` op and gets `shutdown_timeout` in total to exit before it
     /// is killed.
     ///
-    /// Resolves once every child monitor has finished. Errors list every
-    /// monitor that failed: a killed child whose exit could not be confirmed
-    /// (its IDENTIFY permits stay held until it does exit), a panicked
-    /// monitor, or a monitor cancelled by runtime shutdown. Safe to call
-    /// concurrently with [`Self::wait`] and more than once.
+    /// Resolves once every child monitor has finished, with `Ok` only if
+    /// every child ended by this request (or, with respawn disabled, by a
+    /// successful exit). Otherwise the error lists each monitor's terminal
+    /// outcome:
+    ///
+    /// - gave up after `max_respawns`;
+    /// - exited unsuccessfully with respawn disabled;
+    /// - could not be spawned;
+    /// - `child.wait()` failed (the child was killed and its exit confirmed
+    ///   first, if possible);
+    /// - killed but its exit not confirmed (its IDENTIFY permits stay held
+    ///   until it does exit);
+    /// - the monitor panicked or was cancelled by runtime shutdown.
+    ///
+    /// Safe to call concurrently with [`Self::wait`] and more than once.
     pub async fn shutdown(&self) -> Result<(), DiscordError> {
         info!("process shard manager shutting down");
         self.shutdown_tx.send_replace(true);
@@ -1418,15 +1544,39 @@ impl ProcessShardManager {
 // ---------------------------------------------------------------------------
 
 enum ChildRunOutcome {
-    /// The child exited on its own (crash or clean exit), or after the
-    /// monitor killed it for holding a permit too long or for a broken IPC
-    /// session.
-    Exited,
+    /// The child exited, on its own or after the monitor killed it (permit
+    /// held too long, broken IPC session), and the exit is confirmed. A
+    /// respawn may follow.
+    Exited(ChildExit),
     /// Shutdown was requested and the child is confirmed gone.
     Stopped,
-    /// Shutdown was requested, the child was killed, but its exit could not
-    /// be confirmed.
-    StopUnconfirmed(String),
+    /// The child's end could not be supervised normally: waiting for it
+    /// failed, or it was killed but its exit could not be confirmed. The
+    /// monitor stops and reports this instead of respawning a duplicate
+    /// next to a process that may still be alive.
+    Failed(String),
+}
+
+/// How a child that was not asked to stop ended, kept for the monitor's
+/// terminal report.
+struct ChildExit {
+    success: bool,
+    description: String,
+}
+
+impl ChildExit {
+    fn from_status(status: std::process::ExitStatus, killed_for: Option<&str>) -> Self {
+        match killed_for {
+            Some(reason) => Self {
+                success: false,
+                description: format!("was killed by the manager ({reason})"),
+            },
+            None => Self {
+                success: status.success(),
+                description: format!("exited with {status}"),
+            },
+        }
+    }
 }
 
 /// Resolves once shutdown has been requested or the sender is gone, which
@@ -1492,7 +1642,11 @@ async fn run_child_monitor(
         }
 
         set_state(&context.status, ChildState::Starting);
-        match spawn_child_process(&context) {
+        // Every terminal outcome reaches `wait()`/`shutdown()`: a monitor
+        // that stops for any reason other than a requested shutdown (or a
+        // successful exit with respawn disabled) reports how its last child
+        // ended.
+        let last_exit = match spawn_child_process(&context) {
             Ok(child) => {
                 let pid = child.id();
                 lock_or_recover(&context.status).pid = pid;
@@ -1518,20 +1672,22 @@ async fn run_child_monitor(
                         );
                         return Ok(());
                     }
-                    ChildRunOutcome::StopUnconfirmed(reason) => {
+                    ChildRunOutcome::Failed(reason) => {
                         set_state(&context.status, ChildState::Stopped);
                         return Err(reason);
                     }
-                    ChildRunOutcome::Exited => {
+                    ChildRunOutcome::Exited(exit) => {
                         warn!(
                             child = context.index,
                             shard_ids = ?context.shard_ids,
                             uptime_secs = started.elapsed().as_secs(),
-                            "shard child exited"
+                            "shard child {}",
+                            exit.description
                         );
                         if started.elapsed() >= BACKOFF_RESET_UPTIME {
                             backoff_attempt = 0;
                         }
+                        exit
                     }
                 }
             }
@@ -1541,12 +1697,23 @@ async fn run_child_monitor(
                     shard_ids = ?context.shard_ids,
                     "failed to spawn shard child: {error}"
                 );
+                ChildExit {
+                    success: false,
+                    description: format!("could not be spawned: {error}"),
+                }
             }
-        }
+        };
 
         if !context.respawn {
             set_state(&context.status, ChildState::Stopped);
-            return Ok(());
+            return if last_exit.success {
+                Ok(())
+            } else {
+                Err(format!(
+                    "the child {}; respawn is disabled",
+                    last_exit.description
+                ))
+            };
         }
         if let Some(max) = context.max_respawns {
             if respawns >= max {
@@ -1557,7 +1724,10 @@ async fn run_child_monitor(
                     "shard child reached max respawns; giving up"
                 );
                 set_state(&context.status, ChildState::Stopped);
-                return Ok(());
+                return Err(format!(
+                    "gave up after {max} respawn(s); the last child {}",
+                    last_exit.description
+                ));
             }
         }
 
@@ -2003,8 +2173,11 @@ async fn supervise_child(
             "child stdout pipe missing; killing it"
         );
         return match kill_and_confirm(context, child, Vec::new()).await {
-            Ok(()) => ChildRunOutcome::Exited,
-            Err(reason) => ChildRunOutcome::StopUnconfirmed(reason),
+            Ok(()) => ChildRunOutcome::Exited(ChildExit {
+                success: false,
+                description: "had no stdout pipe and was killed".to_string(),
+            }),
+            Err(reason) => ChildRunOutcome::Failed(reason),
         };
     };
     let (writer, mut writer_failed) = ParentWriter::spawn(child.stdin.take());
@@ -2020,14 +2193,16 @@ async fn supervise_child(
                 return graceful_stop(child, writer, &mut reader, session).await;
             }
             status = child.wait() => {
-                match status {
-                    Ok(status) => info!(child = context.index, %status, "shard child exited"),
-                    Err(error) => warn!(child = context.index, "waiting for shard child failed: {error}"),
-                }
-                session.drain_stdout(&mut reader).await;
-                // Exit confirmed: held buckets are returned when `session`
-                // drops, counted as sent.
-                return ChildRunOutcome::Exited;
+                return match status {
+                    Ok(status) => {
+                        info!(child = context.index, %status, "shard child exited");
+                        session.drain_stdout(&mut reader).await;
+                        // Exit confirmed: held buckets are returned when
+                        // `session` drops, counted as sent.
+                        ChildRunOutcome::Exited(ChildExit::from_status(status, killing.as_deref()))
+                    }
+                    Err(error) => wait_failed(context, child, session, error).await,
+                };
             }
             command = command_rx.recv() => match command {
                 Some(ChildCommand::Request { id, frame, respond_to }) => {
@@ -2114,7 +2289,17 @@ async fn graceful_stop(
                 child = context.index,
                 "waiting for shard child failed ({error}); killing it"
             );
-            kill_and_confirm(context, child, session.take_held_leases()).await
+            // Even a confirmed kill leaves this visible: supervision of the
+            // child broke.
+            Err(
+                match kill_and_confirm(context, child, session.take_held_leases()).await {
+                    Ok(()) => format!(
+                        "waiting for the child failed ({error}); it was killed and its exit \
+                         confirmed"
+                    ),
+                    Err(reason) => format!("waiting for the child failed ({error}); {reason}"),
+                },
+            )
         }
         Err(_) => {
             warn!(
@@ -2129,8 +2314,33 @@ async fn graceful_stop(
     drop(writer);
     match confirmed {
         Ok(()) => ChildRunOutcome::Stopped,
-        Err(reason) => ChildRunOutcome::StopUnconfirmed(reason),
+        Err(reason) => ChildRunOutcome::Failed(reason),
     }
+}
+
+/// `child.wait()` failed, so the exit is not confirmed even if the process
+/// may already be gone (`kill_on_drop` would not confirm anything either).
+/// The child is killed, and its exit confirmed, before its held IDENTIFY
+/// buckets are returned; if confirmation fails they stay held. Either way
+/// supervision of this child broke, so the monitor stops and reports it.
+async fn wait_failed(
+    context: &MonitorContext,
+    child: Child,
+    mut session: ChildSession<'_>,
+    error: io::Error,
+) -> ChildRunOutcome {
+    warn!(
+        child = context.index,
+        "waiting for shard child failed: {error}; killing it to confirm its exit"
+    );
+    session.stop_granting();
+    let held = session.take_held_leases();
+    ChildRunOutcome::Failed(match kill_and_confirm(context, child, held).await {
+        Ok(()) => {
+            format!("waiting for the child failed ({error}); it was killed and its exit confirmed")
+        }
+        Err(reason) => format!("waiting for the child failed ({error}); {reason}"),
+    })
 }
 
 /// Kills the child and waits up to `kill_reap_timeout` for the OS to confirm
@@ -3466,53 +3676,187 @@ mod tests {
     #[test]
     fn budget_state_from_limit_keeps_a_usable_total() {
         let state = BudgetState::from_limit(&session_limit(5, 0, 0));
-        assert_eq!((state.remaining, state.total), (5, 5));
+        assert_eq!((state.available, state.total, state.outstanding), (5, 5, 0));
         let state = BudgetState::from_limit(&session_limit(0, 0, 0));
-        assert_eq!((state.remaining, state.total), (0, 1));
+        assert_eq!((state.available, state.total), (0, 1));
+    }
+
+    fn budget_counts(budget: &SessionBudget) -> (i64, u32) {
+        let state = lock_or_recover(&budget.state);
+        (state.available, state.outstanding)
+    }
+
+    fn gateway_bot_body(remaining: u32) -> &'static str {
+        match remaining {
+            0 => {
+                r#"{"url":"wss://gateway.discord.gg","shards":2,"session_start_limit":{"total":1000,"remaining":0,"reset_after":3600000,"max_concurrency":2}}"#
+            }
+            1 => {
+                r#"{"url":"wss://gateway.discord.gg","shards":2,"session_start_limit":{"total":1000,"remaining":1,"reset_after":3600000,"max_concurrency":2}}"#
+            }
+            _ => {
+                r#"{"url":"wss://gateway.discord.gg","shards":2,"session_start_limit":{"total":1000,"remaining":3,"reset_after":3600000,"max_concurrency":2}}"#
+            }
+        }
     }
 
     #[tokio::test]
-    async fn session_budget_waits_for_the_reset_when_exhausted() {
-        let budget = SessionBudget::new(BudgetState::from_limit(&session_limit(1, 3, 200)), None);
+    async fn fixed_budget_waits_for_the_reset_and_keeps_outstanding_reservations() {
+        let budget = Arc::new(SessionBudget::new(
+            BudgetState::from_limit(&session_limit(1, 3, 200)),
+            None,
+        ));
         let start = Instant::now();
-        budget.consume().await;
+        let first = budget.reserve().await;
         assert!(start.elapsed() < Duration::from_millis(150));
         // Exhausted: wait for the reset, then (nothing to refresh from)
-        // assume the daily total is back.
-        budget.consume().await;
+        // assume the daily total is back, minus the outstanding reservation.
+        let second = budget.reserve().await;
         assert!(start.elapsed() >= Duration::from_millis(200));
-        assert_eq!(lock_or_recover(&budget.state).remaining, 2);
-        budget.refund();
-        assert_eq!(lock_or_recover(&budget.state).remaining, 3);
+        assert_eq!(budget_counts(&budget), (1, 2));
+        first.settle(IdentifyOutcome::Abandoned);
+        assert_eq!(budget_counts(&budget), (2, 1));
+        drop(second);
+        assert_eq!(budget_counts(&budget), (2, 0));
     }
 
+    /// Regression: a refund did not wake a reserver that was already waiting
+    /// for the reset, so a freed start could sit unused for hours.
     #[tokio::test]
-    async fn session_budget_refreshes_from_gateway_bot_after_the_reset() {
-        let fresh = r#"{"url":"wss://gateway.discord.gg","shards":1,"session_start_limit":{"total":1000,"remaining":7,"reset_after":3600000,"max_concurrency":1}}"#;
-        let unauthorized = r#"{"message":"401: Unauthorized","code":0}"#;
-        let (port, server) =
-            gateway_bot_server(vec![("200 OK", fresh), ("401 Unauthorized", unauthorized)]).await;
-        let rest = RestClient::builder("token", 0)
-            .api_base(format!("http://127.0.0.1:{port}"))
-            .build()
-            .unwrap();
-        let exhausted = || BudgetState {
-            remaining: 0,
-            total: 5,
-            reset_at: Instant::now() + Duration::from_millis(100),
+    async fn refund_wakes_a_reserver_that_is_already_waiting() {
+        let budget = Arc::new(SessionBudget::new(
+            BudgetState::from_limit(&session_limit(1, 1000, 3_600_000)),
+            None,
+        ));
+        let first = budget.reserve().await;
+        let mut second = Box::pin(budget.reserve());
+        assert!(timeout(Duration::from_millis(100), &mut second)
+            .await
+            .is_err());
+        first.settle(IdentifyOutcome::Abandoned);
+        let second = timeout(Duration::from_secs(1), &mut second)
+            .await
+            .expect("the refund must wake the waiting reserver");
+        second.settle(IdentifyOutcome::Sent);
+        assert_eq!(budget_counts(&budget), (0, 0));
+    }
+
+    /// Regression: a refresh replaced the counter with Discord's remaining
+    /// allowance and forgot reservations still outstanding in another
+    /// bucket. Shard 0 (bucket 0) holds an unsent grant across the reset;
+    /// shard 1 (bucket 1) waits for the budget and triggers the refresh.
+    #[tokio::test]
+    async fn outstanding_reservations_survive_a_refresh_across_buckets() {
+        let (port, server) = gateway_bot_server(vec![
+            ("200 OK", gateway_bot_body(1)),
+            ("200 OK", gateway_bot_body(1)),
+            ("200 OK", gateway_bot_body(0)),
+        ])
+        .await;
+        let setup = || {
+            let budget = Arc::new(SessionBudget::new(
+                BudgetState {
+                    available: 1,
+                    total: 1000,
+                    outstanding: 0,
+                    reset_at: Instant::now() + Duration::from_millis(150),
+                    refresh_failures: 0,
+                },
+                Some(rest_for(port)),
+            ));
+            let scheduler = IdentifyScheduler::new(2, 2, Duration::ZERO, Some(Arc::clone(&budget)));
+            (budget, scheduler)
         };
 
-        let budget = SessionBudget::new(exhausted(), Some(rest.clone()));
-        budget.consume().await;
-        assert_eq!(lock_or_recover(&budget.state).remaining, 6);
+        // Discord says one start is left, but the outstanding grant may
+        // still use it; once it does, the other bucket must keep waiting.
+        let (budget, scheduler) = setup();
+        let first = scheduler.acquire(0).await;
+        let mut second = Box::pin(scheduler.acquire(1));
+        assert!(
+            timeout(Duration::from_millis(400), &mut second)
+                .await
+                .is_err(),
+            "the refresh forgot the outstanding reservation"
+        );
+        assert_eq!(budget_counts(&budget), (0, 1));
+        first.finish(IdentifyOutcome::Sent);
+        assert!(timeout(Duration::from_millis(200), &mut second)
+            .await
+            .is_err());
+        drop(second);
 
-        // A failed refresh assumes the reset happened.
-        let budget = SessionBudget::new(exhausted(), Some(rest));
-        budget.consume().await;
-        assert_eq!(lock_or_recover(&budget.state).remaining, 4);
+        // Same, but the outstanding attempt is abandoned: its refund is
+        // valid against the refreshed count.
+        let (budget, scheduler) = setup();
+        let first = scheduler.acquire(0).await;
+        let mut second = Box::pin(scheduler.acquire(1));
+        assert!(timeout(Duration::from_millis(400), &mut second)
+            .await
+            .is_err());
+        first.finish(IdentifyOutcome::Abandoned);
+        let second = timeout(Duration::from_secs(1), &mut second)
+            .await
+            .expect("the refunded start must be granted");
+        drop(second);
+        assert_eq!(budget_counts(&budget), (0, 0));
 
-        let requests = server.await.unwrap();
-        assert_eq!(requests.len(), 2);
+        // Discord reports nothing left: the refresh records a debt, and the
+        // abandoned attempt's refund only pays it back.
+        let (budget, scheduler) = setup();
+        let first = scheduler.acquire(0).await;
+        let mut second = Box::pin(scheduler.acquire(1));
+        assert!(timeout(Duration::from_millis(400), &mut second)
+            .await
+            .is_err());
+        assert_eq!(budget_counts(&budget), (-1, 1));
+        first.finish(IdentifyOutcome::Abandoned);
+        assert!(
+            timeout(Duration::from_millis(200), &mut second)
+                .await
+                .is_err(),
+            "a refund must not create a start Discord does not have"
+        );
+        assert_eq!(budget_counts(&budget), (0, 0));
+
+        assert_eq!(server.await.unwrap().len(), 3);
+    }
+
+    /// Regression: a failed refresh assumed a full reset, granting starts
+    /// Discord might refuse. It now stays closed until a refresh succeeds.
+    #[tokio::test]
+    async fn failed_refresh_keeps_the_budget_closed_until_a_refresh_succeeds() {
+        let unauthorized = r#"{"message":"401: Unauthorized","code":0}"#;
+        let (port, server) = gateway_bot_server(vec![
+            ("401 Unauthorized", unauthorized),
+            ("200 OK", gateway_bot_body(3)),
+        ])
+        .await;
+        let mut budget = SessionBudget::new(
+            BudgetState {
+                available: 0,
+                total: 5,
+                outstanding: 0,
+                reset_at: Instant::now() + Duration::from_millis(100),
+                refresh_failures: 0,
+            },
+            Some(rest_for(port)),
+        );
+        budget.retry_delay = Duration::from_millis(300);
+        let budget = Arc::new(budget);
+
+        let started = Instant::now();
+        let reservation = timeout(Duration::from_secs(5), budget.reserve())
+            .await
+            .expect("the retried refresh must open the budget");
+        assert!(
+            started.elapsed() >= Duration::from_millis(400),
+            "granted after a failed refresh"
+        );
+        assert_eq!(budget_counts(&budget), (2, 1));
+        assert_eq!(lock_or_recover(&budget.state).refresh_failures, 0);
+        drop(reservation);
+        assert_eq!(server.await.unwrap().len(), 2);
     }
 
     // -- child side (in-process, in-memory pipes) ------------------------------
@@ -4416,10 +4760,14 @@ done
         config.max_respawns = Some(2);
 
         let manager = ProcessShardManager::spawn(config).await.unwrap();
-        timeout(Duration::from_secs(5), manager.wait())
+        // Giving up is a terminal outcome the caller must see.
+        let error = timeout(Duration::from_secs(5), manager.wait())
             .await
             .expect("manager.wait timed out")
-            .unwrap();
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("gave up after 2 respawn(s)"), "{error}");
+        assert!(error.contains("exited with exit status: 1"), "{error}");
 
         let status = &manager.children()[0];
         assert_eq!(status.state, ChildState::Stopped);
@@ -4435,18 +4783,49 @@ done
     #[cfg(unix)]
     #[tokio::test]
     async fn respawn_disabled_leaves_child_stopped() {
+        // A failed exit is reported...
         let mut config = scripted_child_config("exit 3");
         config.respawn = false;
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        let error = timeout(Duration::from_secs(5), manager.wait())
+            .await
+            .expect("manager.wait timed out")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("exited with exit status: 3; respawn is disabled"),
+            "{error}"
+        );
+        let status = &manager.children()[0];
+        assert_eq!(status.state, ChildState::Stopped);
+        assert_eq!(status.respawns, 0);
 
+        // ...a successful one is not.
+        let mut config = scripted_child_config("exit 0");
+        config.respawn = false;
         let manager = ProcessShardManager::spawn(config).await.unwrap();
         timeout(Duration::from_secs(5), manager.wait())
             .await
             .expect("manager.wait timed out")
             .unwrap();
+    }
 
-        let status = &manager.children()[0];
-        assert_eq!(status.state, ChildState::Stopped);
-        assert_eq!(status.respawns, 0);
+    #[tokio::test]
+    async fn spawn_failure_is_reported() {
+        let config = ProcessShardManagerConfig {
+            total_shards: Some(1),
+            program: Some(PathBuf::from("/nonexistent/discordrs-shard-child")),
+            respawn: false,
+            session_start_budget: SessionStartBudget::Unchecked,
+            ..ProcessShardManagerConfig::default()
+        };
+        let manager = ProcessShardManager::spawn(config).await.unwrap();
+        let error = timeout(Duration::from_secs(5), manager.wait())
+            .await
+            .expect("manager.wait timed out")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("could not be spawned"), "{error}");
     }
 
     #[cfg(unix)]
@@ -5038,11 +5417,115 @@ exec sleep 30
         let mut config = scripted_child_config(script);
         config.respawn = false;
         let manager = ProcessShardManager::spawn(config).await.unwrap();
-        timeout(Duration::from_secs(5), manager.wait())
+        let error = timeout(Duration::from_secs(5), manager.wait())
             .await
             .expect("the child must be killed once its stdin is gone")
-            .unwrap();
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("killed by the manager"), "{error}");
+        assert!(error.contains("IPC write to the child failed"), "{error}");
         assert_eq!(manager.children()[0].state, ChildState::Stopped);
+    }
+
+    fn test_monitor_context(
+        scheduler: &Arc<IdentifyScheduler>,
+        kill_reap_timeout: Duration,
+    ) -> MonitorContext {
+        MonitorContext {
+            index: 0,
+            shard_ids: vec![0],
+            status: Arc::new(StdMutex::new(ChildStatus {
+                pid: None,
+                shard_ids: vec![0],
+                state: ChildState::Starting,
+                respawns: 0,
+            })),
+            program: PathBuf::from("/bin/sh"),
+            args: Vec::new(),
+            env: Vec::new(),
+            respawn: false,
+            respawn_delay: Duration::ZERO,
+            max_respawns: None,
+            start_delay: Duration::ZERO,
+            shutdown_timeout: Duration::from_secs(5),
+            kill_reap_timeout,
+            max_frame: MIN_IPC_FRAME_BYTES,
+            scheduler: Arc::clone(scheduler),
+            identify_permit_timeout: Duration::from_secs(60),
+        }
+    }
+
+    /// Runs `wait_failed` for a live child that holds the only bucket, as if
+    /// `child.wait()` had just returned `Err`. Returns the outcome and the
+    /// child's pid.
+    #[cfg(target_os = "linux")]
+    async fn fail_wait_for_live_child(
+        scheduler: &Arc<IdentifyScheduler>,
+        kill_reap_timeout: Duration,
+    ) -> (ChildRunOutcome, u32) {
+        let context = test_monitor_context(scheduler, kill_reap_timeout);
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exec sleep 30"])
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let pid = child.id().unwrap();
+        let mut session = ChildSession::new(&context);
+        let lease = scheduler.acquire(0).await;
+        session.identify_held.insert(
+            0,
+            HeldPermit {
+                lease_id: 1,
+                lease,
+                expires_at: deadline_after(Duration::from_secs(60)),
+            },
+        );
+        let outcome = wait_failed(&context, child, session, io::Error::other("injected")).await;
+        (outcome, pid)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_exists(pid: u32) -> bool {
+        std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
+
+    /// Regression: a `child.wait()` error was logged and treated as a
+    /// confirmed exit, so the session's buckets were returned and the
+    /// monitor could respawn or report success while the child might still
+    /// run. Now the child is killed and its exit confirmed first.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn wait_error_kills_and_confirms_before_returning_buckets() {
+        let scheduler = Arc::new(IdentifyScheduler::new(1, 1, Duration::ZERO, None));
+        let (outcome, pid) = fail_wait_for_live_child(&scheduler, KILL_REAP_TIMEOUT).await;
+        let ChildRunOutcome::Failed(reason) = outcome else {
+            panic!("a wait error must end the monitor with a failure");
+        };
+        assert!(reason.contains("injected"), "{reason}");
+        assert!(reason.contains("exit confirmed"), "{reason}");
+        assert!(!process_exists(pid), "the child was not reaped");
+        // The bucket came back with the confirmed exit.
+        timeout(Duration::from_secs(1), scheduler.acquire(0))
+            .await
+            .expect("bucket still held after a confirmed exit");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn wait_error_without_confirmation_keeps_the_bucket_until_the_exit() {
+        let scheduler = Arc::new(IdentifyScheduler::new(1, 1, Duration::ZERO, None));
+        // A zero reap timeout treats the kill as unconfirmed right away.
+        let (outcome, pid) = fail_wait_for_live_child(&scheduler, Duration::ZERO).await;
+        let ChildRunOutcome::Failed(reason) = outcome else {
+            panic!("a wait error must end the monitor with a failure");
+        };
+        assert!(reason.contains("not confirmed"), "{reason}");
+        // The background reaper returns the bucket only after the OS
+        // reaped the child, so the process is gone by the time it is free.
+        timeout(Duration::from_secs(5), scheduler.acquire(0))
+            .await
+            .expect("the bucket must come back once the exit is observed");
+        assert!(!process_exists(pid), "bucket returned before the exit");
     }
 
     #[cfg(target_os = "linux")]
@@ -5236,6 +5719,6 @@ done
             session_start_limit: session_limit(2, 10, 0),
         };
         let state = BudgetState::from_limit(&gateway_bot.session_start_limit);
-        assert_eq!(state.remaining, 2);
+        assert_eq!(state.available, 2);
     }
 }
