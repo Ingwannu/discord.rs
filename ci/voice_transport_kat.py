@@ -18,6 +18,9 @@ The packet layout follows @discordjs/voice (`Networking.ts` `encryptOpusPacket`,
   with the Opus payload (Discord docs, Voice Connections > Transport Encryption Modes:
   "considers CSRCs and (optionally) the extension preamble to be part of the unencrypted
   header").
+- Padding: with the P bit set, the payload ends with padding whose last octet counts the
+  padding octets, itself included (RFC 3550 section 5.1). It is part of the plaintext, so
+  it is encrypted too; @discordjs/voice strips it after decrypting.
 
 Usage: python3 ci/voice_transport_kat.py   (needs `cryptography`, e.g. `pip install cryptography`)
 """
@@ -155,6 +158,22 @@ def main():
     print(
         rust_bytes("KAT_XCHACHA_EXTENDED", seal("xchacha", key, aad, body + opus, counter))
     )
+
+    # Padded shape: P and X bits, one CSRC, a one-word extension (ID 1, data 0xCD), and
+    # four octets of padding after the Opus frame (three zeros, then the count 4).
+    aad, body = rtp_header(
+        0xB0,
+        0x0304,
+        0x0E0F_1011,
+        0x5566_7788,
+        csrcs=(0xFEED_FACE,),
+        extension=(0xBEDE, bytes([0x10, 0xCD, 0x00, 0x00])),
+    )
+    padding = bytes([0x00, 0x00, 0x00, 0x04])
+    counter = 0x5A6B_7C8D
+    plaintext = body + opus + padding
+    print(rust_bytes("KAT_AES_PADDED", seal("aes", key, aad, plaintext, counter)))
+    print(rust_bytes("KAT_XCHACHA_PADDED", seal("xchacha", key, aad, plaintext, counter)))
 
 
 if __name__ == "__main__":

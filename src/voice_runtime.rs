@@ -336,6 +336,15 @@ pub struct VoiceReceivedPacket {
     pub raw: VoiceRawUdpPacket,
     pub rtp: VoiceRtpHeader,
     pub user_id: Option<UserId>,
+    /// The media payload after transport decryption: an Opus frame, or the
+    /// DAVE-decrypted Opus frame from the `_with_dave` receivers. The RTP
+    /// header extension body and any RTP padding are already removed.
+    ///
+    /// A padding-only packet (P bit set and a padding count equal to the
+    /// whole payload, which RFC 3550 §5.1 allows) yields an empty frame
+    /// when DAVE is not active; with DAVE active it is reported as a DAVE
+    /// frame that is too short. A malformed padding count (zero, or longer
+    /// than the payload) is always an error.
     pub opus_frame: Vec<u8>,
 }
 
@@ -1917,11 +1926,13 @@ fn rtpsize_cleartext_len(packet: &[u8]) -> Result<usize, DiscordError> {
 }
 
 /// Authenticates and decrypts an rtpsize packet and returns its media
-/// payload (an Opus or DAVE frame) without the header extension body.
+/// payload (an Opus or DAVE frame) without the header extension body or the
+/// RTP padding.
 ///
 /// The AEAD boundary ([`rtpsize_cleartext_len`]) and the media offset
-/// (`rtp.header_len`) differ by the extension body, which is only readable
-/// after decryption, so it is stripped from the plaintext afterwards.
+/// (`rtp.header_len`) differ by the extension body, and the padding sits at
+/// the end of the ciphertext; both are only readable after decryption, so
+/// they are stripped from the plaintext afterwards.
 fn decrypt_transport_payload(
     packet: &[u8],
     rtp: &VoiceRtpHeader,
@@ -1972,7 +1983,42 @@ fn decrypt_transport_payload(
     // plaintext. Its elements (RFC 8285) are not media, so they never reach
     // the Opus decoder or the DAVE frame parser.
     plaintext.drain(..extension_body_len);
+    if rtp.padding {
+        strip_rtp_padding(&mut plaintext)?;
+    }
     Ok(plaintext)
+}
+
+/// Removes RTP padding from a decrypted media payload (the plaintext after
+/// the extension body).
+///
+/// With the P bit set, the payload ends with padding whose last octet counts
+/// the padding octets, itself included (RFC 3550 §5.1). In the rtpsize modes
+/// the padding is inside the encrypted region, so it can only be removed
+/// after decryption, as @discordjs/voice does (`VoiceReceiver.ts`
+/// `parsePacket`); left in place, it corrupts the Opus frame and hides the
+/// DAVE magic marker at the end of a DAVE frame. A count of zero (the count
+/// octet counts itself) or one longer than the payload (it would reach into
+/// the extension body) is malformed. A count equal to the payload length is
+/// a padding-only packet and leaves an empty payload.
+fn strip_rtp_padding(payload: &mut Vec<u8>) -> Result<(), DiscordError> {
+    let count = payload
+        .last()
+        .copied()
+        .map(usize::from)
+        .ok_or_else(|| invalid_data_error("padded voice RTP packet has no padding count"))?;
+    let media_len = payload
+        .len()
+        .checked_sub(count)
+        .filter(|_| count > 0)
+        .ok_or_else(|| {
+            invalid_data_error(format!(
+                "voice RTP padding count {count} does not fit a {}-byte payload",
+                payload.len()
+            ))
+        })?;
+    payload.truncate(media_len);
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1990,36 +2036,48 @@ fn encrypt_transport_payload(
     mode: &VoiceEncryptionMode,
     secret_key: &[u8],
 ) -> Result<Vec<u8>, DiscordError> {
-    if secret_key.len() != VOICE_SECRET_KEY_LEN {
-        return Err(invalid_data_error("voice secret_key must be 32 bytes"));
-    }
-
-    // Outbound packets carry no CSRCs and no header extension, so the whole
-    // 12-byte header is the cleartext part and the AAD
-    // (`rtpsize_cleartext_len`). Emitting an extension would mean encrypting
-    // its body together with the payload.
-    let mut packet = build_rtp_header(
+    // Outbound packets carry no CSRCs, header extension, or padding, so the
+    // whole 12-byte header is the cleartext part and the AAD
+    // (`rtpsize_cleartext_len`). Emitting an extension or padding would mean
+    // encrypting its body or padding together with the payload.
+    let header = build_rtp_header(
         params.sequence,
         params.timestamp,
         params.ssrc,
         params.payload_type,
     );
-    let aad = packet.clone();
-    let mut encrypted = opus_frame.to_vec();
+    seal_rtpsize_packet(header, opus_frame, params.nonce_suffix, mode, secret_key)
+}
 
+/// Builds an rtpsize packet: `cleartext` (the RTP header up to the
+/// extension preamble, also the AAD), then `plaintext` encrypted, the
+/// 16-byte tag, and the 4-byte `counter` that [`rtpsize_nonce`] expands.
+fn seal_rtpsize_packet(
+    cleartext: Vec<u8>,
+    plaintext: &[u8],
+    counter: [u8; RTPSIZE_NONCE_SUFFIX_LEN],
+    mode: &VoiceEncryptionMode,
+    secret_key: &[u8],
+) -> Result<Vec<u8>, DiscordError> {
+    if secret_key.len() != VOICE_SECRET_KEY_LEN {
+        return Err(invalid_data_error("voice secret_key must be 32 bytes"));
+    }
+
+    let mut packet = cleartext;
+    let mut encrypted = plaintext.to_vec();
     if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
         let cipher = Aes256Gcm::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(&params.nonce_suffix);
+        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(&counter);
         cipher
-            .encrypt_in_place(AesNonce::from_slice(&nonce), &aad, &mut encrypted)
+            .encrypt_in_place(AesNonce::from_slice(&nonce), &packet, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))?;
     } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
         let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(&params.nonce_suffix);
+        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(&counter);
         cipher
-            .encrypt_in_place(XNonce::from_slice(&nonce), &aad, &mut encrypted)
+            .encrypt_in_place(XNonce::from_slice(&nonce), &packet, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet"))?;
     } else {
         return Err(invalid_data_error(format!(
@@ -2028,7 +2086,7 @@ fn encrypt_transport_payload(
     }
 
     packet.extend_from_slice(&encrypted);
-    packet.extend_from_slice(&params.nonce_suffix);
+    packet.extend_from_slice(&counter);
     Ok(packet)
 }
 
@@ -2164,9 +2222,10 @@ mod tests {
     use super::{
         build_heartbeat_payload, build_identify_payload, connect, decrypt_transport_payload,
         gap_increment, next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header,
-        parse_uleb128, read_hello_interval, select_encryption_mode, update_state,
-        voice_heartbeat_ack_timeout, voice_stage_timeout, VoiceDaveState, VoiceOpusDecoder,
-        VoiceOutboundRtpState, VoiceRuntimeConfig, VoiceRuntimeState, VoiceSessionDescription,
+        parse_uleb128, read_hello_interval, seal_rtpsize_packet, select_encryption_mode,
+        update_state, voice_heartbeat_ack_timeout, voice_stage_timeout, VoiceDaveState,
+        VoiceOpusDecoder, VoiceOutboundRtpState, VoiceRuntimeConfig, VoiceRuntimeState,
+        VoiceSessionDescription,
     };
     #[cfg(feature = "voice-encode")]
     use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
@@ -2222,6 +2281,61 @@ mod tests {
         0x7e, 0xec, 0x3c, 0x20, 0x5d, 0xa8, 0x4c, 0xb6, 0xb1, 0x6e, 0x39, 0x12, 0x1a, 0x80, 0xde,
         0x17, 0xfd, 0xa1, 0xb2, 0xc3, 0xd4,
     ];
+
+    /// Padded shape: P and X bits, one CSRC (0xfeedface), a one-word
+    /// extension (body `10 cd 00 00`), and the Opus frame followed by four
+    /// octets of padding (`00 00 00 04`), all encrypted; sequence 0x0304,
+    /// timestamp 0x0e0f1011, SSRC 0x55667788, counter 0x5a6b7c8d.
+    const KAT_AES_PADDED: [u8; 51] = [
+        0xb1, 0x78, 0x03, 0x04, 0x0e, 0x0f, 0x10, 0x11, 0x55, 0x66, 0x77, 0x88, 0xfe, 0xed, 0xfa,
+        0xce, 0xbe, 0xde, 0x00, 0x01, 0x14, 0xcc, 0x08, 0xf3, 0x6a, 0xc2, 0x83, 0x16, 0xc1, 0xca,
+        0x29, 0x02, 0xda, 0xd2, 0x88, 0x81, 0x49, 0x75, 0x87, 0xc1, 0xa6, 0x20, 0xf2, 0x41, 0x73,
+        0x9d, 0xe2, 0x5a, 0x6b, 0x7c, 0x8d,
+    ];
+    const KAT_XCHACHA_PADDED: [u8; 51] = [
+        0xb1, 0x78, 0x03, 0x04, 0x0e, 0x0f, 0x10, 0x11, 0x55, 0x66, 0x77, 0x88, 0xfe, 0xed, 0xfa,
+        0xce, 0xbe, 0xde, 0x00, 0x01, 0xf5, 0x76, 0x70, 0xcb, 0x31, 0xe6, 0x5a, 0xe0, 0x17, 0xe6,
+        0xbc, 0x5a, 0x16, 0x0e, 0x59, 0xff, 0x91, 0x57, 0xb5, 0xf0, 0x66, 0xdd, 0x8f, 0xf9, 0xd5,
+        0x11, 0xa8, 0x5a, 0x6b, 0x7c, 0x8d,
+    ];
+    /// The DAVE frame from `voice_dave_frame_parser_reads_trailer_and_ranges`:
+    /// ciphertext `01 02 03`, an 8-byte tag, nonce 300, one unencrypted
+    /// range, the supplemental size, and the magic marker at the very end.
+    const DAVE_FRAME: [u8; 18] = [
+        1, 2, 3, 9, 9, 9, 9, 9, 9, 9, 9, 0xac, 0x02, 5, 6, 15, 0xfa, 0xfa,
+    ];
+
+    fn kat_padded() -> [(VoiceEncryptionMode, &'static [u8]); 2] {
+        [
+            (
+                VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                &KAT_AES_PADDED,
+            ),
+            (
+                VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize(),
+                &KAT_XCHACHA_PADDED,
+            ),
+        ]
+    }
+
+    /// A packet with the P bit set: `cleartext` is the RTP header up to the
+    /// extension preamble, `plaintext` everything encrypted after it. Uses
+    /// the production sealing path, which the known-answer tests pin.
+    fn seal_padded(mode: &VoiceEncryptionMode, extension: bool, plaintext: &[u8]) -> Vec<u8> {
+        let mut cleartext = vec![0xa0, 0x78, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0, 0, 0, 3];
+        if extension {
+            cleartext[0] |= 0x10;
+            cleartext.extend_from_slice(&[0xbe, 0xde, 0x00, 0x01]);
+        }
+        seal_rtpsize_packet(
+            cleartext,
+            plaintext,
+            [0x0a, 0x0b, 0x0c, 0x0d],
+            mode,
+            &KAT_KEY,
+        )
+        .unwrap()
+    }
 
     fn kat_modes() -> [(VoiceEncryptionMode, &'static [u8], &'static [u8]); 2] {
         [
@@ -2501,6 +2615,77 @@ mod tests {
                     "{mode:?}: byte {index} is not authenticated"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn voice_receive_strips_padding_after_decrypting_known_answer_vectors() {
+        for (mode, padded) in kat_padded() {
+            let rtp = parse_rtp_header(padded).unwrap();
+            assert!(rtp.padding && rtp.extension);
+            assert_eq!(
+                (rtp.sequence, rtp.timestamp, rtp.ssrc),
+                (0x0304, 0x0e0f_1011, 0x5566_7788)
+            );
+            assert_eq!(rtp.header_len, 12 + 4 + 4 + 4);
+
+            // Neither the extension body nor the four padding octets
+            // (including the count) reach the Opus decoder.
+            let decrypted = decrypt_transport_payload(padded, &rtp, &mode, &KAT_KEY).unwrap();
+            assert_eq!(decrypted, KAT_OPUS, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn voice_receive_strips_padding_after_a_dave_frame() {
+        for (mode, _) in kat_padded() {
+            let packet = seal_padded(
+                &mode,
+                true,
+                &[&[0x10, 0xab, 0, 0], &DAVE_FRAME[..], &[0, 0, 0, 4]].concat(),
+            );
+            let rtp = parse_rtp_header(&packet).unwrap();
+            let frame = decrypt_transport_payload(&packet, &rtp, &mode, &KAT_KEY).unwrap();
+            assert_eq!(frame, DAVE_FRAME);
+            // The magic marker is the last two bytes again, so the frame
+            // parses; with the padding left on it failed with "missing magic
+            // marker".
+            let parsed = parse_dave_frame(&frame).unwrap();
+            assert_eq!(parsed.ciphertext, vec![1, 2, 3]);
+            assert_eq!(parsed.nonce, 300);
+        }
+    }
+
+    #[test]
+    fn voice_receive_rejects_malformed_padding_and_accepts_padding_only_packets() {
+        for (mode, _) in kat_padded() {
+            let cases: [(bool, &[u8], &str); 4] = [
+                // The count octet counts itself, so zero is impossible.
+                (false, &[0xf8, 0xff, 0xfe, 0x00], "padding count 0"),
+                // A count of 7 would reach into the 4-byte extension body.
+                (true, &[0x10, 0xab, 0, 0, 0xf8, 0x07], "padding count 7"),
+                // Five octets of padding in a 4-byte payload.
+                (false, &[0xf8, 0x00, 0x00, 0x05], "padding count 5"),
+                // P bit set but nothing encrypted at all.
+                (false, &[], "no padding count"),
+            ];
+            for (extension, plaintext, expected) in cases {
+                let packet = seal_padded(&mode, extension, plaintext);
+                let rtp = parse_rtp_header(&packet).unwrap();
+                let error = decrypt_transport_payload(&packet, &rtp, &mode, &KAT_KEY)
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains(expected), "{mode:?}: {error}");
+            }
+
+            // A count equal to the payload length is padding only (RFC 3550
+            // allows it) and leaves no media.
+            let packet = seal_padded(&mode, true, &[0x10, 0xab, 0, 0, 0, 0, 3]);
+            let rtp = parse_rtp_header(&packet).unwrap();
+            assert_eq!(
+                decrypt_transport_payload(&packet, &rtp, &mode, &KAT_KEY).unwrap(),
+                Vec::<u8>::new()
+            );
         }
     }
 
@@ -2987,7 +3172,6 @@ mod tests {
     /// SESSION_DESCRIPTION with `dave_protocol_version`) that answers
     /// heartbeats until the client closes, and returns the connected handle
     /// with the UDP socket that receives its media.
-    #[cfg(feature = "dave")]
     async fn connect_mock_voice_session(
         dave_protocol_version: u8,
     ) -> (
@@ -3074,6 +3258,57 @@ mod tests {
         .await
         .unwrap();
         (handle, media, server)
+    }
+
+    #[tokio::test]
+    async fn voice_runtime_receives_padded_dave_frames_over_udp() {
+        /// Records the parsed frame and returns its ciphertext as the media.
+        struct RecordingDecryptor(Option<super::VoiceDaveFrame>);
+
+        impl super::VoiceDaveFrameDecryptor for RecordingDecryptor {
+            fn decrypt_frame(
+                &mut self,
+                _rtp: &super::VoiceRtpHeader,
+                _user_id: Option<crate::model::UserId>,
+                frame: &super::VoiceDaveFrame,
+            ) -> Result<Vec<u8>, crate::error::DiscordError> {
+                self.0 = Some(frame.clone());
+                Ok(frame.ciphertext.clone())
+            }
+        }
+
+        let (handle, media, server) = connect_mock_voice_session(1).await;
+        let mut client = handle.udp_socket().local_addr().unwrap();
+        client.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+
+        // P and X set: extension body, DAVE frame, and four padding octets
+        // are all encrypted with the session key of the mock gateway.
+        let cleartext = vec![
+            0xb0, 0x78, 0x00, 0x07, 0x00, 0x00, 0x03, 0xc0, 0x00, 0x00, 0x00, 0x63, 0xbe, 0xde,
+            0x00, 0x01,
+        ];
+        let plaintext = [&[0x10, 0xab, 0, 0], &DAVE_FRAME[..], &[0, 0, 0, 4]].concat();
+        let packet = seal_rtpsize_packet(
+            cleartext,
+            &plaintext,
+            [0, 0, 0, 1],
+            &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+            &[7_u8; 32],
+        )
+        .unwrap();
+        media.send_to(&packet, client).await.unwrap();
+
+        let mut decryptor = RecordingDecryptor(None);
+        let received = handle
+            .recv_voice_packet_with_dave(128, &mut decryptor)
+            .await
+            .unwrap();
+        assert_eq!(received.rtp.ssrc, 0x63);
+        assert_eq!(received.opus_frame, vec![1, 2, 3]);
+        assert_eq!(decryptor.0.unwrap().bytes, DAVE_FRAME);
+
+        handle.close().await.unwrap();
+        server.await.unwrap();
     }
 
     #[cfg(feature = "dave")]
