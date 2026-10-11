@@ -466,6 +466,9 @@ struct StoreSession {
     client: u64,
     next_sequence: u64,
     in_doubt: Option<InDoubtClear>,
+    /// Rejections seen while claiming, before this client's first applied
+    /// clear; bounded by [`CLAIM_ATTEMPTS`].
+    claim_rejections: u32,
 }
 
 impl StoreSession {
@@ -484,6 +487,7 @@ impl StoreSession {
             client,
             next_sequence: 0,
             in_doubt: None,
+            claim_rejections: 0,
         }
     }
 
@@ -540,6 +544,15 @@ impl StoreSession {
         };
         match self.attempt(backend, clear).await? {
             CacheClear::Applied(_) => Ok(Some(clear.scope)),
+            // Before this client's first applied clear there is no ownership
+            // to lose: the rejection only reports the store's current epoch
+            // (for example a claim expecting 0 against an existing store,
+            // whose first rejection was lost). Continue the claim from it.
+            CacheClear::Rejected(current) if self.epoch.is_none() => {
+                self.note_claim_rejection(current)?;
+                self.claim_with(backend, clear.id, current).await?;
+                Ok(Some(ClearScope::Store))
+            }
             // Not committed, and another client cleared since.
             CacheClear::Rejected(current) => Err(ClearFailure::Superseded(current)),
         }
@@ -580,8 +593,19 @@ impl StoreSession {
     /// claim the store after it (see the [`CacheBackend`] docs).
     async fn claim(&mut self, backend: &dyn CacheBackend) -> Result<u64, ClearFailure> {
         let id = self.next_id();
-        let mut expected = 0;
-        for _ in 0..CLAIM_ATTEMPTS {
+        self.claim_with(backend, id, 0).await
+    }
+
+    /// Issues the claiming full clear `id` expecting `expected`, adopting the
+    /// store's epoch from each rejection (epoch discovery) until it applies
+    /// or the claim budget is spent.
+    async fn claim_with(
+        &mut self,
+        backend: &dyn CacheBackend,
+        id: CacheClearId,
+        mut expected: u64,
+    ) -> Result<u64, ClearFailure> {
+        loop {
             let clear = InDoubtClear {
                 id,
                 expected,
@@ -589,10 +613,23 @@ impl StoreSession {
             };
             match self.attempt(backend, clear).await? {
                 CacheClear::Applied(epoch) => return Ok(epoch),
-                CacheClear::Rejected(current) => expected = current,
+                CacheClear::Rejected(current) => {
+                    self.note_claim_rejection(current)?;
+                    expected = current;
+                }
             }
         }
-        Err(ClearFailure::Superseded(expected))
+    }
+
+    /// Counts a rejection seen while claiming. Only a store whose epoch
+    /// keeps moving under every attempt — another client clearing it
+    /// repeatedly — exhausts the budget and supersedes this client.
+    fn note_claim_rejection(&mut self, current: u64) -> Result<(), ClearFailure> {
+        self.claim_rejections += 1;
+        if self.claim_rejections >= CLAIM_ATTEMPTS {
+            return Err(ClearFailure::Superseded(current));
+        }
+        Ok(())
     }
 
     /// The epoch to stamp writes with: settles an in-doubt clear first (a

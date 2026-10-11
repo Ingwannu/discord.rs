@@ -7288,3 +7288,61 @@ async fn a_committed_clear_whose_response_was_lost_does_not_supersede_the_client
     drop(forwarder);
     worker.shutdown(Duration::from_secs(5)).await.unwrap();
 }
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn a_lost_rejection_of_the_initial_claim_is_epoch_discovery_not_a_takeover() {
+    // A store left at epoch 1 by an earlier (stopped) client.
+    let store = crate::cache::CacheHandle::new();
+    let earlier = crate::cache::CacheClearId {
+        client: 7,
+        sequence: 0,
+    };
+    assert_eq!(
+        crate::cache::CacheBackend::clear_cache(&store, 0, earlier)
+            .await
+            .unwrap(),
+        crate::cache::CacheClear::Applied(1)
+    );
+    crate::cache::CacheBackend::put_message(
+        &store,
+        1,
+        Message {
+            id: Snowflake::from("left-over"),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // The new client's claim expects 0; the store's Rejected(1) answer is
+    // lost, and the in-doubt retry gets Rejected(1) again.
+    let backend = Arc::new(DelayedStore::new(
+        &store,
+        tokio::sync::Semaphore::MAX_PERMITS,
+    ));
+    backend
+        .lose_clear_responses
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let (forwarder, worker) =
+        super::CacheBackendForwarder::spawn(Arc::clone(&backend) as _, 16, Duration::from_secs(5));
+    let health = forwarder.health_handle();
+    forwarder.forward((0, 1), super::BackendWrite::ClearShard);
+    forwarder.flush().await;
+    let after_claim = health.health();
+    assert!(
+        after_claim.healthy && !after_claim.superseded,
+        "a rejection before the first applied clear only reports the epoch: {after_claim:?}"
+    );
+    assert!(
+        !store_has_message(&store, "left-over").await,
+        "the claim applied after discovering the epoch"
+    );
+
+    forwarder.forward((0, 1), put_message_write("mine"));
+    forwarder.flush().await;
+    assert!(store_has_message(&store, "mine").await);
+    drop(forwarder);
+    worker.shutdown(Duration::from_secs(5)).await.unwrap();
+}
