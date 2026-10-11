@@ -49,3 +49,18 @@ pub struct JoinedArchivedThreadsQuery {
     pub before: Option<Snowflake>,
     pub limit: Option<u64>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ThreadMetadata`.
+pub struct ThreadMetadata {
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_archive_duration: Option<u64>,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invitable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_timestamp: Option<String>,
+}

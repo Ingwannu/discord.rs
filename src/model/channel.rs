@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
-use super::{DefaultReaction, ForumTag, PermissionsBitField, Snowflake, ThreadMetadata};
+use super::{PermissionsBitField, Snowflake, ThreadMetadata};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Attachment`.
@@ -189,4 +191,72 @@ pub struct Channel {
     pub default_sort_order: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_forum_layout: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `DefaultReaction`.
+pub struct DefaultReaction {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji_name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `ForumTag`.
+pub struct ForumTag {
+    pub id: Snowflake,
+    pub name: String,
+    #[serde(default)]
+    pub moderated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emoji_name: Option<String>,
+}
+
+/// Request entry for moving or reparenting a guild channel.
+///
+/// The outer `Option` controls whether a field is omitted. Use `Some(None)` to
+/// send JSON `null` for nullable Discord fields such as `parent_id`.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ModifyGuildChannelPosition {
+    /// Channel to modify.
+    pub id: Snowflake,
+    /// New sorting position, or `Some(None)` to send `null`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<Option<i64>>,
+    /// Whether to sync permission overwrites with the new parent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_permissions: Option<Option<bool>>,
+    /// New parent category ID, or `Some(None)` to remove the parent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<Option<Snowflake>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `CreateDmChannel`.
+pub struct CreateDmChannel {
+    pub recipient_id: Snowflake,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+/// Typed Discord API object for `CreateGroupDmChannel`.
+pub struct CreateGroupDmChannel {
+    pub access_tokens: Vec<String>,
+    pub nicks: HashMap<Snowflake, String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+/// Typed Discord API object for `AddGroupDmRecipient`.
+pub struct AddGroupDmRecipient {
+    pub access_token: String,
+    pub nick: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// Typed Discord API object for `FollowedChannel`.
+pub struct FollowedChannel {
+    pub channel_id: Snowflake,
+    pub webhook_id: Snowflake,
 }
