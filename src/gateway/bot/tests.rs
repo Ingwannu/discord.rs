@@ -45,12 +45,12 @@ use crate::gateway::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use crate::http::DiscordHttpClient;
 use crate::model::{
     Activity, Attachment, ChannelId, ComponentInteraction, ComponentInteractionData, Embed,
-    GuildId, Interaction, InteractionContextData, Member, Message, MessageId, Reaction,
-    RequestChannelInfo, Role, RoleId, SoundboardSound, StageInstance, Sticker, User, UserId,
-    VoiceServerUpdate, VoiceState,
+    GuildId, Id, IdMarker, Interaction, InteractionContextData, Member, Message, MessageId,
+    Reaction, RequestChannelInfo, Role, RoleId, SoundboardSound, StageInstance, Sticker, User,
+    UserId, VoiceServerUpdate, VoiceState,
 };
 #[cfg(feature = "sharding")]
-use crate::model::{GatewayBot, Id, IdMarker, SessionStartLimit};
+use crate::model::{GatewayBot, SessionStartLimit};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardConfig, ShardingManager};
 use crate::types::Emoji;

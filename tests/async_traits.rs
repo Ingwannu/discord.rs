@@ -15,11 +15,10 @@
     reason = "a failed expectation fails the test"
 )]
 
-#[cfg(any(feature = "gateway", feature = "cache", feature = "interactions"))]
 use std::future::Future;
 
-/// Compile-time check that a future can be moved into `tokio::spawn`.
-#[cfg(any(feature = "gateway", feature = "cache", feature = "interactions"))]
+/// Compile-time check that a future can be moved into `tokio::spawn`. Used
+/// in every feature configuration: the `cached_manager` module is not gated.
 fn spawnable<F: Future + Send + 'static>(future: F) -> F {
     future
 }
