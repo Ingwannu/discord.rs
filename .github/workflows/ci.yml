@@ -81,6 +81,19 @@ jobs:
       - name: Cargo fmt (check)
         run: cargo fmt --all -- --check
 
+      # Broken intra-doc links are only warnings by default, so they piled up
+      # unnoticed (15 by 2026-10-11). Both feature sets: a link from ungated
+      # docs to a feature-gated item breaks only under default features.
+      - name: Rustdoc (all features, deny warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --all-features --no-deps --locked
+
+      - name: Rustdoc (default features, deny warnings)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --locked
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

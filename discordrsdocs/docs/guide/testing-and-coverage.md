@@ -18,6 +18,7 @@ cargo test --all-features
 cargo check --all-features --all-targets
 cargo clippy --all-features --tests -- -D warnings
 cargo fmt --all -- --check
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 cargo llvm-cov --all-features --summary-only --fail-under-lines 90.0
 ```
 

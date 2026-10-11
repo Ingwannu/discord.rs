@@ -22,8 +22,8 @@ pub mod constants;
 pub mod error;
 /// Typed Discord Gateway event payloads and dispatch decoding.
 pub mod event;
-/// Message formatting helpers with `@discordjs/formatters` parity: mentions,
-/// timestamps, markdown styles, lists, `escape_markdown`, and `clean_content`.
+// Module docs live in the file's `//!` header only: with `///` docs here as
+// well, rustdoc resolves the header's intra-doc links from this scope.
 pub mod formatters;
 #[cfg(feature = "interactions")]
 /// High-level typed interaction application framework.
@@ -45,8 +45,7 @@ pub mod model_ext;
 pub mod oauth2;
 /// Parsers for Discord interaction and modal payloads.
 pub mod parsers;
-/// Channel and guild permission computation (discord.js `permissionsFor`)
-/// over explicit data, models, or the cache.
+// Docs in the file's `//!` header only (see `formatters`).
 pub mod permissions;
 /// Commonly used discord.rs types re-exported for application code.
 pub mod prelude;

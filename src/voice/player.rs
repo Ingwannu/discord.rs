@@ -7,12 +7,10 @@
 //! - [`AudioResource`] — wraps an [`AudioInput`] with metadata and a live
 //!   volume control, and slices it into Discord-sized 20 ms frames.
 //! - [`AudioPlayer`] — a state machine (`Idle` / `Buffering` / `Playing` /
-//!   `Paused` / `AutoPaused`) driven on a 20 ms tick, with a
-//!   [`watch`](tokio::sync::watch) state channel and a
-//!   [`broadcast`](tokio::sync::broadcast) event stream.
-//! - [`PlayerSubscription`] — connects a player to a
-//!   [`VoiceRuntimeHandle`](crate::voice_runtime::VoiceRuntimeHandle) so
-//!   encoded Opus frames are transmitted; unsubscribes on drop.
+//!   `Paused` / `AutoPaused`) driven on a 20 ms tick, with a [`watch`] state
+//!   channel and a [`broadcast`] event stream.
+//! - [`PlayerSubscription`] — connects a player to a [`VoiceRuntimeHandle`]
+//!   so encoded Opus frames are transmitted; unsubscribes on drop.
 //!
 //! The player reads each resource and feeds each subscribed connection from
 //! separate tasks, and its control loop never waits on either, so commands

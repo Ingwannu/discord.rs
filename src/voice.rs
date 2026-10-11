@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "voice")]
 #[path = "voice/player.rs"]
-/// discord.js-style audio playback pipeline: `AudioInput`, `AudioResource`,
-/// the event-driven `AudioPlayer` state machine, and connection subscriptions.
+// Docs in the file's `//!` header only: with `///` docs here as well, rustdoc
+// resolves the header's intra-doc links from this module's scope.
 pub mod player;
 
 use crate::error::DiscordError;
