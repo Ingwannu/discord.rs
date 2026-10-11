@@ -1029,24 +1029,47 @@ const DECODE_CORPUS: &[&[u8]] = &[
     b"[1,2,3] trailing",
 ];
 
-/// The decoder before 3.0: copy into a lossy `String`, parse it into a
-/// `Value`, then decode `T` from the `Value`.
+/// The decoder before 3.0 phase 4: copy into a lossy `String`, parse it
+/// into a `Value`, then decode `T` from the `Value`.
 fn decode_like_before<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, DiscordError> {
     serde_json::from_value(parse_body_value(String::from_utf8_lossy(body).into_owned()))
         .map_err(Into::into)
 }
 
-fn assert_decodes_like_before<T>(body: &[u8])
+/// The bodies whose result changed when `decode_json_body` moved from the
+/// `Value` reader to the text reader (3.0 phase 4), with the type they
+/// changed for. Every other (body, type) pair must decode exactly as before.
+const CHANGED_BY_TEXT_READER: &[(&[u8], &str)] = &[
+    // A duplicated key is a "duplicate field" error for a struct instead
+    // of the last value winning.
+    (br#"{"id":"1","id":"2"}"#, "DecodeProbe"),
+    (br#"{"id":"1","id":"2"}"#, "Option<DecodeProbe>"),
+    // A number out of `f64` range fails where it is read, instead of the
+    // whole body becoming a JSON string, so every target sees an object now
+    // and an ignored field no longer matters ("*": every type).
+    (br#"{"id":"1","extra":1e400}"#, "*"),
+];
+
+fn assert_decodes_like_before<T>(body: &[u8], type_name: &str)
 where
     T: serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
 {
     let shown = String::from_utf8_lossy(body);
+    let changed = CHANGED_BY_TEXT_READER
+        .iter()
+        .any(|&(changed, name)| changed == body && (name == type_name || name == "*"));
     match (decode_like_before::<T>(body), decode_json_body::<T>(body)) {
-        (Ok(before), Ok(now)) => assert_eq!(before, now, "body {shown:?}"),
+        _ if changed => {}
+        (Ok(before), Ok(now)) => assert_eq!(before, now, "body {shown:?} as {type_name}"),
         (Err(before), Err(now)) => {
-            assert_eq!(before.to_string(), now.to_string(), "body {shown:?}")
+            // The text reader adds the position: "... at line 1 column 7".
+            let (before, now) = (before.to_string(), now.to_string());
+            assert!(
+                now.starts_with(&before),
+                "body {shown:?} as {type_name}: before {before:?}, now {now:?}"
+            );
         }
-        (before, now) => panic!("body {shown:?}: before {before:?}, now {now:?}"),
+        (before, now) => panic!("body {shown:?} as {type_name}: before {before:?}, now {now:?}"),
     }
 }
 
@@ -1069,15 +1092,15 @@ fn parse_body_bytes_matches_the_lossy_string_parser() {
 }
 
 #[test]
-fn decode_json_body_matches_the_previous_decoder_values_and_errors() {
+fn decode_json_body_matches_the_previous_decoder_except_the_documented_changes() {
     for body in DECODE_CORPUS {
-        assert_decodes_like_before::<serde_json::Value>(body);
-        assert_decodes_like_before::<Option<serde_json::Value>>(body);
-        assert_decodes_like_before::<()>(body);
-        assert_decodes_like_before::<String>(body);
-        assert_decodes_like_before::<DecodeProbe>(body);
-        assert_decodes_like_before::<Vec<DecodeProbe>>(body);
-        assert_decodes_like_before::<Option<DecodeProbe>>(body);
+        assert_decodes_like_before::<serde_json::Value>(body, "Value");
+        assert_decodes_like_before::<Option<serde_json::Value>>(body, "Option<Value>");
+        assert_decodes_like_before::<()>(body, "()");
+        assert_decodes_like_before::<String>(body, "String");
+        assert_decodes_like_before::<DecodeProbe>(body, "DecodeProbe");
+        assert_decodes_like_before::<Vec<DecodeProbe>>(body, "Vec<DecodeProbe>");
+        assert_decodes_like_before::<Option<DecodeProbe>>(body, "Option<DecodeProbe>");
     }
     // The cases the corpus exists for, spelled out.
     assert_eq!(
@@ -1089,9 +1112,18 @@ fn decode_json_body_matches_the_previous_decoder_values_and_errors() {
         "plain text"
     );
     assert_eq!(
-        decode_json_body::<DecodeProbe>(br#"{"id":"1","id":"2"}"#).unwrap(),
+        decode_json_body::<String>(b"[1,2,3] trailing").unwrap(),
+        "[1,2,3] trailing"
+    );
+    let duplicate = decode_json_body::<DecodeProbe>(br#"{"id":"1","id":"2"}"#).unwrap_err();
+    assert!(
+        duplicate.to_string().contains("duplicate field `id`"),
+        "{duplicate}"
+    );
+    assert_eq!(
+        decode_json_body::<DecodeProbe>(br#"{"id":"1","extra":1e400}"#).unwrap(),
         DecodeProbe {
-            id: String::from("2"),
+            id: String::from("1"),
             name: None
         }
     );
@@ -1102,10 +1134,9 @@ fn decode_json_body_matches_the_previous_decoder_values_and_errors() {
             name: None
         }
     );
-    assert!(matches!(
-        decode_json_body::<DecodeProbe>(b"<html>"),
-        Err(DiscordError::Json(_))
-    ));
+    let html = decode_json_body::<DecodeProbe>(b"<html>").unwrap_err();
+    assert!(matches!(html, DiscordError::Json(_)));
+    assert!(html.to_string().contains("line 1 column"), "{html}");
 }
 
 #[tokio::test]
@@ -1136,11 +1167,14 @@ async fn typed_shims_decode_text_empty_and_no_content_success_bodies_like_before
         .request_typed::<DecodeProbe, serde_json::Value>(Method::GET, "/users/@me", none)
         .await
         .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        decode_like_before::<DecodeProbe>(b"<html>proxy page</html>")
-            .unwrap_err()
-            .to_string()
+    // The same error as before, plus the text reader's position.
+    assert!(
+        error.to_string().starts_with(
+            &decode_like_before::<DecodeProbe>(b"<html>proxy page</html>")
+                .unwrap_err()
+                .to_string()
+        ),
+        "{error}"
     );
     let no_content: Option<DecodeProbe> = client
         .request_optional_typed_no_content(Method::PUT, "/guilds/1/members/2", Some(&json!({})))

@@ -187,33 +187,68 @@ pub(crate) fn parse_body_value(response_text: String) -> Value {
 /// Decodes a response body into `T`.
 ///
 /// [Decision Log] Response decoding
-/// - Purpose: one decoder for every typed REST response, without the old
-///   bytes -> lossy `String` copy -> [`parse_body_value`] -> `T` detour.
+/// - Purpose: one decoder for every typed REST response, and every model's
+///   `Deserialize` compiled once in the whole crate.
 /// - Constraint: `T`'s `Deserialize` impl is compiled once per deserializer
-///   type. Gateway events decode the same models (`Message`, `Guild`,
-///   `Member`, ...); before phase 4 they did so from a `Value`, and debug
-///   builds of downstream crates reuse those instances from this crate.
-/// - Alternatives: (1) `serde_json::from_slice::<T>` on the bytes, with a
-///   non-generic fallback for non-JSON bodies; (2) parse the bytes into a
-///   `Value` and decode `T` from it.
-/// - Chosen: (2). Measured on the all-features lib test build, (1) added
-///   about 300k LLVM IR lines of `SliceRead` deserializers and removed only
-///   63k of `Value` ones (+5.4% total), because every model the gateway
-///   also decodes was instantiated twice. (2) only drops the `String` copy.
-/// - Trade-offs: responses still build a `Value` tree. Since phase 4 B the
-///   gateway decodes from the `d` text (`serde_json::from_str`), so models
-///   both paths read are now instantiated twice (measured +354k IR lines in
-///   the all-features lib build, about 80k of it duplicated models; see
-///   `testing-and-coverage.md`). Moving this function to `from_str` too
-///   removes the duplicates but changes error strings and duplicate-key
-///   handling, which the decoder equivalence test pins; that decision is
-///   open (phase 4 B record in `docs/design/3.0-types-events-requests.md`).
+///   type. Since phase 4 B the gateway decodes the same models (`Message`,
+///   `Guild`, `Member`, ...) from the dispatch text with `serde_json::from_str`
+///   (the `&str` reader), and debug builds of downstream crates reuse those
+///   instances from this crate.
+/// - Alternatives: (1) parse the bytes into a `Value` and decode `T` from it
+///   (until 3.0 phase 4); (2) `serde_json::from_slice::<T>` on the bytes;
+///   (3) `serde_json::from_str::<T>` on the bytes read as UTF-8.
+/// - Chosen: (3). The generic part is the `from_str` call; reading the bytes
+///   as text ([`body_text`]) and the non-JSON fallback ([`quote_non_json`])
+///   are not generic. Valid JSON is scanned once; only a failed decode checks
+///   whether the body was JSON at all.
+/// - Why: (1) instantiated every model a second time for the `Value` reader
+///   once the gateway moved to text (+354k LLVM IR lines in the all-features
+///   lib build, about 80k of it duplicated models), and builds a `Value` tree
+///   per response. (2) is a third reader type (`SliceRead`) and a second copy
+///   of the JSON parser. (3) shares the gateway's instances.
+/// - Trade-offs (3.0 behaviour change): errors carry serde_json's position
+///   (`... at line 1 column 7`); a duplicated key in an object decoded into a
+///   struct is a "duplicate field" error instead of the last value winning;
+///   a number out of `f64` range fails only where it is read (an ignored
+///   field no longer turns the whole body into a string). Empty bodies,
+///   non-JSON text, and invalid UTF-8 read as before.
 pub(crate) fn decode_json_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, DiscordError> {
-    // A `match` instead of `map_err`, which would be one more instance per `T`.
-    match serde_json::from_value(parse_body_bytes(body)) {
+    let text = body_text(body);
+    // `match` instead of `map_err`/`or_else`, which would be one more
+    // instance per `T`.
+    match serde_json::from_str(&text) {
         Ok(value) => Ok(value),
-        Err(error) => Err(error.into()),
+        Err(error) => match quote_non_json(&text) {
+            Some(quoted) => match serde_json::from_str(&quoted) {
+                Ok(value) => Ok(value),
+                Err(error) => Err(error.into()),
+            },
+            None => Err(error.into()),
+        },
     }
+}
+
+/// The body as text: borrowed when it is valid UTF-8, replaced (lossy)
+/// otherwise, and `null` when empty.
+fn body_text(body: &[u8]) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+
+    match std::str::from_utf8(body) {
+        Ok("") => Cow::Borrowed("null"),
+        Ok(text) => Cow::Borrowed(text),
+        Err(_) => Cow::Owned(String::from_utf8_lossy(body).into_owned()),
+    }
+}
+
+/// `text` as a JSON string when it is not JSON (a proxy's HTML page, a
+/// plain-text answer), so a `String` or `Value` target still receives it as
+/// text, as before; `None` when it is JSON.
+fn quote_non_json(text: &str) -> Option<String> {
+    if serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok() {
+        return None;
+    }
+    // Serializing a `str` cannot fail.
+    serde_json::to_string(text).ok()
 }
 
 /// [`parse_body_value`] for raw bytes, without copying valid UTF-8 into a
