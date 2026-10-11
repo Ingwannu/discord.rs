@@ -90,6 +90,44 @@ flowchart LR
 - Sharding and voice are dedicated feature-gated layers above the base `Client`.
 - Add new endpoints to the matching `src/http/<domain>.rs` `impl RestClient` block and new model types to the matching `src/model/<domain>.rs` plus one re-export line in `src/model.rs`; route construction stays in `src/http/paths.rs`, body encoding in `src/http/body.rs`, and rate-limit bookkeeping in `src/http/rate_limit.rs`. Endpoints call the existing typed shims (or `execute` for a custom `RequestBody`) instead of adding another generic `async fn` around the transport.
 
+### Shard supervisor events
+
+`ShardingManager::prepare_runtime` gives each shard two things: a status (`ShardRuntimeStatus`, the current state) and a bounded event queue (a history for observers). `ShardRuntimePublisher::publish` applies an event to the status and queues it under one lock. `ShardRuntimeHandle::try_recv_event` / `drain_events` pop from the queue and never touch the status. The queue holds at most 256 events per shard (`SHARD_EVENT_QUEUE_CAPACITY` in `src/sharding.rs`). When it is full, the oldest event is dropped, and the next pop yields `ShardSupervisorEvent::Lagged { shard_id, missed }` before the oldest kept event. Only `attach_runtime` still reads a caller's std channel; its events bypass `publish`, so they are applied when received.
+
+```text
+[Decision Log]
+- Purpose: keep supervisor memory bounded under reconnect/error churn even if the
+  application never calls drain_events, and keep statuses() current whether or not
+  anyone drains.
+- Existing implementation and constraints: every published event went into an unbounded
+  std::sync::mpsc channel that only drain_events/poll_event emptied, and ShardSupervisor
+  users who only read statuses() never drained it. Receiving applied events a second
+  time, after publish already had, so polling one old event rolled the status back
+  (Running over a newer Reconnecting). Public `event_tx: Sender` fields let callers
+  bypass publish. attach_runtime takes a caller-owned Receiver. Publishers run on async
+  tasks, so publishing must never block.
+- Alternatives considered: (1) std sync_channel(n) + try_send: drops the newest events,
+  needs a side counter to report the gap, and still changes the event_tx type.
+  (2) tokio::sync::broadcast: drop-oldest with Lagged built in, but it allocates every
+  slot up front (256 slots x every shard, used or not), and each receiver clone gets its
+  own cursor while the handles share one drain. (3) Keep the unbounded channel and
+  document that it must be drained: memory still grows by default. (4) A drop counter
+  method instead of an in-band marker: easy to miss, and it loses where the gap is.
+- Chosen approach: a VecDeque capped at 256 per shard behind the existing std mutex.
+  Overflow drops the oldest event, and the next pop yields Lagged { shard_id, missed }.
+  The status is written only by publish. The event_tx fields are removed, so events
+  go through publish. attach_runtime channels keep apply-on-receive.
+- Why this over the alternatives: drop-oldest keeps the newest, most useful events. The
+  in-band marker sits exactly where events are missing, and a lagging observer resyncs
+  from statuses(), which is authoritative. No new dependency, no blocking, no eager
+  allocation, and the lock discipline is unchanged (queue before status).
+- Pros, cons, and impact: per-shard memory is bounded without a consumer, and draining
+  never changes statuses. Breaking for 3.0: ShardRuntimeChannels::event_tx and
+  ShardRuntimePublisher::event_tx are removed (use publish), and the new Lagged variant
+  breaks exhaustive matches. Observers that fall more than 256 events behind on a shard
+  see Lagged. A channel passed to attach_runtime stays bounded only by its owner.
+```
+
 ## Code rules
 
 Library code follows these rules, and the `[lints]` table in `Cargo.toml` makes clippy reject a violation on every target (CI runs `cargo clippy --all-targets -- -D warnings` for all and default features on the pinned toolchain, and `cargo doc` with `RUSTDOCFLAGS="-D warnings"`).

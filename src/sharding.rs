@@ -4,9 +4,9 @@
 #[path = "sharding/process.rs"]
 pub mod process;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use serde_json::Value;
 
@@ -14,6 +14,15 @@ use crate::error::DiscordError;
 use crate::model::GuildId;
 use crate::types::invalid_data_error;
 use crate::ws::GatewayConnectionConfig;
+
+/// Most supervisor events one shard keeps until they are drained.
+///
+/// Events are observations only: `publish` has already applied each one to
+/// the shard's status, so a full queue drops its oldest event and reports
+/// the drop as one [`ShardSupervisorEvent::Lagged`] instead of growing while
+/// nobody drains it. 256 covers far more than one reconnect cycle
+/// (Queued, Starting, Running, Reconnecting, errors, sessions) per shard.
+const SHARD_EVENT_QUEUE_CAPACITY: usize = 256;
 
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -117,6 +126,33 @@ pub enum ShardSupervisorEvent {
         /// Gateway error message.
         message: String,
     },
+    /// The shard's event queue was full, so its `missed` oldest events
+    /// before this point were dropped. Not a shard state: the shard's
+    /// status (`ShardRuntimeHandle::status`, `ShardingManager::statuses`) is
+    /// still current, because every event is applied to it when published.
+    Lagged {
+        /// Shard ID whose events were dropped.
+        shard_id: u32,
+        /// How many events were dropped since the last `Lagged`.
+        missed: u64,
+    },
+}
+
+/// Applies `event` to `status`. Every event is applied exactly once: by
+/// `publish` for the crate's own queue, or on receipt for a caller's channel
+/// (`ShardingManager::attach_runtime`), whose events bypass `publish`.
+fn apply_event(status: &mut ShardRuntimeStatus, event: &ShardSupervisorEvent) {
+    match event {
+        ShardSupervisorEvent::StateChanged { state, .. } => status.state = state.clone(),
+        ShardSupervisorEvent::SessionEstablished { session_id, .. } => {
+            status.session_id = Some(session_id.clone());
+            status.last_error = None;
+        }
+        ShardSupervisorEvent::GatewayError { message, .. } => {
+            status.last_error = Some(message.clone());
+        }
+        ShardSupervisorEvent::Lagged { .. } => {}
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,13 +175,122 @@ impl ShardRuntimeStatus {
     }
 }
 
+/// A shard's supervisor events awaiting `try_recv_event`, bounded at
+/// [`SHARD_EVENT_QUEUE_CAPACITY`].
+struct ShardEventQueue {
+    shard_id: u32,
+    events: VecDeque<ShardSupervisorEvent>,
+    /// Events dropped since the last `Lagged` was handed out.
+    missed: u64,
+}
+
+impl ShardEventQueue {
+    fn new(shard_id: u32) -> Self {
+        Self {
+            shard_id,
+            events: VecDeque::new(),
+            missed: 0,
+        }
+    }
+
+    fn push(&mut self, event: ShardSupervisorEvent) {
+        if self.events.len() >= SHARD_EVENT_QUEUE_CAPACITY {
+            self.events.pop_front();
+            self.missed = self.missed.saturating_add(1);
+        }
+        self.events.push_back(event);
+    }
+
+    /// The next event, preceded by one `Lagged` if events were dropped since
+    /// the last call. Drops always take the oldest events, so the `Lagged`
+    /// marks exactly where the gap is (like tokio's broadcast `Lagged`).
+    fn pop(&mut self) -> Option<ShardSupervisorEvent> {
+        if self.missed > 0 {
+            return Some(ShardSupervisorEvent::Lagged {
+                shard_id: self.shard_id,
+                missed: std::mem::take(&mut self.missed),
+            });
+        }
+        self.events.pop_front()
+    }
+}
+
+/// The publishing side of a shard prepared by
+/// [`ShardingManager::prepare_runtime`], shared by [`ShardRuntimeChannels`]
+/// and every [`ShardRuntimePublisher`] clone.
+#[derive(Clone)]
+struct ShardEventSink {
+    // Shared with the supervisor's handles, which pop. Taken before `status`.
+    queue: Arc<Mutex<ShardEventQueue>>,
+    // Written here, read by the supervisor's handles.
+    status: Arc<Mutex<ShardRuntimeStatus>>,
+    /// Held by every sink clone; once all are gone the handles report the
+    /// runtime disconnected after draining, like a closed channel.
+    _publishing: Arc<()>,
+    /// Alive while a handle can still drain the queue; publishing fails
+    /// once none is left, like a send on a closed channel.
+    supervised: Weak<()>,
+}
+
+impl ShardEventSink {
+    fn new(shard_id: u32, status: Arc<Mutex<ShardRuntimeStatus>>) -> (Self, ShardEventSource) {
+        let queue = Arc::new(Mutex::new(ShardEventQueue::new(shard_id)));
+        let publishing = Arc::new(());
+        let supervising = Arc::new(());
+        let source = ShardEventSource::Queue {
+            queue: Arc::clone(&queue),
+            publishing: Arc::downgrade(&publishing),
+            _supervising: Arc::clone(&supervising),
+        };
+        let sink = Self {
+            queue,
+            status,
+            _publishing: publishing,
+            supervised: Arc::downgrade(&supervising),
+        };
+        (sink, source)
+    }
+
+    fn publish(&self, event: ShardSupervisorEvent) -> Result<(), DiscordError> {
+        // Holding the queue lock while updating the status keeps publisher
+        // clones on different threads from queueing events in another order
+        // than they applied them.
+        let mut queue = lock_or_recover(&self.queue);
+        apply_event(&mut lock_or_recover(&self.status), &event);
+        if self.supervised.strong_count() == 0 {
+            return Err(invalid_data_error(format!(
+                "failed to publish shard supervisor event for shard {}: no supervisor handle is left",
+                queue.shard_id
+            )));
+        }
+        queue.push(event);
+        Ok(())
+    }
+}
+
+/// Where a [`ShardRuntimeHandle`] reads supervisor events from.
+#[derive(Clone)]
+enum ShardEventSource {
+    /// The bounded queue of a shard from `prepare_runtime`. `publish`
+    /// already applied its events to the status.
+    Queue {
+        // Shared with the shard's sinks, which push; every handle clone pops.
+        queue: Arc<Mutex<ShardEventQueue>>,
+        publishing: Weak<()>,
+        _supervising: Arc<()>,
+    },
+    /// A std channel from `attach_runtime` or `register_ipc`. Its events
+    /// were sent without `publish`, so they are applied when received. A std
+    /// Receiver is neither Clone nor Sync; the lock lets every handle clone
+    /// drain the one channel. Always taken before `status`.
+    Channel(Arc<Mutex<Receiver<ShardSupervisorEvent>>>),
+}
+
 #[derive(Clone)]
 /// Typed Discord API object for `ShardRuntimeHandle`.
 pub struct ShardRuntimeHandle {
     command_tx: Sender<ShardIpcMessage>,
-    // A std Receiver is neither Clone nor Sync; the lock lets every handle
-    // clone drain the one queue. Always taken before `status`.
-    event_rx: Arc<Mutex<Receiver<ShardSupervisorEvent>>>,
+    events: ShardEventSource,
     _event_tx_guard: Option<Sender<ShardSupervisorEvent>>,
     // Written by the shard's publisher, read by the supervisor's handles.
     status: Arc<Mutex<ShardRuntimeStatus>>,
@@ -182,82 +327,80 @@ impl ShardRuntimeHandle {
         })
     }
 
+    /// Takes the shard's next supervisor event, if any.
+    ///
+    /// Events are a bounded history for observers; [`Self::status`] is the
+    /// current state whether or not anyone drains them. For a shard from
+    /// [`ShardingManager::prepare_runtime`] at most 256 events are kept: when
+    /// more are published before they are drained, the oldest are dropped
+    /// and the next call returns [`ShardSupervisorEvent::Lagged`] with the
+    /// number dropped. Receiving does not change the status, which `publish`
+    /// already updated. Returns an error once the queue is empty and every
+    /// publisher of the shard is gone.
     pub fn try_recv_event(&self) -> Result<Option<ShardSupervisorEvent>, DiscordError> {
-        match lock_or_recover(&self.event_rx).try_recv() {
-            Ok(event) => {
-                self.apply_event(&event);
-                Ok(Some(event))
+        match &self.events {
+            ShardEventSource::Queue {
+                queue, publishing, ..
+            } => {
+                let mut queue = lock_or_recover(queue);
+                if let Some(event) = queue.pop() {
+                    return Ok(Some(event));
+                }
+                if publishing.strong_count() == 0 {
+                    return Err(self.disconnected_error());
+                }
+                Ok(None)
             }
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(invalid_data_error(format!(
-                "shard {} event channel disconnected",
-                self.info().id
-            ))),
+            ShardEventSource::Channel(receiver) => match lock_or_recover(receiver).try_recv() {
+                Ok(event) => {
+                    apply_event(&mut lock_or_recover(&self.status), &event);
+                    Ok(Some(event))
+                }
+                Err(TryRecvError::Empty) => Ok(None),
+                Err(TryRecvError::Disconnected) => Err(self.disconnected_error()),
+            },
         }
     }
 
-    fn apply_event(&self, event: &ShardSupervisorEvent) {
-        let mut status = lock_or_recover(&self.status);
-
-        match event {
-            ShardSupervisorEvent::StateChanged { state, .. } => status.state = state.clone(),
-            ShardSupervisorEvent::SessionEstablished { session_id, .. } => {
-                status.session_id = Some(session_id.clone());
-                status.last_error = None;
-            }
-            ShardSupervisorEvent::GatewayError { message, .. } => {
-                status.last_error = Some(message.clone());
-            }
-        }
+    fn disconnected_error(&self) -> DiscordError {
+        invalid_data_error(format!(
+            "shard {} event channel disconnected",
+            self.info().id
+        ))
     }
 }
 
 /// Typed Discord API object for `ShardRuntimeChannels`.
+///
+/// Since 3.0 events are emitted only through [`Self::publish`] (or a
+/// [`ShardRuntimePublisher`]); the raw unbounded `event_tx` sender is gone
+/// because nothing bounded what it kept.
 pub struct ShardRuntimeChannels {
     pub info: ShardInfo,
     pub command_rx: Receiver<ShardIpcMessage>,
-    pub event_tx: Sender<ShardSupervisorEvent>,
-    status: Arc<Mutex<ShardRuntimeStatus>>,
+    sink: ShardEventSink,
 }
 
 #[derive(Clone)]
 /// Typed Discord API object for `ShardRuntimePublisher`.
 pub struct ShardRuntimePublisher {
     pub info: ShardInfo,
-    pub event_tx: Sender<ShardSupervisorEvent>,
-    status: Arc<Mutex<ShardRuntimeStatus>>,
+    sink: ShardEventSink,
 }
 
 impl ShardRuntimePublisher {
+    /// Applies `event` to the shard's status, then queues it for observers
+    /// (bounded; see [`ShardRuntimeHandle::try_recv_event`]). The status is
+    /// updated even when this fails, which happens only once no supervisor
+    /// handle for the shard is left.
     pub fn publish(&self, event: ShardSupervisorEvent) -> Result<(), DiscordError> {
-        self.apply_event(&event);
-        self.event_tx.send(event).map_err(|error| {
-            invalid_data_error(format!(
-                "failed to publish shard supervisor event for shard {}: {error}",
-                self.info.id
-            ))
-        })
-    }
-
-    fn apply_event(&self, event: &ShardSupervisorEvent) {
-        let mut status = lock_or_recover(&self.status);
-
-        match event {
-            ShardSupervisorEvent::StateChanged { state, .. } => status.state = state.clone(),
-            ShardSupervisorEvent::SessionEstablished { session_id, .. } => {
-                status.session_id = Some(session_id.clone());
-                status.last_error = None;
-            }
-            ShardSupervisorEvent::GatewayError { message, .. } => {
-                status.last_error = Some(message.clone());
-            }
-        }
+        self.sink.publish(event)
     }
 }
 
 impl ShardRuntimeChannels {
     pub fn status(&self) -> ShardRuntimeStatus {
-        lock_or_recover(&self.status).clone()
+        lock_or_recover(&self.sink.status).clone()
     }
 
     pub fn state(&self) -> ShardRuntimeState {
@@ -265,26 +408,25 @@ impl ShardRuntimeChannels {
     }
 
     pub fn set_state(&self, state: ShardRuntimeState) {
-        lock_or_recover(&self.status).state = state;
+        lock_or_recover(&self.sink.status).state = state;
     }
 
+    /// See [`ShardRuntimePublisher::publish`].
     pub fn publish(&self, event: ShardSupervisorEvent) -> Result<(), DiscordError> {
-        self.publisher().publish(event)
+        self.sink.publish(event)
     }
 
     pub fn publisher(&self) -> ShardRuntimePublisher {
         ShardRuntimePublisher {
             info: self.info.clone(),
-            event_tx: self.event_tx.clone(),
-            status: Arc::clone(&self.status),
+            sink: self.sink.clone(),
         }
     }
 
     pub fn split(self) -> (Receiver<ShardIpcMessage>, ShardRuntimePublisher) {
         let publisher = ShardRuntimePublisher {
             info: self.info,
-            event_tx: self.event_tx,
-            status: self.status,
+            sink: self.sink,
         };
         (self.command_rx, publisher)
     }
@@ -327,6 +469,12 @@ impl ShardingManager {
             .map(|info| self.config.gateway.clone().shard(info.id, info.total))
     }
 
+    /// Registers a shard driven through the caller's own channels.
+    ///
+    /// Events the caller sends on `event_rx`'s sender bypass `publish`, so
+    /// they update the status when they are received, and the channel's
+    /// capacity is the caller's. [`Self::prepare_runtime`] keeps the status
+    /// current without draining and bounds the event history.
     pub fn attach_runtime(
         &mut self,
         shard_id: u32,
@@ -336,7 +484,7 @@ impl ShardingManager {
         let info = self.shard_info_or_error(shard_id)?;
         let handle = ShardRuntimeHandle {
             command_tx,
-            event_rx: Arc::new(Mutex::new(event_rx)),
+            events: ShardEventSource::Channel(Arc::new(Mutex::new(event_rx))),
             _event_tx_guard: None,
             status: Arc::new(Mutex::new(ShardRuntimeStatus::new(info))),
         };
@@ -345,16 +493,32 @@ impl ShardingManager {
         Ok(handle)
     }
 
+    /// Registers a shard and returns the channels its runtime uses: the
+    /// command receiver and the event publisher.
+    ///
+    /// Published events update the shard's status immediately and are kept
+    /// for observers in a queue of at most 256 events (see
+    /// [`ShardRuntimeHandle::try_recv_event`]), so memory stays bounded even
+    /// if [`Self::drain_events`] is never called.
     pub fn prepare_runtime(&mut self, shard_id: u32) -> Result<ShardRuntimeChannels, DiscordError> {
+        let info = self.shard_info_or_error(shard_id)?;
         let (command_tx, command_rx) = channel();
-        let (event_tx, event_rx) = channel();
-        let handle = self.attach_runtime(shard_id, command_tx, event_rx)?;
+        let status = Arc::new(Mutex::new(ShardRuntimeStatus::new(info.clone())));
+        let (sink, events) = ShardEventSink::new(shard_id, Arc::clone(&status));
+        self.runtimes.insert(
+            shard_id,
+            ShardRuntimeHandle {
+                command_tx,
+                events,
+                _event_tx_guard: None,
+                status,
+            },
+        );
 
         Ok(ShardRuntimeChannels {
-            info: handle.info(),
+            info,
             command_rx,
-            event_tx,
-            status: Arc::clone(&handle.status),
+            sink,
         })
     }
 
@@ -401,6 +565,10 @@ impl ShardingManager {
         handle.try_recv_event()
     }
 
+    /// Takes every queued supervisor event of every shard, including
+    /// [`ShardSupervisorEvent::Lagged`] markers where events were dropped
+    /// (see [`ShardRuntimeHandle::try_recv_event`]). Statuses are not
+    /// changed by draining; [`Self::statuses`] is always current.
     pub fn drain_events(&self) -> Result<Vec<ShardSupervisorEvent>, DiscordError> {
         let mut events = Vec::new();
         for handle in self.runtimes.values() {
@@ -423,7 +591,7 @@ impl ShardingManager {
                 shard_id,
                 ShardRuntimeHandle {
                     command_tx: sender,
-                    event_rx: Arc::new(Mutex::new(event_rx)),
+                    events: ShardEventSource::Channel(Arc::new(Mutex::new(event_rx))),
                     _event_tx_guard: Some(event_tx),
                     status: Arc::new(Mutex::new(ShardRuntimeStatus::new(info))),
                 },
@@ -471,7 +639,8 @@ mod tests {
     use std::sync::mpsc::channel;
 
     use super::{
-        ShardConfig, ShardIpcMessage, ShardRuntimeState, ShardSupervisorEvent, ShardingManager,
+        ShardConfig, ShardEventSource, ShardIpcMessage, ShardRuntimeState, ShardSupervisorEvent,
+        ShardingManager, SHARD_EVENT_QUEUE_CAPACITY,
     };
 
     #[test]
@@ -539,15 +708,13 @@ mod tests {
         let shard_one = manager.prepare_runtime(1).unwrap();
 
         shard_zero
-            .event_tx
-            .send(ShardSupervisorEvent::SessionEstablished {
+            .publish(ShardSupervisorEvent::SessionEstablished {
                 shard_id: 0,
                 session_id: "session-a".to_string(),
             })
             .unwrap();
         shard_one
-            .event_tx
-            .send(ShardSupervisorEvent::GatewayError {
+            .publish(ShardSupervisorEvent::GatewayError {
                 shard_id: 1,
                 message: "boom".to_string(),
             })
@@ -555,6 +722,142 @@ mod tests {
 
         let events = manager.drain_events().unwrap();
         assert_eq!(events.len(), 2);
+        assert!(manager.drain_events().unwrap().is_empty());
+    }
+
+    fn state_changed(state: ShardRuntimeState) -> ShardSupervisorEvent {
+        ShardSupervisorEvent::StateChanged { shard_id: 0, state }
+    }
+
+    #[test]
+    fn receiving_events_does_not_reapply_them_over_the_current_status() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let channels = manager.prepare_runtime(0).unwrap();
+
+        channels
+            .publish(state_changed(ShardRuntimeState::Running))
+            .unwrap();
+        channels
+            .publish(ShardSupervisorEvent::SessionEstablished {
+                shard_id: 0,
+                session_id: "session-1".to_string(),
+            })
+            .unwrap();
+        channels
+            .publish(state_changed(ShardRuntimeState::Reconnecting))
+            .unwrap();
+        channels
+            .publish(ShardSupervisorEvent::GatewayError {
+                shard_id: 0,
+                message: "reset".to_string(),
+            })
+            .unwrap();
+
+        // Each older event that is received must leave the newer status
+        // alone: re-applying them used to roll the state back to Running and
+        // clear the newer error.
+        for expected in 0..3 {
+            assert!(manager.poll_event(0).unwrap().is_some(), "event {expected}");
+            let status = manager.status(0).unwrap();
+            assert_eq!(status.state, ShardRuntimeState::Reconnecting);
+            assert_eq!(status.session_id.as_deref(), Some("session-1"));
+            assert_eq!(status.last_error.as_deref(), Some("reset"));
+        }
+    }
+
+    #[test]
+    fn undrained_events_are_bounded_and_report_how_many_were_dropped() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let channels = manager.prepare_runtime(0).unwrap();
+        let states = [ShardRuntimeState::Running, ShardRuntimeState::Reconnecting];
+        let published = SHARD_EVENT_QUEUE_CAPACITY * 10;
+
+        // Reconnect churn while nobody drains.
+        for index in 0..published {
+            channels
+                .publish(state_changed(states[index % 2].clone()))
+                .unwrap();
+        }
+        let ShardEventSource::Queue { queue, .. } = &manager.handle(0).unwrap().events else {
+            panic!("prepare_runtime uses the bounded queue");
+        };
+        assert_eq!(
+            queue.lock().unwrap().events.len(),
+            SHARD_EVENT_QUEUE_CAPACITY
+        );
+        assert_eq!(manager.state(0), Some(ShardRuntimeState::Reconnecting));
+
+        // The gap is reported first, then the newest events in order.
+        let events = manager.drain_events().unwrap();
+        let dropped = published - SHARD_EVENT_QUEUE_CAPACITY;
+        assert_eq!(events.len(), SHARD_EVENT_QUEUE_CAPACITY + 1);
+        assert_eq!(
+            events[0],
+            ShardSupervisorEvent::Lagged {
+                shard_id: 0,
+                missed: u64::try_from(dropped).unwrap(),
+            }
+        );
+        for (offset, event) in events[1..].iter().enumerate() {
+            assert_eq!(
+                event,
+                &state_changed(states[(dropped + offset) % 2].clone())
+            );
+        }
+        assert_eq!(manager.state(0), Some(ShardRuntimeState::Reconnecting));
+
+        // A later overflow reports only the events dropped since then.
+        for _ in 0..SHARD_EVENT_QUEUE_CAPACITY + 2 {
+            channels
+                .publish(state_changed(ShardRuntimeState::Running))
+                .unwrap();
+        }
+        assert_eq!(
+            manager.poll_event(0).unwrap(),
+            Some(ShardSupervisorEvent::Lagged {
+                shard_id: 0,
+                missed: 2,
+            })
+        );
+        assert_eq!(
+            manager.poll_event(0).unwrap(),
+            Some(state_changed(ShardRuntimeState::Running))
+        );
+    }
+
+    #[test]
+    fn publishing_without_a_supervisor_updates_status_and_fails() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let channels = manager.prepare_runtime(0).unwrap();
+        drop(manager.remove_runtime(0));
+
+        let error = channels
+            .publish(state_changed(ShardRuntimeState::Stopped))
+            .unwrap_err();
+        assert!(error.to_string().contains("no supervisor handle is left"));
+        assert_eq!(channels.state(), ShardRuntimeState::Stopped);
+    }
+
+    #[test]
+    fn queued_events_are_delivered_before_a_stopped_runtime_reports_disconnect() {
+        let mut manager = ShardingManager::new(ShardConfig::new(1));
+        let channels = manager.prepare_runtime(0).unwrap();
+        let publisher = channels.publisher();
+        drop(channels);
+        publisher
+            .publish(state_changed(ShardRuntimeState::Stopped))
+            .unwrap();
+        drop(publisher);
+
+        assert_eq!(
+            manager.poll_event(0).unwrap(),
+            Some(state_changed(ShardRuntimeState::Stopped))
+        );
+        assert!(manager
+            .poll_event(0)
+            .unwrap_err()
+            .to_string()
+            .contains("event channel disconnected"));
     }
 
     #[test]

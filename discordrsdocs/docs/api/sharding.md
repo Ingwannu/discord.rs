@@ -166,6 +166,7 @@ Children also receive `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`, `DISCORDRS
 - identify waves are sized by the `max_concurrency` value Discord reports for the bot account
 - shutdown can be awaited with `shutdown_and_wait()` or `wait_for_shutdown(timeout)`
 - reconnect backoff is interruptible, so shutdown does not wait for a long sleep to finish
+- supervisor events are a bounded history for observers (3.0). `publish` updates the shard's status at once, so `statuses()` is always current. Up to 256 events per shard then wait for `drain_events()` / `poll_event()`. When more arrive before they are drained, the oldest are dropped and the next drain starts with `ShardSupervisorEvent::Lagged { shard_id, missed }`. Draining no longer applies events a second time, so `statuses()` cannot roll back to an older state, and memory stays bounded when nothing drains. Runtimes registered with `attach_runtime` keep the caller's own channel, whose events update the status when they are received.
 
 ### Waiting and Failures (3.0)
 

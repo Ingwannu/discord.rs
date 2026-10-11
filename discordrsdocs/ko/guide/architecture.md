@@ -53,6 +53,40 @@ flowchart LR
 - `src/hex.rs`: 엔드포인트의 Ed25519 공개 키·서명용 비공개 16진수 코덱(`hex` 크레이트 대체)
 - 공개 async 트레잇(`EventHandler`, `CacheBackend`, 인터랙션 핸들러, `CachedManager`)은 `fn ... -> impl Future + Send`로 선언해 사용자가 매크로 없이 `async fn`으로 구현합니다. 이런 트레잇은 object safe가 아니므로 게이트웨이 런타임은 비공개 트레잇(`ErasedEventHandler`, `ErasedCacheBackend`)과 블랭킷 impl로 핸들러·캐시 백엔드를 공유하며, 호출마다 한 번 박싱합니다.
 
+## 샤드 감독 이벤트
+
+`ShardingManager::prepare_runtime`은 샤드마다 두 가지를 둡니다. 하나는 현재 상태인 상태값(`ShardRuntimeStatus`)이고, 다른 하나는 관찰자용 이력인 크기 제한 이벤트 큐입니다. `ShardRuntimePublisher::publish`는 한 잠금 안에서 이벤트를 상태값에 반영하고 큐에 넣습니다. `ShardRuntimeHandle::try_recv_event`와 `drain_events`는 큐에서 꺼내기만 하고 상태값은 건드리지 않습니다. 큐는 샤드당 최대 256개(`src/sharding.rs`의 `SHARD_EVENT_QUEUE_CAPACITY`)입니다. 가득 차면 가장 오래된 이벤트를 버리고, 다음 꺼내기는 남은 가장 오래된 이벤트보다 먼저 `ShardSupervisorEvent::Lagged { shard_id, missed }`를 돌려줍니다. `attach_runtime`만 호출자의 std 채널을 그대로 읽습니다. 그 이벤트는 `publish`를 거치지 않으므로 받을 때 반영합니다.
+
+```text
+[Decision Log]
+- 목적과 의도: 애플리케이션이 drain_events를 한 번도 부르지 않아도 재연결·오류가 반복될 때
+  감독자 메모리가 한정되게 하고, 비우든 말든 statuses()가 항상 최신이 되게 한다.
+- 기존 구현 및 제약 조건: 발행된 이벤트는 모두 제한 없는 std::sync::mpsc 채널에 쌓였고,
+  비우는 곳은 drain_events/poll_event뿐이었다. statuses()만 읽는 ShardSupervisor 사용자는
+  채널을 비우지 않는다. 받을 때 publish가 이미 반영한 이벤트를 한 번 더 반영해서, 오래된
+  이벤트 하나만 꺼내도 상태가 되돌아갔다(더 새로운 Reconnecting 위에 Running).
+  공개 `event_tx: Sender` 필드로 publish를 우회할 수 있었다. attach_runtime은 호출자가
+  가진 Receiver를 받는다. 발행자는 async 태스크에서 돌기 때문에 발행이 막히면 안 된다.
+- 검토한 주요 대안: (1) std sync_channel(n) + try_send: 새 이벤트를 버리고, 빈틈을 알리려면
+  별도 카운터가 필요하며, event_tx 타입도 바뀐다. (2) tokio::sync::broadcast: 오래된 것부터
+  버리고 Lagged도 있지만 슬롯을 미리 전부 할당하고(쓰든 안 쓰든 샤드마다 256칸),
+  핸들은 한 큐를 함께 비우는데 수신자 복제마다 커서가 따로 생긴다. (3) 제한 없는 채널을 두고
+  꼭 비우라고 문서화: 기본 동작에서 메모리가 계속 는다. (4) 큐 안의 표시 대신 버림 카운터
+  메서드: 놓치기 쉽고 빈틈의 위치를 잃는다.
+- 선택한 방식: 기존 std 뮤텍스 뒤에 샤드당 256개로 제한한 VecDeque를 둔다. 넘치면 가장
+  오래된 이벤트를 버리고, 다음 꺼내기가 Lagged { shard_id, missed }를 돌려준다. 상태값은
+  publish만 쓴다. event_tx 필드를 없애 이벤트는 publish로만 보낸다. attach_runtime 채널은
+  받을 때 반영하는 방식을 유지한다.
+- 다른 대안 대신 이 방식을 선택한 이유: 오래된 것부터 버리면 더 새롭고 쓸모 있는 이벤트가
+  남는다. 큐 안의 표시가 빈틈 자리에 정확히 놓이고, 뒤처진 관찰자는 권위 있는 statuses()로
+  다시 맞춘다. 새 의존성·블로킹·선할당이 없고 잠금 순서(큐 다음 상태값)도 그대로다.
+- 장점, 단점 및 영향: 소비자가 없어도 샤드당 메모리가 한정되고, 비워도 상태가 바뀌지 않는다.
+  3.0 호환성 깨짐: ShardRuntimeChannels::event_tx와 ShardRuntimePublisher::event_tx가
+  없어졌고(publish 사용), 새 Lagged 변형 때문에 모든 경우를 나열한 match는 고쳐야 한다.
+  샤드에서 256개 넘게 뒤처진 관찰자는 Lagged를 본다. attach_runtime에 넘긴 채널의 크기는
+  여전히 그 소유자가 정한다.
+```
+
 ## 코드 규칙
 
 라이브러리 코드는 아래 규칙을 따르며, `Cargo.toml`의 `[lints]` 표가 모든 타깃에서 위반을 clippy 오류로 만듭니다. CI는 고정 툴체인에서 전체·기본 기능으로 `cargo clippy --all-targets -- -D warnings`와 `RUSTDOCFLAGS="-D warnings" cargo doc`을 실행합니다.
