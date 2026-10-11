@@ -1,12 +1,14 @@
 #[cfg(feature = "collectors")]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[cfg(feature = "collectors")]
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "collectors")]
+use std::sync::{Arc, Mutex};
 #[cfg(feature = "collectors")]
 use std::time::Duration;
 
 #[cfg(feature = "collectors")]
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, Notify};
 #[cfg(feature = "collectors")]
 use tokio::time;
 
@@ -28,8 +30,9 @@ type EventFilter<T> = Arc<dyn Fn(&T) -> bool + Send + Sync>;
 const DEFAULT_STOP_REASON: &str = "user";
 
 #[cfg(feature = "collectors")]
-/// Default number of events the [`CollectorHub`] broadcast ring buffers per
-/// subscriber before the oldest are overwritten.
+/// Default number of events the [`CollectorHub`] journal keeps. A subscriber
+/// that falls further behind (or starts from an older cursor) loses the
+/// oldest ones.
 const DEFAULT_HUB_CAPACITY: usize = 256;
 
 #[cfg(feature = "collectors")]
@@ -111,31 +114,105 @@ fn request_stop(stop_tx: &watch::Sender<Option<String>>, reason: String) {
 }
 
 #[cfg(feature = "collectors")]
+/// A position in a [`CollectorHub`]'s event stream: the sequence number of
+/// the next event published after the cursor was taken.
+///
+/// The gateway runtime captures one right after publishing each event,
+/// before the event is queued for its handler, and hands it to that
+/// handler's [`Context`](crate::gateway::Context). Collectors created from
+/// it see every later event even if the handler starts after those events
+/// were published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EventCursor(u64);
+
+#[cfg(feature = "collectors")]
+impl EventCursor {
+    /// The stream sequence number this cursor points at.
+    pub fn sequence(self) -> u64 {
+        self.0
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// The most recent published events, numbered by sequence.
+///
+/// One bounded ring serves both live delivery and replay from an
+/// [`EventCursor`], so a cursor subscription switches from replayed to live
+/// events without a gap or duplicate, and an evicted cursor is reported as
+/// lag with the exact number of missed events.
+struct EventJournal {
+    events: VecDeque<Event>,
+    /// Sequence number of `events[0]`.
+    first_seq: u64,
+    capacity: usize,
+}
+
+#[cfg(feature = "collectors")]
+impl EventJournal {
+    fn end(&self) -> u64 {
+        self.first_seq + self.events.len() as u64
+    }
+}
+
+#[cfg(feature = "collectors")]
+struct HubShared {
+    journal: Mutex<EventJournal>,
+    published: Notify,
+    closed: AtomicBool,
+}
+
+#[cfg(feature = "collectors")]
+impl HubShared {
+    fn journal(&self) -> std::sync::MutexGuard<'_, EventJournal> {
+        self.journal
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// Closes the stream when the last [`CollectorHub`] clone is dropped, so
+/// subscriptions end with [`broadcast::error::RecvError::Closed`] once they
+/// drained the journal (the old broadcast channel's behavior).
+struct HubPublisher(Arc<HubShared>);
+
+#[cfg(feature = "collectors")]
+impl Drop for HubPublisher {
+    fn drop(&mut self) {
+        self.0.closed.store(true, Ordering::SeqCst);
+        self.0.published.notify_waiters();
+    }
+}
+
+#[cfg(feature = "collectors")]
 #[derive(Clone)]
 /// Fan-out point that feeds gateway events to collectors.
 ///
 /// The client publishes every dispatched [`Event`] here (after the cache is
-/// updated) and each collector owns its own subscription. Two delivery rules
-/// follow from the underlying `tokio::sync::broadcast` channel:
+/// updated) and each collector reads it through its own subscription. The
+/// hub keeps the last `capacity` events (256 by default, see
+/// [`with_capacity`](Self::with_capacity)) in one sequence-numbered journal:
 ///
-/// - **No history.** A collector only sees events published after it was
-///   created. Reactions or messages that arrived earlier are not replayed;
-///   fetch them over REST if you need them.
-/// - **Bounded buffer, lossy on lag.** Each subscriber can fall at most
-///   `capacity` events behind (256 by default, see
-///   [`with_capacity`](Self::with_capacity)). The buffer holds *all* event
-///   types, not just the ones a collector wants, and a collector only drains
-///   it while `next()`/`collect()` is being awaited. When it falls further
-///   behind, the oldest events are dropped for that collector, the drop is
-///   counted in its `lagged_events()`, and collection continues with the
-///   oldest event still buffered. Publishing never blocks the gateway.
+/// - **From now, or from a cursor.** `message_collector()` and friends only
+///   see events published after they were created. The `*_from(cursor)`
+///   variants, which [`Context::message_collector`](crate::gateway::Context::message_collector)
+///   and friends use inside handlers, first replay journaled events at or
+///   after the cursor and then continue live without a gap. Older history is
+///   not kept; fetch it over REST if you need it.
+/// - **Bounded journal, lossy on lag.** The journal holds *all* event types,
+///   not just the ones a collector wants, and a collector only reads it while
+///   `next()`/`collect()` is being awaited. A collector that falls more than
+///   `capacity` events behind, or starts from a cursor older than the
+///   journal, skips the evicted events, counts them in its
+///   `lagged_events()`, and continues with the oldest event still kept.
+///   Publishing never blocks the gateway.
 ///
 /// Size the capacity for your event volume and check `lagged_events()` when
 /// exact results matter: a reaction collector that lagged may have missed
 /// adds (undercount), removals with `dispose(true)` (overcount), or the
 /// deletion event that should have ended it.
 pub struct CollectorHub {
-    sender: broadcast::Sender<Event>,
+    publisher: Arc<HubPublisher>,
 }
 
 #[cfg(feature = "collectors")]
@@ -147,36 +224,106 @@ impl Default for CollectorHub {
 
 #[cfg(feature = "collectors")]
 impl CollectorHub {
-    /// Creates a hub whose subscribers buffer up to 256 events each.
+    /// Creates a hub that keeps the last 256 events.
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_HUB_CAPACITY)
     }
 
-    /// Creates a hub whose subscribers buffer up to `capacity` events each
-    /// (at least 1) before lagging collectors start losing the oldest ones.
+    /// Creates a hub that keeps the last `capacity` events (at least 1)
+    /// before lagging collectors start losing the oldest ones.
     pub fn with_capacity(capacity: usize) -> Self {
-        let (sender, _) = broadcast::channel(capacity.max(1));
-        Self { sender }
+        let capacity = capacity.max(1);
+        Self {
+            publisher: Arc::new(HubPublisher(Arc::new(HubShared {
+                journal: Mutex::new(EventJournal {
+                    events: VecDeque::with_capacity(capacity.min(1024)),
+                    first_seq: 0,
+                    capacity,
+                }),
+                published: Notify::new(),
+                closed: AtomicBool::new(false),
+            }))),
+        }
     }
 
-    pub(crate) fn publish(&self, event: Event) {
-        let _ = self.sender.send(event);
+    fn shared(&self) -> &Arc<HubShared> {
+        &self.publisher.0
     }
 
+    /// Appends an event and returns the cursor just after it.
+    pub(crate) fn publish(&self, event: Event) -> EventCursor {
+        let shared = self.shared();
+        let cursor = {
+            let mut journal = shared.journal();
+            journal.events.push_back(event);
+            if journal.events.len() > journal.capacity {
+                journal.events.pop_front();
+                journal.first_seq += 1;
+            }
+            EventCursor(journal.end())
+        };
+        shared.published.notify_waiters();
+        cursor
+    }
+
+    /// The current end of the stream: a subscription from this cursor sees
+    /// only events published afterwards.
+    pub fn cursor(&self) -> EventCursor {
+        EventCursor(self.shared().journal().end())
+    }
+
+    /// Subscribes to events published from now on.
+    pub fn subscribe(&self) -> EventSubscription {
+        self.subscribe_from(self.cursor())
+    }
+
+    /// Subscribes from `cursor`: journaled events at or after it are
+    /// replayed first, then live events follow without a gap.
+    pub fn subscribe_from(&self, cursor: EventCursor) -> EventSubscription {
+        EventSubscription {
+            shared: Arc::clone(self.shared()),
+            next: cursor.0,
+        }
+    }
+
+    /// Collects messages published from now on.
     pub fn message_collector(&self) -> MessageCollector {
-        MessageCollector::new(self.sender.subscribe())
+        MessageCollector::new(self.subscribe())
     }
 
+    /// Collects messages published at or after `cursor`.
+    pub fn message_collector_from(&self, cursor: EventCursor) -> MessageCollector {
+        MessageCollector::new(self.subscribe_from(cursor))
+    }
+
+    /// Collects interactions published from now on.
     pub fn interaction_collector(&self) -> InteractionCollector {
-        InteractionCollector::new(self.sender.subscribe())
+        InteractionCollector::new(self.subscribe())
     }
 
+    /// Collects interactions published at or after `cursor`.
+    pub fn interaction_collector_from(&self, cursor: EventCursor) -> InteractionCollector {
+        InteractionCollector::new(self.subscribe_from(cursor))
+    }
+
+    /// Collects component interactions published from now on.
     pub fn component_collector(&self) -> ComponentCollector {
-        ComponentCollector::new(self.sender.subscribe())
+        ComponentCollector::new(self.subscribe())
     }
 
+    /// Collects component interactions published at or after `cursor`.
+    pub fn component_collector_from(&self, cursor: EventCursor) -> ComponentCollector {
+        ComponentCollector::new(self.subscribe_from(cursor))
+    }
+
+    /// Collects modal submissions published from now on.
     pub fn modal_collector(&self) -> ModalCollector {
-        ModalCollector::new(self.sender.subscribe())
+        ModalCollector::new(self.subscribe())
+    }
+
+    /// Collects modal submissions published at or after `cursor`.
+    pub fn modal_collector_from(&self, cursor: EventCursor) -> ModalCollector {
+        ModalCollector::new(self.subscribe_from(cursor))
     }
 
     /// Collects reactions on one message, the equivalent of discord.js's
@@ -187,7 +334,17 @@ impl CollectorHub {
     /// [`reaction_collector_for_message`](Self::reaction_collector_for_message)
     /// or [`ReactionCollector::channel_id`] when you already know them.
     pub fn reaction_collector(&self, message_id: impl Into<Snowflake>) -> ReactionCollector {
-        ReactionCollector::new(self.sender.subscribe(), message_id.into())
+        ReactionCollector::new(self.subscribe(), message_id.into())
+    }
+
+    /// Like [`reaction_collector`](Self::reaction_collector), replaying
+    /// events published at or after `cursor` first.
+    pub fn reaction_collector_from(
+        &self,
+        cursor: EventCursor,
+        message_id: impl Into<Snowflake>,
+    ) -> ReactionCollector {
+        ReactionCollector::new(self.subscribe_from(cursor), message_id.into())
     }
 
     /// Collects reactions on `message`, taking its channel and guild from the
@@ -197,6 +354,51 @@ impl CollectorHub {
         collector.core.logic.channel_id = Some(message.channel_id.clone());
         collector.core.logic.guild_id = message.guild_id.clone();
         collector
+    }
+}
+
+#[cfg(feature = "collectors")]
+/// A reader over a [`CollectorHub`]'s event stream, starting at a cursor.
+///
+/// `recv` mirrors `tokio::sync::broadcast::Receiver::recv`: it yields the
+/// next event, `Err(Lagged(n))` once if `n` events were evicted before they
+/// could be read, and `Err(Closed)` after the hub was dropped and every
+/// journaled event was read. It is cancel-safe: an event is consumed only
+/// in the same poll that returns it.
+pub struct EventSubscription {
+    shared: Arc<HubShared>,
+    next: u64,
+}
+
+#[cfg(feature = "collectors")]
+impl EventSubscription {
+    /// Receives the next event; see the type docs for the error cases.
+    pub async fn recv(&mut self) -> Result<Event, broadcast::error::RecvError> {
+        loop {
+            // Register for the wake-up before checking, so a publish (or the
+            // hub closing) between the check and the await is not missed.
+            let published = self.shared.published.notified();
+            tokio::pin!(published);
+            published.as_mut().enable();
+            {
+                let journal = self.shared.journal();
+                if self.next < journal.first_seq {
+                    let skipped = journal.first_seq - self.next;
+                    self.next = journal.first_seq;
+                    return Err(broadcast::error::RecvError::Lagged(skipped));
+                }
+                if self.next < journal.end() {
+                    let index = (self.next - journal.first_seq) as usize;
+                    let event = journal.events[index].clone();
+                    self.next += 1;
+                    return Ok(event);
+                }
+            }
+            if self.shared.closed.load(Ordering::SeqCst) {
+                return Err(broadcast::error::RecvError::Closed);
+            }
+            published.await;
+        }
     }
 }
 
@@ -217,7 +419,7 @@ impl CollectorHub {
 //   shares all timing and stop logic; a new collector only interprets events.
 // - Trade-offs: public collector APIs are unchanged. `handle` must stay
 //   synchronous: the only cancellation point in `select!` is then the
-//   cancel-safe broadcast `recv()`, so never add an await inside `handle`.
+//   cancel-safe `EventSubscription::recv()`, so never add an await inside `handle`.
 
 #[cfg(feature = "collectors")]
 /// What a collector's logic decided about one gateway event.
@@ -236,7 +438,7 @@ enum Step<T> {
 /// Event interpretation plugged into [`CollectorCore`].
 ///
 /// `handle` must stay synchronous so the only cancellation point inside the
-/// core's `select!` is the cancel-safe broadcast `recv()`.
+/// core's `select!` is the cancel-safe `EventSubscription::recv()`.
 trait CollectorLogic: Send {
     type Item;
 
@@ -307,7 +509,7 @@ enum NextOutcome<T> {
 #[cfg(feature = "collectors")]
 /// Shared implementation behind every collector type.
 struct CollectorCore<L> {
-    receiver: broadcast::Receiver<Event>,
+    receiver: EventSubscription,
     logic: L,
     timeout: Option<Duration>,
     idle: Option<Duration>,
@@ -322,7 +524,7 @@ struct CollectorCore<L> {
 
 #[cfg(feature = "collectors")]
 impl<L: CollectorLogic> CollectorCore<L> {
-    fn new(receiver: broadcast::Receiver<Event>, logic: L) -> Self {
+    fn new(receiver: EventSubscription, logic: L) -> Self {
         let (stop_tx, stop_rx) = watch::channel(None);
         Self {
             receiver,
@@ -441,9 +643,9 @@ impl<L: CollectorLogic> CollectorCore<L> {
 #[cfg(feature = "collectors")]
 /// Feeds events to `logic` until it collects an item or ends collection,
 /// tracking lag. Ends with [`CollectorEndReason::ChannelDropped`] when the
-/// broadcast channel closes.
+/// hub closes.
 async fn recv_next<L: CollectorLogic>(
-    receiver: &mut broadcast::Receiver<Event>,
+    receiver: &mut EventSubscription,
     logic: &mut L,
     lagged_events: &mut u64,
 ) -> NextOutcome<L::Item> {
@@ -514,9 +716,9 @@ macro_rules! impl_collector_controls {
                 self
             }
 
-            /// Number of events dropped because this collector lagged behind
-            /// the broadcast channel (see [`CollectorHub`] for when that
-            /// happens).
+            /// Number of events this collector missed because they were
+            /// evicted from the hub's journal before it read them (see
+            /// [`CollectorHub`] for when that happens).
             pub fn lagged_events(&self) -> u64 {
                 self.core.lagged_events
             }
@@ -576,7 +778,7 @@ macro_rules! impl_extracting_collector {
     ($collector:ident, $item:ty, $extract:path) => {
         #[cfg(feature = "collectors")]
         impl $collector {
-            fn new(receiver: broadcast::Receiver<Event>) -> Self {
+            fn new(receiver: EventSubscription) -> Self {
                 Self {
                     core: CollectorCore::new(receiver, Extracting::new($extract)),
                 }
@@ -931,7 +1133,7 @@ impl ReactionCollection {
 // - Purpose: discord.js `ReactionCollector` / `awaitReactions` parity: wait
 //   for reactions on one message and tally users per emoji (polls,
 //   confirmations).
-// - Constraint: events only arrive through the `CollectorHub` broadcast
+// - Constraint: events only arrive through the `CollectorHub` stream
 //   (`publish` keeps its signature while gateway dispatch is restructured);
 //   there is no history and lagging subscribers lose events.
 // - Alternatives: a hub-wide collector with an optional message filter; a
@@ -1183,7 +1385,7 @@ impl CollectorLogic for ReactionLogic {
 ///   revived by an event that was buffered while `next()` was not polled.
 ///
 /// Reactions added before the collector was created are not included, and
-/// events lost to broadcast lag (including deletion events) are not
+/// events lost to hub lag (including deletion events) are not
 /// recovered; see [`CollectorHub`]. Needs the `GUILD_MESSAGE_REACTIONS` (or
 /// `DIRECT_MESSAGE_REACTIONS`) intent.
 pub struct ReactionCollector {
@@ -1192,7 +1394,7 @@ pub struct ReactionCollector {
 
 #[cfg(feature = "collectors")]
 impl ReactionCollector {
-    fn new(receiver: broadcast::Receiver<Event>, message_id: Snowflake) -> Self {
+    fn new(receiver: EventSubscription, message_id: Snowflake) -> Self {
         Self {
             core: CollectorCore::new(receiver, ReactionLogic::new(message_id)),
         }
