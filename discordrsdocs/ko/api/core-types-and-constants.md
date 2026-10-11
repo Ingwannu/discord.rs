@@ -220,8 +220,12 @@ fn describe(channel: &Channel) -> &'static str {
 | `Interaction`이 `{"ChatInputCommand": {"context": .., "data": ..}}`로 직렬화 | Discord 와이어 형식(`{"id", "type", "data", "token", ..}`); `V2ModalSubmission` / `V2ModalComponent`도 같음(`{"type": 4, "custom_id", "value"}`) |
 | `Interaction::Unknown { raw_data: Value }`(`data`가 없으면 `Value::Null`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())`로 읽음 |
 | `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |
-| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)`(문자열, `i8`-`i64`, `u8`-`u32`, 실수, `bool`), `u64` 같은 다른 `Serialize` 값은 `::try_new` / `CommandOptionBuilder::try_choice`; `Default` 없음 |
+| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)`(문자열, `i8`-`i64`, `u8`-`u32`, 실수), `u64` 같은 다른 `Serialize` 값은 `::try_new` / `CommandOptionBuilder::try_choice`; `Default` 없음. `try_new`는 불·무한대·-2^53..2^53 밖의 수를 거절하고, 커맨드 빌더의 `validate()`는 선택지를 옵션 타입과도 대조합니다(`INTEGER`: -2^53+1..2^53-1) |
 | `ModalSubmitInteraction { context, submission }`(resolved 없음) | `+ resolved: Option<ResolvedData>`, `get_attachments` / `get_users` / `get_members` / `get_roles` / `get_channels` |
+| `ComponentInteractionData { custom_id, component_type, values }`(resolved 없음) | `+ resolved: Option<ResolvedData>`, `get_users()` / `get_members()` / `get_roles()` / `get_channels()` |
+| `InteractionContextData { .. }` 리터럴 | `+ guild: Option<Box<InteractionGuild>>`, `channel: Option<Box<Channel>>`, `message: Option<Box<Message>>`, `attachment_size_limit: Option<u64>`, `version: Option<u8>` |
+| Entry Point 명령(`data.type` 4)이 `Interaction::Unknown`이었음 | `Interaction::PrimaryEntryPoint(PrimaryEntryPointInteraction { context, data })` |
+| 모르는 명령 타입: `type`이 먼저 오면 `raw_data`를 다시 인코딩 | 어느 키 순서든 받은 `data` 바이트 그대로 |
 | `CommandInteractionData { .. }` 리터럴 | `+ guild_id: Option<GuildId>`(`..Default::default()` 사용) |
 | `AuthorizingIntegrationOwners::other: Map<String, Value>`, 파생 `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq`는 모르는 항목을 JSON 텍스트로 비교 |
 | `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>`(`{ id }`) |
@@ -243,7 +247,7 @@ fn describe(channel: &Channel) -> &'static str {
 
 그 밖의 변경:
 
-- 잘못된 인터랙션은 `decode_interaction`에서 `DiscordError::Json`, `parse_interaction`에서 `DiscordError::Model`입니다. 메시지에 필드 이름이 들어갑니다(`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). 중복 키는 거부합니다. 인터랙션 `type`은 JSON 숫자여야 합니다(`Value` 파서는 `"2"`도 받았음).
+- 잘못된 인터랙션은 `decode_interaction`에서 `DiscordError::Json`, `parse_interaction`에서 `DiscordError::Model`입니다. 메시지에 필드 이름이 들어갑니다(`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). 반복된 문서화 키는 오류입니다(모르는 키는 검사 없이 건너뜀). 인터랙션 `type`은 JSON 숫자여야 합니다(`Value` 파서는 `"2"`도 받았음).
 - 타입 인터랙션 엔드포인트는 요청 본문을 바로 디코딩하고, 완전히 디코딩하지 못한 PING에도 PONG으로 답합니다.
 - JSON 텍스트로 남는 필드는 애플리케이션이 정하거나 본래 이질적인 값(`ApplicationIdentityProfile::metadata`, 감사 로그 변경 값, 템플릿 스냅샷, 모르는 동적 프로필 필드, 모르는 통합 소유자)이거나 문서에 없는 값(`Sku::manifest_labels`, `Sku::features`)입니다. `Box<RawValue>`는 받은 텍스트를 트리 대신 할당 한 번으로 보관합니다. `serde_json::from_str(raw.get())`이나 타입 지정 접근자로 디코딩하세요. serde의 버퍼링 컨테이너(`#[serde(flatten)]`, `#[serde(untagged)]`)는 통과하지 못하므로 이 모델을 그 안에 넣지 마세요.
 - `InteractionCallbackResponse::data`와 `CreateMessage::{components, embeds}`는 5단계 요청 모델이 송신 본문을 바꿀 때까지 `Value`로 둡니다.

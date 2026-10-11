@@ -11,9 +11,15 @@ Functions:
 - `parse_raw_interaction(&Value) -> Result<RawInteraction, Error>`
 - `parse_interaction_context(&Value) -> Result<InteractionContext, Error>`
 
-`Interaction` implements `Serialize`/`Deserialize` in Discord's wire format (3.0; 2.x derived an externally tagged `{"ChatInputCommand": {...}}` form), so `serde_json::from_slice::<Interaction>(bytes)` and `Interaction::deserialize(&*raw_value)` work too. The decoder reads the payload once: no `Value` tree and no copy of `data`, `resolved`, or `member`. On a 3.9 KB chat-input payload with resolved users, members, channels, roles, and attachments it makes 49 allocations, where 2.x's `decode_event` made 652.
+`Interaction` implements `Serialize`/`Deserialize` in Discord's wire format (3.0; 2.x derived an externally tagged `{"ChatInputCommand": {...}}` form), so `serde_json::from_slice::<Interaction>(bytes)` and `Interaction::deserialize(&*raw_value)` work too. The decoder reads the payload once: no `Value` tree and no copy of `data`, `resolved`, or `member`. On a 3.9 KB chat-input payload with resolved users, members, channels, roles, and attachments it makes 60 allocations, where 2.x's `decode_event` made 652.
 
-How it handles key order: JSON objects are unordered and `data`'s shape depends on `type`. When `type` comes first (as Discord's gateway sends it) `data` is decoded in place; otherwise `data` is kept as JSON text and decoded when the object ends, which costs one copy of `data`. Either way the result is the same.
+How it handles key order: JSON objects are unordered and `data`'s shape depends on `type`. When `type` comes first (as Discord's gateway sends it), `data` of a component, autocomplete, or modal submit interaction is decoded in place. An application command's `data` is always kept as JSON text first and decoded when the object ends, because its variant depends on the command `type` inside it and an unknown command type must keep `data` exactly as sent; that costs one copy of `data`. `data` that comes before `type` is handled the same way. Either way the result is the same.
+
+What round-trips: every field of Discord's Interaction Structure is read and written back (`guild` and `channel` as partial objects, `message`, `version`, `attachment_size_limit` included). Left out: the undocumented, deprecated `entitlement_sku_ids`; keys the typed models do not have inside the `data` of a known type (for example a message component's numeric `id`); and the label and action row wrappers of a modal submit, whose inputs are written back as a flat list. `Interaction::Unknown` keeps `data` byte for byte.
+
+A repeated documented key is an error everywhere in the decoder (the interaction, its `data`, modal components, and the derived models inside). Unknown keys are skipped without that check, and `data` kept as text for an unknown type is not checked at all.
+
+For a guild interaction Discord sends `member` (with `user`) and no `user`; the decoder fills `context.user` with a copy of `member.user`, so handlers find the invoker in one place. That copy is the one clone left in decoding, and it is not written back.
 
 Typed `Interaction` variants include:
 
@@ -21,6 +27,7 @@ Typed `Interaction` variants include:
 - `ChatInputCommand`
 - `UserContextMenu`
 - `MessageContextMenu`
+- `PrimaryEntryPoint` (3.0): an Entry Point command (command type `PRIMARY_ENTRY_POINT`); answer it with a `LAUNCH_ACTIVITY` callback or any command response
 - `Autocomplete`
 - `Component`
 - `ModalSubmit`
@@ -28,7 +35,11 @@ Typed `Interaction` variants include:
 
 `RawInteraction` stays available for compatibility and low-level routing.
 
-`Interaction::Unknown { context, kind, raw_data }` covers an interaction `type` this version does not know and an application command whose command `type` it does not know (for example `PRIMARY_ENTRY_POINT`). `raw_data` is the `data` object as JSON text (`Option<Box<RawValue>>`, `None` without `data`); read it with `serde_json::from_str(raw.get())`.
+`Interaction::Unknown { context, kind, raw_data }` covers an interaction `type` this version does not know and an application command whose command `type` it does not know. `raw_data` is the `data` object as received, byte for byte (`Option<Box<RawValue>>`, `None` without `data`); read it with `serde_json::from_str(raw.get())`. An unknown command type is never forced through the typed command model, so shapes it would reject (an object option value, say) still arrive here.
+
+Fields every variant shares are on `context` (`InteractionContextData`): IDs, token, `user`/`member`, permissions, locales, entitlements, and since 3.0 also `guild` (`InteractionGuild`: id, locale, features), `channel` (partial `Channel`), `message` (for a component, the message it was attached to), `attachment_size_limit`, and `version`.
+
+Message component interactions keep `data.resolved` too: `component.data.get_users()`, `get_members()`, `get_roles()`, and `get_channels()` look the selected values of a user, role, mentionable, or channel select up in it.
 
 Command option values (`CommandInteractionOption::value`) are a `CommandOptionValue`: `String`, `Integer(i64)`, `Number(f64)`, or `Boolean`, as Discord sent them. Read them with `as_str()`, `as_i64()`, `as_f64()` (also accepts an integer, since a `NUMBER` option can arrive as `5`), `as_bool()`, or `as_id()` for user, channel, role, mentionable, and attachment options:
 

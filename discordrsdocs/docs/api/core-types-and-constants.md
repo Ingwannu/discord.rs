@@ -224,8 +224,12 @@ Interactions decode straight from JSON text (`decode_interaction`, or `Interacti
 | `Interaction` serialized as `{"ChatInputCommand": {"context": .., "data": ..}}` | Discord's wire format (`{"id", "type", "data", "token", ..}`); the same for `V2ModalSubmission` / `V2ModalComponent` (`{"type": 4, "custom_id", "value"}`) |
 | `Interaction::Unknown { raw_data: Value }` (`Value::Null` without `data`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())` to read it |
 | `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |
-| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)` (strings, `i8`-`i64`, `u8`-`u32`, floats, `bool`), `::try_new` / `CommandOptionBuilder::try_choice` for other `Serialize` values such as `u64`; no `Default` |
+| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)` (strings, `i8`-`i64`, `u8`-`u32`, floats), `::try_new` / `CommandOptionBuilder::try_choice` for other `Serialize` values such as `u64`; no `Default`. `try_new` rejects booleans, non-finite numbers, and numbers outside -2^53..2^53; the command builders' `validate()` also checks each choice against its option type (`INTEGER`: -2^53+1..2^53-1) |
 | `ModalSubmitInteraction { context, submission }` (no resolved data) | `+ resolved: Option<ResolvedData>`, with `get_attachments` / `get_users` / `get_members` / `get_roles` / `get_channels` |
+| `ComponentInteractionData { custom_id, component_type, values }` (no resolved data) | `+ resolved: Option<ResolvedData>`, with `get_users()` / `get_members()` / `get_roles()` / `get_channels()` |
+| `InteractionContextData { .. }` literals | `+ guild: Option<Box<InteractionGuild>>`, `channel: Option<Box<Channel>>`, `message: Option<Box<Message>>`, `attachment_size_limit: Option<u64>`, `version: Option<u8>` |
+| an Entry Point command (`data.type` 4) was `Interaction::Unknown` | `Interaction::PrimaryEntryPoint(PrimaryEntryPointInteraction { context, data })` |
+| unknown command types: `raw_data` re-encoded when `type` came first | `raw_data` is the `data` bytes as received in every key order |
 | `CommandInteractionData { .. }` literals | `+ guild_id: Option<GuildId>` (use `..Default::default()`) |
 | `AuthorizingIntegrationOwners::other: Map<String, Value>`, derived `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq` compares unknown entries by JSON text |
 | `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>` (`{ id }`) |
@@ -247,7 +251,7 @@ Interactions decode straight from JSON text (`decode_interaction`, or `Interacti
 
 Also changed:
 
-- A malformed interaction is a `DiscordError::Json` from `decode_interaction` and a `DiscordError::Model` from `parse_interaction`; messages name the field (`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). Duplicate keys are rejected. The interaction `type` must be a JSON number (the `Value` parser accepted `"2"`).
+- A malformed interaction is a `DiscordError::Json` from `decode_interaction` and a `DiscordError::Model` from `parse_interaction`; messages name the field (`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). A repeated documented key is an error (unknown keys are skipped unchecked). The interaction `type` must be a JSON number (the `Value` parser accepted `"2"`).
 - The typed interactions endpoint decodes the request body directly and still answers a PING it cannot fully decode with PONG.
 - Fields that stay JSON text are application-defined or heterogeneous by design (`ApplicationIdentityProfile::metadata`, audit log change values, the template snapshot, unknown dynamic profile fields, unknown integration owners) or undocumented (`Sku::manifest_labels`, `Sku::features`). `Box<RawValue>` keeps the text as received with one allocation instead of a tree; decode it with `serde_json::from_str(raw.get())` or the typed accessors. It cannot pass through serde's buffered containers (`#[serde(flatten)]`, `#[serde(untagged)]`), so do not wrap these models in one.
 - `InteractionCallbackResponse::data` and `CreateMessage::{components, embeds}` stay `Value` until the request models of step 5 replace those outgoing bodies.
