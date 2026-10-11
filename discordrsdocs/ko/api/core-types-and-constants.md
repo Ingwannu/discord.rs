@@ -43,11 +43,11 @@
 - 타임스탬프: `timestamp(secs).style(TimestampStyle::RelativeTime)`, `Timestamp::from(SystemTime)`. `TimestampStyle`은 문서화된 9가지 스타일(`t T d D f F s S R`)을 모두 지원합니다.
 - 마크다운: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`, `inline_code`, `code_block`, `code_block_with_language`, `quote`, `block_quote`, `heading`(`HeadingLevel`), `subtext`, `unordered_list`, `ordered_list`, `ListItem`을 쓰는 중첩 목록.
 - `escape_markdown(text, EscapeMarkdownOptions)`와 개별 이스케이퍼. 기본값은 배포된 discord.js v14(@discordjs/formatters 0.6.2)와 같고, 커밋된 골든 코퍼스에서 출력이 일치합니다. discord.js 버그 네 가지(같은 줄 `<:` 뒤 `_` 미처리, 자동 링크 안 `_` 이스케이프, 줄당 첫 마스킹 링크만 처리, 백틱 네 개 이상에서 닫는 펜스가 남는 `cleanCodeBlockContent`)는 따르지 않습니다. 공백 판정은 원래 정규식처럼 ECMAScript `\s` 기준입니다. 모든 백틱 연속을 끊는 `clean_code_block_content`도 제공합니다.
-- `clean_content(text, &resolver)`: 숨은 캐시 조회 없이 `MentionResolver`(트레이트 또는 클로저, `MentionKind`)로 이름을 받습니다. 슬래시 커맨드 이름은 discord.js 문자 클래스와 똑같이 판정합니다(Unicode 17.0 기준으로 생성한 표라 Rust 컴파일러 버전과 무관). `Message::clean_content(...)`와 `Member::mention()`이 이를 호출합니다.
+- `clean_content(text, &resolver)`: 숨은 캐시 조회 없이 `MentionResolver`(타입드 `user(UserId)`/`role(RoleId)`/`channel(ChannelId)` 트레이트 또는 `MentionTarget`을 받는 클로저)로 이름을 받습니다. 슬래시 커맨드 이름은 discord.js 문자 클래스와 똑같이 판정합니다(Unicode 17.0 기준으로 생성한 표라 Rust 컴파일러 버전과 무관). `Message::clean_content(...)`와 `Member::mention()`이 이를 호출합니다.
 
 ## 타입 ID·판별값·패치 필드 (3.0, 미배포)
 
-3단계 시리즈 2의 A 단계부터 모델·이벤트·REST와 캐시 메서드·컬렉터·헬퍼의 모든 ID는 숫자 `GenericId`입니다(2.x의 `String` 기반 `Snowflake`는 없어졌습니다). B 단계에서 각 ID를 리소스별 별칭(`GuildId`, `ChannelId` 등)으로 좁힙니다. 맨 `u8` 코드와 `Option<Option<T>>`는 시리즈 3(판별값)과 4단계(패치 필드)까지 남습니다. 설계는 저장소의 `docs/design/3.0-types-events-requests.md`에 있습니다.
+모델·이벤트·REST와 캐시 메서드·컬렉터·권한·포매터·헬퍼의 모든 ID는 리소스별 타입(`GuildId`, `ChannelId`, `UserId` 등)입니다(2.x의 `String` 기반 `Snowflake`는 없어졌습니다). `GenericId`는 Discord가 종류를 정하지 않은 자리에만 남습니다: `AuditLogEntry::target_id`(액션에 따라 다름), `GuildScheduledEvent::entity_id`(문서에 종류가 없음), `StickerPack::banner_asset_id`(CDN 에셋), 그리고 공용 `CommandInteractionData::target_id`입니다. 마지막 것은 `UserContextMenuInteraction::target_id()`와 `MessageContextMenuInteraction::target_id()`가 `UserId`/`MessageId`로 돌려줍니다. 맨 `u8` 코드와 `Option<Option<T>>`는 시리즈 3(판별값)과 4단계(패치 필드)까지 남습니다. 설계는 저장소의 `docs/design/3.0-types-events-requests.md`에 있습니다.
 
 ### `Id<M>` 타입 ID
 
@@ -72,6 +72,43 @@ fn takes_guild(guild_id: GuildId) {
 }
 ```
 
+엔드포인트는 구체 타입을 값으로 받고(`rest.get_guild(guild_id)`, `rest.get_channel_message(channel_id, message_id)`), 캐시 키는 멤버·프레즌스는 `(GuildId, UserId)`, 메시지는 `(ChannelId, MessageId)` 같은 타입 튜플입니다. `GuildId::everyone_role()`은 `@everyone` 역할의 `RoleId`(길드 ID와 같음)를 손으로 `cast`하지 않고 돌려줍니다.
+
+### 다형 ID
+
+ID의 종류가 옆 필드에 따라 달라지는 와이어 필드는 enum으로 표현하고, 2.x와 똑같은 JSON을 읽고 씁니다.
+
+| 타입 | 와이어 | 변형 |
+|---|---|---|
+| `OverwriteTarget` (`PermissionOverwrite::target`) | `{"id", "type": 0 \| 1}` | `Role(RoleId)`, `Member(UserId)`, `Unknown { kind: OverwriteType, id }` |
+| `CommandPermissionTarget` (`ApplicationCommandPermission::target`) | `{"id", "type": 1 \| 2 \| 3}` | `Role`, `User`, `Channel`, `Everyone(GuildId)`(역할 `id` = 길드 ID), `AllChannels(GuildId)`(채널 `id` = 길드 ID − 1), `Unknown` |
+| `CommandPermissionsId` (`GuildApplicationCommandPermissions::id`) | `"application_id"` 옆의 `"id"` | `Command(CommandId)`, `Application(ApplicationId)`(애플리케이션 전체: `id` = 애플리케이션 ID) |
+| `SelectDefaultValue` | `{"id", "type": "user" \| "role" \| "channel"}` | `User`, `Role`, `Channel`, `Unknown { kind: String, id }` |
+| `EntitlementOwner` (`CreateTestEntitlement::owner`) | `{"owner_id", "owner_type": 1 \| 2}` | `Guild(GuildId)`, `User(UserId)` |
+| `MentionableId` | snowflake 하나 | `User`, `Role`(`ResolvedData::mentionable(id)`로 구함) |
+
+- `Everyone`과 `AllChannels`는 권한 하나만 보고는 알 수 없으므로, 단독 `ApplicationCommandPermission`은 `Role`/`Channel`로 읽습니다. `GuildApplicationCommandPermissions`와 `APPLICATION_COMMAND_PERMISSIONS_UPDATE` 이벤트가 자기 `guild_id`로 해석하며(`CommandPermissionTarget::in_guild`), 두 표현은 같은 JSON으로 직렬화됩니다. 길드 ID 1의 `AllChannels`는 ID 0이 되므로 잘못된 요청 대신 직렬화 오류가 됩니다.
+- 덮어쓰기 엔드포인트는 대상을 받습니다: `edit_channel_permissions_typed(channel_id, OverwriteTarget::Role(role_id), &body)`. 본문의 `type`이 대상과 어긋나면 보내기 전에 오류가 나므로 본문은 `EditChannelPermission::for_target(target)`으로 만듭니다.
+- `SelectDefaultValue`는 수신 컴포넌트(`MessageComponent::default_values`)와 `SelectMenuBuilder`(`default_user(UserId)`, `default_role(RoleId)`, `default_channel(ChannelId)`, `default_mentionable(MentionableId)`)가 함께 씁니다. 컴포넌트 `id(...)` setter는 `ComponentId`를 받습니다.
+- `MentionResolver` 메서드는 `UserId`/`RoleId`/`ChannelId`를 받고, 클로저 resolver는 `MentionTarget`(`User`, `Role`, `Channel`)을 받습니다.
+
+```rust
+use discordrs::model::{OverwriteTarget, PermissionOverwrite};
+
+let overwrite: PermissionOverwrite =
+    serde_json::from_str(r#"{"id": "80351110224678912", "type": 1, "deny": "2048"}"#)?;
+match overwrite.target {
+    OverwriteTarget::Role(role_id) => println!("role {role_id}"),
+    OverwriteTarget::Member(user_id) => println!("member {user_id}"),
+    OverwriteTarget::Unknown { kind, id } => println!("type {kind:?} for {id}"),
+}
+// 다시 쓰면 {"id":"80351110224678912","type":1,"deny":"2048"}입니다.
+```
+
+### 모델에 대한 제네릭 코드
+
+`DiscordModel`에는 연관 타입 `Marker`가 있어 `User::id()`는 `UserId`, `Guild::id()`는 `GuildId`입니다. `CachedManager<T>`는 `Id<T::Marker>`를 받으며(`CachedManager<Guild>::get(GuildId)`), `gateway` 기능 유무와 관계없이 같은 비동기 트레이트입니다.
+
 ### snowflake가 아닌 값
 
 와이어에서는 ID처럼 보이지만 0이 아닌 snowflake가 아닌 값들입니다. 그래서 `Id<M>` 대신 전용 타입을 씁니다.
@@ -87,24 +124,28 @@ fn takes_guild(guild_id: GuildId) {
 
 ### 2.x `Snowflake`에서 옮기기
 
-- **타입.** `Snowflake`(`String`과 파싱한 `u64`)는 `GenericId`로 바뀌었습니다. 8바이트, `Copy`이고 0이 될 수 없습니다. `discordrs::Snowflake`는 `GenericId`의 deprecated 별칭으로만 남아 있어 옛 import는 대체 타입을 알려 주는 경고와 함께 컴파일됩니다. 새 코드는 `GenericId`(B 단계 이후에는 타입별 별칭)를 씁니다.
-- **암시적 변환 없음.** `From<u64>`, `From<&str>`, `From<String>`, `Snowflake::new`, 실패하지 않던 `FromStr`이 없어져 `rest.get_channel("123")`이나 `get_channel(123u64)`는 컴파일되지 않습니다. 엔드포인트와 헬퍼는 구체 타입 `GenericId`를 값으로 받습니다. 믿을 수 없는 입력이나 설정값은 경계에서 한 번 검증합니다.
+- **타입.** `Snowflake`(`String`과 파싱한 `u64`)는 타입 ID로 바뀌었습니다. 8바이트, `Copy`이고 0이 될 수 없습니다. `discordrs::Snowflake`는 `GenericId`의 deprecated 별칭으로만 남아 있어 옛 import는 대체 타입을 알려 주는 경고와 함께 컴파일됩니다. 새 코드는 타입별 별칭(`GuildId`, `UserId` 등)을 씁니다.
+- **암시적 변환 없음.** `From<u64>`, `From<&str>`, `From<String>`, `Snowflake::new`, 실패하지 않던 `FromStr`이 없어져 `rest.get_channel("123")`이나 `get_channel(123u64)`는 컴파일되지 않고, `RoleId` 자리에 `UserId`를 넘기는 것도 컴파일되지 않습니다. 엔드포인트와 헬퍼는 구체 타입을 값으로 받습니다. 믿을 수 없는 입력이나 설정값은 경계에서 한 번 검증합니다.
 
 ```rust
-use discordrs::{DiscordError, GenericId};
+use discordrs::{ChannelId, DiscordError, GuildId};
 
-fn ids(raw: &str) -> Result<(GenericId, GenericId), DiscordError> {
-    let from_text: GenericId = raw.parse()?; // `?`가 InvalidId를 DiscordError로 바꿉니다
-    let from_number = GenericId::try_from(81384788765712384_u64)?;
-    Ok((from_text, from_number))
+fn ids(raw: &str) -> Result<(GuildId, ChannelId), DiscordError> {
+    let guild_id: GuildId = raw.parse()?; // `?`가 InvalidId를 DiscordError로 바꿉니다
+    let channel_id = ChannelId::try_from(81384788765712384_u64)?;
+    Ok((guild_id, channel_id))
 }
 ```
 
-- **Copy, 값 전달.** ID의 `.clone()`을 지우고, 2.x가 `&Snowflake`를 받던 자리(`cache.member(guild_id, user_id)` 같은 캐시 조회, `CacheBackend` 메서드, `MentionResolver`, `MemberPermissionInput::new`)에는 값으로 넘깁니다. `DiscordModel::id()`는 `GenericId`를 돌려줍니다. 캐시 키는 숫자 튜플이라 조회할 때 문자열을 해시하지 않습니다.
+- **Copy, 값 전달.** ID의 `.clone()`을 지우고, 2.x가 `&Snowflake`를 받던 자리(`cache.member(guild_id, user_id)` 같은 캐시 조회, `CacheBackend` 메서드, `MentionResolver`, `MemberPermissionInput::new`)에는 값으로 넘깁니다. `DiscordModel::id()`는 모델의 타입 ID를 돌려줍니다. 캐시 키는 타입이 붙은 숫자 튜플이라 조회할 때 문자열을 해시하지 않습니다.
 - **접근자.** ID는 문자열을 저장하지 않으므로 `as_str()`이 없습니다. 문자열은 `Display`/`to_string()`, 숫자는 `get()`을 씁니다. `as_u64()`/`to_u64()`는 `get()`, `timestamp()`는 `Option` 없이 `u64`, `is_valid()`는 검사할 것이 없어 없어졌습니다.
 - **더 엄격한 디코딩.** 0, 빈 값, 부호, 숫자가 아닌 문자가 든 ID는 문자열로 보존하지 않고 디코딩 오류가 됩니다. 위의 예외 값은 전용 타입을 씁니다.
-- **필수 ID가 있는 저장 모델의 `Default` 제거**(`Message`, `User`, `Guild`, `Channel`, `Role`, `Attachment`, `Sticker`, `Entitlement`, 인터랙션 변형 등 약 60개): 기본값을 만들려면 센티널 ID가 필요하기 때문입니다. `Member`는 `user`가 선택 값이라 `Default`를 유지합니다. 필수 ID가 있는 요청 본문에는 대신 `new(...)` 생성자가 있습니다: `CreateDmChannel::new`, `ModifyGuildChannelPosition::new`, `ModifyGuildRolePosition::new`, `CreateTestEntitlement::new`, `CreateStageInstance::new`, `LobbyMember::new`, `LobbyMemberUpdate::new`. 쿼리·패치·ID가 선택인 본문은 `Default`를 유지합니다. 테스트에서는 JSON으로 모델을 만듭니다(`serde_json::from_value(json!({"id": "1", ...}))`).
-- **raw 인터랙션 컨텍스트.** `parsers::InteractionContext`의 ID(`id`, `application_id`, `guild_id`, `channel_id`, `user_id`)와 `RawInteraction::{Command, Autocomplete}::id`가 `GenericId`이고, 상태 없는 헬퍼도 `interaction_id`/`channel_id`/`message_id`를 `GenericId`로 받습니다.
+- **필수 ID가 있는 저장 모델의 `Default` 제거**(`Message`, `User`, `Guild`, `Channel`, `Role`, `Attachment`, `Sticker`, `Entitlement`, 인터랙션 변형 등 약 60개): 기본값을 만들려면 센티널 ID가 필요하기 때문입니다. `Member`는 `user`가 선택 값이라 `Default`를 유지합니다. 필수 ID가 있는 요청 본문에는 대신 `new(...)` 생성자가 있습니다: `CreateDmChannel::new`, `ModifyGuildChannelPosition::new`, `ModifyGuildRolePosition::new`, `CreateTestEntitlement::new(sku_id, EntitlementOwner::Guild(guild_id))`, `CreateStageInstance::new`, `LobbyMember::new`, `LobbyMemberUpdate::new`. 쿼리·패치·ID가 선택인 본문은 `Default`를 유지합니다. 테스트에서는 JSON으로 모델을 만듭니다(`serde_json::from_value(json!({"id": "1", ...}))`).
+- **다형 필드의 모양 변경**(위 표 참고): `PermissionOverwrite { id, kind }` → `target: OverwriteTarget`, `ApplicationCommandPermission { id, kind }` → `target: CommandPermissionTarget`(`ROLE`/`USER`/`CHANNEL` `u8` 상수는 없어졌고 `CommandPermissionType`을 씁니다. `everyone(guild_id, ..)`/`all_channels(guild_id, ..)` 생성자 추가), `GuildApplicationCommandPermissions::id`와 권한 갱신 이벤트의 `id` → `CommandPermissionsId`, `CreateTestEntitlement { owner_id, owner_type }` → `owner: EntitlementOwner`. `MessageSelectDefaultValue`는 `SelectDefaultValue` enum의 deprecated 별칭이고, 그 생성자는 문자열 대신 타입 ID를 받습니다. `edit_channel_permissions(_typed)`와 `delete_channel_permission`은 `OverwriteTarget`을 받습니다.
+- **애플리케이션 ID.** `RestClient::new(token, application_id)`, `RestClient::builder(...)`, `Client::rest(...)`는 `Option<ApplicationId>`를 받습니다(2.x: `u64`, 미설정은 `0`). `application_id()`는 `Option<ApplicationId>`를 돌려주고, `set_application_id`와 `ClientBuilder::application_id`는 `ApplicationId`를 받습니다.
+- **그 밖의 시그니처.** `MentionResolver` 메서드는 타입 ID를, 클로저 resolver는 `MentionTarget`을 받습니다(2.x: `Fn(MentionKind, Snowflake)`). `CachedManager<T>`는 `T: DiscordModel`을 요구하고 `Id<T::Marker>`를 받으며, 비-gateway 빌드의 동기 버전은 없어졌습니다. 빌더 `id(...)` setter는 `ComponentId`, `EmojiKey::custom`은 `EmojiId`를 받습니다.
+- **raw 인터랙션 컨텍스트.** `parsers::InteractionContext`의 ID는 타입이 붙었고(`id: InteractionId`, `application_id: ApplicationId`, `guild_id: Option<GuildId>`, `channel_id: Option<ChannelId>`, `user_id: Option<UserId>`), `RawInteraction::{Command, Autocomplete}::id`는 `CommandId`이며, 상태 없는 헬퍼는 `InteractionId`/`ChannelId`/`MessageId`를 받습니다.
+- **prelude.** `discordrs::prelude`는 `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, `InvalidId`를 내보냅니다. 그 밖의 별칭(과 `GenericId`)은 크레이트 루트에서 가져옵니다.
 
 ### 열린 판별값
 
@@ -128,8 +169,8 @@ fn ids(raw: &str) -> Result<(GenericId, GenericId), DiscordError> {
 ## 2.2.0 신규 타입
 
 - `MessageComponent` — `Message.components`를 비롯한 수신 측 페이로드가 raw `serde_json::Value` 대신 관용적(tolerant) 타입드 구조로 디코딩됩니다. 컴포넌트 트리 전체를 하나의 넓은 구조체로 다루며(`kind`가 raw 컴포넌트 `type`을 담고 알려진 모든 필드는 옵션), Discord가 새 컴포넌트 종류를 배포해도 디코딩이 실패하지 않습니다. `MessageComponent::BUTTON`, `STRING_SELECT`, `CONTAINER`, `LABEL` 등 연관 상수가 타입 코드를 제공하고, `iter()`는 컴포넌트와 모든 중첩 자식을 깊이 우선으로 순회합니다.
-- `MessageSelectOption`, `MessageSelectDefaultValue`, `UnfurledMediaItem`, `MessageMediaGalleryItem` — 수신 컴포넌트의 타입드 구성 요소입니다.
-- `ResolvedData` — 인터랙션 `resolved` 데이터를 ID 키(3.0부터 `GenericId`)의 여섯 개 조회 맵(`users`, `members`, `roles`, `channels`, `messages`, `attachments`)으로 제공하며, ID 기반 접근자(`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`)와 `is_empty()`를 포함합니다.
+- `MessageSelectOption`, `MessageSelectDefaultValue`(3.0에서는 `SelectDefaultValue` enum), `UnfurledMediaItem`, `MessageMediaGalleryItem` — 수신 컴포넌트의 타입드 구성 요소입니다.
+- `ResolvedData` — 인터랙션 `resolved` 데이터를 ID 키(3.0부터 `UserId`, `RoleId`, `ChannelId`, `MessageId`, `AttachmentId` 같은 타입 키)의 여섯 개 조회 맵(`users`, `members`, `roles`, `channels`, `messages`, `attachments`)으로 제공하며, ID 기반 접근자(`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`)와 `is_empty()`를 포함합니다.
 - `MessageInteractionMetadata` — 타입드 `Message::interaction_metadata`(트리거 인터랙션 id/type, 사용자, 승인 통합 소유자, 원본 응답 메시지 id, 대상 사용자/메시지, 모달용 중첩 `triggering_interaction_metadata`). 사용 중단된 `MessageInteraction`보다 이 필드를 사용합니다.
 - `discordrs::response`의 `InteractionReplyData`와 `AutocompleteChoice` — 2.2.0 `InteractionResponder` 메서드의 페이로드 타입이며, `InteractionReplyData`는 `&str`, `String`, `MessageBuilder`, `CreateMessage`에서 변환됩니다.
 - `discordrs::collector`의 `CollectorEndReason`/`CollectorStopHandle`, HTTP 계층의 `RateLimitInfo`/`RestClientBuilder`, `discordrs::voice::player`의 `AudioPlayerState`/`AudioPlayerEvent`/`TrackEndReason`/`NoSubscriberBehavior`.

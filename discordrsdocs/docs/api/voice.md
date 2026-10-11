@@ -174,11 +174,11 @@ async fn receive_voice() -> Result<(), discordrs::DiscordError> {
 ## Voice State REST
 
 ```rust
-use discordrs::{GenericId, ModifyCurrentUserVoiceState, ModifyUserVoiceState};
+use discordrs::{ChannelId, GuildId, ModifyCurrentUserVoiceState, ModifyUserVoiceState, UserId};
 
-let guild_id: GenericId = "123".parse()?;
-let channel_id: GenericId = "456".parse()?;
-let user_id: GenericId = "789".parse()?;
+let guild_id: GuildId = "123".parse()?;
+let channel_id: ChannelId = "456".parse()?;
+let user_id: UserId = "789".parse()?;
 
 let state = rest.get_current_user_voice_state(guild_id).await?;
 println!("current voice session: {:?}", state.session_id);

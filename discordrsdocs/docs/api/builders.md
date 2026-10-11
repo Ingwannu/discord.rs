@@ -26,12 +26,16 @@ let message = ComponentsV2Message::new().add_action_row(row);
 Auto-populated selects support Discord's `default_values`, `id`, and modal `required` fields:
 
 ```rust
-use discordrs::{ActionRowBuilder, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::{ActionRowBuilder, ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
 
+// Default values carry typed IDs (`SelectDefaultValue::{User, Role, Channel}`),
+// so a role cannot be listed as a user; `default_user`, `default_role`,
+// `default_channel`, and `default_mentionable` are shorthands.
+let moderators: RoleId = "701".parse()?;
 let row = ActionRowBuilder::new().add_select_menu(
     SelectMenuBuilder::mentionable("notify_targets")
-        .id(12)
-        .default_value(SelectDefaultValue::role("701"))
+        .id(ComponentId::new(12))
+        .default_value(SelectDefaultValue::role(moderators))
         .min_values(0)
         .max_values(2)
         .required(false),

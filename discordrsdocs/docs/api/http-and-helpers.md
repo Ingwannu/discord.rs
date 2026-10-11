@@ -62,7 +62,7 @@ Raw `serde_json::Value` methods remain available for routes where Discord adds f
 
 ## REST Client Configuration (`RestClient::builder`, 2.2.0)
 
-`RestClient::builder(token, application_id)` returns a `RestClientBuilder` mirroring discord.js's `RESTOptions`; `RestClient::new(...)` keeps the zero-configuration behavior:
+`RestClient::builder(token, application_id)` returns a `RestClientBuilder` mirroring discord.js's `RESTOptions`; `RestClient::new(...)` keeps the zero-configuration behavior. `application_id` is an `Option<ApplicationId>` in both: `None` until it is known (application-scoped routes fail until `set_application_id(...)`, which the gateway client calls from `READY`), and `application_id()` returns it the same way:
 
 ```rust
 use std::sync::Arc;
@@ -70,7 +70,7 @@ use std::time::Duration;
 
 use discordrs::{AllowedMentions, RestClient};
 
-let rest = RestClient::builder("bot-token", 0)
+let rest = RestClient::builder("bot-token", None)
     .api_version(10)                     // or .api_base("https://discord.com/api/v10")
     .connect_timeout(Duration::from_secs(5))
     .request_timeout(Duration::from_secs(20))
@@ -404,6 +404,9 @@ use discordrs::{ApplicationCommandPermission, EditApplicationCommandPermissions}
 
 let body = EditApplicationCommandPermissions::new([
     ApplicationCommandPermission::role(role_id, true),
+    // `@everyone` (the guild ID) and "all channels" (guild ID - 1).
+    ApplicationCommandPermission::everyone(guild_id, false),
+    ApplicationCommandPermission::all_channels(guild_id, true),
 ]);
 
 let updated = rest
@@ -740,7 +743,7 @@ let audit_log = rest
 Channel invite listing and creation are typed through `get_channel_invites(...)` and `create_channel_invite_typed(...)`:
 
 ```rust
-use discordrs::{CreateChannelInvite, GenericId};
+use discordrs::{CreateChannelInvite, RoleId};
 
 let invites = rest.get_channel_invites(channel_id).await?;
 let invite = rest
@@ -749,7 +752,7 @@ let invite = rest
         &CreateChannelInvite {
             max_age: Some(600),
             unique: Some(true),
-            role_ids: Some(vec!["701".parse::<GenericId>()?]),
+            role_ids: Some(vec!["701".parse::<RoleId>()?]),
             ..Default::default()
         },
     )
@@ -768,7 +771,7 @@ Use `FileAttachment::new("target_users.csv", b"user_id\n...")` for the `target_u
 Voice-channel status and permission overwrite updates are typed through `SetVoiceChannelStatus` and `EditChannelPermission`:
 
 ```rust
-use discordrs::{EditChannelPermission, PermissionsBitField, SetVoiceChannelStatus};
+use discordrs::{EditChannelPermission, OverwriteTarget, PermissionsBitField, SetVoiceChannelStatus};
 
 rest
     .set_voice_channel_status(
@@ -779,14 +782,16 @@ rest
     )
     .await?;
 
+// The target says whether the overwrite ID is a role or a member; the call
+// fails before sending if the body's `type` disagrees.
+let target = OverwriteTarget::Role(role_id);
 rest
     .edit_channel_permissions_typed(
         channel_id,
-        role_id,
+        target,
         &EditChannelPermission {
-            kind: 0,
             allow: Some(PermissionsBitField(1024)),
-            deny: None,
+            ..EditChannelPermission::for_target(target)
         },
     )
     .await?;
@@ -799,12 +804,12 @@ Group DM creation is typed through `CreateGroupDmChannel`, and recipient managem
 ```rust
 use std::collections::HashMap;
 
-use discordrs::{AddGroupDmRecipient, CreateGroupDmChannel, GenericId};
+use discordrs::{AddGroupDmRecipient, CreateGroupDmChannel, UserId};
 
 let group_dm = rest
     .create_group_dm_channel_typed(&CreateGroupDmChannel {
         access_tokens: vec![gdm_join_access_token.to_string()],
-        nicks: HashMap::from([(GenericId::try_from(42_u64)?, "friend".to_string())]),
+        nicks: HashMap::from([(UserId::try_from(42_u64)?, "friend".to_string())]),
     })
     .await?;
 

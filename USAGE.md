@@ -156,7 +156,7 @@ use std::sync::Arc;
 use discordrs::{Context, DiscordHttpClient, TypeMap};
 use tokio::sync::RwLock;
 
-let http = Arc::new(DiscordHttpClient::new("token", 0));
+let http = Arc::new(DiscordHttpClient::new("token", None));
 let data = Arc::new(RwLock::new(TypeMap::new()));
 
 let ctx = Context::new(http, data);
@@ -241,18 +241,18 @@ Guild channel reordering and OAuth2 guild joins have typed request bodies:
 
 ```rust
 use discordrs::{
-    AddGroupDmRecipient, AddGuildMember, AuditLogQuery, BeginGuildPruneRequest, CreateGuildBan,
-    CreateGuildChannel, CreateGuildRole, CreateStageInstance, DiscordHttpClient, GetGuildQuery,
-    GuildBansQuery, GuildWidgetImageStyle, ModifyCurrentMember, ModifyGuild,
+    AddGroupDmRecipient, AddGuildMember, AuditLogQuery, BeginGuildPruneRequest, ChannelId,
+    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateStageInstance, DiscordHttpClient,
+    GetGuildQuery, GuildBansQuery, GuildId, GuildWidgetImageStyle, ModifyCurrentMember, ModifyGuild,
     ModifyGuildChannelPosition, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
     ModifyGuildRolePosition, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
-    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, GenericId, WelcomeScreenChannel,
+    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, UserId, WelcomeScreenChannel,
 };
 
 async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
-    let guild_id: GenericId = "123".parse()?;
-    let channel_id: GenericId = "456".parse()?;
-    let user_id: GenericId = "789".parse()?;
+    let guild_id: GuildId = "123".parse()?;
+    let channel_id: ChannelId = "456".parse()?;
+    let user_id: UserId = "789".parse()?;
 
     let guild = http
         .get_guild_with_query(
@@ -511,7 +511,7 @@ use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, MessageBuilder, b
 
 async fn send_panel(
     http: &discordrs::DiscordHttpClient,
-    channel_id: discordrs::GenericId,
+    channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let message = MessageBuilder::new()
         .content("Support panel")
@@ -540,7 +540,7 @@ use discordrs::{
 
 async fn send_support_panel(
     http: &DiscordHttpClient,
-    channel_id: discordrs::GenericId,
+    channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
         ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
@@ -562,12 +562,14 @@ async fn send_support_panel(
 Auto-populated select menus preserve Discord's current `default_values`, component `id`, and modal `required` fields:
 
 ```rust
-use discordrs::{ActionRowBuilder, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::{ActionRowBuilder, ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
 
+// Default values carry typed IDs, so a role cannot be listed as a user.
+let moderators: RoleId = "701".parse()?;
 let row = ActionRowBuilder::new().add_select_menu(
     SelectMenuBuilder::mentionable("notify_targets")
-        .id(12)
-        .default_value(SelectDefaultValue::role("701"))
+        .id(ComponentId::new(12))
+        .default_value(SelectDefaultValue::role(moderators))
         .min_values(0)
         .max_values(2)
         .required(false),
@@ -580,14 +582,15 @@ Sticker packs and guild sticker writes are typed:
 
 ```rust
 use discordrs::{
-    CreateGuildSticker, DiscordHttpClient, FileAttachment, GenericId, ModifyGuildSticker,
+    CreateGuildSticker, DiscordHttpClient, FileAttachment, GuildId, ModifyGuildSticker,
+    StickerPackId,
 };
 
 async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
     // IDs are checked once at the boundary; `?` turns `InvalidId` into
     // `DiscordError`. After that they are `Copy`.
-    let pack_id: GenericId = "123456789012345678".parse()?;
-    let guild_id: GenericId = "223456789012345678".parse()?;
+    let pack_id: StickerPackId = "123456789012345678".parse()?;
+    let guild_id: GuildId = "223456789012345678".parse()?;
     let pack = http.get_sticker_pack(pack_id).await?;
     println!("pack: {}", pack.name);
 
@@ -649,12 +652,14 @@ async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::D
 Discord's Message Resource search and current-pin routes are exposed as typed `RestClient` methods:
 
 ```rust
-use discordrs::{ChannelPinsQuery, DiscordHttpClient, GenericId, SearchGuildMessagesQuery};
+use discordrs::{
+    ChannelId, ChannelPinsQuery, DiscordHttpClient, GuildId, MessageId, SearchGuildMessagesQuery,
+};
 
 async fn inspect_messages(
     http: &DiscordHttpClient,
-    guild_id: GenericId,
-    channel_id: GenericId,
+    guild_id: GuildId,
+    channel_id: ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let search = http
         .search_guild_messages(
@@ -682,7 +687,7 @@ async fn inspect_messages(
 
     println!("current pins: {}", pins.items.len());
 
-    let message_id: GenericId = "123456789012345678".parse()?;
+    let message_id: MessageId = "123456789012345678".parse()?;
     http.pin_message(channel_id, message_id).await?;
     http.unpin_message(channel_id, message_id).await?;
     Ok(())
@@ -695,14 +700,14 @@ Channel Resource gaps are typed too:
 
 ```rust
 use discordrs::{
-    CreateChannelInvite, EditChannelPermission, FileAttachment, PermissionsBitField,
-    SetVoiceChannelStatus,
+    CreateChannelInvite, EditChannelPermission, FileAttachment, OverwriteTarget,
+    PermissionsBitField, SetVoiceChannelStatus,
 };
 
 async fn channel_admin(
     http: &discordrs::DiscordHttpClient,
-    channel_id: discordrs::GenericId,
-    role_id: discordrs::GenericId,
+    channel_id: discordrs::ChannelId,
+    role_id: discordrs::RoleId,
 ) -> Result<(), discordrs::DiscordError> {
     let invites = http.get_channel_invites(channel_id).await?;
     println!("active invites: {}", invites.len());
@@ -721,7 +726,7 @@ async fn channel_admin(
     http.create_channel_invite_with_target_users_file(
         channel_id,
         &CreateChannelInvite {
-            role_ids: Some(vec![role_id.into()]),
+            role_ids: Some(vec![role_id]),
             ..Default::default()
         },
         &FileAttachment::new("target_users.csv", b"user_id\n777\n"),
@@ -741,13 +746,15 @@ async fn channel_admin(
     )
     .await?;
 
+    // The overwrite target says whether the ID is a role or a member, and
+    // `for_target` puts the matching `type` in the body.
+    let target = OverwriteTarget::Role(role_id);
     http.edit_channel_permissions_typed(
         channel_id,
-        role_id,
+        target,
         &EditChannelPermission {
-            kind: 0,
             allow: Some(PermissionsBitField(1024)),
-            deny: None,
+            ..EditChannelPermission::for_target(target)
         },
     )
     .await?;
@@ -765,9 +772,9 @@ use discordrs::{CreateMessage, DiscordHttpClient, MessageReference};
 
 async fn reply_and_forward(
     http: &DiscordHttpClient,
-    channel_id: discordrs::GenericId,
-    message_id: discordrs::GenericId,
-    announce_channel_id: discordrs::GenericId,
+    channel_id: discordrs::ChannelId,
+    message_id: discordrs::MessageId,
+    announce_channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     // Reply to a message in the same channel.
     http.create_message(
@@ -796,7 +803,7 @@ async fn reply_and_forward(
 `discordrs::model_ext` adds discord.js-style methods directly to the typed models (`Message`, `Member`, `Guild`, `Channel`, `Role`, `User`). They are inherent impls, so no extra trait import is needed — just call them on the model values you already have:
 
 ```rust
-use discordrs::{CreateGuildChannel, GenericId, Guild, Member, Message, RestClient};
+use discordrs::{CreateGuildChannel, Guild, Member, Message, RestClient, UserId};
 
 async fn entity_tour(
     http: &RestClient,
@@ -841,7 +848,7 @@ async fn entity_tour(
         channel.is_text_based(),
         guild.icon_url(Some(256)),
     );
-    let user_id = GenericId::try_from(42_u64)?;
+    let user_id = UserId::try_from(42_u64)?;
     let fetched = guild.fetch_member(http, user_id).await?;
     guild.ban(http, user_id, Some(3600)).await?;
     println!("banned {}", fetched.display_name());
@@ -979,7 +986,7 @@ use discordrs::{DiscordHttpClient, InteractionCallbackResponse};
 
 async fn respond_and_inspect(
     http: &DiscordHttpClient,
-    interaction_id: discordrs::GenericId,
+    interaction_id: discordrs::InteractionId,
     interaction_token: &str,
 ) -> Result<(), discordrs::DiscordError> {
     let result = http
@@ -1137,7 +1144,7 @@ fn with_backend<B: CacheBackend + 'static>(token: &str, backend: Arc<B>) {
 For hot member, message, and presence reads, use the `Arc` variants to avoid deep cloning cached payloads:
 
 ```rust
-async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::GenericId, user_id: discordrs::GenericId) {
+async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::GuildId, user_id: discordrs::UserId) {
     if let Some(member) = ctx.members().cached_arc(guild_id, user_id).await {
         println!("Cached member: {}", member.user.id);
     }
@@ -1202,8 +1209,13 @@ Application command permission edits are an OAuth2 Bearer-token flow in Discord,
 ```rust
 use discordrs::{ApplicationCommandPermission, EditApplicationCommandPermissions};
 
+let guild_id: discordrs::GuildId = "81384788765712384".parse()?;
 let edit = EditApplicationCommandPermissions::new([
     ApplicationCommandPermission::role("123456789012345678".parse()?, true),
+    // Discord's constants: `@everyone` is the guild ID, "all channels" is
+    // the guild ID minus one. Received permissions decode to these too.
+    ApplicationCommandPermission::everyone(guild_id, false),
+    ApplicationCommandPermission::all_channels(guild_id, true),
 ]);
 
 let permissions = rest
@@ -1334,8 +1346,8 @@ Generated query strings are percent-encoded. Request body serialization failures
 ```rust
 async fn moderate(
     rest: &discordrs::RestClient,
-    guild_id: discordrs::GenericId,
-    user_id: discordrs::GenericId,
+    guild_id: discordrs::GuildId,
+    user_id: discordrs::UserId,
 ) -> Result<(), discordrs::DiscordError> {
     rest.with_reason("spam")
         .remove_guild_member(guild_id, user_id)
@@ -1385,7 +1397,7 @@ async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::Disc
 
 ## 8.7 Configure the REST Client (`RestClient::builder`)
 
-`RestClient::builder(token, application_id)` returns a `RestClientBuilder`, mirroring discord.js's `RESTOptions`. `RestClient::new(...)` keeps the zero-configuration behavior:
+`RestClient::builder(token, application_id)` returns a `RestClientBuilder`, mirroring discord.js's `RESTOptions`. `RestClient::new(...)` keeps the zero-configuration behavior. In both, `application_id` is an `Option<ApplicationId>`: pass `None` when it is not known yet (application-scoped routes then fail until `set_application_id(...)`; the gateway client sets it from `READY`):
 
 ```rust
 use std::sync::Arc;
@@ -1394,7 +1406,7 @@ use std::time::Duration;
 use discordrs::{AllowedMentions, RestClient};
 
 fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
-    RestClient::builder(token, 0)
+    RestClient::builder(token, None)
         .api_version(10)                                // or .api_base("https://discord.com/api/v10")
         .connect_timeout(Duration::from_secs(5))
         .request_timeout(Duration::from_secs(20))
@@ -1461,7 +1473,7 @@ If you want the underlying shard-local sender, call `ctx.shard_messenger().await
 `Context::fetch_members(...)` requests guild members over the gateway and awaits the correlated `GUILD_MEMBERS_CHUNK` payloads — the discord.js `guild.members.fetch()` equivalent. Fetched members and presences also fill the cache.
 
 ```rust
-async fn load_members(ctx: &discordrs::Context, guild_id: discordrs::GenericId) -> Result<(), discordrs::DiscordError> {
+async fn load_members(ctx: &discordrs::Context, guild_id: discordrs::GuildId) -> Result<(), discordrs::DiscordError> {
     // All members (requires the GUILD_MEMBERS privileged intent).
     let members = ctx.fetch_members(guild_id, None, None).await?;
     println!("fetched {} members", members.len());
@@ -1609,9 +1621,9 @@ From `Context`, the common gateway-driven flow is:
 ```rust
 #[cfg(feature = "voice")]
 async fn join_and_prepare_voice(ctx: &discordrs::Context) -> Result<(), discordrs::DiscordError> {
-    let guild_id: discordrs::GenericId = "1".parse()?;
-    let channel_id: discordrs::GenericId = "2".parse()?;
-    let user_id: discordrs::GenericId = "1234".parse()?;
+    let guild_id: discordrs::GuildId = "1".parse()?;
+    let channel_id: discordrs::ChannelId = "2".parse()?;
+    let user_id: discordrs::UserId = "1234".parse()?;
     ctx.join_voice(guild_id, channel_id, false, false).await?;
 
     if let Some(config) = ctx.voice_runtime_config(guild_id, user_id).await {
@@ -1664,12 +1676,15 @@ async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
 Voice-state REST routes are also typed:
 
 ```rust
-use discordrs::{DiscordHttpClient, GenericId, ModifyCurrentUserVoiceState, ModifyUserVoiceState};
+use discordrs::{
+    ChannelId, DiscordHttpClient, GuildId, ModifyCurrentUserVoiceState, ModifyUserVoiceState,
+    UserId,
+};
 
 async fn manage_voice_state(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
-    let guild_id: GenericId = "123".parse()?;
-    let channel_id: GenericId = "456".parse()?;
-    let user_id: GenericId = "789".parse()?;
+    let guild_id: GuildId = "123".parse()?;
+    let channel_id: ChannelId = "456".parse()?;
+    let user_id: UserId = "789".parse()?;
 
     let state = http.get_current_user_voice_state(guild_id).await?;
     println!("current voice session: {:?}", state.session_id);

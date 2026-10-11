@@ -21,7 +21,7 @@
 
 ## REST 클라이언트 구성 (`RestClient::builder`, 2.2.0)
 
-`RestClient::builder(token, application_id)`는 discord.js의 `RESTOptions`에 해당하는 `RestClientBuilder`를 반환합니다. `RestClient::new(...)`는 기존의 무설정 동작을 유지합니다.
+`RestClient::builder(token, application_id)`는 discord.js의 `RESTOptions`에 해당하는 `RestClientBuilder`를 반환합니다. `RestClient::new(...)`는 기존의 무설정 동작을 유지합니다. 두 곳 모두 `application_id`는 `Option<ApplicationId>`입니다. 아직 모르면 `None`을 넘기고(애플리케이션 범위 경로는 `set_application_id(...)` 전까지 오류가 납니다. 게이트웨이 클라이언트는 `READY`에서 설정합니다), `application_id()`도 같은 형태로 돌려줍니다.
 
 ```rust
 use std::sync::Arc;
@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use discordrs::{AllowedMentions, RestClient};
 
-let rest = RestClient::builder("bot-token", 0)
+let rest = RestClient::builder("bot-token", None)
     .api_version(10)                     // 또는 .api_base("https://discord.com/api/v10")
     .connect_timeout(Duration::from_secs(5))
     .request_timeout(Duration::from_secs(20))

@@ -91,3 +91,5 @@ Application command permission reads are typed through:
 - `get_application_command_permissions(guild_id, command_id)`
 
 Permission writes use `EditApplicationCommandPermissions` and `ApplicationCommandPermission`. Discord requires an OAuth2 Bearer token for the write route, so `edit_application_command_permissions(...)` does not use the bot token.
+
+Each permission's target is a `CommandPermissionTarget`: `Role(RoleId)`, `User(UserId)`, `Channel(ChannelId)`, or one of Discord's guild constants, `Everyone(GuildId)` (wire `id` = the guild ID) and `AllChannels(GuildId)` (wire `id` = guild ID − 1); unknown types are kept as `Unknown`. Build them with `ApplicationCommandPermission::{role, user, channel, everyone, all_channels}`. Fetched `GuildApplicationCommandPermissions` resolve the constants against their `guild_id`, and their `id` is a `CommandPermissionsId`: `Command(CommandId)`, or `Application(ApplicationId)` for the application-wide entry whose `id` equals the application ID.

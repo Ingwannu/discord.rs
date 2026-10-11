@@ -38,13 +38,13 @@ Discord requires user OAuth2 Bearer authorization for routes that represent the 
 - `create_lobby_channel_invite_for_self(bearer_token, lobby_id)` (3.0)
 
 ```rust
-use discordrs::{CreateLobby, GenericId, LobbyMember};
+use discordrs::{CreateLobby, LobbyMember, UserId};
 
 let lobby = rest
     .create_lobby(&CreateLobby {
         // `LobbyMember` has no `Default` (its ID is required); `new` fills
         // the optional fields with `None`.
-        members: Some(vec![LobbyMember::new("123456789012345678".parse::<GenericId>()?)]),
+        members: Some(vec![LobbyMember::new("123456789012345678".parse::<UserId>()?)]),
         idle_timeout_seconds: Some(300),
         ..CreateLobby::default()
     })

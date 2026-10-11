@@ -59,7 +59,7 @@ Check thread membership (or `MANAGE_THREADS`) for private threads and the thread
 
 Roles are resolved from `guild.roles`. Owners and administrators are answered as soon as that is known: the owner needs no roles, and a member with `ADMINISTRATOR` on `@everyone` or on any resolvable role needs no other roles; neither needs overwrites, a thread parent, or a valid timeout. Contradictions are still errors for everyone: a DM, a channel or parent from another guild, a parent that is not the thread's `parent_id`, or a parent that cannot hold threads (voice, stage, category, directory, or another thread; parents of channel types the crate does not know are accepted as given).
 
-Otherwise anything missing is a typed `PermissionDataError` that names the object: `MissingRole` (the `@everyone` role when `role_id == guild_id`), `MissingRolePermissions`, `MissingGuildOwner`, `MissingMemberUser` (message `member` objects have no `user`; copy `message.author` into it), `MissingParentChannel`, `MissingPermissionOverwrites` (partial channels such as interaction `resolved` entries), `NotGuildChannel`, `GuildMismatch`, `ParentMismatch`, `InvalidParentChannel`, and `InvalidTimestamp`. `PermissionDataError` converts into `DiscordError::Model` for `?`.
+Otherwise anything missing is a typed `PermissionDataError` that names the object: `MissingRole` (the `@everyone` role when `role_id == guild_id.everyone_role()`), `MissingRolePermissions`, `MissingGuildOwner`, `MissingMemberUser` (message `member` objects have no `user`; copy `message.author` into it), `MissingParentChannel`, `MissingPermissionOverwrites` (partial channels such as interaction `resolved` entries), `NotGuildChannel`, `GuildMismatch`, `ParentMismatch`, `InvalidParentChannel`, and `InvalidTimestamp`. `PermissionDataError` converts into `DiscordError::Model` for `?`.
 
 ### Results
 
@@ -77,13 +77,13 @@ From 2026-11-16 Discord sends channels a bot cannot view with the `CHANNEL_OBFUS
 ```rust
 use std::time::SystemTime;
 use discordrs::permissions::{cached_permissions_for, PermissionDataError};
-use discordrs::{CacheHandle, GenericId};
+use discordrs::{CacheHandle, ChannelId, GuildId, UserId};
 
 async fn check(
     cache: &CacheHandle,
-    guild: GenericId,
-    user: GenericId,
-    channel: GenericId,
+    guild: GuildId,
+    user: UserId,
+    channel: ChannelId,
 ) -> Result<(), PermissionDataError> {
     let result = cached_permissions_for(cache, guild, user, channel, SystemTime::now()).await?;
     println!("{result:?}");
@@ -102,14 +102,14 @@ use std::time::{Duration, SystemTime};
 use discordrs::bitfield::permissions;
 use discordrs::model::PermissionOverwrite;
 use discordrs::permissions::{ChannelClass, ChannelPermissionInput, MemberPermissionInput};
-use discordrs::{GenericId, InvalidId};
+use discordrs::{GuildId, InvalidId, RoleId, UserId};
 
 fn example(overwrites: &[PermissionOverwrite]) -> Result<(), InvalidId> {
     let (guild, owner, member, role) = (
-        GenericId::try_from(1_u64)?,
-        GenericId::try_from(2_u64)?,
-        GenericId::try_from(3_u64)?,
-        GenericId::try_from(4_u64)?,
+        GuildId::try_from(1_u64)?,
+        UserId::try_from(2_u64)?,
+        UserId::try_from(3_u64)?,
+        RoleId::try_from(4_u64)?,
     );
     let now = SystemTime::now();
     // IDs are Copy: pass them by value.
@@ -189,11 +189,11 @@ The output matches discord.js 0.6.2 for every case in the committed golden corpu
 ### `clean_content`
 
 ```rust
-use discordrs::formatters::{clean_content, MentionKind};
-use discordrs::GenericId;
+use discordrs::formatters::{clean_content, MentionTarget};
 
-let names = |kind: MentionKind, id: GenericId| match (kind, id.get()) {
-    (MentionKind::User, 80351110224678912) => Some("Nelly".to_string()),
+// A closure resolver gets the mention with its ID typed by kind.
+let names = |target: MentionTarget| match target {
+    MentionTarget::User(id) if id.get() == 80351110224678912 => Some("Nelly".to_string()),
     _ => None,
 };
 assert_eq!(clean_content("hi <@80351110224678912>", &names), "hi @Nelly");

@@ -207,7 +207,7 @@ use std::time::Duration;
 use discordrs::EmojiKey;
 
 // Poll: count ✅ / ❌ for 60 seconds, ignoring the bot's own reactions.
-// `bot_user_id: GenericId` is the bot's own id, for example saved from READY.
+// `bot_user_id: UserId` is the bot's own id, for example saved from READY.
 let tally = ctx
     .collectors()
     .reaction_collector_for_message(&poll_message)

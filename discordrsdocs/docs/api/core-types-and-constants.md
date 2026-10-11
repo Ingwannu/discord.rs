@@ -4,7 +4,7 @@
 
 The typed surface is centered on:
 
-- `GenericId` and the typed IDs (`GuildId`, `ChannelId`, `UserId`, ...)
+- the typed IDs (`GuildId`, `ChannelId`, `UserId`, ...) and `GenericId` for IDs of unknown kind
 - `PermissionsBitField`
 - `User`
 - `Guild`
@@ -43,11 +43,11 @@ Effective permissions following Discord's documented algorithm (owner, `ADMINIST
 - Timestamps: `timestamp(secs).style(TimestampStyle::RelativeTime)`, `Timestamp::from(SystemTime)`; `TimestampStyle` has all nine documented styles (`t T d D f F s S R`).
 - Markdown: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`, `inline_code`, `code_block`, `code_block_with_language`, `quote`, `block_quote`, `heading` (`HeadingLevel`), `subtext`, `unordered_list`, `ordered_list`, and nested variants with `ListItem`.
 - `escape_markdown(text, EscapeMarkdownOptions)` plus the individual escapers, matching discord.js 0.6.2 on a committed golden corpus (four documented discord.js bugs fixed); `clean_code_block_content`, which breaks every backtick run of three or more.
-- `clean_content(text, &resolver)` with a `MentionResolver` (trait or closure; `MentionKind`), matching discord.js's command-name character class exactly (Unicode 17.0 table); `Message::clean_content(...)` and `Member::mention()` delegate to it.
+- `clean_content(text, &resolver)` with a `MentionResolver` (trait with typed `user(UserId)`/`role(RoleId)`/`channel(ChannelId)`, or a closure over `MentionTarget`), matching discord.js's command-name character class exactly (Unicode 17.0 table); `Message::clean_content(...)` and `Member::mention()` delegate to it.
 
 ## Typed IDs, Discriminants, and Patch Fields (3.0, unreleased)
 
-Since phase 3 series 2 step A, every ID in models, events, REST and cache methods, collectors, and helpers is a numeric `GenericId` (the 2.x `String`-backed `Snowflake` is gone). Step B narrows each one to its per-resource alias (`GuildId`, `ChannelId`, ...). Raw `u8` codes and `Option<Option<T>>` remain until series 3 (discriminants) and phase 4 (patch fields). The design is in `docs/design/3.0-types-events-requests.md` in the repository.
+Every ID in models, events, REST and cache methods, collectors, permissions, formatters, and helpers has its per-resource type (`GuildId`, `ChannelId`, `UserId`, ...); the 2.x `String`-backed `Snowflake` is gone. `GenericId` remains only where Discord leaves the kind open: `AuditLogEntry::target_id` (depends on the action), `GuildScheduledEvent::entity_id` (undocumented kind), `StickerPack::banner_asset_id` (a CDN asset), and the shared `CommandInteractionData::target_id`, which `UserContextMenuInteraction::target_id()` and `MessageContextMenuInteraction::target_id()` return as a `UserId` / `MessageId`. Raw `u8` codes and `Option<Option<T>>` remain until series 3 (discriminants) and phase 4 (patch fields). The design is in `docs/design/3.0-types-events-requests.md` in the repository.
 
 ### `Id<M>` typed IDs
 
@@ -72,6 +72,43 @@ fn takes_guild(guild_id: GuildId) {
 }
 ```
 
+Endpoints take the concrete type by value (`rest.get_guild(guild_id)`, `rest.get_channel_message(channel_id, message_id)`), and caches are keyed by typed tuples such as `(GuildId, UserId)` for members and presences and `(ChannelId, MessageId)` for messages. `GuildId::everyone_role()` gives the `@everyone` role's `RoleId` (it shares the guild's ID) without a hand-written `cast`.
+
+### Polymorphic IDs
+
+Some wire fields hold an ID whose kind depends on a sibling field. Each has an enum that reads and writes exactly the 2.x JSON:
+
+| Type | Wire | Variants |
+|---|---|---|
+| `OverwriteTarget` (`PermissionOverwrite::target`) | `{"id", "type": 0 \| 1}` | `Role(RoleId)`, `Member(UserId)`, `Unknown { kind: OverwriteType, id }` |
+| `CommandPermissionTarget` (`ApplicationCommandPermission::target`) | `{"id", "type": 1 \| 2 \| 3}` | `Role`, `User`, `Channel`, `Everyone(GuildId)` (role `id` = guild ID), `AllChannels(GuildId)` (channel `id` = guild ID − 1), `Unknown` |
+| `CommandPermissionsId` (`GuildApplicationCommandPermissions::id`) | `"id"` next to `"application_id"` | `Command(CommandId)`, `Application(ApplicationId)` (application-wide: `id` = application ID) |
+| `SelectDefaultValue` | `{"id", "type": "user" \| "role" \| "channel"}` | `User`, `Role`, `Channel`, `Unknown { kind: String, id }` |
+| `EntitlementOwner` (`CreateTestEntitlement::owner`) | `{"owner_id", "owner_type": 1 \| 2}` | `Guild(GuildId)`, `User(UserId)` |
+| `MentionableId` | a bare snowflake | `User`, `Role` (from `ResolvedData::mentionable(id)`) |
+
+- `Everyone` and `AllChannels` cannot be recognised from a lone permission, so a standalone `ApplicationCommandPermission` decodes them as `Role` / `Channel`. `GuildApplicationCommandPermissions` and the `APPLICATION_COMMAND_PERMISSIONS_UPDATE` event resolve them against their `guild_id` (`CommandPermissionTarget::in_guild`), and both spellings serialize to the same JSON. `AllChannels` of guild `1` would be ID `0`, so it is a serialization error rather than a bad request.
+- Overwrite endpoints take a target: `edit_channel_permissions_typed(channel_id, OverwriteTarget::Role(role_id), &body)`; build the body with `EditChannelPermission::for_target(target)`, because a body whose `type` contradicts the target is rejected before sending.
+- `SelectDefaultValue` is shared by received components (`MessageComponent::default_values`) and `SelectMenuBuilder` (`default_user(UserId)`, `default_role(RoleId)`, `default_channel(ChannelId)`, `default_mentionable(MentionableId)`). Component `id(...)` setters take a `ComponentId`.
+- `MentionResolver` methods take `UserId` / `RoleId` / `ChannelId`; a closure resolver takes a `MentionTarget` (`User`, `Role`, `Channel`).
+
+```rust
+use discordrs::model::{OverwriteTarget, PermissionOverwrite};
+
+let overwrite: PermissionOverwrite =
+    serde_json::from_str(r#"{"id": "80351110224678912", "type": 1, "deny": "2048"}"#)?;
+match overwrite.target {
+    OverwriteTarget::Role(role_id) => println!("role {role_id}"),
+    OverwriteTarget::Member(user_id) => println!("member {user_id}"),
+    OverwriteTarget::Unknown { kind, id } => println!("type {kind:?} for {id}"),
+}
+// Writes back {"id":"80351110224678912","type":1,"deny":"2048"}.
+```
+
+### Generic code over models
+
+`DiscordModel` has an associated `Marker`, so `User::id()` is a `UserId`, `Guild::id()` a `GuildId`, and so on. `CachedManager<T>` takes `Id<T::Marker>` (`CachedManager<Guild>::get(GuildId)`) and is the same async trait with and without the `gateway` feature.
+
 ### Values that are not snowflakes
 
 These look like IDs on the wire but are not nonzero snowflakes, so they have their own types instead of `Id<M>`:
@@ -87,24 +124,28 @@ These look like IDs on the wire but are not nonzero snowflakes, so they have the
 
 ### Migrating from 2.x `Snowflake`
 
-- **Type.** `Snowflake` (a `String` plus a parsed `u64`) is replaced by `GenericId`: 8 bytes, `Copy`, never zero. `discordrs::Snowflake` survives only as a deprecated alias of `GenericId`, so old imports still compile, with a deprecation warning that names the replacement. Write `GenericId` (or, once step B lands, the typed alias) instead.
-- **No implicit conversions.** `From<u64>`, `From<&str>`, `From<String>`, `Snowflake::new`, and the infallible `FromStr` are gone, so `rest.get_channel("123")` and `get_channel(123u64)` no longer compile. Endpoints and helpers take a concrete `GenericId` by value. Validate untrusted text or config once, at the boundary:
+- **Type.** `Snowflake` (a `String` plus a parsed `u64`) is replaced by typed IDs: 8 bytes, `Copy`, never zero. `discordrs::Snowflake` survives only as a deprecated alias of `GenericId`, so old imports still compile with a deprecation warning that names the replacement; write the typed alias (`GuildId`, `UserId`, ...) instead.
+- **No implicit conversions.** `From<u64>`, `From<&str>`, `From<String>`, `Snowflake::new`, and the infallible `FromStr` are gone, so `rest.get_channel("123")` and `get_channel(123u64)` no longer compile, and neither does passing a `UserId` where a `RoleId` is expected. Endpoints and helpers take the concrete type by value. Validate untrusted text or config once, at the boundary:
 
 ```rust
-use discordrs::{DiscordError, GenericId};
+use discordrs::{ChannelId, DiscordError, GuildId};
 
-fn ids(raw: &str) -> Result<(GenericId, GenericId), DiscordError> {
-    let from_text: GenericId = raw.parse()?; // `?` maps InvalidId into DiscordError
-    let from_number = GenericId::try_from(81384788765712384_u64)?;
-    Ok((from_text, from_number))
+fn ids(raw: &str) -> Result<(GuildId, ChannelId), DiscordError> {
+    let guild_id: GuildId = raw.parse()?; // `?` maps InvalidId into DiscordError
+    let channel_id = ChannelId::try_from(81384788765712384_u64)?;
+    Ok((guild_id, channel_id))
 }
 ```
 
-- **Copy, by value.** Drop `.clone()` on IDs, and pass them by value where 2.x took `&Snowflake` (cache getters such as `cache.member(guild_id, user_id)`, `CacheBackend` methods, `MentionResolver`, `MemberPermissionInput::new`, `DiscordModel::id()` now returns `GenericId`). Cache keys are numeric tuples, so lookups no longer hash strings.
+- **Copy, by value.** Drop `.clone()` on IDs, and pass them by value where 2.x took `&Snowflake` (cache getters such as `cache.member(guild_id, user_id)`, `CacheBackend` methods, `MentionResolver`, `MemberPermissionInput::new`). `DiscordModel::id()` returns the model's typed ID. Cache keys are typed numeric tuples, so lookups no longer hash strings.
 - **Accessors.** `as_str()` is gone (an ID stores no text): use `Display`/`to_string()` for text and `get()` for the number. `as_u64()`/`to_u64()` become `get()`, `timestamp()` returns `u64` (no `Option`), and `is_valid()` has nothing left to check.
 - **Stricter decoding.** Zero, empty, signed, or non-digit IDs are decode errors instead of being kept as strings. The documented exceptions above have their own types.
-- **`Default` removed from persisted models with a required ID** (`Message`, `User`, `Guild`, `Channel`, `Role`, `Attachment`, `Sticker`, `Entitlement`, the interaction variants, and about sixty types in all): a default would need a sentinel ID. `Member` keeps `Default` because its `user` is optional. Request bodies whose ID is required gained a `new(...)` constructor instead: `CreateDmChannel::new`, `ModifyGuildChannelPosition::new`, `ModifyGuildRolePosition::new`, `CreateTestEntitlement::new`, `CreateStageInstance::new`, `LobbyMember::new`, `LobbyMemberUpdate::new`. Queries, patches, and bodies whose IDs are optional keep `Default`. In tests, build models from JSON (`serde_json::from_value(json!({"id": "1", ...}))`).
-- **Raw interaction context.** `parsers::InteractionContext` IDs (`id`, `application_id`, `guild_id`, `channel_id`, `user_id`) and `RawInteraction::{Command, Autocomplete}::id` are `GenericId`, and the stateless helpers take `interaction_id`/`channel_id`/`message_id` as `GenericId`.
+- **`Default` removed from persisted models with a required ID** (`Message`, `User`, `Guild`, `Channel`, `Role`, `Attachment`, `Sticker`, `Entitlement`, the interaction variants, and about sixty types in all): a default would need a sentinel ID. `Member` keeps `Default` because its `user` is optional. Request bodies whose ID is required gained a `new(...)` constructor instead: `CreateDmChannel::new`, `ModifyGuildChannelPosition::new`, `ModifyGuildRolePosition::new`, `CreateTestEntitlement::new(sku_id, EntitlementOwner::Guild(guild_id))`, `CreateStageInstance::new`, `LobbyMember::new`, `LobbyMemberUpdate::new`. Queries, patches, and bodies whose IDs are optional keep `Default`. In tests, build models from JSON (`serde_json::from_value(json!({"id": "1", ...}))`).
+- **Polymorphic fields changed shape** (see the table above): `PermissionOverwrite { id, kind }` → `target: OverwriteTarget`; `ApplicationCommandPermission { id, kind }` → `target: CommandPermissionTarget` (the `ROLE`/`USER`/`CHANNEL` `u8` constants are gone; use `CommandPermissionType`), plus `everyone(guild_id, ..)` / `all_channels(guild_id, ..)` constructors; `GuildApplicationCommandPermissions::id` and the permissions update event's `id` → `CommandPermissionsId`; `CreateTestEntitlement { owner_id, owner_type }` → `owner: EntitlementOwner`; `MessageSelectDefaultValue` is a deprecated alias of the `SelectDefaultValue` enum, whose builders take typed IDs instead of strings. `edit_channel_permissions(_typed)` and `delete_channel_permission` take an `OverwriteTarget`.
+- **Application ID.** `RestClient::new(token, application_id)`, `RestClient::builder(...)`, and `Client::rest(...)` take `Option<ApplicationId>` (2.x: `u64` with `0` for unset); `application_id()` returns `Option<ApplicationId>`, `set_application_id` and `ClientBuilder::application_id` take an `ApplicationId`.
+- **Other signatures.** `MentionResolver` methods take typed IDs and closure resolvers take a `MentionTarget` (2.x: `Fn(MentionKind, Snowflake)`); `CachedManager<T>` requires `T: DiscordModel` and takes `Id<T::Marker>`, with no separate synchronous form in non-gateway builds; builder `id(...)` setters take a `ComponentId`; `EmojiKey::custom` takes an `EmojiId`.
+- **Raw interaction context.** `parsers::InteractionContext` IDs are typed (`id: InteractionId`, `application_id: ApplicationId`, `guild_id: Option<GuildId>`, `channel_id: Option<ChannelId>`, `user_id: Option<UserId>`), `RawInteraction::{Command, Autocomplete}::id` is a `CommandId`, and the stateless helpers take `InteractionId` / `ChannelId` / `MessageId`.
+- **Prelude.** `discordrs::prelude` exports `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, and `InvalidId`; import the other aliases (and `GenericId`) from the crate root.
 
 ### Open discriminants
 
@@ -128,8 +169,8 @@ Seven names are still taken by their 2.x versions. Until series 3 swaps them in,
 ## New in 2.2.0
 
 - `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.
-- `MessageSelectOption`, `MessageSelectDefaultValue`, `UnfurledMediaItem`, and `MessageMediaGalleryItem` — typed pieces of received components.
-- `ResolvedData` — interaction `resolved` data as six lookup maps keyed by ID (`GenericId` since 3.0; `users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
+- `MessageSelectOption`, `MessageSelectDefaultValue` (in 3.0 the `SelectDefaultValue` enum), `UnfurledMediaItem`, and `MessageMediaGalleryItem` — typed pieces of received components.
+- `ResolvedData` — interaction `resolved` data as six lookup maps keyed by ID (typed since 3.0: `UserId`, `RoleId`, `ChannelId`, `MessageId`, `AttachmentId`; `users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
 - `MessageInteractionMetadata` — typed `Message::interaction_metadata` (triggering interaction id/type, user, authorizing integration owners, original response message id, target user/message, interacted message id, and nested `triggering_interaction_metadata` for modals). Prefer it over the deprecated `MessageInteraction`.
 - `InteractionReplyData` and `AutocompleteChoice` in `discordrs::response` — the payload types behind the `2.2.0` `InteractionResponder` methods; `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
 - `CollectorEndReason` and `CollectorStopHandle` in `discordrs::collector`; `RateLimitInfo` and `RestClientBuilder` in the HTTP layer; `AudioPlayerState`, `AudioPlayerEvent`, `TrackEndReason`, and `NoSubscriberBehavior` in `discordrs::voice::player`.

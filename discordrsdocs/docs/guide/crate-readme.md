@@ -90,7 +90,7 @@ use discordrs::{
 
 async fn send_support_panel(
     http: &DiscordHttpClient,
-    channel_id: discordrs::GenericId,
+    channel_id: discordrs::ChannelId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
         ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
