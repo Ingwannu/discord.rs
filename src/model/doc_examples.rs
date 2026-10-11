@@ -997,3 +997,24 @@ fn documented_interaction_fields_round_trip() {
     let message = context.message.as_deref().map(|message| message.kind);
     assert_eq!(message, Some(Some(MessageType::DEFAULT)));
 }
+
+/// An invoked Entry Point command decodes as its own variant. Discord has
+/// no example interaction for it, so the `data` is the documented Example
+/// Entry Point Command as the interaction carries it (`id`, `name`,
+/// `type`); `handler` is a command property, not part of the data.
+#[test]
+fn entry_point_command_interactions_decode_typed() {
+    let data = r#"{"id":"1290011223344556700","name":"launch","type":4}"#;
+    let payload = interaction_with(2, data);
+    let (interaction, written) = decode_every_way("entry point interaction", &payload);
+    compare("entry point interaction", "$", &written, &payload);
+    let Interaction::PrimaryEntryPoint(entry_point) = interaction else {
+        panic!("decoded as {interaction:?}");
+    };
+    assert_eq!(
+        entry_point.data.kind,
+        Some(CommandType::PRIMARY_ENTRY_POINT)
+    );
+    assert_eq!(entry_point.data.name.as_deref(), Some("launch"));
+    assert_eq!(written["data"]["type"], json!(4));
+}

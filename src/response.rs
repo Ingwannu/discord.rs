@@ -15,7 +15,7 @@ use crate::model::{
     AllowedMentions, AutocompleteInteraction, ChatInputCommandInteraction, ComponentInteraction,
     CreateMessage, CreatePoll, InteractionCallbackResponse, InteractionCallbackResult,
     InteractionContextData, InteractionResponseType, Message, MessageContextMenuInteraction,
-    MessageId, ModalSubmitInteraction, UserContextMenuInteraction,
+    MessageId, ModalSubmitInteraction, PrimaryEntryPointInteraction, UserContextMenuInteraction,
 };
 
 /// Discord message flag marking a response as ephemeral, as raw bits for
@@ -1370,6 +1370,12 @@ impl InteractionResponder for UserContextMenuInteraction {
 }
 
 impl InteractionResponder for MessageContextMenuInteraction {
+    fn responder_context(&self) -> &InteractionContextData {
+        &self.context
+    }
+}
+
+impl InteractionResponder for PrimaryEntryPointInteraction {
     fn responder_context(&self) -> &InteractionContextData {
         &self.context
     }

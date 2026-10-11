@@ -445,6 +445,21 @@ pub struct MessageContextMenuInteraction {
     pub data: CommandInteractionData,
 }
 
+/// An invoked Entry Point command (command type `PRIMARY_ENTRY_POINT`), the
+/// command that opens the app's Activity from the App Launcher.
+///
+/// Discord only sends it when the command's `handler` is `APP_HANDLER`;
+/// with `DISCORD_LAUNCH_ACTIVITY` Discord launches the Activity itself.
+/// Answer it with a `LAUNCH_ACTIVITY` callback (`context.create_response`
+/// with [`InteractionResponseType::LAUNCH_ACTIVITY`], or
+/// `InteractionResponse::LaunchActivity` from an interactions endpoint) or
+/// with any other command response.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrimaryEntryPointInteraction {
+    pub context: InteractionContextData,
+    pub data: CommandInteractionData,
+}
+
 impl UserContextMenuInteraction {
     /// The user the command was used on (`data.target_id`).
     pub fn target_id(&self) -> Option<UserId> {
@@ -619,6 +634,9 @@ pub enum Interaction {
     UserContextMenu(UserContextMenuInteraction),
     /// Discord API enum variant `MessageContextMenu`.
     MessageContextMenu(MessageContextMenuInteraction),
+    /// An Entry Point command (command type `PRIMARY_ENTRY_POINT`). 2.x
+    /// and early 3.0 decoded it as [`Interaction::Unknown`].
+    PrimaryEntryPoint(PrimaryEntryPointInteraction),
     /// Discord API enum variant `Autocomplete`.
     Autocomplete(AutocompleteInteraction),
     /// Discord API enum variant `Component`.
@@ -651,6 +669,7 @@ impl Interaction {
             Interaction::ChatInputCommand(interaction) => &interaction.context,
             Interaction::UserContextMenu(interaction) => &interaction.context,
             Interaction::MessageContextMenu(interaction) => &interaction.context,
+            Interaction::PrimaryEntryPoint(interaction) => &interaction.context,
             Interaction::Autocomplete(interaction) => &interaction.context,
             Interaction::Component(interaction) => &interaction.context,
             Interaction::ModalSubmit(interaction) => &interaction.context,

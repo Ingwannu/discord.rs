@@ -1085,6 +1085,10 @@ fn interaction_accessors_cover_all_variants() {
             },
             resolved: None,
         }),
+        Interaction::PrimaryEntryPoint(crate::model::PrimaryEntryPointInteraction {
+            context: context(9, 90, "entry-point-token"),
+            data: CommandInteractionData::default(),
+        }),
         Interaction::Unknown {
             context: context(8, 80, "unknown-token"),
             kind: InteractionType::new(99),
@@ -1101,6 +1105,7 @@ fn interaction_accessors_cover_all_variants() {
         (5, 50, "autocomplete-token"),
         (6, 60, "component-token"),
         (7, 70, "modal-token"),
+        (9, 90, "entry-point-token"),
         (8, 80, "unknown-token"),
     ];
 

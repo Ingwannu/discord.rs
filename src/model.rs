@@ -105,8 +105,8 @@ pub use interaction::{
     ComponentInteractionData, Interaction, InteractionCallbackActivityInstance,
     InteractionCallbackInteraction, InteractionCallbackResource, InteractionCallbackResponse,
     InteractionCallbackResult, InteractionContextData, InteractionGuild,
-    MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction, ResolvedData,
-    UserContextMenuInteraction,
+    MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction,
+    PrimaryEntryPointInteraction, ResolvedData, UserContextMenuInteraction,
 };
 pub use invite::{CreateChannelInvite, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus};
 pub use lobby::{

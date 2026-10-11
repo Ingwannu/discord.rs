@@ -305,6 +305,12 @@ fn route_key(interaction: &Interaction) -> RouteKey {
             .clone()
             .map(RouteKey::Command)
             .unwrap_or(RouteKey::Unknown),
+        Interaction::PrimaryEntryPoint(interaction) => interaction
+            .data
+            .name
+            .clone()
+            .map(RouteKey::Command)
+            .unwrap_or(RouteKey::Unknown),
         Interaction::Autocomplete(interaction) => interaction
             .data
             .name

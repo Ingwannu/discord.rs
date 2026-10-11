@@ -63,8 +63,8 @@ use crate::model::{
     ComponentInteractionData, Entitlement, GuildId, GuildInstallOwner, Interaction,
     InteractionContextData, InteractionContextType, InteractionGuild, InteractionId,
     InteractionResponseState, InteractionType, Member, Message, MessageContextMenuInteraction,
-    ModalSubmitInteraction, PingInteraction, ResolvedData, User, UserContextMenuInteraction,
-    UserId,
+    ModalSubmitInteraction, PingInteraction, PrimaryEntryPointInteraction, ResolvedData, User,
+    UserContextMenuInteraction, UserId,
 };
 use crate::parsers::modal::{ModalDataRef, ModalDataSeed};
 use crate::parsers::V2ModalSubmission;
@@ -412,6 +412,7 @@ enum CommandKind {
     ChatInput,
     User,
     Message,
+    PrimaryEntryPoint,
 }
 
 impl CommandKind {
@@ -422,6 +423,7 @@ impl CommandKind {
             CommandType::CHAT_INPUT => Some(Self::ChatInput),
             CommandType::USER => Some(Self::User),
             CommandType::MESSAGE => Some(Self::Message),
+            CommandType::PRIMARY_ENTRY_POINT => Some(Self::PrimaryEntryPoint),
             _ => None,
         }
     }
@@ -441,6 +443,9 @@ fn command_interaction(
         }
         CommandKind::Message => {
             Interaction::MessageContextMenu(MessageContextMenuInteraction { context, data })
+        }
+        CommandKind::PrimaryEntryPoint => {
+            Interaction::PrimaryEntryPoint(PrimaryEntryPointInteraction { context, data })
         }
     }
 }
@@ -463,6 +468,11 @@ impl Serialize for Interaction {
                 Some(DataRef::Command(&interaction.data)),
             ),
             Interaction::MessageContextMenu(interaction) => (
+                &interaction.context,
+                InteractionType::APPLICATION_COMMAND,
+                Some(DataRef::Command(&interaction.data)),
+            ),
+            Interaction::PrimaryEntryPoint(interaction) => (
                 &interaction.context,
                 InteractionType::APPLICATION_COMMAND,
                 Some(DataRef::Command(&interaction.data)),
