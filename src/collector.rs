@@ -16,7 +16,7 @@ use tokio::time;
 use crate::event::{Event, ReactionEvent};
 #[cfg(feature = "collectors")]
 use crate::model::{
-    Channel, ComponentInteraction, Interaction, Message, ModalSubmitInteraction, Snowflake,
+    Channel, ComponentInteraction, GenericId, Interaction, Message, ModalSubmitInteraction,
 };
 #[cfg(feature = "collectors")]
 use crate::types::Emoji;
@@ -338,8 +338,8 @@ impl CollectorHub {
     /// channel/thread/guild deletion only ends collection after that; use
     /// [`reaction_collector_for_message`](Self::reaction_collector_for_message)
     /// or [`ReactionCollector::channel_id`] when you already know them.
-    pub fn reaction_collector(&self, message_id: impl Into<Snowflake>) -> ReactionCollector {
-        ReactionCollector::new(self.subscribe(), message_id.into())
+    pub fn reaction_collector(&self, message_id: GenericId) -> ReactionCollector {
+        ReactionCollector::new(self.subscribe(), message_id)
     }
 
     /// Like [`reaction_collector`](Self::reaction_collector), replaying
@@ -347,17 +347,17 @@ impl CollectorHub {
     pub fn reaction_collector_from(
         &self,
         cursor: EventCursor,
-        message_id: impl Into<Snowflake>,
+        message_id: GenericId,
     ) -> ReactionCollector {
-        ReactionCollector::new(self.subscribe_from(cursor), message_id.into())
+        ReactionCollector::new(self.subscribe_from(cursor), message_id)
     }
 
     /// Collects reactions on `message`, taking its channel and guild from the
     /// message so deletion of either ends collection right away.
     pub fn reaction_collector_for_message(&self, message: &Message) -> ReactionCollector {
-        let mut collector = self.reaction_collector(message.id.clone());
-        collector.core.logic.channel_id = Some(message.channel_id.clone());
-        collector.core.logic.guild_id = message.guild_id.clone();
+        let mut collector = self.reaction_collector(message.id);
+        collector.core.logic.channel_id = Some(message.channel_id);
+        collector.core.logic.guild_id = message.guild_id;
         collector
     }
 }
@@ -907,7 +907,7 @@ impl_extracting_collector!(ModalCollector, ModalSubmitInteraction, extract_modal
 /// U+FE0F variation selector) are different keys.
 pub enum EmojiKey {
     /// A custom (guild or application) emoji.
-    Custom(Snowflake),
+    Custom(GenericId),
     /// A Unicode emoji such as `"✅"`.
     Unicode(String),
 }
@@ -915,8 +915,8 @@ pub enum EmojiKey {
 #[cfg(feature = "collectors")]
 impl EmojiKey {
     /// Key for a custom emoji id.
-    pub fn custom(id: impl Into<Snowflake>) -> Self {
-        Self::Custom(id.into())
+    pub fn custom(id: GenericId) -> Self {
+        Self::Custom(id)
     }
 
     /// Key for a Unicode emoji.
@@ -927,8 +927,8 @@ impl EmojiKey {
     /// Key of a gateway emoji object, or `None` when it carries neither an
     /// id nor a name.
     pub fn from_emoji(emoji: &Emoji) -> Option<Self> {
-        match (&emoji.id, &emoji.name) {
-            (Some(id), _) => Some(Self::Custom(Snowflake::new(id.clone()))),
+        match (emoji.id, &emoji.name) {
+            (Some(id), _) => Some(Self::Custom(id)),
             (None, Some(name)) => Some(Self::Unicode(name.clone())),
             (None, None) => None,
         }
@@ -943,8 +943,8 @@ impl EmojiKey {
 /// user can hold both for the same emoji and remove them independently.
 pub struct CollectedReaction {
     emoji: Emoji,
-    users: BTreeSet<Snowflake>,
-    burst_users: BTreeSet<Snowflake>,
+    users: BTreeSet<GenericId>,
+    burst_users: BTreeSet<GenericId>,
 }
 
 #[cfg(feature = "collectors")]
@@ -956,12 +956,12 @@ impl CollectedReaction {
     }
 
     /// Users holding a normal reaction with this emoji.
-    pub fn users(&self) -> &BTreeSet<Snowflake> {
+    pub fn users(&self) -> &BTreeSet<GenericId> {
         &self.users
     }
 
     /// Users holding a burst (super) reaction with this emoji.
-    pub fn burst_users(&self) -> &BTreeSet<Snowflake> {
+    pub fn burst_users(&self) -> &BTreeSet<GenericId> {
         &self.burst_users
     }
 
@@ -972,11 +972,11 @@ impl CollectedReaction {
     }
 
     /// Whether `user_id` holds a normal or burst reaction with this emoji.
-    pub fn contains_user(&self, user_id: &Snowflake) -> bool {
-        self.users.contains(user_id) || self.burst_users.contains(user_id)
+    pub fn contains_user(&self, user_id: GenericId) -> bool {
+        self.users.contains(&user_id) || self.burst_users.contains(&user_id)
     }
 
-    fn set_mut(&mut self, burst: bool) -> &mut BTreeSet<Snowflake> {
+    fn set_mut(&mut self, burst: bool) -> &mut BTreeSet<GenericId> {
         if burst {
             &mut self.burst_users
         } else {
@@ -1008,7 +1008,7 @@ pub struct ReactionCollection {
     // How many (emoji, normal/burst) slots each user holds, so `users()` and
     // the `max_users` check stay O(log n) instead of re-scanning every set
     // on each event.
-    user_slots: BTreeMap<Snowflake, usize>,
+    user_slots: BTreeMap<GenericId, usize>,
     total: usize,
     reaction_count: usize,
 }
@@ -1053,7 +1053,7 @@ impl ReactionCollection {
 
     /// Distinct users holding at least one collected reaction
     /// (discord.js `collector.users`), in id order.
-    pub fn users(&self) -> impl Iterator<Item = &Snowflake> {
+    pub fn users(&self) -> impl Iterator<Item = &GenericId> {
         self.user_slots.keys()
     }
 
@@ -1068,7 +1068,7 @@ impl ReactionCollection {
             .position(|(candidate, _)| candidate == key)
     }
 
-    fn insert(&mut self, key: EmojiKey, emoji: Emoji, user_id: Snowflake, burst: bool) {
+    fn insert(&mut self, key: EmojiKey, emoji: Emoji, user_id: GenericId, burst: bool) {
         let index = self.position(&key).unwrap_or_else(|| {
             self.reactions.push((key, CollectedReaction::default()));
             self.reactions.len() - 1
@@ -1078,21 +1078,21 @@ impl ReactionCollection {
         self.total = self.total.saturating_add(1);
         if let Some((_, reaction)) = self.reactions.get_mut(index) {
             reaction.emoji = emoji;
-            if reaction.set_mut(burst).insert(user_id.clone()) {
+            if reaction.set_mut(burst).insert(user_id) {
                 self.reaction_count = self.reaction_count.saturating_add(1);
                 *self.user_slots.entry(user_id).or_insert(0) += 1;
             }
         }
     }
 
-    fn remove_user(&mut self, key: &EmojiKey, user_id: &Snowflake, burst: bool) {
+    fn remove_user(&mut self, key: &EmojiKey, user_id: GenericId, burst: bool) {
         let Some(index) = self.position(key) else {
             return;
         };
         let removed = self
             .reactions
             .get_mut(index)
-            .is_some_and(|(_, reaction)| reaction.set_mut(burst).remove(user_id));
+            .is_some_and(|(_, reaction)| reaction.set_mut(burst).remove(&user_id));
         if !removed {
             return;
         }
@@ -1117,7 +1117,7 @@ impl ReactionCollection {
         for user_id in reaction.users.iter().chain(reaction.burst_users.iter()) {
             self.total = self.total.saturating_sub(1);
             self.reaction_count = self.reaction_count.saturating_sub(1);
-            self.release_user(user_id);
+            self.release_user(*user_id);
         }
     }
 
@@ -1128,11 +1128,11 @@ impl ReactionCollection {
         self.reaction_count = 0;
     }
 
-    fn release_user(&mut self, user_id: &Snowflake) {
-        if let Some(slots) = self.user_slots.get_mut(user_id) {
+    fn release_user(&mut self, user_id: GenericId) {
+        if let Some(slots) = self.user_slots.get_mut(&user_id) {
             *slots = slots.saturating_sub(1);
             if *slots == 0 {
-                self.user_slots.remove(user_id);
+                self.user_slots.remove(&user_id);
             }
         }
     }
@@ -1173,12 +1173,12 @@ impl ReactionCollection {
 #[cfg(feature = "collectors")]
 /// Logic behind [`ReactionCollector`].
 struct ReactionLogic {
-    message_id: Snowflake,
-    channel_id: Option<Snowflake>,
+    message_id: GenericId,
+    channel_id: Option<GenericId>,
     // Set when the message lives in a thread whose parent is known; Discord
     // sends no THREAD_DELETE for threads removed with their parent channel.
-    parent_channel_id: Option<Snowflake>,
-    guild_id: Option<Snowflake>,
+    parent_channel_id: Option<GenericId>,
+    guild_id: Option<GenericId>,
     filter: Option<EventFilter<ReactionEvent>>,
     dispose: bool,
     max_items: Option<usize>,
@@ -1189,7 +1189,7 @@ struct ReactionLogic {
 
 #[cfg(feature = "collectors")]
 impl ReactionLogic {
-    fn new(message_id: Snowflake) -> Self {
+    fn new(message_id: GenericId) -> Self {
         Self {
             message_id,
             channel_id: None,
@@ -1209,18 +1209,18 @@ impl ReactionLogic {
     /// collection even when only the message id was given.
     fn targets(
         &mut self,
-        message_id: Option<&Snowflake>,
-        channel_id: Option<&Snowflake>,
-        guild_id: Option<&Snowflake>,
+        message_id: Option<GenericId>,
+        channel_id: Option<GenericId>,
+        guild_id: Option<GenericId>,
     ) -> bool {
-        if message_id != Some(&self.message_id) {
+        if message_id != Some(self.message_id) {
             return false;
         }
         if self.channel_id.is_none() {
-            self.channel_id = channel_id.cloned();
+            self.channel_id = channel_id;
         }
         if self.guild_id.is_none() {
-            self.guild_id = guild_id.cloned();
+            self.guild_id = guild_id;
         }
         true
     }
@@ -1229,16 +1229,12 @@ impl ReactionLogic {
     /// deleting that parent channel ends collection.
     fn learn_parent(&mut self, thread: &Channel) {
         if self.parent_channel_id.is_none() && self.channel_id.as_ref() == Some(&thread.id) {
-            self.parent_channel_id = thread.parent_id.clone();
+            self.parent_channel_id = thread.parent_id;
         }
     }
 
     fn targets_reaction(&mut self, reaction: &ReactionEvent) -> bool {
-        self.targets(
-            reaction.message_id.as_ref(),
-            reaction.channel_id.as_ref(),
-            reaction.guild_id.as_ref(),
-        )
+        self.targets(reaction.message_id, reaction.channel_id, reaction.guild_id)
     }
 
     fn end_if(condition: bool, reason: CollectorEndReason) -> Step<ReactionEvent> {
@@ -1253,9 +1249,9 @@ impl ReactionLogic {
 #[cfg(feature = "collectors")]
 /// Key, user, and normal/burst kind of a reaction add/remove event, or `None`
 /// when Discord omitted the emoji or user.
-fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, Snowflake, bool)> {
+fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, GenericId, bool)> {
     let key = EmojiKey::from_emoji(reaction.emoji.as_ref()?)?;
-    let user_id = reaction.user_id.clone()?;
+    let user_id = reaction.user_id?;
     // `type` 1 is a burst reaction; older payloads only carry `burst`.
     let burst = reaction.burst == Some(true) || reaction.reaction_type == Some(1);
     Some((key, user_id, burst))
@@ -1283,27 +1279,19 @@ impl CollectorLogic for ReactionLogic {
             Event::MessageReactionRemove(reaction) if self.dispose => {
                 if self.targets_reaction(&reaction) && passes(self.filter.as_ref(), &reaction) {
                     if let Some((key, user_id, burst)) = reaction_identity(&reaction) {
-                        self.collected.remove_user(&key, &user_id, burst);
+                        self.collected.remove_user(&key, user_id, burst);
                     }
                 }
                 Step::Skip
             }
             Event::MessageReactionRemoveAll(event) if self.dispose => {
-                if self.targets(
-                    event.message_id.as_ref(),
-                    event.channel_id.as_ref(),
-                    event.guild_id.as_ref(),
-                ) {
+                if self.targets(event.message_id, event.channel_id, event.guild_id) {
                     self.collected.clear();
                 }
                 Step::Skip
             }
             Event::MessageReactionRemoveEmoji(event) if self.dispose => {
-                if self.targets(
-                    event.message_id.as_ref(),
-                    event.channel_id.as_ref(),
-                    event.guild_id.as_ref(),
-                ) {
+                if self.targets(event.message_id, event.channel_id, event.guild_id) {
                     if let Some(key) = event.emoji.as_ref().and_then(EmojiKey::from_emoji) {
                         self.collected.remove_emoji(&key);
                     }
@@ -1403,7 +1391,7 @@ pub struct ReactionCollector {
 
 #[cfg(feature = "collectors")]
 impl ReactionCollector {
-    fn new(receiver: EventSubscription, message_id: Snowflake) -> Self {
+    fn new(receiver: EventSubscription, message_id: GenericId) -> Self {
         Self {
             core: CollectorCore::new(receiver, ReactionLogic::new(message_id)),
         }
@@ -1451,8 +1439,8 @@ impl ReactionCollector {
 
     /// Channel (or thread) holding the message, so its deletion ends
     /// collection before the first reaction arrives.
-    pub fn channel_id(mut self, channel_id: impl Into<Snowflake>) -> Self {
-        self.core.logic.channel_id = Some(channel_id.into());
+    pub fn channel_id(mut self, channel_id: GenericId) -> Self {
+        self.core.logic.channel_id = Some(channel_id);
         self
     }
 
@@ -1462,21 +1450,21 @@ impl ReactionCollector {
     /// events carry the parent; without this call it is only learned from a
     /// `THREAD_CREATE` / `THREAD_UPDATE` / `THREAD_LIST_SYNC` for the thread
     /// seen while collecting.
-    pub fn parent_channel_id(mut self, parent_channel_id: impl Into<Snowflake>) -> Self {
-        self.core.logic.parent_channel_id = Some(parent_channel_id.into());
+    pub fn parent_channel_id(mut self, parent_channel_id: GenericId) -> Self {
+        self.core.logic.parent_channel_id = Some(parent_channel_id);
         self
     }
 
     /// Guild holding the message, so removal from it ends collection before
     /// the first reaction arrives.
-    pub fn guild_id(mut self, guild_id: impl Into<Snowflake>) -> Self {
-        self.core.logic.guild_id = Some(guild_id.into());
+    pub fn guild_id(mut self, guild_id: GenericId) -> Self {
+        self.core.logic.guild_id = Some(guild_id);
         self
     }
 
     /// The watched message.
-    pub fn message_id(&self) -> &Snowflake {
-        &self.core.logic.message_id
+    pub fn message_id(&self) -> GenericId {
+        self.core.logic.message_id
     }
 
     /// Reactions collected so far. Updated as `next()` consumes events.
@@ -1501,6 +1489,7 @@ impl_collector_controls!(ReactionCollector, ReactionEvent);
 
 #[cfg(all(test, feature = "collectors"))]
 mod tests {
+    use crate::model::test_id;
     use std::time::Duration;
 
     use serde_json::json;
@@ -1508,7 +1497,7 @@ mod tests {
     use tokio::time;
 
     use crate::event::{decode_event, Event};
-    use crate::model::{Interaction, Message, Snowflake};
+    use crate::model::{GenericId, Interaction, Message};
     use crate::types::Emoji;
 
     use super::{CollectorEndReason, CollectorHub, EmojiKey, ReactionCollection};
@@ -1598,7 +1587,7 @@ mod tests {
         let hub = CollectorHub::with_capacity(1);
         let mut collector = hub.message_collector().timeout(Duration::from_secs(1));
 
-        for id in ["2", "3", "4"] {
+        for id in [2, 3, 4] {
             hub.publish(
                 decode_event(
                     "MESSAGE_CREATE",
@@ -1618,7 +1607,7 @@ mod tests {
             .next()
             .await
             .expect("collector should still yield the newest buffered message");
-        assert_eq!(message.id.as_str(), "4");
+        assert_eq!(message.id.get(), 4);
         assert!(collector.lagged_events() >= 1);
     }
 
@@ -1659,7 +1648,7 @@ mod tests {
         );
 
         let message = collector.next().await.expect("matching message update");
-        assert_eq!(message.id.as_str(), "4");
+        assert_eq!(message.id.get(), 4);
         assert_eq!(message.content, "keep");
     }
 
@@ -1730,15 +1719,15 @@ mod tests {
             .next()
             .await
             .expect("component interaction");
-        assert_eq!(component.context.id.as_str(), "3");
-        assert_eq!(component.context.application_id.as_str(), "4");
+        assert_eq!(component.context.id.get(), 3);
+        assert_eq!(component.context.application_id.get(), 4);
         assert_eq!(component.context.token, "token");
         assert_eq!(component.data.custom_id, "button");
         assert_eq!(component.data.component_type, 2);
         assert_eq!(component.data.values, vec!["one".to_string()]);
 
         let modal = modal_collector.next().await.expect("modal interaction");
-        assert_eq!(modal.context.id.as_str(), "5");
+        assert_eq!(modal.context.id.get(), 5);
         assert_eq!(modal.submission.custom_id, "modal");
     }
 
@@ -1756,7 +1745,7 @@ mod tests {
 
         match collector.next().await {
             Some(Interaction::Component(component)) => {
-                assert_eq!(component.context.id.as_str(), "2");
+                assert_eq!(component.context.id.get(), 2);
                 assert_eq!(component.data.custom_id, "keep-me");
             }
             other => panic!("unexpected interaction after filter skip: {other:?}"),
@@ -1777,8 +1766,8 @@ mod tests {
 
         let interactions = collector.collect().await;
         assert_eq!(interactions.len(), 2);
-        assert_eq!(interactions[0].id().as_str(), "1");
-        assert_eq!(interactions[1].id().as_str(), "2");
+        assert_eq!(interactions[0].id().get(), 1);
+        assert_eq!(interactions[1].id().get(), 2);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1853,7 +1842,7 @@ mod tests {
             .expect("collector should yield the newest buffered interaction");
         match interaction {
             Interaction::ModalSubmit(modal) => {
-                assert_eq!(modal.context.id.as_str(), "3");
+                assert_eq!(modal.context.id.get(), 3);
                 assert_eq!(modal.submission.custom_id, "latest");
             }
             other => panic!("unexpected interaction after lag: {other:?}"),
@@ -2028,7 +2017,7 @@ mod tests {
         hub.publish(component_interaction("3", "keep"));
 
         let component = collector.next().await.expect("matching component");
-        assert_eq!(component.context.id.as_str(), "3");
+        assert_eq!(component.context.id.get(), 3);
         assert_eq!(component.data.custom_id, "keep");
         assert_eq!(collector.received_count(), 1);
     }
@@ -2045,7 +2034,7 @@ mod tests {
         hub.publish(modal_interaction("2", "wanted"));
 
         let modal = collector.next().await.expect("matching modal");
-        assert_eq!(modal.context.id.as_str(), "2");
+        assert_eq!(modal.context.id.get(), 2);
         assert_eq!(modal.submission.custom_id, "wanted");
         assert_eq!(collector.received_count(), 1);
     }
@@ -2174,8 +2163,13 @@ mod tests {
         EmojiKey::unicode(name)
     }
 
-    fn user(id: &str) -> Snowflake {
-        Snowflake::from(id)
+    fn user(id: &str) -> GenericId {
+        id.parse().unwrap()
+    }
+
+    /// The payload helpers take the wire text; collectors take typed IDs.
+    fn id(text: &str) -> GenericId {
+        text.parse().unwrap()
     }
 
     fn users_of(collection: &ReactionCollection, emoji: &str) -> Vec<String> {
@@ -2189,7 +2183,7 @@ mod tests {
     async fn reaction_collector_tallies_users_per_emoji_in_first_seen_order() {
         let hub = CollectorHub::new();
         let collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(30));
 
         hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
@@ -2199,14 +2193,14 @@ mod tests {
 
         let collected = collector.collect().await;
         let keys: Vec<&EmojiKey> = collected.iter().map(|(key, _)| key).collect();
-        assert_eq!(keys, vec![&key("✅"), &EmojiKey::custom("777")]);
+        assert_eq!(keys, vec![&key("✅"), &EmojiKey::custom(test_id(777))]);
         assert_eq!(collected.len(), 2);
         assert!(!collected.is_empty());
         assert_eq!(collected.total(), 4);
         assert_eq!(collected.user_count(), 3);
         assert_eq!(
-            collected.users().map(Snowflake::as_str).collect::<Vec<_>>(),
-            vec!["1", "2", "3"]
+            collected.users().map(|user| user.get()).collect::<Vec<_>>(),
+            vec![1, 2, 3]
         );
 
         let check = collected.get(&key("✅")).expect("✅ collected");
@@ -2216,12 +2210,12 @@ mod tests {
             vec![&user("3")]
         );
         assert_eq!(check.count(), 3);
-        assert!(check.contains_user(&user("3")));
-        assert!(!check.contains_user(&user("4")));
+        assert!(check.contains_user(user("3")));
+        assert!(!check.contains_user(user("4")));
         assert_eq!(check.emoji().name.as_deref(), Some("✅"));
 
         let party = collected
-            .get(&EmojiKey::custom(777_u64))
+            .get(&EmojiKey::custom(test_id(777)))
             .expect("custom emoji keyed by id");
         assert_eq!(party.emoji().name.as_deref(), Some("party"));
         assert_eq!(party.count(), 1);
@@ -2231,10 +2225,10 @@ mod tests {
     async fn reaction_collector_yields_only_matching_message_and_filter() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
-            .filter(|reaction| reaction.user_id.as_ref().map(Snowflake::as_str) == Some("1"))
+            .reaction_collector(id(MESSAGE))
+            .filter(|reaction| reaction.user_id.map(GenericId::get) == Some(1))
             .timeout(Duration::from_secs(30));
-        assert_eq!(collector.message_id().as_str(), MESSAGE);
+        assert_eq!(collector.message_id(), id(MESSAGE));
 
         hub.publish(reaction_add("501", "1", unicode("✅")));
         hub.publish(reaction_add(MESSAGE, "2", unicode("✅")));
@@ -2257,7 +2251,7 @@ mod tests {
     async fn reaction_collector_skips_events_without_emoji_or_user() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(30));
 
         hub.publish(
@@ -2292,7 +2286,7 @@ mod tests {
     async fn reaction_collector_max_items_ends_with_limit() {
         let hub = CollectorHub::new();
         let collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .max_items(2)
             .timeout(Duration::from_secs(30));
 
@@ -2313,7 +2307,7 @@ mod tests {
     async fn reaction_collector_max_emojis_ends_with_emoji_limit() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .max_emojis(2)
             .timeout(Duration::from_secs(30));
 
@@ -2335,7 +2329,7 @@ mod tests {
     async fn reaction_collector_max_users_ends_with_user_limit() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .max_users(2)
             .timeout(Duration::from_secs(30));
 
@@ -2361,15 +2355,15 @@ mod tests {
         let hub = CollectorHub::new();
         for (collector, expected) in [
             (
-                hub.reaction_collector(MESSAGE).max_items(0),
+                hub.reaction_collector(id(MESSAGE)).max_items(0),
                 CollectorEndReason::Limit,
             ),
             (
-                hub.reaction_collector(MESSAGE).max_emojis(0),
+                hub.reaction_collector(id(MESSAGE)).max_emojis(0),
                 CollectorEndReason::EmojiLimit,
             ),
             (
-                hub.reaction_collector(MESSAGE).max_users(0),
+                hub.reaction_collector(id(MESSAGE)).max_users(0),
                 CollectorEndReason::UserLimit,
             ),
         ] {
@@ -2382,7 +2376,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn reaction_collector_without_dispose_ignores_removals() {
         let hub = CollectorHub::new();
-        let collector = hub.reaction_collector(MESSAGE).idle(Duration::from_secs(5));
+        let collector = hub
+            .reaction_collector(id(MESSAGE))
+            .idle(Duration::from_secs(5));
 
         hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
         hub.publish(reaction_add(MESSAGE, "2", unicode("❌")));
@@ -2400,7 +2396,7 @@ mod tests {
     async fn reaction_collector_dispose_applies_each_removal_kind() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .dispose(true)
             .idle(Duration::from_secs(5));
 
@@ -2428,14 +2424,14 @@ mod tests {
         let collected = collector.collected();
         assert_eq!(users_of(collected, "✅"), vec!["2"]);
         assert_eq!(users_of(collected, "❌"), vec!["1"]);
-        assert!(collected.get(&EmojiKey::custom("777")).is_none());
+        assert!(collected.get(&EmojiKey::custom(test_id(777))).is_none());
         assert_eq!(collected.total(), 2);
         assert_eq!(collected.user_count(), 2, "user 3 left with the emoji");
 
         // Removing the last user of an emoji drops the emoji entirely.
         let hub = CollectorHub::new();
         let collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .dispose(true)
             .idle(Duration::from_secs(5));
         hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
@@ -2458,7 +2454,7 @@ mod tests {
     async fn reaction_collector_dispose_tracks_burst_reactions_separately() {
         let hub = CollectorHub::new();
         let collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .dispose(true)
             .idle(Duration::from_secs(5));
 
@@ -2470,7 +2466,7 @@ mod tests {
         let check = collected.get(&key("✅")).expect("normal reaction remains");
         assert_eq!(check.count(), 1);
         assert!(check.burst_users().is_empty());
-        assert!(check.contains_user(&user("1")));
+        assert!(check.contains_user(user("1")));
         assert_eq!(collected.total(), 1);
         assert_eq!(collected.user_count(), 1);
     }
@@ -2479,7 +2475,7 @@ mod tests {
     async fn reaction_collector_disposed_reactions_free_room_under_max_items() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .dispose(true)
             .max_items(2)
             .timeout(Duration::from_secs(30));
@@ -2505,7 +2501,7 @@ mod tests {
         // Removal payloads carry no `message_author_id`, so this filter
         // accepts every add and rejects every removal, as in discord.js.
         let collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .dispose(true)
             .filter(|reaction| reaction.message_author_id.is_some())
             .idle(Duration::from_secs(5));
@@ -2520,7 +2516,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn reaction_collector_ends_when_the_message_is_deleted() {
         let hub = CollectorHub::new();
-        let mut single = hub.reaction_collector(MESSAGE);
+        let mut single = hub.reaction_collector(id(MESSAGE));
 
         hub.publish(
             decode_event(
@@ -2546,7 +2542,7 @@ mod tests {
         assert!(single.next().await.is_none());
         assert_eq!(single.end_reason(), Some(CollectorEndReason::MessageDelete));
 
-        let mut bulk_only = hub.reaction_collector(MESSAGE);
+        let mut bulk_only = hub.reaction_collector(id(MESSAGE));
         hub.publish(
             decode_event(
                 "MESSAGE_DELETE_BULK",
@@ -2585,7 +2581,7 @@ mod tests {
     async fn reaction_collector_learns_location_from_the_first_reaction() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(30));
 
         // Before any reaction the channel is unknown, so this is ignored.
@@ -2636,9 +2632,9 @@ mod tests {
         );
 
         let mut explicit = hub
-            .reaction_collector(MESSAGE)
-            .channel_id(CHANNEL)
-            .guild_id(GUILD);
+            .reaction_collector(id(MESSAGE))
+            .channel_id(id(CHANNEL))
+            .guild_id(id(GUILD));
         hub.publish(guild_delete(GUILD, None));
         assert!(explicit.next().await.is_none());
         assert_eq!(explicit.end_reason(), Some(CollectorEndReason::GuildDelete));
@@ -2649,7 +2645,7 @@ mod tests {
         let hub = CollectorHub::new();
 
         let mut timed = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(60));
         let started = time::Instant::now();
         assert!(timed.next().await.is_none());
@@ -2657,7 +2653,7 @@ mod tests {
         assert_eq!(timed.end_reason(), Some(CollectorEndReason::Time));
 
         let mut idle = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(60))
             .idle(Duration::from_secs(10));
         let publisher = hub.clone();
@@ -2675,7 +2671,7 @@ mod tests {
         );
         assert_eq!(idle.end_reason(), Some(CollectorEndReason::Idle));
 
-        let mut stopped = hub.reaction_collector(MESSAGE);
+        let mut stopped = hub.reaction_collector(id(MESSAGE));
         let handle = stopped.stop_handle();
         tokio::spawn(async move {
             time::sleep(Duration::from_secs(1)).await;
@@ -2688,7 +2684,7 @@ mod tests {
         );
 
         let mut reset = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .timeout(Duration::from_secs(10));
         reset.reset_timer();
         time::sleep(Duration::from_secs(6)).await;
@@ -2697,7 +2693,7 @@ mod tests {
         assert!(reset.next().await.is_none());
         assert_eq!(started.elapsed(), Duration::from_secs(10));
 
-        let mut handle_stop = hub.reaction_collector(MESSAGE);
+        let mut handle_stop = hub.reaction_collector(id(MESSAGE));
         handle_stop.stop_handle().stop();
         assert!(handle_stop.next().await.is_none());
         assert_eq!(
@@ -2705,7 +2701,7 @@ mod tests {
             Some(CollectorEndReason::User("user".to_string()))
         );
 
-        let mut user_stop = hub.reaction_collector(MESSAGE);
+        let mut user_stop = hub.reaction_collector(id(MESSAGE));
         user_stop.stop();
         user_stop.stop_with_reason("ignored");
         assert!(user_stop.next().await.is_none());
@@ -2718,7 +2714,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn reaction_collector_reports_lag_and_channel_drop() {
         let hub = CollectorHub::with_capacity(2);
-        let mut collector = hub.reaction_collector(MESSAGE);
+        let mut collector = hub.reaction_collector(id(MESSAGE));
 
         for user_id in ["1", "2", "3", "4"] {
             hub.publish(reaction_add(MESSAGE, user_id, unicode("✅")));
@@ -2741,8 +2737,8 @@ mod tests {
     #[test]
     fn emoji_key_from_emoji_prefers_custom_ids() {
         assert_eq!(
-            EmojiKey::from_emoji(&Emoji::custom("party", "777", true)),
-            Some(EmojiKey::Custom(Snowflake::from("777")))
+            EmojiKey::from_emoji(&Emoji::custom("party", test_id(777), true)),
+            Some(EmojiKey::Custom(test_id(777)))
         );
         assert_eq!(
             EmojiKey::from_emoji(&Emoji::unicode("✅")),
@@ -2778,7 +2774,7 @@ mod tests {
         for _ in 0..100 {
             let hub = CollectorHub::new();
             let mut collector = hub
-                .reaction_collector(MESSAGE)
+                .reaction_collector(id(MESSAGE))
                 .timeout(Duration::from_secs(5))
                 .idle(Duration::from_secs(60));
             hub.publish(reaction_add(MESSAGE, "1", unicode("✅")));
@@ -2854,7 +2850,7 @@ mod tests {
     async fn reaction_max_items_counts_every_accepted_add_like_discord_js() {
         let hub = CollectorHub::new();
         let mut collector = hub
-            .reaction_collector(MESSAGE)
+            .reaction_collector(id(MESSAGE))
             .max_items(2)
             .timeout(Duration::from_secs(30));
 
@@ -2891,9 +2887,9 @@ mod tests {
         let hub = CollectorHub::new();
 
         let mut explicit = hub
-            .reaction_collector(MESSAGE)
-            .channel_id(CHANNEL)
-            .parent_channel_id("5");
+            .reaction_collector(id(MESSAGE))
+            .channel_id(id(CHANNEL))
+            .parent_channel_id(test_id(5));
         hub.publish(channel_delete("6"));
         hub.publish(channel_delete("5"));
         assert!(explicit.next().await.is_none());
@@ -2903,7 +2899,7 @@ mod tests {
         );
 
         // Learned from THREAD_UPDATE for the message's thread only.
-        let mut learned = hub.reaction_collector(MESSAGE).channel_id(CHANNEL);
+        let mut learned = hub.reaction_collector(id(MESSAGE)).channel_id(id(CHANNEL));
         hub.publish(thread_update("11", "7"));
         hub.publish(channel_delete("7"));
         hub.publish(thread_update(CHANNEL, "5"));
@@ -2922,7 +2918,7 @@ mod tests {
         );
 
         // Learned from THREAD_LIST_SYNC.
-        let mut synced = hub.reaction_collector(MESSAGE).channel_id(CHANNEL);
+        let mut synced = hub.reaction_collector(id(MESSAGE)).channel_id(id(CHANNEL));
         hub.publish(
             decode_event(
                 "THREAD_LIST_SYNC",
@@ -2943,8 +2939,8 @@ mod tests {
 
         // Without parent knowledge a parent deletion cannot be matched.
         let mut unknown = hub
-            .reaction_collector(MESSAGE)
-            .channel_id(CHANNEL)
+            .reaction_collector(id(MESSAGE))
+            .channel_id(id(CHANNEL))
             .timeout(Duration::from_secs(5));
         hub.publish(channel_delete("5"));
         assert!(unknown.next().await.is_none());
@@ -2955,9 +2951,9 @@ mod tests {
     fn collector_futures_are_send() {
         fn assert_send<T: Send>(_: T) {}
         let hub = CollectorHub::new();
-        let mut reactions = hub.reaction_collector(MESSAGE);
+        let mut reactions = hub.reaction_collector(id(MESSAGE));
         assert_send(reactions.next());
-        assert_send(hub.reaction_collector(MESSAGE).collect());
+        assert_send(hub.reaction_collector(id(MESSAGE)).collect());
         let mut messages = hub.message_collector();
         assert_send(messages.next());
         assert_send(hub.component_collector().collect());

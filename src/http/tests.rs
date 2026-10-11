@@ -1,3 +1,4 @@
+use crate::model::test_id;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use super::paths::{
     guild_bans_query, guild_members_query, interaction_callback_path, invite_query,
     joined_archived_threads_query, poll_answer_voters_query, rate_limit_route_key,
     request_uses_bot_authorization, search_guild_members_query, subscription_query,
-    thread_member_query, validate_snowflake_path_segment, validate_token_path_segment,
+    thread_member_query, validate_token_path_segment,
 };
 use super::rate_limit::RateLimitState;
 use super::{
@@ -25,16 +26,17 @@ use crate::model::{
     BulkGuildBanRequest, ChannelPinsQuery, CreateChannelInvite, CreateGuildBan, CreateGuildChannel,
     CreateGuildRole, CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance,
     CreateTestEntitlement, CreateWebhook, CurrentUserGuildsQuery,
-    EditApplicationCommandPermissions, EditChannelPermission, EntitlementQuery, GetGuildQuery,
-    GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
-    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
-    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
-    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField, RoleColors,
-    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, Snowflake,
-    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
+    EditApplicationCommandPermissions, EditChannelPermission, EntitlementQuery, GenericId,
+    GetGuildQuery, GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle,
+    InteractionCallbackResponse, JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember,
+    LobbyMemberUpdate, ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
+    ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
+    ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
+    ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField, PollAnswerId, RoleColors,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery,
+    ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -689,66 +691,58 @@ fn global_commands_path_uses_configured_application_id() {
 
 #[test]
 fn followup_webhook_path_uses_explicit_application_id() {
-    let path = followup_webhook_path("123", "token", None).unwrap();
+    let path = followup_webhook_path(test_id(123), "token", None).unwrap();
     assert_eq!(path, "/webhooks/123/token");
 }
 
 #[test]
 fn edit_followup_webhook_path_includes_message_id() {
-    let path = followup_webhook_path("123", "token", Some("456")).unwrap();
+    let path = followup_webhook_path(test_id(123), "token", Some("456")).unwrap();
     assert_eq!(path, "/webhooks/123/token/messages/456");
 }
 
 #[test]
 fn original_interaction_response_path_uses_original_message_marker() {
-    let path = followup_webhook_path("123", "token", Some("@original")).unwrap();
+    let path = followup_webhook_path(test_id(123), "token", Some("@original")).unwrap();
     assert_eq!(path, "/webhooks/123/token/messages/@original");
 }
 
 #[test]
-fn followup_webhook_path_rejects_zero_application_id() {
-    let error = followup_webhook_path("0", "token", None).unwrap_err();
-    assert!(error.to_string().contains("application_id must be set"));
-}
-
-#[test]
 fn followup_webhook_path_rejects_empty_or_unsafe_segments() {
-    let token_error = followup_webhook_path("123", "", None).unwrap_err();
+    let token_error = followup_webhook_path(test_id(123), "", None).unwrap_err();
     assert!(token_error.to_string().contains("interaction_token"));
 
-    let token_separator_error = followup_webhook_path("123", "token/part", None).unwrap_err();
+    let token_separator_error =
+        followup_webhook_path(test_id(123), "token/part", None).unwrap_err();
     assert!(token_separator_error
         .to_string()
         .contains("interaction_token"));
 
-    let application_id_error = followup_webhook_path("12/3", "token", None).unwrap_err();
-    assert!(application_id_error.to_string().contains("application_id"));
-
-    let message_error = followup_webhook_path("123", "token", Some("bad/id")).unwrap_err();
+    let message_error = followup_webhook_path(test_id(123), "token", Some("bad/id")).unwrap_err();
     assert!(message_error.to_string().contains("message_id"));
 }
 
 #[test]
 fn interaction_callback_path_rejects_unsafe_tokens() {
-    let error = interaction_callback_path(Snowflake::from("123"), "bad/token").unwrap_err();
+    let error = interaction_callback_path(test_id(123), "bad/token").unwrap_err();
     assert!(error.to_string().contains("interaction_token"));
 }
 
 #[test]
 fn interaction_and_webhook_paths_accept_safe_segments() {
     assert_eq!(
-        interaction_callback_path(Snowflake::from("123"), "safe-token").unwrap(),
+        interaction_callback_path(test_id(123), "safe-token").unwrap(),
         "/interactions/123/safe-token/callback"
     );
     assert_eq!(
-        execute_webhook_path(Snowflake::from("456"), "safe-token").unwrap(),
+        execute_webhook_path(test_id(456), "safe-token").unwrap(),
         "/webhooks/456/safe-token?wait=true"
     );
 }
 
 #[test]
 fn execute_webhook_path_rejects_unsafe_tokens() {
-    let error = execute_webhook_path(Snowflake::from("123"), "bad/token").unwrap_err();
+    let error = execute_webhook_path(test_id(123), "bad/token").unwrap_err();
     assert!(error.to_string().contains("webhook_token"));
 }
 
@@ -1211,19 +1205,6 @@ fn validate_token_path_segment_handles_original_marker_and_control_characters() 
     assert!(control.to_string().contains("unsafe"));
 }
 
-#[test]
-fn validate_snowflake_path_segment_rejects_non_digit_ids() {
-    validate_snowflake_path_segment("channel_id", &Snowflake::from("123")).unwrap();
-
-    let slash = validate_snowflake_path_segment("channel_id", &Snowflake::from("123/456"))
-        .expect_err("slash must not be accepted in a snowflake path segment");
-    assert!(slash.to_string().contains("valid Discord snowflake"));
-
-    let query = validate_snowflake_path_segment("channel_id", &Snowflake::from("123?after=1"))
-        .expect_err("query separators must not be accepted in snowflake path segments");
-    assert!(query.to_string().contains("ASCII digits"));
-}
-
 #[tokio::test]
 async fn invite_helpers_reject_unsafe_codes_before_network() {
     let client = RestClient::new_with_base_url("poc-token", 123, "http://127.0.0.1:9");
@@ -1274,7 +1255,7 @@ async fn typed_request_serialization_errors_return_json_errors_before_network() 
     };
 
     match client
-        .modify_guild_member_typed(Snowflake::from("1"), Snowflake::from("2"), &body)
+        .modify_guild_member_typed(test_id(1), test_id(2), &body)
         .await
         .unwrap_err()
     {
@@ -1330,7 +1311,7 @@ fn new_coverage_query_helpers_build_expected_paths() {
     assert_eq!(
         thread_member_query(&ThreadMemberQuery {
             with_member: Some(true),
-            after: Some(Snowflake::from("10")),
+            after: Some(test_id(10)),
             limit: Some(25),
         }),
         "?with_member=true&after=10&limit=25"
@@ -1344,42 +1325,42 @@ fn new_coverage_query_helpers_build_expected_paths() {
     );
     assert_eq!(
         joined_archived_threads_query(&JoinedArchivedThreadsQuery {
-            before: Some(Snowflake::from("11")),
+            before: Some(test_id(11)),
             limit: Some(10),
         }),
         "?before=11&limit=10"
     );
     assert_eq!(
         subscription_query(&SubscriptionQuery {
-            before: Some(Snowflake::from("20")),
-            after: Some(Snowflake::from("21")),
+            before: Some(test_id(20)),
+            after: Some(test_id(21)),
             limit: Some(100),
-            user_id: Some(Snowflake::from("22")),
+            user_id: Some(test_id(22)),
         }),
         "?before=20&after=21&limit=100&user_id=22"
     );
     assert_eq!(
-        invite_query(Some(true), Some(false), Some(Snowflake::from("30"))),
+        invite_query(Some(true), Some(false), Some(test_id(30))),
         "?with_counts=true&with_expiration=false&guild_scheduled_event_id=30"
     );
     assert_eq!(
-        poll_answer_voters_query(Some(Snowflake::from("40")), Some(15)),
+        poll_answer_voters_query(Some(test_id(40)), Some(15)),
         "?after=40&limit=15"
     );
     assert_eq!(
         audit_log_query(&AuditLogQuery {
-            user_id: Some(Snowflake::from("50")),
+            user_id: Some(test_id(50)),
             action_type: Some(192),
-            before: Some(Snowflake::from("60")),
-            after: Some(Snowflake::from("55")),
+            before: Some(test_id(60)),
+            after: Some(test_id(55)),
             limit: Some(25),
         }),
         "?user_id=50&action_type=192&before=60&after=55&limit=25"
     );
     assert_eq!(
         current_user_guilds_query(&CurrentUserGuildsQuery {
-            before: Some(Snowflake::from("70")),
-            after: Some(Snowflake::from("65")),
+            before: Some(test_id(70)),
+            after: Some(test_id(65)),
             limit: Some(50),
             with_counts: Some(true),
             shard: None,
@@ -1404,15 +1385,15 @@ fn new_coverage_query_helpers_build_expected_paths() {
     assert_eq!(
         guild_bans_query(&GuildBansQuery {
             limit: Some(100),
-            before: Some(Snowflake::from("90")),
-            after: Some(Snowflake::from("10")),
+            before: Some(test_id(90)),
+            after: Some(test_id(10)),
         }),
         "?limit=100&before=90&after=10"
     );
     assert_eq!(
         guild_members_query(&GuildMembersQuery {
             limit: Some(100),
-            after: Some(Snowflake::from("80")),
+            after: Some(test_id(80)),
         }),
         "?limit=100&after=80"
     );
@@ -1613,7 +1594,7 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
 
     assert_eq!(
         client
-            .create_message_with_files(Snowflake::from("100"), &body, &files)
+            .create_message_with_files(test_id(100), &body, &files)
             .await
             .expect("create message with files")
             .content,
@@ -1621,12 +1602,7 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
     );
     assert_eq!(
         client
-            .update_message_with_files(
-                Snowflake::from("100"),
-                Snowflake::from("701"),
-                &body,
-                &files,
-            )
+            .update_message_with_files(test_id(100), test_id(701), &body, &files,)
             .await
             .expect("update message with files")
             .content,
@@ -1675,7 +1651,7 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     assert_eq!(
         client
             .execute_webhook_with_files(
-                Snowflake::from("777"),
+                test_id(777),
                 "token",
                 &json!({ "content": "webhook" }),
                 &files,
@@ -1686,7 +1662,7 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     );
     client
         .create_interaction_response_with_files(
-            Snowflake::from("778"),
+            test_id(778),
             "token",
             &sample_interaction_response(),
             &files,
@@ -1761,7 +1737,7 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
 
     assert_eq!(
         client
-            .get_webhook_message(Snowflake::from("777"), "token", "900")
+            .get_webhook_message(test_id(777), "token", "900")
             .await
             .expect("get webhook message")
             .content,
@@ -1769,7 +1745,7 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message(Snowflake::from("777"), "token", "900", &body)
+            .edit_webhook_message(test_id(777), "token", "900", &body)
             .await
             .expect("edit webhook message")
             .content,
@@ -1777,14 +1753,14 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message_with_files(Snowflake::from("777"), "token", "900", &body, &files,)
+            .edit_webhook_message_with_files(test_id(777), "token", "900", &body, &files,)
             .await
             .expect("edit webhook message with files")
             .content,
         "edited-file"
     );
     client
-        .delete_webhook_message(Snowflake::from("777"), "token", "900")
+        .delete_webhook_message(test_id(777), "token", "900")
         .await
         .expect("delete webhook message");
 
@@ -1831,17 +1807,17 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
     let body = sample_message();
     let files = vec![sample_file("webhook.txt", "webhook file")];
     let thread_query = WebhookMessageQuery {
-        thread_id: Some(Snowflake::from("42")),
+        thread_id: Some(test_id(42)),
         with_components: None,
     };
     let edit_query = WebhookMessageQuery {
-        thread_id: Some(Snowflake::from("42")),
+        thread_id: Some(test_id(42)),
         with_components: Some(true),
     };
 
     assert_eq!(
         client
-            .get_webhook_message_with_query(Snowflake::from("777"), "token", "900", &thread_query)
+            .get_webhook_message_with_query(test_id(777), "token", "900", &thread_query)
             .await
             .expect("get webhook message with query")
             .content,
@@ -1849,13 +1825,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message_with_query(
-                Snowflake::from("777"),
-                "token",
-                "900",
-                &edit_query,
-                &body,
-            )
+            .edit_webhook_message_with_query(test_id(777), "token", "900", &edit_query, &body,)
             .await
             .expect("edit webhook message with query")
             .content,
@@ -1864,7 +1834,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .edit_webhook_message_with_files_and_query(
-                Snowflake::from("777"),
+                test_id(777),
                 "token",
                 "900",
                 &edit_query,
@@ -1877,7 +1847,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
         "edited-file"
     );
     client
-        .delete_webhook_message_with_query(Snowflake::from("777"), "token", "900", &thread_query)
+        .delete_webhook_message_with_query(test_id(777), "token", "900", &thread_query)
         .await
         .expect("delete webhook message with query");
 
@@ -1926,19 +1896,19 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     let client = RestClient::new_with_base_url("webhook-token", 123, base_url);
     let query = WebhookExecuteQuery {
         wait: Some(false),
-        thread_id: Some(Snowflake::from("42")),
+        thread_id: Some(test_id(42)),
         with_components: Some(true),
     };
     let compatible_query = WebhookExecuteQuery {
         wait: Some(true),
-        thread_id: Some(Snowflake::from("43")),
+        thread_id: Some(test_id(43)),
         with_components: Some(true),
     };
 
     assert_eq!(
         client
             .create_webhook_from_request(
-                Snowflake::from("500"),
+                test_id(500),
                 &CreateWebhook {
                     name: "deployments".to_string(),
                     avatar: Some(None),
@@ -1947,24 +1917,23 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
             .await
             .expect("create webhook")
             .id
-            .as_ref()
-            .map(Snowflake::as_str),
-        Some("700")
+            .map(GenericId::get),
+        Some(700)
     );
     client
         .modify_webhook_from_request(
-            Snowflake::from("700"),
+            test_id(700),
             &ModifyWebhook {
                 name: Some("ops".to_string()),
                 avatar: Some(None),
-                channel_id: Some(Snowflake::from("501")),
+                channel_id: Some(test_id(501)),
             },
         )
         .await
         .expect("modify webhook");
     client
         .modify_webhook_with_token_from_request(
-            Snowflake::from("700"),
+            test_id(700),
             "token",
             &ModifyWebhookWithToken {
                 name: Some("public".to_string()),
@@ -1976,7 +1945,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     assert_eq!(
         client
             .execute_webhook_with_query(
-                Snowflake::from("700"),
+                test_id(700),
                 "token",
                 &query,
                 &json!({ "content": "query" }),
@@ -1988,7 +1957,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     assert_eq!(
         client
             .execute_slack_compatible_webhook(
-                Snowflake::from("700"),
+                test_id(700),
                 "token",
                 &compatible_query,
                 &json!({ "text": "deploy" }),
@@ -2000,7 +1969,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     assert_eq!(
         client
             .execute_github_compatible_webhook(
-                Snowflake::from("700"),
+                test_id(700),
                 "token",
                 &compatible_query,
                 &json!({ "zen": "Keep it logically awesome." }),
@@ -2010,7 +1979,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
         json!("github")
     );
     client
-        .delete_webhook_with_token(Snowflake::from("700"), "token")
+        .delete_webhook_with_token(test_id(700), "token")
         .await
         .expect("delete webhook with token");
 
@@ -2065,11 +2034,11 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     }
 
     assert!(client
-        .modify_webhook_with_token(Snowflake::from("700"), "bad/token", &json!({}))
+        .modify_webhook_with_token(test_id(700), "bad/token", &json!({}))
         .await
         .is_err());
     assert!(client
-        .delete_webhook_with_token(Snowflake::from("700"), "bad/token")
+        .delete_webhook_with_token(test_id(700), "bad/token")
         .await
         .is_err());
 }
@@ -2135,31 +2104,31 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
 
     let ban = client
         .bulk_guild_ban(
-            Snowflake::from("200"),
+            test_id(200),
             &BulkGuildBanRequest {
-                user_ids: vec![Snowflake::from("1"), Snowflake::from("2")],
+                user_ids: vec![test_id(1), test_id(2)],
                 delete_message_seconds: Some(60),
             },
         )
         .await
         .unwrap();
-    assert_eq!(ban.banned_users[0].as_str(), "1");
+    assert_eq!(ban.banned_users[0].get(), 1);
     let bans = client
         .get_guild_bans_with_query(
-            Snowflake::from("200"),
+            test_id(200),
             &GuildBansQuery {
                 limit: Some(100),
-                before: Some(Snowflake::from("90")),
-                after: Some(Snowflake::from("10")),
+                before: Some(test_id(90)),
+                after: Some(test_id(10)),
             },
         )
         .await
         .unwrap();
     assert_eq!(bans[0].reason.as_deref(), Some("spam"));
-    assert_eq!(bans[0].user.as_ref().unwrap().id.as_str(), "3");
+    assert_eq!(bans[0].user.as_ref().unwrap().id.get(), 3);
     assert_eq!(
         client
-            .get_guild_role(Snowflake::from("200"), Snowflake::from("9"))
+            .get_guild_role(test_id(200), test_id(9))
             .await
             .unwrap()
             .name,
@@ -2167,16 +2136,16 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_auto_moderation_rules_typed(Snowflake::from("200"))
+            .get_auto_moderation_rules_typed(test_id(200))
             .await
             .unwrap()[0]
             .id
-            .as_str(),
-        "7"
+            .get(),
+        7
     );
     assert_eq!(
         client
-            .get_auto_moderation_rule(Snowflake::from("200"), Snowflake::from("7"))
+            .get_auto_moderation_rule(test_id(200), test_id(7))
             .await
             .unwrap()
             .name,
@@ -2184,7 +2153,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert!(
         client
-            .create_auto_moderation_rule_typed(Snowflake::from("200"), &json!({ "name": "new" }))
+            .create_auto_moderation_rule_typed(test_id(200), &json!({ "name": "new" }))
             .await
             .unwrap()
             .enabled
@@ -2192,8 +2161,8 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert!(
         client
             .modify_auto_moderation_rule_typed(
-                Snowflake::from("200"),
-                Snowflake::from("8"),
+                test_id(200),
+                test_id(8),
                 &json!({ "name": "updated" }),
             )
             .await
@@ -2202,7 +2171,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_preview_typed(Snowflake::from("200"))
+            .get_guild_preview_typed(test_id(200))
             .await
             .unwrap()
             .approximate_member_count,
@@ -2210,20 +2179,20 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     let audit_log = client
         .get_guild_audit_log_typed(
-            Snowflake::from("200"),
+            test_id(200),
             &AuditLogQuery {
-                user_id: Some(Snowflake::from("901")),
+                user_id: Some(test_id(901)),
                 action_type: Some(192),
-                before: Some(Snowflake::from("950")),
-                after: Some(Snowflake::from("850")),
+                before: Some(test_id(950)),
+                after: Some(test_id(850)),
                 limit: Some(25),
             },
         )
         .await
         .unwrap();
     assert_eq!(
-        audit_log.audit_log_entries[0].id.as_ref().unwrap().as_str(),
-        "900"
+        audit_log.audit_log_entries[0].id.as_ref().unwrap().get(),
+        900
     );
     assert_eq!(
         audit_log.audit_log_entries[0].options.as_ref().unwrap()["status"],
@@ -2232,7 +2201,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert_eq!(audit_log.users[0].username, "moderator");
     assert_eq!(
         client
-            .get_guild_prune_count_typed(Snowflake::from("200"), Some(7), &[Snowflake::from("9")])
+            .get_guild_prune_count_typed(test_id(200), Some(7), &[test_id(9)])
             .await
             .unwrap()
             .pruned,
@@ -2240,7 +2209,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .begin_guild_prune_typed(Snowflake::from("200"), Some(7), Some(false), &[])
+            .begin_guild_prune_typed(test_id(200), Some(7), Some(false), &[])
             .await
             .unwrap()
             .pruned,
@@ -2249,11 +2218,11 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .begin_guild_prune_with_request(
-                Snowflake::from("200"),
+                test_id(200),
                 &BeginGuildPruneRequest {
                     days: Some(7),
                     compute_prune_count: Some(false),
-                    include_roles: Some(vec![Snowflake::from("9")]),
+                    include_roles: Some(vec![test_id(9)]),
                     reason: None,
                 },
             )
@@ -2264,7 +2233,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_vanity_url(Snowflake::from("200"))
+            .get_guild_vanity_url(test_id(200))
             .await
             .unwrap()
             .code
@@ -2388,27 +2357,27 @@ async fn raw_auto_moderation_wrappers_hit_expected_paths() {
 
     assert_eq!(
         client
-            .get_auto_moderation_rules(Snowflake::from("200"))
+            .get_auto_moderation_rules(test_id(200))
             .await
             .unwrap()[0]["id"],
         json!("7")
     );
     assert_eq!(
         client
-            .create_auto_moderation_rule(Snowflake::from("200"), &body)
+            .create_auto_moderation_rule(test_id(200), &body)
             .await
             .unwrap()["id"],
         json!("8")
     );
     assert_eq!(
         client
-            .modify_auto_moderation_rule(Snowflake::from("200"), Snowflake::from("9"), &body)
+            .modify_auto_moderation_rule(test_id(200), test_id(9), &body)
             .await
             .unwrap()["id"],
         json!("9")
     );
     client
-        .delete_auto_moderation_rule(Snowflake::from("200"), Snowflake::from("9"))
+        .delete_auto_moderation_rule(test_id(200), test_id(9))
         .await
         .unwrap();
 
@@ -2478,7 +2447,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
 
     assert_eq!(
         client
-            .get_guild_bans(Snowflake::from("200"), Some(2), Some(Snowflake::from("9")))
+            .get_guild_bans(test_id(200), Some(2), Some(test_id(9)))
             .await
             .unwrap()[0]
             .user
@@ -2489,7 +2458,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_ban(Snowflake::from("200"), Snowflake::from("4"))
+            .get_guild_ban(test_id(200), test_id(4))
             .await
             .unwrap()
             .reason
@@ -2498,16 +2467,16 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     );
     client
         .create_guild_ban(
-            Snowflake::from("200"),
-            Snowflake::from("4"),
+            test_id(200),
+            test_id(4),
             &json!({ "delete_message_seconds": 60 }),
         )
         .await
         .unwrap();
     client
         .create_guild_ban_typed(
-            Snowflake::from("200"),
-            Snowflake::from("5"),
+            test_id(200),
+            test_id(5),
             &CreateGuildBan {
                 delete_message_days: None,
                 delete_message_seconds: Some(120),
@@ -2516,21 +2485,17 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     client
-        .remove_guild_ban(Snowflake::from("200"), Snowflake::from("4"))
+        .remove_guild_ban(test_id(200), test_id(4))
         .await
         .unwrap();
     client
-        .modify_guild_member(
-            Snowflake::from("200"),
-            Snowflake::from("6"),
-            &json!({ "nick": "raw" }),
-        )
+        .modify_guild_member(test_id(200), test_id(6), &json!({ "nick": "raw" }))
         .await
         .unwrap();
     client
         .modify_guild_member_typed(
-            Snowflake::from("200"),
-            Snowflake::from("7"),
+            test_id(200),
+            test_id(7),
             &ModifyGuildMember {
                 nick: Some(Some("typed".to_string())),
                 ..ModifyGuildMember::default()
@@ -2539,7 +2504,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     assert!(client
-        .get_guild_audit_log(Snowflake::from("200"), None, None, None, None)
+        .get_guild_audit_log(test_id(200), None, None, None, None)
         .await
         .unwrap()["audit_log_entries"]
         .as_array()
@@ -2547,10 +2512,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .is_empty());
     assert_eq!(
         client
-            .modify_guild_role_positions(
-                Snowflake::from("200"),
-                &json!([{ "id": "9", "position": 1 }]),
-            )
+            .modify_guild_role_positions(test_id(200), &json!([{ "id": "9", "position": 1 }]),)
             .await
             .unwrap()[0]
             .name,
@@ -2559,9 +2521,9 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .modify_guild_role_positions_typed(
-                Snowflake::from("200"),
+                test_id(200),
                 &[ModifyGuildRolePosition {
-                    id: Snowflake::from("10"),
+                    id: test_id(10),
                     position: Some(Some(2)),
                 }],
             )
@@ -2571,35 +2533,32 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         "mod"
     );
     assert_eq!(
-        client
-            .get_guild_emojis(Snowflake::from("200"))
-            .await
-            .unwrap()[0]["name"],
+        client.get_guild_emojis(test_id(200)).await.unwrap()[0]["name"],
         json!("guild_raw")
     );
     assert_eq!(
         client
-            .get_guild_emoji(Snowflake::from("200"), Snowflake::from("1"))
+            .get_guild_emoji(test_id(200), test_id(1))
             .await
             .unwrap()["id"],
         json!("1")
     );
     assert_eq!(
         client
-            .create_guild_emoji(Snowflake::from("200"), &emoji_body)
+            .create_guild_emoji(test_id(200), &emoji_body)
             .await
             .unwrap()["name"],
         json!("guild_create")
     );
     assert_eq!(
         client
-            .modify_guild_emoji(Snowflake::from("200"), Snowflake::from("2"), &emoji_body)
+            .modify_guild_emoji(test_id(200), test_id(2), &emoji_body)
             .await
             .unwrap()["name"],
         json!("guild_edit")
     );
     client
-        .delete_guild_emoji(Snowflake::from("200"), Snowflake::from("2"))
+        .delete_guild_emoji(test_id(200), test_id(2))
         .await
         .unwrap();
     assert_eq!(
@@ -2607,10 +2566,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         json!("app_raw")
     );
     assert_eq!(
-        client
-            .get_application_emoji(Snowflake::from("3"))
-            .await
-            .unwrap()["id"],
+        client.get_application_emoji(test_id(3)).await.unwrap()["id"],
         json!("3")
     );
     assert_eq!(
@@ -2619,15 +2575,12 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_application_emoji(Snowflake::from("4"), &emoji_body)
+            .modify_application_emoji(test_id(4), &emoji_body)
             .await
             .unwrap()["name"],
         json!("app_edit")
     );
-    client
-        .delete_application_emoji(Snowflake::from("4"))
-        .await
-        .unwrap();
+    client.delete_application_emoji(test_id(4)).await.unwrap();
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -2679,26 +2632,23 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     let body = json!({ "name": "emoji", "image": "data:image/png;base64,AAAA" });
 
     assert_eq!(
-        client
-            .get_guild_emojis_typed(Snowflake::from("200"))
-            .await
-            .unwrap()[0]
+        client.get_guild_emojis_typed(test_id(200)).await.unwrap()[0]
             .name
             .as_deref(),
         Some("guild_one")
     );
     assert_eq!(
         client
-            .get_guild_emoji_typed(Snowflake::from("200"), Snowflake::from("1"))
+            .get_guild_emoji_typed(test_id(200), test_id(1))
             .await
             .unwrap()
             .id
-            .as_deref(),
-        Some("1")
+            .map(GenericId::get),
+        Some(1)
     );
     assert_eq!(
         client
-            .create_guild_emoji_typed(Snowflake::from("200"), &body)
+            .create_guild_emoji_typed(test_id(200), &body)
             .await
             .unwrap()
             .name
@@ -2707,7 +2657,7 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_emoji_typed(Snowflake::from("200"), Snowflake::from("2"), &body)
+            .modify_guild_emoji_typed(test_id(200), test_id(2), &body)
             .await
             .unwrap()
             .name
@@ -2722,12 +2672,12 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_application_emoji_typed(Snowflake::from("3"))
+            .get_application_emoji_typed(test_id(3))
             .await
             .unwrap()
             .id
-            .as_deref(),
-        Some("3")
+            .map(GenericId::get),
+        Some(3)
     );
     assert_eq!(
         client
@@ -2740,7 +2690,7 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_application_emoji_typed(Snowflake::from("4"), &body)
+            .modify_application_emoji_typed(test_id(4), &body)
             .await
             .unwrap()
             .name
@@ -2859,7 +2809,7 @@ async fn application_management_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     assert_eq!(activity.location.kind, "gc");
-    assert_eq!(activity.users[0].as_str(), "400");
+    assert_eq!(activity.users[0].get(), 400);
     assert_eq!(
         client
             .get_application_role_connection_metadata_records()
@@ -2940,39 +2890,46 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("command-token", 555, base_url);
-    let edit =
-        EditApplicationCommandPermissions::new([ApplicationCommandPermission::role("300", true)]);
+    let edit = EditApplicationCommandPermissions::new([ApplicationCommandPermission::role(
+        test_id(300),
+        true,
+    )]);
 
     let all = client
-        .get_guild_application_command_permissions("200")
+        .get_guild_application_command_permissions(test_id(200))
         .await
         .unwrap();
     assert_eq!(
         all[0].permissions[0],
-        ApplicationCommandPermission::role("300", true)
+        ApplicationCommandPermission::role(test_id(300), true)
     );
 
     let single = client
-        .get_application_command_permissions("200", "401")
+        .get_application_command_permissions(test_id(200), test_id(401))
         .await
         .unwrap();
-    assert_eq!(single.guild_id.as_str(), "200");
+    assert_eq!(single.guild_id.get(), 200);
 
     let batch = client
         .batch_edit_application_command_permissions(
             "oauth.access-token",
-            "200",
+            test_id(200),
             std::slice::from_ref(&edit),
         )
         .await
         .unwrap();
-    assert_eq!(batch[0].id.as_str(), "401");
+    assert_eq!(batch[0].id.get(), 401);
 
     let edited = client
-        .edit_application_command_permissions("oauth.access-token", "200", "401", &edit)
+        .edit_application_command_permissions(
+            "oauth.access-token",
+            test_id(200),
+            test_id(401),
+            &edit,
+        )
         .await
         .unwrap();
-    assert_eq!(edited.id.as_str(), "401");
+    assert_eq!(edited.id.get(), 401);
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -3027,11 +2984,13 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
 async fn application_command_permissions_reject_unsafe_bearer_tokens_before_network() {
     let (base_url, captured, server) = spawn_test_server(Vec::new()).await;
     let client = RestClient::new_with_base_url("command-token", 555, base_url);
-    let edit =
-        EditApplicationCommandPermissions::new([ApplicationCommandPermission::user("301", false)]);
+    let edit = EditApplicationCommandPermissions::new([ApplicationCommandPermission::user(
+        test_id(301),
+        false,
+    )]);
 
     let error = client
-        .edit_application_command_permissions("bad\r\ntoken", "200", "401", &edit)
+        .edit_application_command_permissions("bad\r\ntoken", test_id(200), test_id(401), &edit)
         .await
         .expect_err("control characters should be rejected before sending a request");
     assert!(error.to_string().contains("Authorization header"));
@@ -3089,13 +3048,16 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
         .metadata([("level", "7")]);
 
     assert_eq!(client.get_current_user().await.unwrap().username, "current");
-    assert_eq!(client.get_user("556").await.unwrap().username, "target");
+    assert_eq!(
+        client.get_user(test_id(556)).await.unwrap().username,
+        "target"
+    );
     assert_eq!(client.get_current_user_guilds().await.unwrap().len(), 1);
     assert_eq!(
         client
             .get_current_user_guilds_with_query(&CurrentUserGuildsQuery {
                 before: None,
-                after: Some(Snowflake::from("200")),
+                after: Some(test_id(200)),
                 limit: Some(1),
                 with_counts: Some(true),
                 shard: None,
@@ -3104,7 +3066,7 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
             .unwrap()[0]["name"],
         json!("Guild Page")
     );
-    client.leave_guild("200").await.unwrap();
+    client.leave_guild(test_id(200)).await.unwrap();
 
     let connections = client
         .get_current_user_connections("oauth.access")
@@ -3114,7 +3076,7 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
     assert_eq!(connections[0].integrations[0]["id"], json!("integration-1"));
 
     let member = client
-        .get_current_user_guild_member("oauth.access", "200")
+        .get_current_user_guild_member("oauth.access", test_id(200))
         .await
         .unwrap();
     assert_eq!(member.user.unwrap().username, "oauth-member");
@@ -3233,7 +3195,7 @@ async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
         .create_lobby(&CreateLobby {
             metadata: Some(metadata.clone()),
             members: Some(vec![LobbyMember {
-                id: Snowflake::from("42"),
+                id: test_id(42),
                 metadata: Some(member_metadata.clone()),
                 flags: Some(1),
             }]),
@@ -3241,13 +3203,13 @@ async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
         })
         .await
         .unwrap();
-    assert_eq!(lobby.members[0].id.as_str(), "42");
+    assert_eq!(lobby.members[0].id.get(), 42);
 
-    assert_eq!(client.get_lobby("900").await.unwrap().id.as_str(), "900");
+    assert_eq!(client.get_lobby(test_id(900)).await.unwrap().id.get(), 900);
     assert_eq!(
         client
             .modify_lobby(
-                "900",
+                test_id(900),
                 &ModifyLobby {
                     metadata: Some(metadata.clone()),
                     members: None,
@@ -3257,15 +3219,15 @@ async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
             .await
             .unwrap()
             .application_id
-            .as_str(),
-        "555"
+            .get(),
+        555
     );
-    client.delete_lobby("900").await.unwrap();
+    client.delete_lobby(test_id(900)).await.unwrap();
 
     let added = client
         .add_lobby_member(
-            "900",
-            "42",
+            test_id(900),
+            test_id(42),
             &AddLobbyMember {
                 metadata: Some(member_metadata.clone()),
                 flags: Some(1),
@@ -3277,9 +3239,9 @@ async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
 
     let updated = client
         .bulk_update_lobby_members(
-            "900",
+            test_id(900),
             &[LobbyMemberUpdate {
-                id: Snowflake::from("42"),
+                id: test_id(42),
                 metadata: Some(member_metadata),
                 flags: Some(1),
                 remove_member: None,
@@ -3287,22 +3249,28 @@ async fn lobby_wrappers_cover_bot_and_bearer_authorized_routes() {
         )
         .await
         .unwrap();
-    assert_eq!(updated[0].id.as_str(), "42");
+    assert_eq!(updated[0].id.get(), 42);
 
-    client.remove_lobby_member("900", "42").await.unwrap();
-    client.leave_lobby("oauth.access", "900").await.unwrap();
+    client
+        .remove_lobby_member(test_id(900), test_id(42))
+        .await
+        .unwrap();
+    client
+        .leave_lobby("oauth.access", test_id(900))
+        .await
+        .unwrap();
     client
         .link_lobby_channel(
             "oauth.access",
-            "900",
+            test_id(900),
             &LinkLobbyChannel {
-                channel_id: Some(Snowflake::from("700")),
+                channel_id: Some(test_id(700)),
             },
         )
         .await
         .unwrap();
     client
-        .update_lobby_message_moderation_metadata("900", "777", &metadata)
+        .update_lobby_message_moderation_metadata(test_id(900), test_id(777), &metadata)
         .await
         .unwrap();
 
@@ -3428,11 +3396,11 @@ async fn legacy_pin_template_and_nick_wrappers_hit_expected_paths() {
     let client = RestClient::new_with_base_url("legacy-token", 555, base_url);
 
     client
-        .pin_message_legacy(Snowflake::from("100"), Snowflake::from("5"))
+        .pin_message_legacy(test_id(100), test_id(5))
         .await
         .unwrap();
     client
-        .unpin_message_legacy(Snowflake::from("100"), Snowflake::from("5"))
+        .unpin_message_legacy(test_id(100), test_id(5))
         .await
         .unwrap();
     assert_eq!(
@@ -3444,7 +3412,7 @@ async fn legacy_pin_template_and_nick_wrappers_hit_expected_paths() {
         "tmpl"
     );
     client
-        .modify_current_member_nick(Snowflake::from("200"), Some("nick"))
+        .modify_current_member_nick(test_id(200), Some("nick"))
         .await
         .unwrap();
 
@@ -3535,38 +3503,31 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     let client = RestClient::new_with_base_url("thread-token", 555, base_url);
 
     assert_eq!(
-        client
-            .get_pinned_messages(Snowflake::from("100"))
-            .await
-            .unwrap()[0]
-            .content,
+        client.get_pinned_messages(test_id(100)).await.unwrap()[0].content,
         "pinned"
     );
     client
         .set_voice_channel_status(
-            Snowflake::from("100"),
+            test_id(100),
             &SetVoiceChannelStatus {
                 status: Some("focus".to_string()),
             },
         )
         .await
         .unwrap();
-    client
-        .trigger_typing_indicator(Snowflake::from("100"))
-        .await
-        .unwrap();
+    client.trigger_typing_indicator(test_id(100)).await.unwrap();
     client
         .edit_channel_permissions(
-            Snowflake::from("100"),
-            Snowflake::from("200"),
+            test_id(100),
+            test_id(200),
             &json!({ "type": 0, "allow": "8" }),
         )
         .await
         .unwrap();
     client
         .edit_channel_permissions_typed(
-            Snowflake::from("100"),
-            Snowflake::from("201"),
+            test_id(100),
+            test_id(201),
             &EditChannelPermission {
                 kind: 1,
                 allow: Some(PermissionsBitField(8)),
@@ -3576,66 +3537,62 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     client
-        .delete_channel_permission(Snowflake::from("100"), Snowflake::from("202"))
+        .delete_channel_permission(test_id(100), test_id(202))
         .await
         .unwrap();
     assert_eq!(
         client
             .create_thread_from_message(
-                Snowflake::from("100"),
-                Snowflake::from("5"),
+                test_id(100),
+                test_id(5),
                 &json!({ "name": "from-message" }),
             )
             .await
             .unwrap()
             .id
-            .as_str(),
-        "900"
+            .get(),
+        900
     );
     assert_eq!(
         client
-            .create_thread(Snowflake::from("100"), &json!({ "name": "standalone" }))
+            .create_thread(test_id(100), &json!({ "name": "standalone" }))
             .await
             .unwrap()
             .id
-            .as_str(),
-        "901"
+            .get(),
+        901
     );
-    client.join_thread(Snowflake::from("900")).await.unwrap();
+    client.join_thread(test_id(900)).await.unwrap();
     client
-        .add_thread_member(Snowflake::from("900"), Snowflake::from("42"))
+        .add_thread_member(test_id(900), test_id(42))
         .await
         .unwrap();
-    client.leave_thread(Snowflake::from("900")).await.unwrap();
+    client.leave_thread(test_id(900)).await.unwrap();
     client
-        .remove_thread_member(Snowflake::from("900"), Snowflake::from("42"))
+        .remove_thread_member(test_id(900), test_id(42))
         .await
         .unwrap();
     assert_eq!(
         client
-            .get_thread_member(Snowflake::from("900"), Snowflake::from("42"), Some(true))
+            .get_thread_member(test_id(900), test_id(42), Some(true))
             .await
             .unwrap()
             .user_id
             .unwrap()
-            .as_str(),
-        "42"
+            .get(),
+        42
     );
     assert_eq!(
-        client
-            .get_thread_members(Snowflake::from("900"))
-            .await
-            .unwrap()[0]
-            .flags,
+        client.get_thread_members(test_id(900)).await.unwrap()[0].flags,
         0
     );
     assert_eq!(
         client
             .list_thread_members(
-                Snowflake::from("900"),
+                test_id(900),
                 &ThreadMemberQuery {
                     with_member: Some(false),
-                    after: Some(Snowflake::from("41")),
+                    after: Some(test_id(41)),
                     limit: Some(1),
                 },
             )
@@ -3644,11 +3601,11 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
             .id
             .as_ref()
             .unwrap()
-            .as_str(),
-        "900"
+            .get(),
+        900
     );
     assert!(!client
-        .get_public_archived_threads(Snowflake::from("100"), Some(2))
+        .get_public_archived_threads(test_id(100), Some(2))
         .await
         .unwrap()["has_more"]
         .as_bool()
@@ -3656,7 +3613,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     assert!(
         !client
             .list_public_archived_threads(
-                Snowflake::from("100"),
+                test_id(100),
                 &ArchivedThreadsQuery {
                     before: Some("abc".to_string()),
                     limit: Some(3),
@@ -3669,7 +3626,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     assert!(
         !client
             .list_private_archived_threads(
-                Snowflake::from("100"),
+                test_id(100),
                 &ArchivedThreadsQuery {
                     before: Some("def".to_string()),
                     limit: Some(4),
@@ -3682,9 +3639,9 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     assert!(
         !client
             .list_joined_private_archived_threads(
-                Snowflake::from("100"),
+                test_id(100),
                 &JoinedArchivedThreadsQuery {
-                    before: Some(Snowflake::from("899")),
+                    before: Some(test_id(899)),
                     limit: Some(5),
                 },
             )
@@ -3694,7 +3651,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     );
     assert!(
         !client
-            .get_active_guild_threads(Snowflake::from("300"))
+            .get_active_guild_threads(test_id(300))
             .await
             .unwrap()
             .has_more
@@ -3771,7 +3728,7 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
 
     assert_eq!(
         client
-            .modify_current_member(Snowflake::from("200"), &json!({ "nick": "bot" }))
+            .modify_current_member(test_id(200), &json!({ "nick": "bot" }))
             .await
             .unwrap()
             .user
@@ -3785,7 +3742,7 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
     );
     let guilds_with_counts = client
         .get_current_user_guilds_typed_with_query(&CurrentUserGuildsQuery {
-            after: Some(Snowflake::from("199")),
+            after: Some(test_id(199)),
             limit: Some(50),
             with_counts: Some(true),
             ..CurrentUserGuildsQuery::default()
@@ -3798,7 +3755,7 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
     assert_eq!(guilds_with_counts[0].approximate_presence_count, Some(784));
     assert_eq!(
         client
-            .get_webhook_with_token(Snowflake::from("300"), "token")
+            .get_webhook_with_token(test_id(300), "token")
             .await
             .unwrap()
             .name
@@ -3806,11 +3763,7 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
         Some("hook")
     );
     assert_eq!(
-        client
-            .get_guild_voice_regions(Snowflake::from("200"))
-            .await
-            .unwrap()[0]
-            .id,
+        client.get_guild_voice_regions(test_id(200)).await.unwrap()[0].id,
         "sydney"
     );
 
@@ -3857,29 +3810,29 @@ async fn voice_state_resource_wrappers_hit_expected_paths() {
 
     assert_eq!(
         client
-            .get_current_user_voice_state(Snowflake::from("200"))
+            .get_current_user_voice_state(test_id(200))
             .await
             .unwrap()
             .user_id
             .unwrap()
-            .as_str(),
-        "555"
+            .get(),
+        555
     );
     assert_eq!(
         client
-            .get_user_voice_state(Snowflake::from("200"), Snowflake::from("777"))
+            .get_user_voice_state(test_id(200), test_id(777))
             .await
             .unwrap()
             .user_id
             .unwrap()
-            .as_str(),
-        "777"
+            .get(),
+        777
     );
     client
         .modify_current_user_voice_state_from_request(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyCurrentUserVoiceState {
-                channel_id: Some(Snowflake::from("300")),
+                channel_id: Some(test_id(300)),
                 suppress: Some(false),
                 request_to_speak_timestamp: Some(None),
             },
@@ -3888,10 +3841,10 @@ async fn voice_state_resource_wrappers_hit_expected_paths() {
         .unwrap();
     client
         .modify_user_voice_state_from_request(
-            Snowflake::from("200"),
-            Snowflake::from("777"),
+            test_id(200),
+            test_id(777),
             &ModifyUserVoiceState {
-                channel_id: Some(Snowflake::from("300")),
+                channel_id: Some(test_id(300)),
                 suppress: Some(true),
             },
         )
@@ -3973,10 +3926,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
     let client = RestClient::new_with_base_url("channel-token", 0, base_url);
 
     assert_eq!(
-        client
-            .get_channel_invites(Snowflake::from("100"))
-            .await
-            .unwrap()[0]
+        client.get_channel_invites(test_id(100)).await.unwrap()[0]
             .code
             .as_deref(),
         Some("abc")
@@ -3984,13 +3934,13 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
     assert_eq!(
         client
             .create_channel_invite_typed(
-                Snowflake::from("100"),
+                test_id(100),
                 &CreateChannelInvite {
                     max_age: Some(600),
                     max_uses: Some(2),
                     temporary: Some(true),
                     unique: Some(true),
-                    role_ids: Some(vec![Snowflake::from("300")]),
+                    role_ids: Some(vec![test_id(300)]),
                     ..CreateChannelInvite::default()
                 },
             )
@@ -4002,7 +3952,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
     );
     client
         .set_voice_channel_status(
-            Snowflake::from("200"),
+            test_id(200),
             &SetVoiceChannelStatus {
                 status: Some("Planning sprint".to_string()),
             },
@@ -4011,8 +3961,8 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
         .unwrap();
     client
         .edit_channel_permissions_typed(
-            Snowflake::from("100"),
-            Snowflake::from("300"),
+            test_id(100),
+            test_id(300),
             &EditChannelPermission {
                 kind: 0,
                 allow: Some(PermissionsBitField(1024)),
@@ -4022,7 +3972,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
         .await
         .unwrap();
     client
-        .delete_channel_permission(Snowflake::from("100"), Snowflake::from("300"))
+        .delete_channel_permission(test_id(100), test_id(300))
         .await
         .unwrap();
 
@@ -4158,10 +4108,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
 
     assert_eq!(client.get_application_emojis().await.unwrap().len(), 1);
     assert_eq!(
-        client
-            .get_application_emoji(Snowflake::from("1"))
-            .await
-            .unwrap()["id"],
+        client.get_application_emoji(test_id(1)).await.unwrap()["id"],
         json!("1")
     );
     assert_eq!(
@@ -4170,21 +4117,14 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_application_emoji(Snowflake::from("2"), &body)
+            .modify_application_emoji(test_id(2), &body)
             .await
             .unwrap()["name"],
         json!("renamed")
     );
-    client
-        .delete_application_emoji(Snowflake::from("2"))
-        .await
-        .unwrap();
+    client.delete_application_emoji(test_id(2)).await.unwrap();
     assert_eq!(
-        client
-            .get_sticker(Snowflake::from("10"))
-            .await
-            .unwrap()
-            .name,
+        client.get_sticker(test_id(10)).await.unwrap().name,
         "sticker"
     );
     assert_eq!(
@@ -4197,35 +4137,26 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
         1
     );
     assert_eq!(
-        client
-            .get_sticker_pack(Snowflake::from("20"))
-            .await
-            .unwrap()
-            .id
-            .as_str(),
-        "20"
+        client.get_sticker_pack(test_id(20)).await.unwrap().id.get(),
+        20
     );
     assert_eq!(
-        client
-            .get_guild_stickers(Snowflake::from("200"))
-            .await
-            .unwrap()
-            .len(),
+        client.get_guild_stickers(test_id(200)).await.unwrap().len(),
         1
     );
     assert_eq!(
         client
-            .get_guild_sticker(Snowflake::from("200"), Snowflake::from("11"))
+            .get_guild_sticker(test_id(200), test_id(11))
             .await
             .unwrap()
             .id
-            .as_str(),
-        "11"
+            .get(),
+        11
     );
     assert_eq!(
         client
             .create_guild_sticker_from_request(
-                Snowflake::from("200"),
+                test_id(200),
                 &CreateGuildSticker {
                     name: "name".to_string(),
                     description: "desc".to_string(),
@@ -4236,14 +4167,14 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .await
             .unwrap()
             .id
-            .as_str(),
-        "12"
+            .get(),
+        12
     );
     assert_eq!(
         client
             .modify_guild_sticker_from_request(
-                Snowflake::from("200"),
-                Snowflake::from("12"),
+                test_id(200),
+                test_id(12),
                 &ModifyGuildSticker {
                     name: Some("name".to_string()),
                     description: Some(Some("desc".to_string())),
@@ -4253,51 +4184,48 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .await
             .unwrap()
             .id
-            .as_str(),
-        "12"
+            .get(),
+        12
     );
     client
-        .delete_guild_sticker(Snowflake::from("200"), Snowflake::from("12"))
+        .delete_guild_sticker(test_id(200), test_id(12))
         .await
         .unwrap();
     assert_eq!(
         client
-            .get_guild_prune_count(Snowflake::from("200"), Some(7), &[Snowflake::from("9")])
+            .get_guild_prune_count(test_id(200), Some(7), &[test_id(9)])
             .await
             .unwrap()["pruned"],
         json!(3)
     );
     assert_eq!(
         client
-            .begin_guild_prune(Snowflake::from("200"), Some(7), Some(false), &[])
+            .begin_guild_prune(test_id(200), Some(7), Some(false), &[])
             .await
             .unwrap()["pruned"],
         json!(2)
     );
     assert!(
         client
-            .get_guild_widget_settings(Snowflake::from("200"))
+            .get_guild_widget_settings(test_id(200))
             .await
             .unwrap()
             .enabled
     );
     assert!(
         !client
-            .modify_guild_widget_settings(Snowflake::from("200"), &json!({ "enabled": false }))
+            .modify_guild_widget_settings(test_id(200), &json!({ "enabled": false }))
             .await
             .unwrap()
             .enabled
     );
     assert_eq!(
-        client
-            .get_guild_widget(Snowflake::from("200"))
-            .await
-            .unwrap()["name"],
+        client.get_guild_widget(test_id(200)).await.unwrap()["name"],
         json!("widget")
     );
     assert_eq!(
         client
-            .get_guild_widget_typed(Snowflake::from("200"))
+            .get_guild_widget_typed(test_id(200))
             .await
             .unwrap()
             .members[0]
@@ -4307,47 +4235,43 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_widget_image(Snowflake::from("200"), Some(GuildWidgetImageStyle::Banner2))
+            .get_guild_widget_image(test_id(200), Some(GuildWidgetImageStyle::Banner2))
             .await
             .unwrap(),
         b"PNGDATA".to_vec()
     );
     assert_eq!(
         client
-            .follow_announcement_channel(Snowflake::from("100"), Snowflake::from("101"))
+            .follow_announcement_channel(test_id(100), test_id(101))
             .await
             .unwrap()
             .webhook_id
-            .as_str(),
-        "101"
+            .get(),
+        101
     );
     assert_eq!(
         client
             .create_stage_instance_from_request(&CreateStageInstance {
-                channel_id: Snowflake::from("400"),
+                channel_id: test_id(400),
                 topic: "town hall".to_string(),
                 privacy_level: Some(2),
                 send_start_notification: Some(true),
-                guild_scheduled_event_id: Some(Snowflake::from("500")),
+                guild_scheduled_event_id: Some(test_id(500)),
             })
             .await
             .unwrap()
             .channel_id
-            .as_str(),
-        "400"
+            .get(),
+        400
     );
     assert_eq!(
-        client
-            .get_stage_instance(Snowflake::from("400"))
-            .await
-            .unwrap()
-            .topic,
+        client.get_stage_instance(test_id(400)).await.unwrap().topic,
         "town hall"
     );
     assert_eq!(
         client
             .modify_stage_instance_from_request(
-                Snowflake::from("400"),
+                test_id(400),
                 &ModifyStageInstance {
                     privacy_level: Some(2),
                 },
@@ -4357,13 +4281,10 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .privacy_level,
         2
     );
-    client
-        .delete_stage_instance(Snowflake::from("400"))
-        .await
-        .unwrap();
+    client.delete_stage_instance(test_id(400)).await.unwrap();
     assert_eq!(
         client
-            .get_guild_welcome_screen(Snowflake::from("200"))
+            .get_guild_welcome_screen(test_id(200))
             .await
             .unwrap()
             .welcome_channels
@@ -4372,7 +4293,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_welcome_screen(Snowflake::from("200"), &welcome_screen_payload())
+            .modify_guild_welcome_screen(test_id(200), &welcome_screen_payload())
             .await
             .unwrap()
             .description
@@ -4381,14 +4302,14 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert!(
         client
-            .get_guild_onboarding(Snowflake::from("200"))
+            .get_guild_onboarding(test_id(200))
             .await
             .unwrap()
             .enabled
     );
     assert!(
         client
-            .modify_guild_onboarding(Snowflake::from("200"), &onboarding_payload())
+            .modify_guild_onboarding(test_id(200), &onboarding_payload())
             .await
             .unwrap()
             .enabled
@@ -4396,7 +4317,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .modify_guild_incident_actions(
-                Snowflake::from("200"),
+                test_id(200),
                 &ModifyGuildIncidentActions {
                     invites_disabled_until: Some("2026-05-01T12:00:00.000000+00:00".to_string()),
                     dms_disabled_until: None,
@@ -4410,7 +4331,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_templates(Snowflake::from("200"))
+            .get_guild_templates(test_id(200))
             .await
             .unwrap()
             .len(),
@@ -4418,7 +4339,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_template(Snowflake::from("200"), &body)
+            .create_guild_template(test_id(200), &body)
             .await
             .unwrap()
             .code,
@@ -4426,7 +4347,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .sync_guild_template(Snowflake::from("200"), "tmpl")
+            .sync_guild_template(test_id(200), "tmpl")
             .await
             .unwrap()
             .code,
@@ -4434,7 +4355,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_template(Snowflake::from("200"), "tmpl", &body)
+            .modify_guild_template(test_id(200), "tmpl", &body)
             .await
             .unwrap()
             .code,
@@ -4442,7 +4363,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .delete_guild_template(Snowflake::from("200"), "tmpl")
+            .delete_guild_template(test_id(200), "tmpl")
             .await
             .unwrap()
             .code,
@@ -4599,25 +4520,21 @@ async fn raw_sticker_wrappers_preserve_multipart_and_json_bodies() {
 
     assert_eq!(
         client
-            .create_guild_sticker(
-                Snowflake::from("200"),
-                &body,
-                sample_file("sticker.png", "png"),
-            )
+            .create_guild_sticker(test_id(200), &body, sample_file("sticker.png", "png"),)
             .await
             .unwrap()
             .id
-            .as_str(),
-        "13"
+            .get(),
+        13
     );
     assert_eq!(
         client
-            .modify_guild_sticker(Snowflake::from("200"), Snowflake::from("13"), &body)
+            .modify_guild_sticker(test_id(200), test_id(13), &body)
             .await
             .unwrap()
             .id
-            .as_str(),
-        "13"
+            .get(),
+        13
     );
 
     server.await.expect("server finished");
@@ -4695,7 +4612,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
 
     assert_eq!(
         client
-            .get_guild_scheduled_events(Snowflake::from("200"))
+            .get_guild_scheduled_events(test_id(200))
             .await
             .unwrap()[0]
             .name,
@@ -4703,7 +4620,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .create_guild_scheduled_event_typed(Snowflake::from("200"), &body)
+            .create_guild_scheduled_event_typed(test_id(200), &body)
             .await
             .unwrap()
             .entity_metadata
@@ -4712,7 +4629,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .get_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
+            .get_guild_scheduled_event(test_id(200), test_id(2))
             .await
             .unwrap()
             .recurrence_rule
@@ -4721,7 +4638,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .modify_guild_scheduled_event_typed(Snowflake::from("200"), Snowflake::from("2"), &body)
+            .modify_guild_scheduled_event_typed(test_id(200), test_id(2), &body)
             .await
             .unwrap()
             .status,
@@ -4729,7 +4646,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .get_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
+            .get_guild_scheduled_event(test_id(200), test_id(2))
             .await
             .unwrap()
             .user_count,
@@ -4737,29 +4654,29 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .create_guild_scheduled_event(Snowflake::from("200"), &body)
+            .create_guild_scheduled_event(test_id(200), &body)
             .await
             .unwrap()
             .id
-            .as_str(),
-        "3"
+            .get(),
+        3
     );
     assert_eq!(
         client
-            .modify_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("3"), &body)
+            .modify_guild_scheduled_event(test_id(200), test_id(3), &body)
             .await
             .unwrap()
             .id
-            .as_str(),
-        "3"
+            .get(),
+        3
     );
     client
-        .delete_guild_scheduled_event(Snowflake::from("200"), Snowflake::from("2"))
+        .delete_guild_scheduled_event(test_id(200), test_id(2))
         .await
         .unwrap();
     assert_eq!(
         client
-            .get_guild_scheduled_event_users(Snowflake::from("200"), Snowflake::from("2"), Some(50))
+            .get_guild_scheduled_event_users(test_id(200), test_id(2), Some(50))
             .await
             .unwrap()[0]
             .user
@@ -4768,7 +4685,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .get_guild_scheduled_event_users(Snowflake::from("200"), Snowflake::from("2"), None)
+            .get_guild_scheduled_event_users(test_id(200), test_id(2), None)
             .await
             .unwrap()[0]
             .user
@@ -4848,16 +4765,16 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("premium-token", 555, base_url);
     let query = EntitlementQuery {
-        user_id: Some(Snowflake::from("777")),
-        sku_ids: vec![Snowflake::from("900"), Snowflake::from("901")],
+        user_id: Some(test_id(777)),
+        sku_ids: vec![test_id(900), test_id(901)],
         limit: Some(25),
-        guild_id: Some(Snowflake::from("200")),
+        guild_id: Some(test_id(200)),
         exclude_ended: Some(true),
         exclude_deleted: Some(false),
         ..EntitlementQuery::default()
     };
     let subscription_query = SubscriptionQuery {
-        user_id: Some(Snowflake::from("777")),
+        user_id: Some(test_id(777)),
         limit: Some(10),
         ..SubscriptionQuery::default()
     };
@@ -4871,62 +4788,53 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     assert!(sku.features.is_empty());
     assert_eq!(
         client
-            .get_sku_subscriptions(Snowflake::from("900"), &subscription_query)
+            .get_sku_subscriptions(test_id(900), &subscription_query)
             .await
             .unwrap()[0]
             .id
-            .as_str(),
-        "950"
+            .get(),
+        950
     );
     assert_eq!(
         client
-            .get_sku_subscription(Snowflake::from("900"), Snowflake::from("950"))
+            .get_sku_subscription(test_id(900), test_id(950))
             .await
             .unwrap()
             .user_id
-            .as_str(),
-        "777"
+            .get(),
+        777
     );
     let entitlement = client.get_entitlements(&query).await.unwrap().remove(0);
-    assert_eq!(entitlement.sku_id.as_str(), "900");
+    assert_eq!(entitlement.sku_id.get(), 900);
     assert_eq!(entitlement.gift_code_flags, Some(0));
-    assert_eq!(
-        entitlement.subscription_id.as_ref().map(Snowflake::as_str),
-        Some("950")
-    );
+    assert_eq!(entitlement.subscription_id.map(GenericId::get), Some(950));
     assert_eq!(
         client
-            .get_entitlement(Snowflake::from("901"))
+            .get_entitlement(test_id(901))
             .await
             .unwrap()
             .user_id
             .unwrap()
-            .as_str(),
-        "777"
+            .get(),
+        777
     );
-    client
-        .consume_entitlement(Snowflake::from("901"))
-        .await
-        .unwrap();
+    client.consume_entitlement(test_id(901)).await.unwrap();
     assert_eq!(
         client
             .create_test_entitlement(&CreateTestEntitlement {
-                sku_id: Snowflake::from("900"),
-                owner_id: Snowflake::from("200"),
+                sku_id: test_id(900),
+                owner_id: test_id(200),
                 owner_type: 1,
             })
             .await
             .unwrap()
             .id
-            .as_str(),
-        "902"
+            .get(),
+        902
     );
+    client.delete_test_entitlement(test_id(902)).await.unwrap();
     client
-        .delete_test_entitlement(Snowflake::from("902"))
-        .await
-        .unwrap();
-    client
-        .send_soundboard_sound(Snowflake::from("300"), &sound_body)
+        .send_soundboard_sound(test_id(300), &sound_body)
         .await
         .unwrap();
     assert_eq!(
@@ -4935,7 +4843,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .list_guild_soundboard_sounds(Snowflake::from("200"))
+            .list_guild_soundboard_sounds(test_id(200))
             .await
             .unwrap()
             .items
@@ -4944,7 +4852,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_soundboard_sound(Snowflake::from("200"), Snowflake::from("2"))
+            .get_guild_soundboard_sound(test_id(200), test_id(2))
             .await
             .unwrap()
             .name,
@@ -4952,28 +4860,24 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_soundboard_sound(Snowflake::from("200"), &sound_body)
+            .create_guild_soundboard_sound(test_id(200), &sound_body)
             .await
             .unwrap()
             .sound_id
-            .as_str(),
-        "3"
+            .get(),
+        3
     );
     assert_eq!(
         client
-            .modify_guild_soundboard_sound(
-                Snowflake::from("200"),
-                Snowflake::from("3"),
-                &json!({ "name": "quack" })
-            )
+            .modify_guild_soundboard_sound(test_id(200), test_id(3), &json!({ "name": "quack" }))
             .await
             .unwrap()
             .sound_id
-            .as_str(),
-        "3"
+            .get(),
+        3
     );
     client
-        .delete_guild_soundboard_sound(Snowflake::from("200"), Snowflake::from("3"))
+        .delete_guild_soundboard_sound(test_id(200), test_id(3))
         .await
         .unwrap();
 
@@ -5098,30 +5002,30 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     let client = RestClient::new_with_base_url("coverage-token", 555, base_url);
 
     client
-        .add_thread_member(Snowflake::from("700"), Snowflake::from("777"))
+        .add_thread_member(test_id(700), test_id(777))
         .await
         .unwrap();
     client
-        .remove_thread_member(Snowflake::from("700"), Snowflake::from("777"))
+        .remove_thread_member(test_id(700), test_id(777))
         .await
         .unwrap();
     assert_eq!(
         client
-            .get_thread_member(Snowflake::from("700"), Snowflake::from("777"), Some(true))
+            .get_thread_member(test_id(700), test_id(777), Some(true))
             .await
             .unwrap()
             .user_id
             .unwrap()
-            .as_str(),
-        "777"
+            .get(),
+        777
     );
     assert_eq!(
         client
             .list_thread_members(
-                Snowflake::from("700"),
+                test_id(700),
                 &ThreadMemberQuery {
                     with_member: Some(true),
-                    after: Some(Snowflake::from("10")),
+                    after: Some(test_id(10)),
                     limit: Some(25),
                 },
             )
@@ -5133,7 +5037,7 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .list_public_archived_threads(
-                Snowflake::from("100"),
+                test_id(100),
                 &ArchivedThreadsQuery {
                     before: Some("2026-04-29T00:00:00Z".to_string()),
                     limit: Some(50),
@@ -5146,26 +5050,23 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
         1
     );
     client
-        .list_private_archived_threads(Snowflake::from("100"), &ArchivedThreadsQuery::default())
+        .list_private_archived_threads(test_id(100), &ArchivedThreadsQuery::default())
         .await
         .unwrap();
     client
         .list_joined_private_archived_threads(
-            Snowflake::from("100"),
+            test_id(100),
             &JoinedArchivedThreadsQuery {
-                before: Some(Snowflake::from("700")),
+                before: Some(test_id(700)),
                 limit: Some(10),
             },
         )
         .await
         .unwrap();
-    client
-        .get_active_guild_threads(Snowflake::from("200"))
-        .await
-        .unwrap();
+    client.get_active_guild_threads(test_id(200)).await.unwrap();
     assert_eq!(
         client
-            .get_invite_with_options("abc", Some(true), Some(true), Some(Snowflake::from("300")))
+            .get_invite_with_options("abc", Some(true), Some(true), Some(test_id(300)))
             .await
             .unwrap()
             .uses,
@@ -5174,9 +5075,9 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     assert_eq!(
         client
             .create_channel_invite_with_target_users_file(
-                Snowflake::from("100"),
+                test_id(100),
                 &CreateChannelInvite {
-                    role_ids: Some(vec![Snowflake::from("701")]),
+                    role_ids: Some(vec![test_id(701)]),
                     ..CreateChannelInvite::default()
                 },
                 &sample_file("target_users.csv", "user_id\n777\n888\n"),
@@ -5185,8 +5086,8 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
             .unwrap()
             .roles[0]
             .id
-            .as_str(),
-        "701"
+            .get(),
+        701
     );
     assert_eq!(
         client.get_invite_target_users_csv("abc").await.unwrap(),
@@ -5205,25 +5106,22 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
         1
     );
     assert_eq!(
-        client
-            .get_guild_integrations(Snowflake::from("200"))
-            .await
-            .unwrap()[0]
+        client.get_guild_integrations(test_id(200)).await.unwrap()[0]
             .id
-            .as_str(),
-        "900"
+            .get(),
+        900
     );
     client
-        .delete_guild_integration(Snowflake::from("200"), Snowflake::from("900"))
+        .delete_guild_integration(test_id(200), test_id(900))
         .await
         .unwrap();
     assert_eq!(
         client
             .get_poll_answer_voters(
-                Snowflake::from("100"),
-                Snowflake::from("800"),
-                1,
-                Some(Snowflake::from("777")),
+                test_id(100),
+                test_id(800),
+                PollAnswerId::new(1),
+                Some(test_id(777)),
                 Some(10),
             )
             .await
@@ -5234,7 +5132,7 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .end_poll(Snowflake::from("100"), Snowflake::from("800"))
+            .end_poll(test_id(100), test_id(800))
             .await
             .unwrap()
             .content,
@@ -5352,7 +5250,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
     );
     assert_model_error_contains(
         client
-            .bulk_overwrite_guild_commands_typed(Snowflake::from("456"), &commands)
+            .bulk_overwrite_guild_commands_typed(test_id(456), &commands)
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -5416,28 +5314,28 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
 
     assert_model_error_contains(
         client
-            .execute_webhook(Snowflake::from("456"), "bad/token", &json!({}))
+            .execute_webhook(test_id(456), "bad/token", &json!({}))
             .await
             .unwrap_err(),
         "webhook_token",
     );
     assert_model_error_contains(
         client
-            .create_interaction_response_typed(Snowflake::from("789"), "bad/token", &response)
+            .create_interaction_response_typed(test_id(789), "bad/token", &response)
             .await
             .unwrap_err(),
         "interaction_token",
     );
     assert_model_error_contains(
         client
-            .create_interaction_response_json(Snowflake::from("789"), "bad/token", &json!({}))
+            .create_interaction_response_json(test_id(789), "bad/token", &json!({}))
             .await
             .unwrap_err(),
         "interaction_token",
     );
     assert_model_error_contains(
         client
-            .create_followup_message_with_application_id("123", "bad/token", &body)
+            .create_followup_message_with_application_id(test_id(123), "bad/token", &body)
             .await
             .unwrap_err(),
         "interaction_token",
@@ -5445,7 +5343,7 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
     assert_model_error_contains(
         client
             .create_followup_message_json_with_application_id(
-                "123",
+                test_id(123),
                 "bad/token",
                 &json!({ "content": "hi" }),
             )
@@ -5455,21 +5353,25 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
     );
     assert_model_error_contains(
         client
-            .get_original_interaction_response_with_application_id("123", "bad/token")
+            .get_original_interaction_response_with_application_id(test_id(123), "bad/token")
             .await
             .unwrap_err(),
         "interaction_token",
     );
     assert_model_error_contains(
         client
-            .edit_original_interaction_response_with_application_id("123", "bad/token", &body)
+            .edit_original_interaction_response_with_application_id(
+                test_id(123),
+                "bad/token",
+                &body,
+            )
             .await
             .unwrap_err(),
         "interaction_token",
     );
     assert_model_error_contains(
         client
-            .delete_original_interaction_response_with_application_id("123", "bad/token")
+            .delete_original_interaction_response_with_application_id(test_id(123), "bad/token")
             .await
             .unwrap_err(),
         "interaction_token",
@@ -5483,32 +5385,14 @@ async fn client_followup_methods_validate_application_and_message_segments() {
 
     assert_model_error_contains(
         client
-            .create_followup_message_json_with_application_id(
-                "12/3",
-                "token",
-                &json!({ "content": "hi" }),
-            )
-            .await
-            .unwrap_err(),
-        "application_id",
-    );
-    assert_model_error_contains(
-        client
-            .create_followup_message_with_application_id("12/3", "token", &body)
-            .await
-            .unwrap_err(),
-        "application_id",
-    );
-    assert_model_error_contains(
-        client
-            .edit_followup_message_with_application_id("123", "token", "bad/id", &body)
+            .edit_followup_message_with_application_id(test_id(123), "token", "bad/id", &body)
             .await
             .unwrap_err(),
         "message_id",
     );
     assert_model_error_contains(
         client
-            .delete_followup_message_with_application_id("123", "token", "bad/id")
+            .delete_followup_message_with_application_id(test_id(123), "token", "bad/id")
             .await
             .unwrap_err(),
         "message_id",
@@ -5612,72 +5496,66 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     let body = sample_message();
 
     let created = client
-        .create_message(Snowflake::from("100"), &body)
+        .create_message(test_id(100), &body)
         .await
         .expect("create message");
     assert_eq!(created.content, "hello");
 
     let updated = client
-        .update_message(Snowflake::from("100"), Snowflake::from("1"), &body)
+        .update_message(test_id(100), test_id(1), &body)
         .await
         .expect("update message");
     assert_eq!(updated.content, "updated");
 
     let fetched = client
-        .get_message(Snowflake::from("100"), Snowflake::from("1"))
+        .get_message(test_id(100), test_id(1))
         .await
         .expect("get message");
     assert_eq!(fetched.content, "updated");
 
-    let channel = client
-        .get_channel(Snowflake::from("100"))
-        .await
-        .expect("get channel");
+    let channel = client.get_channel(test_id(100)).await.expect("get channel");
     assert_eq!(channel.name.as_deref(), Some("general"));
 
     let deleted_channel = client
-        .delete_channel(Snowflake::from("100"))
+        .delete_channel(test_id(100))
         .await
         .expect("delete channel");
-    assert_eq!(deleted_channel.id.as_str(), "100");
+    assert_eq!(deleted_channel.id.get(), 100);
 
     let renamed = client
-        .update_channel_typed(Snowflake::from("100"), &json!({ "name": "renamed" }))
+        .update_channel_typed(test_id(100), &json!({ "name": "renamed" }))
         .await
         .expect("update channel");
     assert_eq!(renamed.name.as_deref(), Some("renamed"));
 
     let limited_messages = client
-        .get_channel_messages(Snowflake::from("100"), Some(2))
+        .get_channel_messages(test_id(100), Some(2))
         .await
         .expect("channel messages with limit");
     assert_eq!(limited_messages.len(), 1);
 
     let all_messages = client
-        .get_channel_messages(Snowflake::from("100"), None)
+        .get_channel_messages(test_id(100), None)
         .await
         .expect("channel messages without limit");
     assert_eq!(all_messages[0].content, "latest");
 
     client
-        .bulk_delete_messages(
-            Snowflake::from("100"),
-            vec![Snowflake::from("1"), Snowflake::from("2")],
-        )
+        .bulk_delete_messages(test_id(100), vec![test_id(1), test_id(2)])
         .await
         .expect("bulk delete");
     client
-        .add_reaction(Snowflake::from("100"), Snowflake::from("1"), "spark")
+        .add_reaction(test_id(100), test_id(1), "spark")
         .await
         .expect("add reaction");
     client
-        .remove_reaction(Snowflake::from("100"), Snowflake::from("1"), "spark")
+        .remove_reaction(test_id(100), test_id(1), "spark")
         .await
         .expect("remove reaction");
 
     assert_eq!(
         client
-            .crosspost_message(Snowflake::from("100"), Snowflake::from("1"))
+            .crosspost_message(test_id(100), test_id(1))
             .await
             .expect("crosspost message")
             .content,
@@ -5686,11 +5564,11 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(
         client
             .get_channel_messages_paginated(
-                Snowflake::from("100"),
+                test_id(100),
                 Some(50),
-                Some(Snowflake::from("10")),
-                Some(Snowflake::from("11")),
-                Some(Snowflake::from("12")),
+                Some(test_id(10)),
+                Some(test_id(11)),
+                Some(test_id(12)),
             )
             .await
             .expect("paginated messages")[0]
@@ -5700,11 +5578,11 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(
         client
             .get_reactions(
-                Snowflake::from("100"),
-                Snowflake::from("1"),
+                test_id(100),
+                test_id(1),
                 "spark",
                 Some(25),
-                Some(Snowflake::from("42")),
+                Some(test_id(42)),
             )
             .await
             .expect("get reactions")[0]
@@ -5712,20 +5590,15 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
         "reactor"
     );
     client
-        .remove_user_reaction(
-            Snowflake::from("100"),
-            Snowflake::from("1"),
-            "spark",
-            Snowflake::from("42"),
-        )
+        .remove_user_reaction(test_id(100), test_id(1), "spark", test_id(42))
         .await
         .expect("remove user reaction");
     client
-        .remove_all_reactions(Snowflake::from("100"), Snowflake::from("1"))
+        .remove_all_reactions(test_id(100), test_id(1))
         .await
         .expect("remove all reactions");
     client
-        .remove_all_reactions_for_emoji(Snowflake::from("100"), Snowflake::from("1"), "spark")
+        .remove_all_reactions_for_emoji(test_id(100), test_id(1), "spark")
         .await
         .expect("remove all reactions for emoji");
 
@@ -5740,15 +5613,15 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(raw["ok"], json!(true));
 
     let sent = client
-        .send_message_json(Snowflake::from("100"), &json!({ "content": "raw" }))
+        .send_message_json(test_id(100), &json!({ "content": "raw" }))
         .await
         .expect("send raw message");
     assert_eq!(sent["id"], json!("903"));
 
     let edited = client
         .edit_message_json(
-            Snowflake::from("100"),
-            Snowflake::from("903"),
+            test_id(100),
+            test_id(903),
             &json!({ "content": "edited raw" }),
         )
         .await
@@ -5756,17 +5629,17 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(edited["content"], json!("edited raw"));
 
     client
-        .delete_message(Snowflake::from("100"), Snowflake::from("903"))
+        .delete_message(test_id(100), test_id(903))
         .await
         .expect("delete raw message");
 
     let search = client
         .search_guild_messages(
-            Snowflake::from("200"),
+            test_id(200),
             &SearchGuildMessagesQuery {
                 limit: Some(5),
                 content: Some("hello world & tea".to_string()),
-                channel_ids: vec![Snowflake::from("100"), Snowflake::from("101")],
+                channel_ids: vec![test_id(100), test_id(101)],
                 author_types: vec!["bot".to_string()],
                 mention_everyone: Some(false),
                 has: vec!["link".to_string()],
@@ -5778,12 +5651,12 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
         .expect("search guild messages");
     assert_eq!(search.total_results, 1);
     assert_eq!(search.messages[0][0].content, "searched");
-    assert_eq!(search.threads[0].id.as_str(), "700");
-    assert_eq!(search.members[0].user_id.as_ref().unwrap().as_str(), "42");
+    assert_eq!(search.threads[0].id.get(), 700);
+    assert_eq!(search.members[0].user_id.as_ref().unwrap().get(), 42);
 
     let pins = client
         .get_channel_pins(
-            Snowflake::from("100"),
+            test_id(100),
             &ChannelPinsQuery {
                 before: Some("2026-05-01T00:00:00.000Z".to_string()),
                 limit: Some(10),
@@ -5795,11 +5668,11 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert!(!pins.has_more);
 
     client
-        .pin_message(Snowflake::from("100"), Snowflake::from("5"))
+        .pin_message(test_id(100), test_id(5))
         .await
         .expect("pin message");
     client
-        .unpin_message(Snowflake::from("100"), Snowflake::from("5"))
+        .unpin_message(test_id(100), test_id(5))
         .await
         .expect("unpin message");
 
@@ -5945,15 +5818,12 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     client.set_application_id(555);
     let command = sample_command();
 
-    let guild = client
-        .get_guild(Snowflake::from("200"))
-        .await
-        .expect("get guild");
+    let guild = client.get_guild(test_id(200)).await.expect("get guild");
     assert_eq!(guild.name, "guild");
 
     let guild_with_counts = client
         .get_guild_with_query(
-            Snowflake::from("200"),
+            test_id(200),
             &GetGuildQuery {
                 with_counts: Some(true),
             },
@@ -5963,26 +5833,26 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(guild_with_counts.name, "guild-counts");
 
     let updated = client
-        .update_guild(Snowflake::from("200"), &json!({ "name": "guild-updated" }))
+        .update_guild(test_id(200), &json!({ "name": "guild-updated" }))
         .await
         .expect("update guild");
     assert_eq!(updated.name, "guild-updated");
 
     let channels = client
-        .get_guild_channels(Snowflake::from("200"))
+        .get_guild_channels(test_id(200))
         .await
         .expect("get guild channels");
     assert_eq!(channels.len(), 1);
 
     let created_channel = client
-        .create_guild_channel(Snowflake::from("200"), &json!({ "name": "new" }))
+        .create_guild_channel(test_id(200), &json!({ "name": "new" }))
         .await
         .expect("create guild channel");
-    assert_eq!(created_channel.id.as_str(), "202");
+    assert_eq!(created_channel.id.get(), 202);
 
     assert_eq!(
         client
-            .get_guild_members(Snowflake::from("200"), Some(3))
+            .get_guild_members(test_id(200), Some(3))
             .await
             .expect("members with limit")
             .len(),
@@ -5991,10 +5861,10 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(
         client
             .get_guild_members_with_query(
-                Snowflake::from("200"),
+                test_id(200),
                 &GuildMembersQuery {
                     limit: Some(2),
-                    after: Some(Snowflake::from("201")),
+                    after: Some(test_id(201)),
                 },
             )
             .await
@@ -6004,71 +5874,56 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .get_guild_members(Snowflake::from("200"), None)
+            .get_guild_members(test_id(200), None)
             .await
             .expect("members without limit")
             .len(),
         1
     );
     client
-        .remove_guild_member(Snowflake::from("200"), Snowflake::from("201"))
+        .remove_guild_member(test_id(200), test_id(201))
         .await
         .expect("remove guild member");
     client
-        .add_guild_member_role(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
-            Snowflake::from("300"),
-        )
+        .add_guild_member_role(test_id(200), test_id(201), test_id(300))
         .await
         .expect("add guild member role");
     client
-        .remove_guild_member_role(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
-            Snowflake::from("300"),
-        )
+        .remove_guild_member_role(test_id(200), test_id(201), test_id(300))
         .await
         .expect("remove guild member role");
 
     let created_role = client
-        .create_role(Snowflake::from("200"), &json!({ "name": "admin" }))
+        .create_role(test_id(200), &json!({ "name": "admin" }))
         .await
         .expect("create role");
     assert_eq!(created_role.name, "admin");
 
     let updated_role = client
-        .update_role(
-            Snowflake::from("200"),
-            Snowflake::from("300"),
-            &json!({ "name": "mod" }),
-        )
+        .update_role(test_id(200), test_id(300), &json!({ "name": "mod" }))
         .await
         .expect("update role");
     assert_eq!(updated_role.name, "mod");
 
     client
-        .delete_role(Snowflake::from("200"), Snowflake::from("300"))
+        .delete_role(test_id(200), test_id(300))
         .await
         .expect("delete role");
 
     let member = client
-        .get_member(Snowflake::from("200"), Snowflake::from("201"))
+        .get_member(test_id(200), test_id(201))
         .await
         .expect("get member");
     assert!(member.roles.is_empty());
 
-    let roles = client
-        .list_roles(Snowflake::from("200"))
-        .await
-        .expect("list roles");
+    let roles = client.list_roles(test_id(200)).await.expect("list roles");
     assert_eq!(roles[0].name, "mod");
 
     let reordered_roles = client
         .modify_guild_role_positions_typed(
-            Snowflake::from("200"),
+            test_id(200),
             &[ModifyGuildRolePosition {
-                id: Snowflake::from("300"),
+                id: test_id(300),
                 position: Some(Some(1)),
             }],
         )
@@ -6102,7 +5957,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(gateway.shards, 1);
 
     let guild_commands = client
-        .bulk_overwrite_guild_commands_typed(Snowflake::from("200"), &[command])
+        .bulk_overwrite_guild_commands_typed(test_id(200), &[command])
         .await
         .expect("bulk overwrite guild commands");
     assert_eq!(guild_commands[0].name, "guild");
@@ -6171,24 +6026,24 @@ async fn single_command_wrappers_hit_expected_paths() {
     let client = RestClient::new_with_base_url("command-token", 555, base_url);
 
     let global = client
-        .get_global_command(Snowflake::from("401"))
+        .get_global_command(test_id(401))
         .await
         .expect("get global command");
     assert_eq!(global.name, "global");
 
     let edited = client
-        .edit_global_command(Snowflake::from("401"), &json!({ "name": "global" }))
+        .edit_global_command(test_id(401), &json!({ "name": "global" }))
         .await
         .expect("edit global command");
     assert_eq!(edited.description, "edited");
 
     client
-        .delete_global_command(Snowflake::from("401"))
+        .delete_global_command(test_id(401))
         .await
         .expect("delete global command");
 
     let guild = client
-        .get_guild_command(Snowflake::from("200"), Snowflake::from("402"))
+        .get_guild_command(test_id(200), test_id(402))
         .await
         .expect("get guild command");
     assert_eq!(guild.description, "read");
@@ -6254,8 +6109,8 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     client
         .create_guild_ban_typed(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
+            test_id(200),
+            test_id(201),
             &CreateGuildBan {
                 delete_message_days: None,
                 delete_message_seconds: Some(60),
@@ -6266,7 +6121,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let created_role = client
         .create_guild_role(
-            Snowflake::from("200"),
+            test_id(200),
             &CreateGuildRole {
                 name: Some("gradient".to_string()),
                 colors: Some(RoleColors {
@@ -6284,8 +6139,8 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let updated_role = client
         .modify_guild_role(
-            Snowflake::from("200"),
-            Snowflake::from("300"),
+            test_id(200),
+            test_id(300),
             &ModifyGuildRole {
                 name: Some(Some("muted".to_string())),
                 permissions: Some(Some(PermissionsBitField(8))),
@@ -6300,11 +6155,11 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     client
         .modify_guild_member_typed(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
+            test_id(200),
+            test_id(201),
             &ModifyGuildMember {
                 nick: Some(None),
-                roles: Some(Some(vec![Snowflake::from("300")])),
+                roles: Some(Some(vec![test_id(300)])),
                 mute: Some(Some(false)),
                 channel_id: Some(None),
                 communication_disabled_until: Some(Some("2026-05-01T00:00:00Z".to_string())),
@@ -6316,7 +6171,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let current_member = client
         .modify_current_member(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyCurrentMember {
                 nick: Some(Some("bot".to_string())),
                 avatar: Some(None),
@@ -6330,7 +6185,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let guild = client
         .modify_guild(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyGuild {
                 name: Some("renamed".to_string()),
                 afk_channel_id: Some(None),
@@ -6346,7 +6201,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let channel = client
         .create_guild_channel_from_request(
-            Snowflake::from("200"),
+            test_id(200),
             &CreateGuildChannel {
                 name: "rules".to_string(),
                 kind: Some(0),
@@ -6362,7 +6217,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let widget = client
         .modify_guild_widget(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyGuildWidgetSettings {
                 enabled: Some(true),
                 channel_id: Some(None),
@@ -6374,11 +6229,11 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let welcome_screen = client
         .modify_guild_welcome_screen_config(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyGuildWelcomeScreen {
                 enabled: Some(Some(true)),
                 welcome_channels: Some(Some(vec![WelcomeScreenChannel {
-                    channel_id: Snowflake::from("202"),
+                    channel_id: test_id(202),
                     description: "Start here".to_string(),
                     emoji_id: None,
                     emoji_name: Some("wave".to_string()),
@@ -6392,10 +6247,10 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
 
     let onboarding = client
         .modify_guild_onboarding_config(
-            Snowflake::from("200"),
+            test_id(200),
             &ModifyGuildOnboarding {
                 prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
-                default_channel_ids: Some(vec![Snowflake::from("202")]),
+                default_channel_ids: Some(vec![test_id(202)]),
                 enabled: Some(true),
                 mode: Some(0),
             },
@@ -6518,7 +6373,7 @@ async fn client_search_guild_members_uses_shared_query_encoding() {
 
     let typed = client
         .search_guild_members_with_query(
-            Snowflake::from("200"),
+            test_id(200),
             &SearchGuildMembersQuery {
                 query: "alice & bob".to_string(),
                 limit: Some(5),
@@ -6529,10 +6384,10 @@ async fn client_search_guild_members_uses_shared_query_encoding() {
     assert_eq!(typed[0].user.as_ref().unwrap().username.as_str(), "alice");
 
     let legacy = client
-        .search_guild_members(Snowflake::from("200"), "bob/smith", None)
+        .search_guild_members(test_id(200), "bob/smith", None)
         .await
         .expect("legacy search members");
-    assert_eq!(legacy[0].user.as_ref().unwrap().id.as_str(), "202");
+    assert_eq!(legacy[0].user.as_ref().unwrap().id.get(), 202);
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -6563,9 +6418,9 @@ async fn client_guild_member_and_channel_position_wrappers_hit_local_server() {
 
     client
         .modify_guild_channel_positions(
-            Snowflake::from("200"),
+            test_id(200),
             &[ModifyGuildChannelPosition {
-                id: Snowflake::from("202"),
+                id: test_id(202),
                 position: Some(Some(1)),
                 lock_permissions: Some(Some(true)),
                 parent_id: Some(None),
@@ -6576,12 +6431,12 @@ async fn client_guild_member_and_channel_position_wrappers_hit_local_server() {
 
     let added = client
         .add_guild_member(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
+            test_id(200),
+            test_id(201),
             &AddGuildMember {
                 access_token: "oauth-access-token".to_string(),
                 nick: Some("joined".to_string()),
-                roles: Some(vec![Snowflake::from("300")]),
+                roles: Some(vec![test_id(300)]),
                 mute: Some(false),
                 deaf: Some(false),
             },
@@ -6593,14 +6448,14 @@ async fn client_guild_member_and_channel_position_wrappers_hit_local_server() {
             .and_then(|member| member.user)
             .map(|user| user.id)
             .expect("joined user id")
-            .as_str(),
-        "201"
+            .get(),
+        201
     );
 
     let already_member = client
         .add_guild_member(
-            Snowflake::from("200"),
-            Snowflake::from("201"),
+            test_id(200),
+            test_id(201),
             &AddGuildMember {
                 access_token: "oauth-access-token".to_string(),
                 ..Default::default()
@@ -6658,11 +6513,11 @@ async fn client_guild_role_member_counts_wrapper_hits_local_server() {
     let client = RestClient::new_with_base_url("guild-token", 0, base_url);
 
     let counts = client
-        .get_guild_role_member_counts(Snowflake::from("200"))
+        .get_guild_role_member_counts(test_id(200))
         .await
         .expect("get guild role member counts");
-    assert_eq!(counts.get(&Snowflake::from("300")), Some(&7));
-    assert_eq!(counts.get(&Snowflake::from("301")), Some(&2));
+    assert_eq!(counts.get(&test_id(300)), Some(&7));
+    assert_eq!(counts.get(&test_id(301)), Some(&2));
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -6685,8 +6540,8 @@ async fn client_group_dm_recipient_wrappers_hit_local_server() {
 
     client
         .add_group_dm_recipient(
-            Snowflake::from("500"),
-            Snowflake::from("42"),
+            test_id(500),
+            test_id(42),
             &AddGroupDmRecipient {
                 access_token: "oauth-gdm-token".to_string(),
                 nick: "friend".to_string(),
@@ -6695,7 +6550,7 @@ async fn client_group_dm_recipient_wrappers_hit_local_server() {
         .await
         .expect("add group dm recipient");
     client
-        .remove_group_dm_recipient(Snowflake::from("500"), Snowflake::from("42"))
+        .remove_group_dm_recipient(test_id(500), test_id(42))
         .await
         .expect("remove group dm recipient");
 
@@ -6733,13 +6588,13 @@ async fn public_widget_image_retries_rate_limits_and_surfaces_api_errors() {
     let client = RestClient::new_with_base_url("image-token", 0, base_url);
 
     let image = client
-        .get_guild_widget_image(Snowflake::from("200"), None)
+        .get_guild_widget_image(test_id(200), None)
         .await
         .expect("widget image after retry");
     assert_eq!(image, b"PNGDATA".to_vec());
 
     match client
-        .get_guild_widget_image(Snowflake::from("200"), Some(GuildWidgetImageStyle::Shield))
+        .get_guild_widget_image(test_id(200), Some(GuildWidgetImageStyle::Shield))
         .await
         .expect_err("bad widget image should return api error")
     {
@@ -6806,61 +6661,53 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     let body = sample_message();
 
     let webhook = client
-        .create_webhook(Snowflake::from("500"), &json!({ "name": "hook" }))
+        .create_webhook(test_id(500), &json!({ "name": "hook" }))
         .await
         .expect("create webhook");
     assert_eq!(webhook["id"], json!("900"));
 
     let webhooks = client
-        .get_channel_webhooks(Snowflake::from("500"))
+        .get_channel_webhooks(test_id(500))
         .await
         .expect("get channel webhooks array");
     assert_eq!(webhooks.len(), 1);
 
     let fallback = client
-        .get_channel_webhooks(Snowflake::from("500"))
+        .get_channel_webhooks(test_id(500))
         .await
         .expect("get channel webhooks fallback");
     assert!(fallback.is_empty());
 
     let executed = client
-        .execute_webhook(
-            Snowflake::from("777"),
-            "token",
-            &json!({ "content": "hook" }),
-        )
+        .execute_webhook(test_id(777), "token", &json!({ "content": "hook" }))
         .await
         .expect("execute webhook with retry");
     assert_eq!(executed["id"], json!("901"));
 
     let dm = client
         .create_dm_channel_typed(&crate::model::CreateDmChannel {
-            recipient_id: Snowflake::from("42"),
+            recipient_id: test_id(42),
         })
         .await
         .expect("create dm channel");
-    assert_eq!(dm.id.as_str(), "500");
+    assert_eq!(dm.id.get(), 500);
 
     let group_dm = client
         .create_group_dm_channel_typed(&crate::model::CreateGroupDmChannel {
             access_tokens: vec!["oauth-gdm-one".to_string(), "oauth-gdm-two".to_string()],
-            nicks: HashMap::from([(Snowflake::from("43"), "friend".to_string())]),
+            nicks: HashMap::from([(test_id(43), "friend".to_string())]),
         })
         .await
         .expect("create group dm channel");
-    assert_eq!(group_dm.id.as_str(), "501");
+    assert_eq!(group_dm.id.get(), 501);
 
     client
-        .create_interaction_response_typed(
-            Snowflake::from("777"),
-            "token",
-            &sample_interaction_response(),
-        )
+        .create_interaction_response_typed(test_id(777), "token", &sample_interaction_response())
         .await
         .expect("create interaction response typed");
     client
         .create_interaction_response_json(
-            Snowflake::from("778"),
+            test_id(778),
             "token",
             &json!({ "type": 4, "data": { "content": "json" } }),
         )
@@ -6870,7 +6717,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(
         client
             .create_followup_message_json_with_application_id(
-                "123",
+                test_id(123),
                 "token",
                 &json!({ "content": "json" }),
             )
@@ -6887,7 +6734,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .create_followup_message_with_application_id("123", "token", &body)
+            .create_followup_message_with_application_id(test_id(123), "token", &body)
             .await
             .expect("explicit followup message")
             .content,
@@ -6903,7 +6750,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .get_original_interaction_response_with_application_id("123", "token")
+            .get_original_interaction_response_with_application_id(test_id(123), "token")
             .await
             .expect("explicit original get")
             .content,
@@ -6919,7 +6766,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .edit_original_interaction_response_with_application_id("123", "token", &body)
+            .edit_original_interaction_response_with_application_id(test_id(123), "token", &body)
             .await
             .expect("explicit original edit")
             .content,
@@ -6934,7 +6781,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         "edited"
     );
     client
-        .delete_original_interaction_response_with_application_id("123", "token")
+        .delete_original_interaction_response_with_application_id(test_id(123), "token")
         .await
         .expect("explicit original delete");
     client
@@ -6944,7 +6791,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
 
     assert_eq!(
         client
-            .edit_followup_message_with_application_id("123", "token", "55", &body)
+            .edit_followup_message_with_application_id(test_id(123), "token", "55", &body)
             .await
             .expect("explicit followup edit")
             .content,
@@ -6959,7 +6806,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         "followup-edit"
     );
     client
-        .delete_followup_message_with_application_id("123", "token", "55")
+        .delete_followup_message_with_application_id(test_id(123), "token", "55")
         .await
         .expect("explicit followup delete");
     client
@@ -7095,7 +6942,7 @@ async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
     }
 
     match client
-        .execute_webhook(Snowflake::from("9"), "token", &json!({ "content": "boom" }))
+        .execute_webhook(test_id(9), "token", &json!({ "content": "boom" }))
         .await
         .unwrap_err()
     {
@@ -7187,10 +7034,10 @@ async fn with_reason_sends_encoded_audit_log_header_on_mutations_only() {
     let client = RestClient::new_with_base_url("reason-token", 123, base_url);
     let scoped = client.with_reason("spam 스팸");
     scoped
-        .remove_guild_member("1", "2")
+        .remove_guild_member(test_id(1), test_id(2))
         .await
         .expect("kick with reason");
-    scoped.get_channel("9").await.expect("get channel");
+    scoped.get_channel(test_id(9)).await.expect("get channel");
     task.await.expect("server task");
 
     let requests = captured.lock().expect("captured requests");
@@ -7215,8 +7062,11 @@ async fn server_errors_are_retried_and_then_succeed() {
     .await;
 
     let client = RestClient::new_with_base_url("retry-5xx-token", 123, base_url);
-    let channel = client.get_channel("9").await.expect("retried channel get");
-    assert_eq!(channel.id, crate::model::Snowflake::from("9"));
+    let channel = client
+        .get_channel(test_id(9))
+        .await
+        .expect("retried channel get");
+    assert_eq!(channel.id, crate::model::test_id(9));
     task.await.expect("server task");
 
     assert_eq!(captured.lock().expect("captured").len(), 2);
@@ -7233,7 +7083,7 @@ async fn server_errors_are_not_replayed_for_post_requests() {
     let client = RestClient::new_with_base_url("no-replay-token", 123, base_url);
     let error = client
         .create_message(
-            "9",
+            test_id(9),
             &CreateMessage {
                 content: Some("hello".to_string()),
                 ..CreateMessage::default()
@@ -7264,7 +7114,7 @@ async fn server_errors_are_replayed_for_nonce_enforced_message_creates() {
     let client = RestClient::new_with_base_url("nonce-token", 123, base_url);
     client
         .create_message(
-            "9",
+            test_id(9),
             &CreateMessage {
                 content: Some("hello".to_string()),
                 nonce: Some("dedupe-1".to_string()),
@@ -7293,7 +7143,7 @@ async fn server_errors_are_replayed_for_post_when_explicitly_enabled() {
         .expect("client");
     client
         .create_message(
-            "9",
+            test_id(9),
             &CreateMessage {
                 content: Some("hello".to_string()),
                 ..CreateMessage::default()
@@ -7431,7 +7281,7 @@ async fn long_rate_limit_after_ambiguous_attempt_stops_nonce_replay() {
     let started = Instant::now();
     let error = client
         .create_message(
-            "9",
+            test_id(9),
             &CreateMessage {
                 content: Some("hello".to_string()),
                 nonce: Some("dedupe-2".to_string()),
@@ -7521,11 +7371,7 @@ async fn api_error_text_echoing_the_route_token_is_scrubbed() {
 
     let client = RestClient::new_with_base_url("echo", 123, base_url);
     let error = client
-        .execute_webhook(
-            Snowflake::from("9"),
-            "echoed-secret",
-            &json!({ "content": "x" }),
-        )
+        .execute_webhook(test_id(9), "echoed-secret", &json!({ "content": "x" }))
         .await
         .expect_err("404");
     let text = format!("{error} {error:?}");
@@ -7621,7 +7467,10 @@ async fn rate_limit_retry_uses_retry_after_header_for_non_json_bodies() {
     .await;
 
     let client = RestClient::new_with_base_url("retry-header-token", 123, base_url);
-    client.get_channel("9").await.expect("channel after 429");
+    client
+        .get_channel(test_id(9))
+        .await
+        .expect("channel after 429");
     task.await.expect("server task");
     assert_eq!(captured.lock().expect("captured").len(), 2);
 }
@@ -7645,7 +7494,7 @@ async fn new_guild_lifecycle_routes_have_expected_shapes() {
         })
         .await
         .expect("create guild");
-    client.delete_guild("1").await.expect("delete guild");
+    client.delete_guild(test_id(1)).await.expect("delete guild");
     client
         .create_guild_from_template(
             "abcDEF123",
@@ -7657,7 +7506,7 @@ async fn new_guild_lifecycle_routes_have_expected_shapes() {
         .await
         .expect("create guild from template");
     let mfa = client
-        .modify_guild_mfa_level("2", 1)
+        .modify_guild_mfa_level(test_id(2), 1)
         .await
         .expect("modify mfa");
     assert_eq!(mfa.level, 1);
@@ -7695,7 +7544,7 @@ async fn interaction_response_with_result_requests_callback_resource() {
     let client = RestClient::new_with_base_url("callback-token", 123, base_url);
     let result = client
         .create_interaction_response_with_result(
-            "10",
+            test_id(10),
             "interactiontoken",
             &crate::model::InteractionCallbackResponse {
                 kind: 4,
@@ -7708,7 +7557,7 @@ async fn interaction_response_with_result_requests_callback_resource() {
 
     assert_eq!(
         result.interaction.response_message_id,
-        Some(crate::model::Snowflake::from("11"))
+        Some(crate::model::test_id(11))
     );
     let message = result
         .resource
@@ -7734,7 +7583,7 @@ async fn forward_message_sends_forward_reference_type() {
 
     let client = RestClient::new_with_base_url("forward-token", 123, base_url);
     client
-        .forward_message("20", "21", "30")
+        .forward_message(test_id(20), test_id(21), test_id(30))
         .await
         .expect("forward message");
     task.await.expect("server task");
@@ -7831,7 +7680,7 @@ async fn rest_client_builder_rate_limit_callback_fires_on_every_429() {
 
     let message = client
         .create_message(
-            Snowflake::from("555"),
+            test_id(555),
             &CreateMessage {
                 content: Some("hello".to_string()),
                 ..CreateMessage::default()
@@ -7886,7 +7735,7 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
     let client = RestClient::builder("mentions-token", 123)
         .api_base(base_url)
         .default_allowed_mentions(crate::model::AllowedMentions {
-            users: vec![Snowflake::from("42")],
+            users: vec![test_id(42)],
             replied_user: Some(false),
             ..crate::model::AllowedMentions::default()
         })
@@ -7895,7 +7744,7 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
 
     client
         .create_message(
-            Snowflake::from("555"),
+            test_id(555),
             &CreateMessage {
                 content: Some("no explicit mentions".to_string()),
                 ..CreateMessage::default()
@@ -7905,7 +7754,7 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
         .expect("create message");
     client
         .create_message(
-            Snowflake::from("555"),
+            test_id(555),
             &CreateMessage {
                 content: Some("explicit mentions".to_string()),
                 allowed_mentions: Some(crate::model::AllowedMentions {
@@ -7919,8 +7768,8 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
         .expect("create message with explicit mentions");
     client
         .update_message(
-            Snowflake::from("555"),
-            Snowflake::from("901"),
+            test_id(555),
+            test_id(901),
             &CreateMessage {
                 content: Some("edited".to_string()),
                 ..CreateMessage::default()
@@ -7973,7 +7822,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
 
     client
         .execute_webhook(
-            Snowflake::from("777"),
+            test_id(777),
             "webhooktoken",
             &json!({ "content": "from webhook" }),
         )
@@ -7981,7 +7830,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
         .expect("execute webhook");
     client
         .create_interaction_response_typed(
-            Snowflake::from("10"),
+            test_id(10),
             "interactiontoken",
             &InteractionCallbackResponse {
                 kind: 4,
@@ -7992,7 +7841,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
         .expect("interaction response");
     client
         .create_interaction_response_typed(
-            Snowflake::from("11"),
+            test_id(11),
             "interactiontoken",
             &InteractionCallbackResponse {
                 kind: 4,
@@ -8006,7 +7855,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
         .expect("interaction response with explicit mentions");
     client
         .create_interaction_response_typed(
-            Snowflake::from("12"),
+            test_id(12),
             "interactiontoken",
             &InteractionCallbackResponse {
                 kind: 9,
@@ -8060,14 +7909,14 @@ async fn invite_target_user_routes_have_expected_shapes() {
 
     let client = RestClient::new_with_base_url("invite-token", 123, base_url);
     client
-        .add_invite_target_user("abc", "10")
+        .add_invite_target_user("abc", test_id(10))
         .await
         .expect("add target user");
     client
-        .remove_invite_target_user("abc", "11")
+        .remove_invite_target_user("abc", test_id(11))
         .await
         .expect("remove target user");
-    let ids = [Snowflake::from("12"), Snowflake::from("13")];
+    let ids = [test_id(12), test_id(13)];
     client
         .bulk_add_invite_target_users("abc", &ids)
         .await
@@ -8102,16 +7951,14 @@ async fn invite_target_user_routes_have_expected_shapes() {
 #[tokio::test]
 async fn invite_target_user_bulk_routes_reject_more_than_1000_ids_locally() {
     let client = RestClient::new("bulk-limit", 123);
-    let ids = (0..1001)
-        .map(|id| Snowflake::from(id.to_string()))
-        .collect::<Vec<_>>();
+    let ids = (1..=1001).map(test_id).collect::<Vec<_>>();
     let error = client
         .bulk_add_invite_target_users("abc", &ids)
         .await
         .expect_err("1001 ids exceed Discord's cap");
     assert!(error.to_string().contains("1000"), "{error}");
     assert!(client
-        .add_invite_target_user("bad/code", "1")
+        .add_invite_target_user("bad/code", test_id(1))
         .await
         .is_err());
 }
@@ -8119,7 +7966,7 @@ async fn invite_target_user_bulk_routes_reject_more_than_1000_ids_locally() {
 #[test]
 fn create_channel_invite_serializes_target_user_ids() {
     let body = CreateChannelInvite {
-        target_user_ids: Some(vec![Snowflake::from("1"), Snowflake::from("2")]),
+        target_user_ids: Some(vec![test_id(1), test_id(2)]),
         ..CreateChannelInvite::default()
     };
     let value = serde_json::to_value(&body).expect("serialize");
@@ -8188,7 +8035,7 @@ async fn application_identity_profile_routes_have_expected_shapes() {
     };
 
     let created = client
-        .update_application_identity_profile("7", "p/1", &update)
+        .update_application_identity_profile(test_id(7), "p/1", &update)
         .await
         .expect("first write");
     let created = created.expect("201 returns the profile");
@@ -8198,17 +8045,17 @@ async fn application_identity_profile_routes_have_expected_shapes() {
         Some(3)
     );
     assert!(client
-        .update_application_identity_profile("7", "p/1", &update)
+        .update_application_identity_profile(test_id(7), "p/1", &update)
         .await
         .expect("second write")
         .is_none());
     let fetched = client
-        .get_application_identity_profile("7", "p/1")
+        .get_application_identity_profile(test_id(7), "p/1")
         .await
         .expect("get profile");
     assert_eq!(fetched, created);
     let by_user = client
-        .get_user_application_identities("7")
+        .get_user_application_identities(test_id(7))
         .await
         .expect("by user");
     assert_eq!(by_user.identities[0].provider_issued_user_id, "p/1");
@@ -8217,7 +8064,7 @@ async fn application_identity_profile_routes_have_expected_shapes() {
         .await
         .expect("by external id");
     client
-        .delete_application_identity("7", "NONE", "p/1", None)
+        .delete_application_identity(test_id(7), "NONE", "p/1", None)
         .await
         .expect("delete");
     task.await.expect("server task");
@@ -8263,7 +8110,7 @@ async fn application_identity_profile_update_enforces_documented_limits() {
         }),
     };
     let error = client
-        .update_application_identity_profile("7", "p", &too_many)
+        .update_application_identity_profile(test_id(7), "p", &too_many)
         .await
         .expect_err("31 dynamic fields exceed the cap");
     assert!(error.to_string().contains("30"), "{error}");
@@ -8299,7 +8146,7 @@ async fn application_identity_profile_update_enforces_documented_limits() {
     assert!(error.to_string().contains("10240"), "{error}");
 
     assert!(RestClient::new("no-app", 0)
-        .get_user_application_identities("7")
+        .get_user_application_identities(test_id(7))
         .await
         .is_err());
 }
@@ -8335,11 +8182,11 @@ async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes
         )
         .await
         .expect("get or create lobby");
-    assert_eq!(joined.id, Snowflake::from("100"));
+    assert_eq!(joined.id, test_id(100));
     let sent = client
         .send_lobby_message(
             "bearer-1",
-            "100",
+            test_id(100),
             &crate::model::CreateLobbyMessage {
                 content: "gg".to_string(),
                 ..Default::default()
@@ -8354,17 +8201,17 @@ async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes
         Some("Captain")
     );
     let history = client
-        .get_lobby_messages("bearer-1", "100", Some(20))
+        .get_lobby_messages("bearer-1", test_id(100), Some(20))
         .await
         .expect("lobby messages");
     assert_eq!(history.len(), 1);
     let own = client
-        .create_lobby_channel_invite_for_self("bearer-1", "100")
+        .create_lobby_channel_invite_for_self("bearer-1", test_id(100))
         .await
         .expect("self invite");
     assert_eq!(own.code, "self-code");
     let theirs = client
-        .create_lobby_channel_invite_for_user("100", "8")
+        .create_lobby_channel_invite_for_user(test_id(100), test_id(8))
         .await
         .expect("user invite");
     assert_eq!(theirs.code, "user-code");
@@ -8423,7 +8270,7 @@ async fn lobby_message_limit_is_checked_locally() {
     let client = RestClient::new("bot-token", 555);
     for limit in [0_u8, 201] {
         assert!(client
-            .get_lobby_messages("bearer", "100", Some(limit))
+            .get_lobby_messages("bearer", test_id(100), Some(limit))
             .await
             .is_err());
     }

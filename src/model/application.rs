@@ -4,14 +4,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{PermissionsBitField, Snowflake, User};
+use super::{GenericId, PermissionsBitField, User};
 
 /// Partial application object attached to messages sent by an app
 /// (e.g. Rich Presence or activity invites).
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialApplication {
-    #[serde(default)]
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -25,43 +24,43 @@ pub struct PartialApplication {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_sku_id: Option<Snowflake>,
+    pub primary_sku_id: Option<GenericId>,
 }
 
 /// A running application Activity instance.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActivityInstance {
     /// Application ID that owns the Activity.
-    pub application_id: Snowflake,
+    pub application_id: GenericId,
     /// Activity instance ID.
     pub instance_id: String,
     /// Unique launch ID for this Activity session.
-    pub launch_id: Snowflake,
+    pub launch_id: GenericId,
     /// Location where the Activity instance is running.
     pub location: ActivityLocation,
     /// Users currently connected to the Activity instance.
     #[serde(default)]
-    pub users: Vec<Snowflake>,
+    pub users: Vec<GenericId>,
 }
 
 /// Location where an application Activity instance is running.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActivityLocation {
     /// Unique location ID.
     pub id: String,
     /// Location kind, such as `gc` for guild channel or `pc` for private channel.
     pub kind: String,
     /// Channel ID for this location.
-    pub channel_id: Snowflake,
+    pub channel_id: GenericId,
     /// Guild ID for guild-channel Activity locations.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Application`.
 pub struct Application {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -83,9 +82,9 @@ pub struct Application {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_sku_id: Option<Snowflake>,
+    pub primary_sku_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

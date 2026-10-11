@@ -152,7 +152,10 @@ mod event_handler {
         let silent = Arc::new(Silent);
         tokio::spawn(spawnable(async move {
             silent.handle_event(context(), ready_event()).await;
-            silent.message_create(context(), Message::default()).await;
+            let message: Message =
+                serde_json::from_value(json!({ "id": "1", "channel_id": "2", "content": "" }))
+                    .expect("minimal message");
+            silent.message_create(context(), message).await;
         }))
         .await
         .expect("default hooks complete");
@@ -188,7 +191,7 @@ mod cache_backend {
 
     use discordrs::cache::{CacheBackend, CacheClear, CacheClearId};
     use discordrs::model::Presence;
-    use discordrs::{CacheHandle, DiscordError, Member, Message, Snowflake, User};
+    use discordrs::{CacheHandle, DiscordError, GenericId, Member, Message, User};
 
     use super::spawnable;
 
@@ -228,8 +231,8 @@ mod cache_backend {
         async fn put_member(
             &self,
             epoch: u64,
-            guild_id: Snowflake,
-            user_id: Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
             member: Member,
         ) -> Result<(), DiscordError> {
             self.store
@@ -239,15 +242,15 @@ mod cache_backend {
 
         async fn get_member(
             &self,
-            guild_id: &Snowflake,
-            user_id: &Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
         ) -> Result<Option<Arc<Member>>, DiscordError> {
             self.store.get_member(guild_id, user_id).await
         }
 
         async fn list_members(
             &self,
-            guild_id: &Snowflake,
+            guild_id: GenericId,
         ) -> Result<Vec<Arc<Member>>, DiscordError> {
             self.store.list_members(guild_id).await
         }
@@ -255,8 +258,8 @@ mod cache_backend {
         async fn delete_member(
             &self,
             epoch: u64,
-            guild_id: &Snowflake,
-            user_id: &Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
         ) -> Result<(), DiscordError> {
             self.store.delete_member(epoch, guild_id, user_id).await
         }
@@ -267,15 +270,15 @@ mod cache_backend {
 
         async fn get_message(
             &self,
-            channel_id: &Snowflake,
-            message_id: &Snowflake,
+            channel_id: GenericId,
+            message_id: GenericId,
         ) -> Result<Option<Arc<Message>>, DiscordError> {
             self.store.get_message(channel_id, message_id).await
         }
 
         async fn list_messages(
             &self,
-            channel_id: &Snowflake,
+            channel_id: GenericId,
         ) -> Result<Vec<Arc<Message>>, DiscordError> {
             self.store.list_messages(channel_id).await
         }
@@ -283,8 +286,8 @@ mod cache_backend {
         async fn delete_message(
             &self,
             epoch: u64,
-            channel_id: &Snowflake,
-            message_id: &Snowflake,
+            channel_id: GenericId,
+            message_id: GenericId,
         ) -> Result<(), DiscordError> {
             self.store
                 .delete_message(epoch, channel_id, message_id)
@@ -294,8 +297,8 @@ mod cache_backend {
         async fn put_presence(
             &self,
             epoch: u64,
-            guild_id: Snowflake,
-            user_id: Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
             presence: Presence,
         ) -> Result<(), DiscordError> {
             self.store
@@ -305,15 +308,15 @@ mod cache_backend {
 
         async fn get_presence(
             &self,
-            guild_id: &Snowflake,
-            user_id: &Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
         ) -> Result<Option<Arc<Presence>>, DiscordError> {
             self.store.get_presence(guild_id, user_id).await
         }
 
         async fn list_presences(
             &self,
-            guild_id: &Snowflake,
+            guild_id: GenericId,
         ) -> Result<Vec<Arc<Presence>>, DiscordError> {
             self.store.list_presences(guild_id).await
         }
@@ -321,8 +324,8 @@ mod cache_backend {
         async fn delete_presence(
             &self,
             epoch: u64,
-            guild_id: &Snowflake,
-            user_id: &Snowflake,
+            guild_id: GenericId,
+            user_id: GenericId,
         ) -> Result<(), DiscordError> {
             self.store.delete_presence(epoch, guild_id, user_id).await
         }
@@ -339,22 +342,25 @@ mod cache_backend {
                 Ok(CacheClear::Applied(epoch)) => epoch,
                 other => panic!("first clear should apply: {other:?}"),
             };
-            let guild_id = Snowflake::from("1");
-            let user_id = Snowflake::from("2");
+            // Outside the crate, IDs come from checked parsing or
+            // conversion; there is no infallible `From<&str>`/`From<u64>`.
+            let guild_id: GenericId = "1".parse().expect("valid id");
+            let user_id = GenericId::try_from(2_u64).expect("valid id");
+            let user: User = serde_json::from_value(serde_json::json!({
+                "id": user_id,
+                "username": "wumpus",
+            }))
+            .expect("minimal user");
             let member = Member {
-                user: Some(User {
-                    id: user_id.clone(),
-                    username: "wumpus".to_string(),
-                    ..User::default()
-                }),
+                user: Some(user),
                 ..Member::default()
             };
             backend
-                .put_member(epoch, guild_id.clone(), user_id.clone(), member)
+                .put_member(epoch, guild_id, user_id, member)
                 .await
                 .expect("put_member succeeds");
             backend
-                .get_member(&guild_id, &user_id)
+                .get_member(guild_id, user_id)
                 .await
                 .expect("get_member succeeds")
         }))
@@ -386,32 +392,33 @@ mod cached_manager {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use discordrs::{CachedManager, DiscordError, Snowflake};
+    use discordrs::{CachedManager, DiscordError, GenericId};
     use tokio::sync::RwLock;
 
     use super::spawnable;
 
+    fn id(value: u64) -> GenericId {
+        GenericId::try_new(value).expect("nonzero test id")
+    }
+
     /// A user-defined manager with its own store.
     #[derive(Clone, Default)]
     struct Tags {
-        entries: Arc<RwLock<HashMap<Snowflake, String>>>,
+        entries: Arc<RwLock<HashMap<GenericId, String>>>,
     }
 
     impl CachedManager<String> for Tags {
-        async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<String, DiscordError> {
-            let id = id.into();
-            self.cached(id.clone())
+        async fn get(&self, id: GenericId) -> Result<String, DiscordError> {
+            self.cached(id)
                 .await
                 .ok_or_else(|| DiscordError::model(format!("no tag {id}")))
         }
 
-        async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<String> {
-            let id = id.into();
+        async fn cached(&self, id: GenericId) -> Option<String> {
             self.entries.read().await.get(&id).cloned()
         }
 
-        async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-            let id = id.into();
+        async fn contains(&self, id: GenericId) -> bool {
             self.entries.read().await.contains_key(&id)
         }
 
@@ -426,13 +433,13 @@ mod cached_manager {
         tags.entries
             .write()
             .await
-            .insert(Snowflake::from("7"), "seven".to_string());
+            .insert(id(7), "seven".to_string());
         let found = tokio::spawn(spawnable({
             let tags = tags.clone();
             async move {
                 (
-                    tags.get("7").await,
-                    tags.contains("8").await,
+                    tags.get(id(7)).await,
+                    tags.contains(id(8)).await,
                     tags.list_cached().await,
                 )
             }
@@ -442,7 +449,7 @@ mod cached_manager {
         assert_eq!(found.0.ok(), Some("seven".to_string()));
         assert!(!found.1);
         assert_eq!(found.2, vec!["seven".to_string()]);
-        assert!(tags.get("8").await.is_err());
+        assert!(tags.get(id(8)).await.is_err());
     }
 }
 

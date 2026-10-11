@@ -1,36 +1,39 @@
+use crate::model::test_id;
 use std::collections::HashMap;
 
 use serde_json::json;
 
 use super::{
     AllowedMentions, ApplicationCommand, ApplicationCommandOptionChoice, ApplicationInstallParams,
-    ApplicationIntegrationTypeConfig, Attachment, AutocompleteInteraction, BeginGuildPruneRequest,
-    Channel, ChannelType, ChatInputCommandInteraction, CommandInteractionData,
-    CommandInteractionOption, ComponentInteraction, ComponentInteractionData, CreateChannelInvite,
-    CreateDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker,
-    CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
-    Embed, EmbedField, Entitlement, ForumTag, GatewayBot, Guild, GuildScheduledEvent, Integration,
-    Interaction, InteractionCallbackResponse, InteractionContextData, Invite,
-    InviteTargetUsersJobStatus, Member, Message, MessageComponent, MessageContextMenuInteraction,
-    ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
-    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
-    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
-    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
-    ModifyWebhookWithToken, PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer,
-    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData,
-    Role, RoleColors, SessionStartLimit, Sku, Snowflake, StickerItem, Subscription,
-    ThreadListResponse, ThreadMember, ThreadMetadata, User, UserContextMenuInteraction,
-    WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreenChannel,
+    ApplicationIntegrationTypeConfig, Attachment, AuthorizingIntegrationOwners,
+    AutocompleteInteraction, BeginGuildPruneRequest, Channel, ChannelType,
+    ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption, ComponentId,
+    ComponentInteraction, ComponentInteractionData, CreateChannelInvite, CreateDmChannel,
+    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateMessage,
+    CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel, Embed,
+    EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId, GuildInstallOwner,
+    GuildScheduledEvent, GuildWidget, Integration, Interaction, InteractionCallbackResponse,
+    InteractionContextData, Invite, InviteTargetUsersJobStatus, Member, Message, MessageComponent,
+    MessageContextMenuInteraction, ModalSubmitInteraction, ModifyCurrentApplication,
+    ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState,
+    ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite, PermissionsBitField,
+    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollMedia,
+    PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SessionStartLimit, Sku,
+    StickerItem, Subscription, ThreadListResponse, ThreadMember, ThreadMetadata, User,
+    UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
 #[test]
 fn snowflake_deserializes_from_string_and_number() {
-    let string_value: Snowflake = serde_json::from_value(json!("123")).unwrap();
-    let number_value: Snowflake = serde_json::from_value(json!(123)).unwrap();
+    let string_value: GenericId = serde_json::from_value(json!("123")).unwrap();
+    let number_value: GenericId = serde_json::from_value(json!(123)).unwrap();
 
-    assert_eq!(string_value.as_str(), "123");
-    assert_eq!(number_value.as_str(), "123");
+    assert_eq!(string_value.get(), 123);
+    assert_eq!(number_value.get(), 123);
 }
 
 #[test]
@@ -69,8 +72,8 @@ fn application_command_option_choice_new_serializes_value() {
 #[test]
 fn snowflake_timestamp_extracts_creation_time() {
     // Discord Snowflake: timestamp is in the top 42 bits
-    let sf = Snowflake::from(1759288472266248192u64);
-    let ts = sf.timestamp().expect("should extract timestamp");
+    let sf: GenericId = test_id(1759288472266248192);
+    let ts = sf.timestamp();
     // Should be a reasonable Unix timestamp (after 2020)
     assert!(ts > 1_577_836_800_000u64); // after 2020-01-01
 }
@@ -90,38 +93,39 @@ fn application_command_id_opt_is_none_until_discord_assigns_an_id() {
 #[test]
 fn application_command_created_at_uses_assigned_id() {
     let command = ApplicationCommand {
-        id: Some(Snowflake::from(1759288472266248192u64)),
+        id: Some(test_id(1759288472266248192)),
         name: "ping".to_string(),
         description: "Ping".to_string(),
         ..ApplicationCommand::default()
     };
 
     assert_eq!(
-        command.id_opt().map(Snowflake::as_str),
-        Some("1759288472266248192")
+        command.id_opt().map(GenericId::get),
+        Some(1759288472266248192)
     );
     assert!(command.created_at().is_some());
 }
 
 #[test]
-fn snowflake_helpers_cover_string_numeric_and_error_paths() {
-    let snowflake = Snowflake::new("1759288472266248192");
-    let parsed = "42".parse::<Snowflake>().unwrap();
-    let invalid = Snowflake::new("not-a-number");
+fn generic_id_construction_is_checked_and_round_trips_as_a_string() {
+    let id = GenericId::try_from(1_759_288_472_266_248_192_u64).unwrap();
+    let parsed = "42".parse::<GenericId>().unwrap();
 
-    assert_eq!(snowflake.as_str(), "1759288472266248192");
-    assert_eq!(snowflake.as_u64(), Some(1_759_288_472_266_248_192));
-    assert_eq!(snowflake.to_u64(), Some(1_759_288_472_266_248_192));
-    assert_eq!(snowflake.to_string(), "1759288472266248192");
-    assert_eq!(parsed.as_str(), "42");
-    assert_eq!(invalid.as_u64(), None);
-    assert!(snowflake.is_valid());
-    assert!(!invalid.is_valid());
-    assert!(Snowflake::try_new("42").is_ok());
-    assert!(Snowflake::try_new("not-a-number").is_err());
-
-    let error = serde_json::from_value::<Snowflake>(json!(-1)).unwrap_err();
-    assert!(error.to_string().contains("snowflake cannot be negative"));
+    assert_eq!(id.get(), 1_759_288_472_266_248_192);
+    assert_eq!(id.to_string(), "1759288472266248192");
+    assert_eq!(parsed.get(), 42);
+    assert!("not-a-number".parse::<GenericId>().is_err());
+    assert!(GenericId::try_from(0_u64).is_err());
+    assert_eq!(
+        serde_json::to_value(id).unwrap(),
+        json!("1759288472266248192")
+    );
+    assert_eq!(
+        serde_json::from_value::<GenericId>(json!(1_759_288_472_266_248_192_u64)).unwrap(),
+        id
+    );
+    assert!(serde_json::from_value::<GenericId>(json!(-1)).is_err());
+    assert!(serde_json::from_value::<GenericId>(json!("abc")).is_err());
 }
 
 #[test]
@@ -145,10 +149,10 @@ fn permissions_bitfield_helpers_cover_mutation_and_invalid_wire_values() {
 #[test]
 fn channel_and_create_message_keep_wire_aliases_and_omit_absent_optionals() {
     let channel = Channel {
-        id: Snowflake::from("10"),
+        id: test_id(10),
         kind: 5,
         name: Some("announcements".to_string()),
-        ..Channel::default()
+        ..Channel::fixture()
     };
     let message = CreateMessage {
         content: Some("hello".to_string()),
@@ -187,11 +191,11 @@ fn forum_channel_fields_decode_tags_and_default_reaction() {
     .unwrap();
 
     let tag = &channel.available_tags.as_ref().unwrap()[0];
-    assert_eq!(tag.id.as_str(), "11");
+    assert_eq!(tag.id.get(), 11);
     assert_eq!(tag.name, "Support");
     assert!(tag.moderated);
     assert_eq!(tag.emoji_name.as_deref(), Some("ticket"));
-    assert_eq!(channel.applied_tags.as_ref().unwrap()[0].as_str(), "11");
+    assert_eq!(channel.applied_tags.as_ref().unwrap()[0].get(), 11);
     assert_eq!(
         channel
             .default_reaction_emoji
@@ -202,18 +206,18 @@ fn forum_channel_fields_decode_tags_and_default_reaction() {
     assert_eq!(channel.default_thread_rate_limit_per_user, Some(30));
 
     let serialized = serde_json::to_value(Channel {
-        id: Snowflake::from("20"),
+        id: test_id(20),
         kind: 15,
         available_tags: Some(vec![ForumTag {
-            id: Snowflake::from("21"),
+            id: test_id(21),
             name: "News".to_string(),
-            ..ForumTag::default()
+            ..ForumTag::fixture()
         }]),
         default_reaction_emoji: Some(DefaultReaction {
-            emoji_id: Some(Snowflake::from("22")),
+            emoji_id: Some(test_id(22)),
             ..DefaultReaction::default()
         }),
-        ..Channel::default()
+        ..Channel::fixture()
     })
     .unwrap();
     assert_eq!(serialized["available_tags"][0]["name"], json!("News"));
@@ -269,7 +273,7 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
 
     let poll = message.poll.expect("poll should decode");
     assert_eq!(poll.question.text.as_deref(), Some("Ship it?"));
-    assert_eq!(poll.answers[0].answer_id, Some(1));
+    assert_eq!(poll.answers[0].answer_id, Some(PollAnswerId::new(1)));
     assert_eq!(poll.answers[0].poll_media.text.as_deref(), Some("Yes"));
     assert_eq!(
         poll.answers[0]
@@ -291,7 +295,7 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
 
     let create_message = CreateMessage {
         allowed_mentions: Some(AllowedMentions {
-            users: vec![Snowflake::from("42")],
+            users: vec![test_id(42)],
             replied_user: Some(false),
             ..AllowedMentions::default()
         }),
@@ -335,7 +339,7 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
 
     let _default_results = PollResults {
         answer_counts: vec![PollAnswerCount {
-            id: 1,
+            id: PollAnswerId::new(1),
             count: 0,
             me_voted: false,
         }],
@@ -371,8 +375,8 @@ fn guild_member_decodes_current_profile_fields() {
         member
             .avatar_decoration_data
             .as_ref()
-            .map(|decoration| decoration.sku_id.as_str()),
-        Some("555")
+            .map(|decoration| decoration.sku_id.get()),
+        Some(555)
     );
     assert_eq!(
         member
@@ -399,11 +403,11 @@ fn guild_member_decodes_current_profile_fields() {
 fn guild_role_position_body_keeps_nullable_wire_shape() {
     let positions = vec![
         ModifyGuildRolePosition {
-            id: Snowflake::from("300"),
+            id: test_id(300),
             position: Some(Some(1)),
         },
         ModifyGuildRolePosition {
-            id: Snowflake::from("301"),
+            id: test_id(301),
             position: Some(None),
         },
     ];
@@ -421,7 +425,7 @@ fn guild_role_position_body_keeps_nullable_wire_shape() {
 fn guild_request_bodies_keep_nullable_wire_shape() {
     let member = ModifyGuildMember {
         nick: Some(None),
-        roles: Some(Some(vec![Snowflake::from("300")])),
+        roles: Some(Some(vec![test_id(300)])),
         mute: Some(Some(false)),
         deaf: None,
         channel_id: Some(None),
@@ -533,7 +537,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
         kind: Some(ChannelType::Text as u8),
         topic: Some(Some("read first".to_string())),
         permission_overwrites: Some(Some(vec![PermissionOverwrite {
-            id: Snowflake::from("300"),
+            id: test_id(300),
             kind: 0,
             allow: Some(PermissionsBitField(1024)),
             deny: None,
@@ -570,7 +574,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
     let welcome_screen = ModifyGuildWelcomeScreen {
         enabled: Some(Some(true)),
         welcome_channels: Some(Some(vec![WelcomeScreenChannel {
-            channel_id: Snowflake::from("202"),
+            channel_id: test_id(202),
             description: "Start here".to_string(),
             emoji_id: None,
             emoji_name: Some("wave".to_string()),
@@ -592,7 +596,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
 
     let onboarding = ModifyGuildOnboarding {
         prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
-        default_channel_ids: Some(vec![Snowflake::from("202")]),
+        default_channel_ids: Some(vec![test_id(202)]),
         enabled: Some(true),
         mode: Some(0),
     };
@@ -609,7 +613,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
     let prune = BeginGuildPruneRequest {
         days: Some(7),
         compute_prune_count: Some(false),
-        include_roles: Some(vec![Snowflake::from("300")]),
+        include_roles: Some(vec![test_id(300)]),
         reason: None,
     };
     assert_eq!(
@@ -665,8 +669,8 @@ fn monetization_poll_and_thread_response_models_decode() {
     assert_eq!(entitlement.kind, 8);
     assert_eq!(entitlement.gift_code_flags, Some(0));
     assert_eq!(
-        entitlement.subscription_id.as_ref().map(Snowflake::as_str),
-        Some("1019653835926409216")
+        entitlement.subscription_id.map(GenericId::get),
+        Some(1019653835926409216)
     );
 
     let subscription: Subscription = serde_json::from_value(json!({
@@ -681,7 +685,7 @@ fn monetization_poll_and_thread_response_models_decode() {
         "canceled_at": null
     }))
     .unwrap();
-    assert_eq!(subscription.sku_ids[0].as_str(), "1158857122189168803");
+    assert_eq!(subscription.sku_ids[0].get(), 1158857122189168803);
     assert_eq!(subscription.status, 0);
 
     let voters: PollAnswerVoters = serde_json::from_value(json!({
@@ -696,16 +700,16 @@ fn monetization_poll_and_thread_response_models_decode() {
         "has_more": false
     }))
     .unwrap();
-    assert_eq!(threads.threads[0].id.as_str(), "50");
-    assert_eq!(threads.members[0].user_id.as_ref().unwrap().as_str(), "42");
+    assert_eq!(threads.threads[0].id.get(), 50);
+    assert_eq!(threads.members[0].user_id.as_ref().unwrap().get(), 42);
 
     let thread_member = ThreadMember {
-        user_id: Some(Snowflake::from("42")),
+        user_id: Some(test_id(42)),
         member: Some(Member {
             user: Some(User {
-                id: Snowflake::from("42"),
+                id: test_id(42),
                 username: "member".to_string(),
-                ..User::default()
+                ..User::fixture()
             }),
             ..Member::default()
         }),
@@ -779,8 +783,8 @@ fn message_resource_extended_fields_decode() {
     }))
     .unwrap();
 
-    assert_eq!(message.mention_roles[0].as_str(), "3000");
-    assert_eq!(message.application_id.unwrap().as_str(), "4000");
+    assert_eq!(message.mention_roles[0].get(), 3000);
+    assert_eq!(message.application_id.unwrap().get(), 4000);
     assert_eq!(
         message
             .application
@@ -824,8 +828,8 @@ fn message_resource_extended_fields_decode() {
     assert_eq!(
         message.message_snapshots[0].message.sticker_items[0]
             .id
-            .as_str(),
-        "9000"
+            .get(),
+        9000
     );
     assert_eq!(
         message
@@ -834,7 +838,7 @@ fn message_resource_extended_fields_decode() {
             .map(|message| message.content.as_str()),
         Some("original")
     );
-    assert_eq!(message.call.unwrap().participants[0].as_str(), "42");
+    assert_eq!(message.call.unwrap().participants[0].get(), 42);
     assert_eq!(
         message.shared_client_theme.unwrap().colors,
         vec!["5865F2".to_string(), "7258F2".to_string()]
@@ -858,10 +862,10 @@ fn integration_model_decodes_core_guild_integration_shape() {
     }))
     .unwrap();
 
-    assert_eq!(integration.id.as_str(), "100");
+    assert_eq!(integration.id.get(), 100);
     assert_eq!(integration.kind, "twitch");
     assert_eq!(integration.account.name, "stream");
-    assert_eq!(integration.application.as_ref().unwrap().id.as_str(), "200");
+    assert_eq!(integration.application.as_ref().unwrap().id.get(), 200);
 }
 
 #[test]
@@ -893,10 +897,10 @@ fn embed_field_and_focus_helpers_follow_default_and_true_branches() {
 #[test]
 fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
     let context = InteractionContextData {
-        id: Snowflake::from("99"),
-        application_id: Snowflake::from("77"),
+        id: test_id(99),
+        application_id: test_id(77),
         token: "token-123".to_string(),
-        ..InteractionContextData::default()
+        ..InteractionContextData::fixture()
     };
     let interaction = Interaction::Component(ComponentInteraction {
         context: context.clone(),
@@ -907,88 +911,88 @@ fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
         },
     });
     let user = User {
-        id: Snowflake::from(1759288472266248192u64),
+        id: test_id(1759288472266248192),
         username: "discordrs".to_string(),
-        ..User::default()
+        ..User::fixture()
     };
 
-    assert_eq!(interaction.context().id.as_str(), "99");
-    assert_eq!(interaction.id().as_str(), "99");
-    assert_eq!(interaction.application_id().as_str(), "77");
+    assert_eq!(interaction.context().id.get(), 99);
+    assert_eq!(interaction.id().get(), 99);
+    assert_eq!(interaction.application_id().get(), 77);
     assert_eq!(interaction.token(), "token-123");
 
-    assert_eq!(DiscordModel::id(&user).as_str(), "1759288472266248192");
+    assert_eq!(DiscordModel::id(&user).get(), 1759288472266248192);
     assert_eq!(
-        DiscordModel::id_opt(&user).map(Snowflake::as_str),
-        Some("1759288472266248192")
+        DiscordModel::id_opt(&user).map(GenericId::get),
+        Some(1759288472266248192)
     );
     assert!(DiscordModel::created_at(&user).is_some());
 }
 
 #[test]
 fn interaction_accessors_cover_all_variants() {
-    fn context(id: &str, application_id: &str, token: &str) -> InteractionContextData {
+    fn context(id: u64, application_id: u64, token: &str) -> InteractionContextData {
         InteractionContextData {
-            id: Snowflake::from(id),
-            application_id: Snowflake::from(application_id),
+            id: test_id(id),
+            application_id: test_id(application_id),
             token: token.to_string(),
-            ..InteractionContextData::default()
+            ..InteractionContextData::fixture()
         }
     }
 
     let interactions = [
         Interaction::Ping(PingInteraction {
-            context: context("1", "10", "ping-token"),
+            context: context(1, 10, "ping-token"),
         }),
         Interaction::ChatInputCommand(ChatInputCommandInteraction {
-            context: context("2", "20", "chat-token"),
+            context: context(2, 20, "chat-token"),
             data: CommandInteractionData::default(),
         }),
         Interaction::UserContextMenu(UserContextMenuInteraction {
-            context: context("3", "30", "user-token"),
+            context: context(3, 30, "user-token"),
             data: CommandInteractionData::default(),
         }),
         Interaction::MessageContextMenu(MessageContextMenuInteraction {
-            context: context("4", "40", "message-token"),
+            context: context(4, 40, "message-token"),
             data: CommandInteractionData::default(),
         }),
         Interaction::Autocomplete(AutocompleteInteraction {
-            context: context("5", "50", "autocomplete-token"),
+            context: context(5, 50, "autocomplete-token"),
             data: CommandInteractionData::default(),
         }),
         Interaction::Component(ComponentInteraction {
-            context: context("6", "60", "component-token"),
+            context: context(6, 60, "component-token"),
             data: ComponentInteractionData::default(),
         }),
         Interaction::ModalSubmit(ModalSubmitInteraction {
-            context: context("7", "70", "modal-token"),
+            context: context(7, 70, "modal-token"),
             submission: V2ModalSubmission {
                 custom_id: "modal".to_string(),
                 components: vec![],
             },
         }),
         Interaction::Unknown {
-            context: context("8", "80", "unknown-token"),
+            context: context(8, 80, "unknown-token"),
             kind: 99,
             raw_data: json!({ "kind": "unknown" }),
         },
     ];
 
     let expected = [
-        ("1", "10", "ping-token"),
-        ("2", "20", "chat-token"),
-        ("3", "30", "user-token"),
-        ("4", "40", "message-token"),
-        ("5", "50", "autocomplete-token"),
-        ("6", "60", "component-token"),
-        ("7", "70", "modal-token"),
-        ("8", "80", "unknown-token"),
+        (1, 10, "ping-token"),
+        (2, 20, "chat-token"),
+        (3, 30, "user-token"),
+        (4, 40, "message-token"),
+        (5, 50, "autocomplete-token"),
+        (6, 60, "component-token"),
+        (7, 70, "modal-token"),
+        (8, 80, "unknown-token"),
     ];
 
     for (interaction, (id, application_id, token)) in interactions.iter().zip(expected) {
-        assert_eq!(interaction.context().id.as_str(), id);
-        assert_eq!(interaction.id().as_str(), id);
-        assert_eq!(interaction.application_id().as_str(), application_id);
+        assert_eq!(interaction.context().id.get(), id);
+        assert_eq!(interaction.id().get(), id);
+        assert_eq!(interaction.application_id().get(), application_id);
         assert_eq!(interaction.token(), token);
     }
 }
@@ -996,36 +1000,36 @@ fn interaction_accessors_cover_all_variants() {
 #[test]
 fn discord_model_trait_returns_ids_for_core_models() {
     let guild = Guild {
-        id: Snowflake::from("11"),
+        id: test_id(11),
         name: "Guild".to_string(),
-        ..Guild::default()
+        ..Guild::fixture()
     };
     let channel = Channel {
-        id: Snowflake::from("12"),
+        id: test_id(12),
         kind: 0,
-        ..Channel::default()
+        ..Channel::fixture()
     };
     let message = Message {
-        id: Snowflake::from("13"),
-        channel_id: Snowflake::from("99"),
-        ..Message::default()
+        id: test_id(13),
+        channel_id: test_id(99),
+        ..Message::fixture()
     };
     let role = Role {
-        id: Snowflake::from("14"),
+        id: test_id(14),
         name: "Admin".to_string(),
-        ..Role::default()
+        ..Role::fixture()
     };
     let attachment = Attachment {
-        id: Snowflake::from("15"),
+        id: test_id(15),
         filename: "file.txt".to_string(),
-        ..Attachment::default()
+        ..Attachment::fixture()
     };
 
-    assert_eq!(DiscordModel::id(&guild).as_str(), "11");
-    assert_eq!(DiscordModel::id(&channel).as_str(), "12");
-    assert_eq!(DiscordModel::id(&message).as_str(), "13");
-    assert_eq!(DiscordModel::id(&role).as_str(), "14");
-    assert_eq!(DiscordModel::id(&attachment).as_str(), "15");
+    assert_eq!(DiscordModel::id(&guild).get(), 11);
+    assert_eq!(DiscordModel::id(&channel).get(), 12);
+    assert_eq!(DiscordModel::id(&message).get(), 13);
+    assert_eq!(DiscordModel::id(&role).get(), 14);
+    assert_eq!(DiscordModel::id(&attachment).get(), 15);
 }
 
 #[test]
@@ -1066,10 +1070,10 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
         ..InteractionCallbackResponse::default()
     };
     let dm_channel = CreateDmChannel {
-        recipient_id: Snowflake::from("321"),
+        recipient_id: test_id(321),
     };
     let sticker = StickerItem {
-        id: Snowflake::from("654"),
+        id: test_id(654),
         name: "party".to_string(),
         kind: Some(1),
     };
@@ -1078,14 +1082,14 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
         code: Some("abc".to_string()),
         approximate_member_count: Some(42),
         roles: vec![Role {
-            id: Snowflake::from("700"),
+            id: test_id(700),
             name: "guest".to_string(),
-            ..Role::default()
+            ..Role::fixture()
         }],
         ..Invite::default()
     };
     let invite_body = CreateChannelInvite {
-        role_ids: Some(vec![Snowflake::from("700")]),
+        role_ids: Some(vec![test_id(700)]),
         ..CreateChannelInvite::default()
     };
     let invite_job = InviteTargetUsersJobStatus {
@@ -1153,11 +1157,11 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
 #[test]
 fn stage_instance_request_bodies_keep_wire_shape() {
     let create = CreateStageInstance {
-        channel_id: Snowflake::from("400"),
+        channel_id: test_id(400),
         topic: "town hall".to_string(),
         privacy_level: Some(2),
         send_start_notification: Some(true),
-        guild_scheduled_event_id: Some(Snowflake::from("500")),
+        guild_scheduled_event_id: Some(test_id(500)),
     };
     assert_eq!(
         serde_json::to_value(&create).unwrap(),
@@ -1213,7 +1217,7 @@ fn sticker_request_bodies_keep_wire_shape() {
 #[test]
 fn voice_state_request_bodies_keep_wire_shape() {
     let current = ModifyCurrentUserVoiceState {
-        channel_id: Some(Snowflake::from("200")),
+        channel_id: Some(test_id(200)),
         suppress: Some(false),
         request_to_speak_timestamp: Some(None),
     };
@@ -1227,7 +1231,7 @@ fn voice_state_request_bodies_keep_wire_shape() {
     );
 
     let user = ModifyUserVoiceState {
-        channel_id: Some(Snowflake::from("200")),
+        channel_id: Some(test_id(200)),
         suppress: Some(true),
     };
     assert_eq!(
@@ -1314,7 +1318,7 @@ fn webhook_request_bodies_and_queries_keep_wire_shape() {
     let modify = ModifyWebhook {
         name: Some("ops".to_string()),
         avatar: Some(Some("data:image/png;base64,abc".to_string())),
-        channel_id: Some(Snowflake::from("500")),
+        channel_id: Some(test_id(500)),
     };
     assert_eq!(
         serde_json::to_value(&modify).unwrap(),
@@ -1339,7 +1343,7 @@ fn webhook_request_bodies_and_queries_keep_wire_shape() {
 
     let query = WebhookExecuteQuery {
         wait: Some(false),
-        thread_id: Some(Snowflake::from("600")),
+        thread_id: Some(test_id(600)),
         with_components: Some(true),
     };
     assert_eq!(
@@ -1352,7 +1356,7 @@ fn webhook_request_bodies_and_queries_keep_wire_shape() {
     );
 
     let message_query = WebhookMessageQuery {
-        thread_id: Some(Snowflake::from("601")),
+        thread_id: Some(test_id(601)),
         with_components: Some(false),
     };
     assert_eq!(
@@ -1423,11 +1427,10 @@ fn embed_presence_and_permissions_cover_optional_and_numeric_serde_paths() {
         ..Embed::default()
     };
     let presence = Presence {
-        user_id: Some(Snowflake::from("777")),
+        user_id: Some(test_id(777)),
         ..Presence::default()
     };
     let numeric_permissions: PermissionsBitField = serde_json::from_value(json!(16)).unwrap();
-    let invalid_timestamp = Snowflake::new("not-a-number");
 
     let embed_json = serde_json::to_value(&embed).unwrap();
     let presence_json = serde_json::to_value(&presence).unwrap();
@@ -1437,7 +1440,6 @@ fn embed_presence_and_permissions_cover_optional_and_numeric_serde_paths() {
     assert!(embed_json.get("description").is_none());
     assert_eq!(presence_json, json!({ "user_id": "777" }));
     assert_eq!(numeric_permissions.bits(), 16);
-    assert_eq!(invalid_timestamp.timestamp(), None);
 }
 
 #[test]
@@ -1540,7 +1542,7 @@ fn message_components_v2_tree_decodes_typed() {
     let components = message.components.as_deref().unwrap();
     let container = &components[0];
     assert_eq!(container.kind, MessageComponent::CONTAINER);
-    assert_eq!(container.id, Some(1));
+    assert_eq!(container.id, Some(ComponentId::new(1)));
     assert_eq!(container.accent_color, Some(5_793_266));
     assert_eq!(container.spoiler, Some(false));
 
@@ -1608,7 +1610,7 @@ fn message_components_v2_tree_decodes_typed() {
     let channel_select = &container.components[6].components[0];
     assert_eq!(channel_select.kind, MessageComponent::CHANNEL_SELECT);
     assert_eq!(channel_select.channel_types, vec![0, 5]);
-    assert_eq!(channel_select.default_values[0].id.as_str(), "42");
+    assert_eq!(channel_select.default_values[0].id.get(), 42);
     assert_eq!(channel_select.default_values[0].kind, "channel");
 
     // Depth-first iteration visits the whole tree, including the accessory.
@@ -1705,18 +1707,21 @@ fn resolved_data_decodes_all_six_maps_with_lookups() {
     .unwrap();
 
     assert!(!resolved.is_empty());
-    assert_eq!(resolved.user(42u64).unwrap().username, "someone");
+    assert_eq!(resolved.user(test_id(42)).unwrap().username, "someone");
     assert_eq!(
-        resolved.member("42").unwrap().nick.as_deref(),
+        resolved.member(test_id(42)).unwrap().nick.as_deref(),
         Some("friend")
     );
-    assert_eq!(resolved.role(77u64).unwrap().name, "Admins");
-    let channel = resolved.channel("88").unwrap();
+    assert_eq!(resolved.role(test_id(77)).unwrap().name, "Admins");
+    let channel = resolved.channel(test_id(88)).unwrap();
     assert_eq!(channel.kind, 11);
     assert_eq!(channel.name.as_deref(), Some("release-thread"));
-    assert_eq!(resolved.message(99u64).unwrap().content, "hello");
-    assert_eq!(resolved.attachment(100u64).unwrap().filename, "log.txt");
-    assert!(resolved.user(1u64).is_none());
+    assert_eq!(resolved.message(test_id(99)).unwrap().content, "hello");
+    assert_eq!(
+        resolved.attachment(test_id(100)).unwrap().filename,
+        "log.txt"
+    );
+    assert!(resolved.user(test_id(1)).is_none());
 
     // Every map defaults to empty when Discord omits it.
     let empty: ResolvedData = serde_json::from_value(json!({})).unwrap();
@@ -1755,54 +1760,47 @@ fn message_interaction_metadata_decodes_with_nested_trigger() {
     .unwrap();
 
     let metadata = message.interaction_metadata.unwrap();
-    assert_eq!(metadata.id.as_str(), "900");
+    assert_eq!(metadata.id.get(), 900);
     assert_eq!(metadata.kind, 5);
     assert_eq!(metadata.user.as_ref().unwrap().username, "someone");
     assert_eq!(
         metadata
             .authorizing_integration_owners
-            .get("0")
-            .map(Snowflake::as_str),
-        Some("500")
+            .guild_install
+            .and_then(GuildInstallOwner::guild_id)
+            .map(GuildId::get),
+        Some(500)
     );
     assert_eq!(
         metadata
-            .original_response_message_id
-            .as_ref()
-            .map(Snowflake::as_str),
-        Some("901")
-    );
-    assert_eq!(metadata.target_user.as_ref().unwrap().id.as_str(), "43");
-    assert_eq!(
-        metadata.target_message_id.as_ref().map(Snowflake::as_str),
-        Some("902")
+            .authorizing_integration_owners
+            .user_install
+            .map(UserId::get),
+        Some(42)
     );
     assert_eq!(
-        metadata
-            .interacted_message_id
-            .as_ref()
-            .map(Snowflake::as_str),
-        Some("903")
+        metadata.original_response_message_id.map(GenericId::get),
+        Some(901)
+    );
+    assert_eq!(metadata.target_user.as_ref().unwrap().id.get(), 43);
+    assert_eq!(metadata.target_message_id.map(GenericId::get), Some(902));
+    assert_eq!(
+        metadata.interacted_message_id.map(GenericId::get),
+        Some(903)
     );
 
     let trigger = metadata.triggering_interaction_metadata.unwrap();
-    assert_eq!(trigger.id.as_str(), "890");
+    assert_eq!(trigger.id.get(), 890);
     assert_eq!(trigger.kind, 3);
     assert!(trigger.authorizing_integration_owners.is_empty());
-    assert_eq!(
-        trigger
-            .interacted_message_id
-            .as_ref()
-            .map(Snowflake::as_str),
-        Some("880")
-    );
+    assert_eq!(trigger.interacted_message_id.map(GenericId::get), Some(880));
     assert!(trigger.triggering_interaction_metadata.is_none());
 
     let legacy = message.interaction.unwrap();
-    assert_eq!(legacy.id.as_str(), "900");
+    assert_eq!(legacy.id.get(), 900);
     assert_eq!(legacy.kind, 2);
     assert_eq!(legacy.name, "deploy");
-    assert_eq!(legacy.user.as_ref().unwrap().id.as_str(), "42");
+    assert_eq!(legacy.user.as_ref().unwrap().id.get(), 42);
 }
 
 #[test]
@@ -1822,13 +1820,11 @@ fn command_interaction_resolved_data_is_typed() {
     let resolved = data.resolved.unwrap();
     let target_id = data.target_id.unwrap();
     assert_eq!(
-        resolved
-            .user(target_id.clone())
-            .map(|user| user.username.as_str()),
+        resolved.user(target_id).map(|user| user.username.as_str()),
         Some("target-user")
     );
     assert!(resolved.member(target_id).is_some());
-    assert!(resolved.role(1u64).is_none());
+    assert!(resolved.role(test_id(1)).is_none());
 }
 
 #[test]
@@ -1911,4 +1907,93 @@ fn channel_obfuscation_is_detected_from_the_flag_not_the_name() {
     assert!(named_like_hidden
         .channel_flags()
         .contains(crate::bitfield::channel_flags::IS_SPOILER_CHANNEL.bits()));
+}
+
+#[test]
+fn authorizing_integration_owners_keeps_bot_dm_zero_and_unknown_keys() {
+    let owners: AuthorizingIntegrationOwners =
+        serde_json::from_value(json!({ "0": "0", "1": "42", "7": ["future", 1] })).unwrap();
+    assert_eq!(owners.guild_install, Some(GuildInstallOwner::BotDm));
+    assert_eq!(owners.user_install.map(UserId::get), Some(42));
+    assert_eq!(owners.other.get("7"), Some(&json!(["future", 1])));
+    assert!(!owners.is_empty());
+    assert_eq!(
+        serde_json::to_value(&owners).unwrap(),
+        json!({ "0": "0", "1": "42", "7": ["future", 1] })
+    );
+
+    let guild: AuthorizingIntegrationOwners =
+        serde_json::from_value(json!({ "0": 81384788765712384_u64 })).unwrap();
+    assert_eq!(
+        guild
+            .guild_install
+            .and_then(GuildInstallOwner::guild_id)
+            .map(GuildId::get),
+        Some(81384788765712384)
+    );
+    assert!(guild.user_install.is_none());
+    assert!(AuthorizingIntegrationOwners::default().is_empty());
+    assert!(serde_json::from_value::<AuthorizingIntegrationOwners>(json!({ "1": "0" })).is_err());
+}
+
+#[test]
+fn guild_widget_member_ids_are_opaque_and_may_be_zero() {
+    let widget: GuildWidget = serde_json::from_value(json!({
+        "id": "1",
+        "name": "widget",
+        "channels": [],
+        "members": [{ "id": "0", "username": "anon" }, { "id": "abc", "username": "x" }]
+    }))
+    .unwrap();
+    assert_eq!(widget.members[0].id.as_str(), "0");
+    assert_eq!(widget.members[1].id.as_str(), "abc");
+}
+
+#[test]
+fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
+    use super::{
+        CreateGuild, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
+        CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole,
+    };
+
+    let everyone = CreateGuildPlaceholderId::new(0);
+    let category = CreateGuildPlaceholderId::new(1);
+    let body = CreateGuild {
+        name: "guild".to_string(),
+        roles: Some(vec![CreateGuildPlaceholderRole {
+            id: Some(everyone),
+            ..CreateGuildPlaceholderRole::default()
+        }]),
+        channels: Some(vec![
+            CreateGuildPlaceholderChannel {
+                id: Some(category),
+                name: "general".to_string(),
+                kind: Some(4),
+                ..CreateGuildPlaceholderChannel::default()
+            },
+            CreateGuildPlaceholderChannel {
+                id: Some(CreateGuildPlaceholderId::new(2)),
+                name: "chat".to_string(),
+                parent_id: Some(category),
+                permission_overwrites: Some(vec![CreateGuildPlaceholderOverwrite {
+                    id: everyone,
+                    kind: 0,
+                    allow: None,
+                    deny: None,
+                }]),
+                ..CreateGuildPlaceholderChannel::default()
+            },
+        ]),
+        system_channel_id: Some(CreateGuildPlaceholderId::new(2)),
+        ..CreateGuild::default()
+    };
+    let value = serde_json::to_value(&body).unwrap();
+    assert_eq!(value["roles"][0]["id"], json!(0));
+    assert_eq!(value["channels"][1]["parent_id"], json!(1));
+    assert_eq!(
+        value["channels"][1]["permission_overwrites"][0]["id"],
+        json!(0)
+    );
+    assert_eq!(value["system_channel_id"], json!(2));
+    assert_eq!(everyone.get(), 0);
 }

@@ -1,16 +1,17 @@
+use crate::model::test_id;
 use serde_json::{json, Value};
 
 use super::*;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Entitlement, Guild, Integration, IntegrationAccount, Interaction,
-    InteractionContextData, Member, Message, PingInteraction, Role, Snowflake, SoundboardSound,
-    StageInstance, Subscription, User, VoiceServerUpdate, VoiceState,
+    Channel, Entitlement, GenericId, Guild, Integration, IntegrationAccount, Interaction,
+    InteractionContextData, Member, Message, PingInteraction, Role, SoundboardSound, StageInstance,
+    Subscription, User, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
-fn snowflake(id: &str) -> Snowflake {
-    Snowflake::new(id)
+fn snowflake(id: &str) -> GenericId {
+    id.parse().unwrap()
 }
 
 fn raw(kind: &str) -> Value {
@@ -21,7 +22,7 @@ fn user(id: &str, username: &str) -> User {
     User {
         id: snowflake(id),
         username: username.to_string(),
-        ..Default::default()
+        ..User::fixture()
     }
 }
 
@@ -29,7 +30,7 @@ fn guild(id: &str, name: &str) -> Guild {
     Guild {
         id: snowflake(id),
         name: name.to_string(),
-        ..Default::default()
+        ..Guild::fixture()
     }
 }
 
@@ -37,7 +38,7 @@ fn channel(id: &str) -> Channel {
     Channel {
         id: snowflake(id),
         kind: 0,
-        ..Default::default()
+        ..Channel::fixture()
     }
 }
 
@@ -52,7 +53,7 @@ fn role(id: &str, name: &str) -> Role {
     Role {
         id: snowflake(id),
         name: name.to_string(),
-        ..Default::default()
+        ..Role::fixture()
     }
 }
 
@@ -61,7 +62,7 @@ fn message(id: &str, channel_id: &str, content: &str) -> Message {
         id: snowflake(id),
         channel_id: snowflake(channel_id),
         content: content.to_string(),
-        ..Default::default()
+        ..Message::fixture()
     }
 }
 
@@ -70,7 +71,7 @@ fn interaction_context() -> InteractionContextData {
         id: snowflake("400"),
         application_id: snowflake("401"),
         token: "token".to_string(),
-        ..Default::default()
+        ..InteractionContextData::fixture()
     }
 }
 
@@ -584,7 +585,7 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
             let action = event.action.as_ref().expect("action should decode");
             assert_eq!(action.kind, 2);
             assert_eq!(
-                action.metadata.as_ref().and_then(|m| m.channel_id.clone()),
+                action.metadata.as_ref().and_then(|m| m.channel_id),
                 Some(snowflake("721"))
             );
             assert_eq!(event.rule_id, Some(snowflake("722")));
@@ -631,9 +632,9 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
                 event
                     .entry
                     .as_ref()
-                    .and_then(|entry| entry.id.as_ref())
-                    .map(Snowflake::as_str),
-                Some("731")
+                    .and_then(|entry| entry.id)
+                    .map(GenericId::get),
+                Some(731)
             );
         }
         other => panic!("unexpected audit log entry event: {other:?}"),
@@ -1258,9 +1259,9 @@ fn decode_event_covers_new_gateway_surface_variants() {
     .unwrap()
     {
         Event::GuildMembersChunk(event) => {
-            assert_eq!(event.data.guild_id.as_str(), "1");
+            assert_eq!(event.data.guild_id.get(), 1);
             assert_eq!(event.data.members.len(), 1);
-            assert_eq!(event.data.not_found[0].as_str(), "4");
+            assert_eq!(event.data.not_found[0].get(), 4);
             assert_eq!(
                 event.data.presences.unwrap()[0]
                     .activities
@@ -1290,7 +1291,7 @@ fn decode_event_covers_new_gateway_surface_variants() {
     .unwrap()
     {
         Event::VoiceChannelStatusUpdate(event) => {
-            assert_eq!(event.channel_id.unwrap().as_str(), "2");
+            assert_eq!(event.channel_id.unwrap().get(), 2);
             assert_eq!(event.status.as_deref(), Some("Live"));
         }
         other => panic!("unexpected voice channel status event: {other:?}"),
@@ -1309,8 +1310,8 @@ fn decode_event_covers_new_gateway_surface_variants() {
     assert_eq!(event.raw(), &raw_channel_info);
     match event {
         Event::ChannelInfo(event) => {
-            assert_eq!(event.guild_id.as_str(), "1");
-            assert_eq!(event.channels[0].id.as_str(), "2");
+            assert_eq!(event.guild_id.get(), 1);
+            assert_eq!(event.channels[0].id.get(), 2);
             assert_eq!(event.channels[0].status.as_deref(), Some("Live"));
             assert_eq!(
                 event.channels[0].voice_start_time.as_deref(),
@@ -1646,7 +1647,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     application_id: snowflake("932"),
                     kind: 8,
                     deleted: false,
-                    ..Entitlement::default()
+                    ..Entitlement::fixture()
                 },
                 raw: raw("ENTITLEMENT_CREATE"),
             }),
@@ -1660,7 +1661,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
                     status: 0,
-                    ..Subscription::default()
+                    ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_CREATE"),
             }),
@@ -1677,7 +1678,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                         id: "account".to_string(),
                         name: "account".to_string(),
                     },
-                    ..Integration::default()
+                    ..Integration::fixture()
                 },
                 raw: raw("INTEGRATION_CREATE"),
             }),
@@ -1700,7 +1701,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     guild_id: Some(snowflake("934")),
                     volume: 1.0,
                     available: true,
-                    ..SoundboardSound::default()
+                    ..SoundboardSound::fixture()
                 },
                 raw: raw("GUILD_SOUNDBOARD_SOUND_CREATE"),
             }),
@@ -1722,7 +1723,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     sound_id: snowflake("938"),
                     volume: 1.0,
                     available: true,
-                    ..SoundboardSound::default()
+                    ..SoundboardSound::fixture()
                 }],
                 raw: raw("SOUNDBOARD_SOUNDS"),
             }),
@@ -1736,7 +1737,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     application_id: snowflake("941"),
                     kind: 8,
                     deleted: false,
-                    ..Entitlement::default()
+                    ..Entitlement::fixture()
                 },
                 raw: raw("ENTITLEMENT_UPDATE"),
             }),
@@ -1750,7 +1751,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     application_id: snowflake("944"),
                     kind: 8,
                     deleted: true,
-                    ..Entitlement::default()
+                    ..Entitlement::fixture()
                 },
                 raw: raw("ENTITLEMENT_DELETE"),
             }),
@@ -1764,7 +1765,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
                     status: 1,
-                    ..Subscription::default()
+                    ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_UPDATE"),
             }),
@@ -1778,7 +1779,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
                     status: 2,
-                    ..Subscription::default()
+                    ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_DELETE"),
             }),
@@ -1795,7 +1796,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                         id: "account".to_string(),
                         name: "account".to_string(),
                     },
-                    ..Integration::default()
+                    ..Integration::fixture()
                 },
                 raw: raw("INTEGRATION_UPDATE"),
             }),
@@ -1809,7 +1810,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     guild_id: Some(snowflake("952")),
                     volume: 1.0,
                     available: true,
-                    ..SoundboardSound::default()
+                    ..SoundboardSound::fixture()
                 },
                 raw: raw("GUILD_SOUNDBOARD_SOUND_UPDATE"),
             }),
@@ -1873,7 +1874,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                 channel_id: Some(snowflake("981")),
                 message_id: Some(snowflake("982")),
                 guild_id: Some(snowflake("983")),
-                answer_id: Some(1),
+                answer_id: Some(crate::model::PollAnswerId::new(1)),
                 raw: raw("MESSAGE_POLL_VOTE_ADD"),
             }),
         ),
@@ -1884,7 +1885,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                 channel_id: Some(snowflake("985")),
                 message_id: Some(snowflake("986")),
                 guild_id: Some(snowflake("987")),
-                answer_id: Some(2),
+                answer_id: Some(crate::model::PollAnswerId::new(2)),
                 raw: raw("MESSAGE_POLL_VOTE_REMOVE"),
             }),
         ),
@@ -2034,7 +2035,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     channel_id: snowflake("137"),
                     topic: "updated".to_string(),
                     privacy_level: 2,
-                    ..StageInstance::default()
+                    ..StageInstance::fixture()
                 },
                 raw: raw("STAGE_INSTANCE_UPDATE"),
             }),
@@ -2048,7 +2049,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     channel_id: snowflake("140"),
                     topic: "deleted".to_string(),
                     privacy_level: 2,
-                    ..StageInstance::default()
+                    ..StageInstance::fixture()
                 },
                 raw: raw("STAGE_INSTANCE_DELETE"),
             }),
@@ -2114,7 +2115,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                 application_id: Some(snowflake("152")),
                 guild_id: Some(snowflake("153")),
                 permissions: vec![crate::model::ApplicationCommandPermission::role(
-                    Snowflake::new("154"),
+                    test_id(154),
                     true,
                 )],
                 raw: raw("APPLICATION_COMMAND_PERMISSIONS_UPDATE"),
@@ -2204,7 +2205,7 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match entitlement {
         Event::EntitlementUpdate(event) => {
-            assert_eq!(event.entitlement.sku_id.as_str(), "2");
+            assert_eq!(event.entitlement.sku_id.get(), 2);
             assert!(!event.entitlement.deleted);
         }
         other => panic!("unexpected event: {other:?}"),
@@ -2225,7 +2226,7 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match subscription {
         Event::SubscriptionUpdate(event) => {
-            assert_eq!(event.subscription.id.as_str(), "30");
+            assert_eq!(event.subscription.id.get(), 30);
             assert_eq!(event.subscription.status, 1);
         }
         other => panic!("unexpected event: {other:?}"),
@@ -2245,8 +2246,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match integration {
         Event::IntegrationCreate(event) => {
-            assert_eq!(event.guild_id.unwrap().as_str(), "41");
-            assert_eq!(event.integration.id.as_str(), "40");
+            assert_eq!(event.guild_id.unwrap().get(), 41);
+            assert_eq!(event.integration.id.get(), 40);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2262,8 +2263,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match integration_delete {
         Event::IntegrationDelete(event) => {
-            assert_eq!(event.id.unwrap().as_str(), "40");
-            assert_eq!(event.application_id.unwrap().as_str(), "42");
+            assert_eq!(event.id.unwrap().get(), 40);
+            assert_eq!(event.application_id.unwrap().get(), 42);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2281,8 +2282,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match poll_vote {
         Event::MessagePollVoteRemove(event) => {
-            assert_eq!(event.user_id.unwrap().as_str(), "50");
-            assert_eq!(event.answer_id, Some(2));
+            assert_eq!(event.user_id.unwrap().get(), 50);
+            assert_eq!(event.answer_id, Some(crate::model::PollAnswerId::new(2)));
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2300,8 +2301,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match sound {
         Event::GuildSoundboardSoundUpdate(event) => {
-            assert_eq!(event.sound.sound_id.as_str(), "10");
-            assert_eq!(event.sound.guild_id.unwrap().as_str(), "20");
+            assert_eq!(event.sound.sound_id.get(), 10);
+            assert_eq!(event.sound.guild_id.unwrap().get(), 20);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2316,8 +2317,8 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match delete {
         Event::GuildSoundboardSoundDelete(event) => {
-            assert_eq!(event.sound_id.as_str(), "10");
-            assert_eq!(event.guild_id.as_str(), "20");
+            assert_eq!(event.sound_id.get(), 10);
+            assert_eq!(event.guild_id.get(), 20);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2337,7 +2338,7 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     .unwrap();
     match sounds {
         Event::GuildSoundboardSoundsUpdate(event) => {
-            assert_eq!(event.guild_id.as_str(), "20");
+            assert_eq!(event.guild_id.get(), 20);
             assert_eq!(event.soundboard_sounds.len(), 1);
         }
         other => panic!("unexpected event: {other:?}"),
@@ -2583,7 +2584,7 @@ fn invite_create_decodes_full_typed_fields() {
         Event::InviteCreate(invite) => {
             assert_eq!(invite.code.as_deref(), Some("abc123"));
             assert_eq!(
-                invite.inviter.as_ref().map(|user| user.id.clone()),
+                invite.inviter.as_ref().map(|user| user.id),
                 Some(snowflake("302"))
             );
             assert_eq!(invite.uses, Some(0));
@@ -2594,7 +2595,7 @@ fn invite_create_decodes_full_typed_fields() {
             assert_eq!(invite.expires_at.as_deref(), Some("2026-01-01T01:00:00Z"));
             assert_eq!(invite.target_type, Some(1));
             assert_eq!(
-                invite.target_user.as_ref().map(|user| user.id.clone()),
+                invite.target_user.as_ref().map(|user| user.id),
                 Some(snowflake("303"))
             );
         }
@@ -2698,7 +2699,7 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
     {
         Event::ApplicationCommandPermissionsUpdate(event) => {
             assert_eq!(event.permissions.len(), 3);
-            assert_eq!(event.permissions[0].id.as_str(), "303");
+            assert_eq!(event.permissions[0].id.get(), 303);
             assert_eq!(
                 event.permissions[0].kind,
                 crate::model::ApplicationCommandPermission::ROLE

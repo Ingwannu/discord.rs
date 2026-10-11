@@ -2,23 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Snowflake, User};
+use super::{GenericId, User};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StickerItem`.
 pub struct StickerItem {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(rename = "format_type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Sticker`.
 pub struct Sticker {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pack_id: Option<Snowflake>,
+    pub pack_id: Option<GenericId>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -30,7 +30,7 @@ pub struct Sticker {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,21 +56,21 @@ pub struct ModifyGuildSticker {
     pub tags: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StickerPack`.
 pub struct StickerPack {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku_id: Option<Snowflake>,
+    pub sku_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover_sticker_id: Option<Snowflake>,
+    pub cover_sticker_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub banner_asset_id: Option<Snowflake>,
+    pub banner_asset_id: Option<GenericId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -80,18 +80,18 @@ pub struct StickerPackList {
     pub sticker_packs: Vec<StickerPack>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `SoundboardSound`.
 pub struct SoundboardSound {
     pub name: String,
-    pub sound_id: Snowflake,
+    pub sound_id: GenericId,
     pub volume: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<Snowflake>,
+    pub emoji_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(default)]
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

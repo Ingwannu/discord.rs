@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateTestEntitlement, Entitlement, EntitlementQuery, Sku, Snowflake, Subscription,
+    CreateTestEntitlement, Entitlement, EntitlementQuery, GenericId, Sku, Subscription,
     SubscriptionQuery,
 };
 
@@ -22,14 +22,14 @@ impl RestClient {
 
     pub async fn get_sku_subscriptions(
         &self,
-        sku_id: impl Into<Snowflake>,
+        sku_id: GenericId,
         query: &SubscriptionQuery,
     ) -> Result<Vec<Subscription>, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!(
                 "/skus/{}/subscriptions{}",
-                sku_id.into(),
+                sku_id,
                 subscription_query(query)
             ),
             Option::<&Value>::None,
@@ -39,16 +39,12 @@ impl RestClient {
 
     pub async fn get_sku_subscription(
         &self,
-        sku_id: impl Into<Snowflake>,
-        subscription_id: impl Into<Snowflake>,
+        sku_id: GenericId,
+        subscription_id: GenericId,
     ) -> Result<Subscription, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!(
-                "/skus/{}/subscriptions/{}",
-                sku_id.into(),
-                subscription_id.into()
-            ),
+            &format!("/skus/{}/subscriptions/{}", sku_id, subscription_id),
             Option::<&Value>::None,
         )
         .await
@@ -72,30 +68,27 @@ impl RestClient {
 
     pub async fn get_entitlement(
         &self,
-        entitlement_id: impl Into<Snowflake>,
+        entitlement_id: GenericId,
     ) -> Result<Entitlement, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
             &format!(
                 "/applications/{application_id}/entitlements/{}",
-                entitlement_id.into()
+                entitlement_id
             ),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn consume_entitlement(
-        &self,
-        entitlement_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn consume_entitlement(&self, entitlement_id: GenericId) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::POST,
             &format!(
                 "/applications/{application_id}/entitlements/{}/consume",
-                entitlement_id.into()
+                entitlement_id
             ),
             Option::<&Value>::None,
         )
@@ -117,14 +110,14 @@ impl RestClient {
 
     pub async fn delete_test_entitlement(
         &self,
-        entitlement_id: impl Into<Snowflake>,
+        entitlement_id: GenericId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::DELETE,
             &format!(
                 "/applications/{application_id}/entitlements/{}",
-                entitlement_id.into()
+                entitlement_id
             ),
             Option::<&Value>::None,
         )

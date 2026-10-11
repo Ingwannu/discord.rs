@@ -29,8 +29,8 @@ use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
-    InteractionContextData, Message, Snowflake,
+    ApplicationCommandOptionChoice, CreateMessage, GenericId, InteractionCallbackResponse,
+    InteractionContextData, Message,
 };
 use crate::response::InteractionReplyData;
 use crate::types::ButtonConfig;
@@ -90,7 +90,7 @@ impl ComponentsV2Payload {
 /// Provides the `send_container_message` helper.
 pub async fn send_container_message(
     http: &DiscordHttpClient,
-    channel_id: u64,
+    channel_id: GenericId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
@@ -100,7 +100,7 @@ pub async fn send_container_message(
 /// Provides the `send_message` helper.
 pub async fn send_message(
     http: &DiscordHttpClient,
-    channel_id: impl Into<Snowflake>,
+    channel_id: GenericId,
     body: &CreateMessage,
 ) -> Result<Message, DiscordError> {
     http.create_message(channel_id, body).await
@@ -109,7 +109,7 @@ pub async fn send_message(
 /// Provides the `send_to_channel` helper.
 pub async fn send_to_channel(
     http: &DiscordHttpClient,
-    channel_id: u64,
+    channel_id: GenericId,
     title: &str,
     description: &str,
     buttons: Vec<ButtonConfig>,
@@ -126,7 +126,7 @@ pub async fn send_to_channel(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_container(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -188,7 +188,7 @@ fn reply_data(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_container(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -212,7 +212,7 @@ pub async fn respond_component_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_modal_with_container(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -327,7 +327,7 @@ pub async fn delete_original_response(
 pub async fn delete_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message_id: &str,
+    message_id: GenericId,
 ) -> Result<(), DiscordError> {
     context.delete_follow_up(http, message_id).await
 }
@@ -342,7 +342,7 @@ pub async fn delete_followup_response(
 pub async fn edit_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message_id: &str,
+    message_id: GenericId,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
     context
@@ -353,8 +353,8 @@ pub async fn edit_followup_response(
 /// Provides the `edit_message_with_container` helper.
 pub async fn edit_message_with_container(
     http: &DiscordHttpClient,
-    channel_id: u64,
-    message_id: u64,
+    channel_id: GenericId,
+    message_id: GenericId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
@@ -368,7 +368,7 @@ pub async fn edit_message_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn update_component_with_container(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     container: ContainerBuilder,
 ) -> Result<(), DiscordError> {
@@ -389,7 +389,7 @@ pub async fn update_component_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_modal(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     modal: ModalBuilder,
 ) -> Result<(), DiscordError> {
@@ -517,7 +517,7 @@ pub async fn launch_activity(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn defer_and_followup_container(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -541,7 +541,7 @@ pub async fn defer_and_followup_container(
 /// Provides the `send_components_v2` helper.
 pub async fn send_components_v2(
     http: &DiscordHttpClient,
-    channel_id: u64,
+    channel_id: GenericId,
     message: ComponentsV2Message,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(message.build()).into_value();
@@ -555,7 +555,7 @@ pub async fn send_components_v2(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_components_v2(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     message: ComponentsV2Message,
     ephemeral: bool,
@@ -580,7 +580,7 @@ pub async fn respond_with_components_v2(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_components_v2(
     http: &DiscordHttpClient,
-    interaction_id: &str,
+    interaction_id: GenericId,
     interaction_token: &str,
     message: ComponentsV2Message,
     ephemeral: bool,
@@ -601,13 +601,14 @@ pub async fn respond_component_with_components_v2(
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
+    use crate::model::test_id;
     use serde_json::json;
 
     use super::{
         components_v2_flags, defer_and_followup_container, defer_interaction,
-        defer_update_interaction, delete_followup_response, delete_original_response,
-        edit_original_response, followup_message, followup_with_container, get_original_response,
-        launch_activity, respond_component_with_components_v2, respond_component_with_container,
+        defer_update_interaction, delete_original_response, edit_original_response,
+        followup_message, followup_with_container, launch_activity,
+        respond_component_with_components_v2, respond_component_with_container,
         respond_modal_with_container, respond_to_interaction, respond_with_autocomplete_choices,
         respond_with_components_v2, respond_with_container, respond_with_message,
         respond_with_modal, respond_with_modal_typed, update_component_with_container,
@@ -623,7 +624,7 @@ mod tests {
     use crate::http::DiscordHttpClient;
     use crate::model::{
         ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
-        InteractionContextData, Snowflake,
+        InteractionContextData,
     };
     use crate::response::AckKind;
 
@@ -633,10 +634,10 @@ mod tests {
 
     fn sample_context(application_id: &str, token: &str) -> InteractionContextData {
         InteractionContextData {
-            id: Snowflake::from("111"),
-            application_id: Snowflake::from(application_id),
+            id: test_id(111),
+            application_id: application_id.parse().unwrap(),
             token: token.to_string(),
-            ..InteractionContextData::default()
+            ..InteractionContextData::fixture()
         }
     }
 
@@ -725,31 +726,43 @@ mod tests {
         let http = sample_http(123);
 
         assert_model_error_contains(
-            respond_with_container(&http, "111", "bad/token", sample_container(), true)
+            respond_with_container(&http, test_id(111), "bad/token", sample_container(), true)
                 .await
                 .unwrap_err(),
             "interaction_token",
         );
         assert_model_error_contains(
-            respond_component_with_container(&http, "111", "bad/token", sample_container(), false)
+            respond_component_with_container(
+                &http,
+                test_id(111),
+                "bad/token",
+                sample_container(),
+                false,
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            respond_modal_with_container(
+                &http,
+                test_id(111),
+                "bad/token",
+                sample_container(),
+                true,
+            )
+            .await
+            .unwrap_err(),
+            "interaction_token",
+        );
+        assert_model_error_contains(
+            update_component_with_container(&http, test_id(111), "bad/token", sample_container())
                 .await
                 .unwrap_err(),
             "interaction_token",
         );
         assert_model_error_contains(
-            respond_modal_with_container(&http, "111", "bad/token", sample_container(), true)
-                .await
-                .unwrap_err(),
-            "interaction_token",
-        );
-        assert_model_error_contains(
-            update_component_with_container(&http, "111", "bad/token", sample_container())
-                .await
-                .unwrap_err(),
-            "interaction_token",
-        );
-        assert_model_error_contains(
-            respond_with_modal(&http, "111", "bad/token", sample_modal())
+            respond_with_modal(&http, test_id(111), "bad/token", sample_modal())
                 .await
                 .unwrap_err(),
             "interaction_token",
@@ -757,7 +770,7 @@ mod tests {
         assert_model_error_contains(
             respond_with_components_v2(
                 &http,
-                "111",
+                test_id(111),
                 "bad/token",
                 sample_components_message(),
                 true,
@@ -769,7 +782,7 @@ mod tests {
         assert_model_error_contains(
             respond_component_with_components_v2(
                 &http,
-                "111",
+                test_id(111),
                 "bad/token",
                 sample_components_message(),
                 false,
@@ -779,9 +792,15 @@ mod tests {
             "interaction_token",
         );
         assert_model_error_contains(
-            defer_and_followup_container(&http, "111", "bad/token", sample_container(), true)
-                .await
-                .unwrap_err(),
+            defer_and_followup_container(
+                &http,
+                test_id(111),
+                "bad/token",
+                sample_container(),
+                true,
+            )
+            .await
+            .unwrap_err(),
             "interaction_token",
         );
     }
@@ -850,9 +869,7 @@ mod tests {
     async fn followup_helpers_validate_application_id_and_path_segments_before_network() {
         let http_without_application_id = sample_http(0);
         let http = sample_http(123);
-        let zero_application_context = acknowledged(sample_context("0", "followup-token"));
         let bad_token_context = acknowledged(sample_context("456", "bad/token"));
-        let good_context = acknowledged(sample_context("456", "followup-token"));
 
         assert_model_error_contains(
             followup_with_container(
@@ -866,22 +883,10 @@ mod tests {
             "application_id must be set",
         );
         assert_model_error_contains(
-            followup_message(&http, &zero_application_context, sample_message(), false)
-                .await
-                .unwrap_err(),
-            "application_id must be set",
-        );
-        assert_model_error_contains(
             followup_message(&http, &bad_token_context, sample_message(), true)
                 .await
                 .unwrap_err(),
             "interaction_token",
-        );
-        assert_model_error_contains(
-            get_original_response(&http, &zero_application_context)
-                .await
-                .unwrap_err(),
-            "application_id must be set",
         );
         assert_model_error_contains(
             edit_original_response(&http, &bad_token_context, sample_message())
@@ -894,18 +899,6 @@ mod tests {
                 .await
                 .unwrap_err(),
             "interaction_token",
-        );
-        assert_model_error_contains(
-            super::edit_followup_response(&http, &good_context, "bad/id", sample_message())
-                .await
-                .unwrap_err(),
-            "message_id",
-        );
-        assert_model_error_contains(
-            delete_followup_response(&http, &good_context, "bad/id")
-                .await
-                .unwrap_err(),
-            "message_id",
         );
     }
 
@@ -999,7 +992,7 @@ mod tests {
                 .await
                 .map(drop)
                 .unwrap_err(),
-            super::edit_followup_response(&http, &context, "30", referencing())
+            super::edit_followup_response(&http, &context, test_id(30), referencing())
                 .await
                 .map(drop)
                 .unwrap_err(),

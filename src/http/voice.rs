@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateStageInstance, ModifyCurrentUserVoiceState, ModifyStageInstance, ModifyUserVoiceState,
-    SetVoiceChannelStatus, Snowflake, StageInstance, VoiceRegion, VoiceState,
+    CreateStageInstance, GenericId, ModifyCurrentUserVoiceState, ModifyStageInstance,
+    ModifyUserVoiceState, SetVoiceChannelStatus, StageInstance, VoiceRegion, VoiceState,
 };
 
 use super::RestClient;
@@ -15,12 +15,12 @@ use super::RestClient;
 impl RestClient {
     pub async fn set_voice_channel_status(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &SetVoiceChannelStatus,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
-            &format!("/channels/{}/voice-status", channel_id.into()),
+            &format!("/channels/{}/voice-status", channel_id),
             Some(body),
         )
         .await
@@ -50,11 +50,11 @@ impl RestClient {
 
     pub async fn get_stage_instance(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<StageInstance, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/stage-instances/{}", channel_id.into()),
+            &format!("/stage-instances/{}", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -62,7 +62,7 @@ impl RestClient {
 
     pub async fn modify_stage_instance(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &Value,
     ) -> Result<StageInstance, DiscordError> {
         self.modify_stage_instance_typed(channel_id, body).await
@@ -70,7 +70,7 @@ impl RestClient {
 
     pub async fn modify_stage_instance_typed<B>(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &B,
     ) -> Result<StageInstance, DiscordError>
     where
@@ -78,7 +78,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/stage-instances/{}", channel_id.into()),
+            &format!("/stage-instances/{}", channel_id),
             Some(body),
         )
         .await
@@ -86,19 +86,16 @@ impl RestClient {
 
     pub async fn modify_stage_instance_from_request(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &ModifyStageInstance,
     ) -> Result<StageInstance, DiscordError> {
         self.modify_stage_instance_typed(channel_id, body).await
     }
 
-    pub async fn delete_stage_instance(
-        &self,
-        channel_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn delete_stage_instance(&self, channel_id: GenericId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/stage-instances/{}", channel_id.into()),
+            &format!("/stage-instances/{}", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -116,11 +113,11 @@ impl RestClient {
 
     pub async fn get_guild_voice_regions(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<VoiceRegion>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/regions", guild_id.into()),
+            &format!("/guilds/{}/regions", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -128,11 +125,11 @@ impl RestClient {
 
     pub async fn get_current_user_voice_state(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<VoiceState, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/voice-states/@me", guild_id.into()),
+            &format!("/guilds/{}/voice-states/@me", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -140,16 +137,12 @@ impl RestClient {
 
     pub async fn get_user_voice_state(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<VoiceState, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!(
-                "/guilds/{}/voice-states/{}",
-                guild_id.into(),
-                user_id.into()
-            ),
+            &format!("/guilds/{}/voice-states/{}", guild_id, user_id),
             Option::<&Value>::None,
         )
         .await
@@ -157,7 +150,7 @@ impl RestClient {
 
     pub async fn modify_current_user_voice_state<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<(), DiscordError>
     where
@@ -165,7 +158,7 @@ impl RestClient {
     {
         self.request_no_content(
             Method::PATCH,
-            &format!("/guilds/{}/voice-states/@me", guild_id.into()),
+            &format!("/guilds/{}/voice-states/@me", guild_id),
             Some(body),
         )
         .await
@@ -173,7 +166,7 @@ impl RestClient {
 
     pub async fn modify_current_user_voice_state_from_request(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyCurrentUserVoiceState,
     ) -> Result<(), DiscordError> {
         self.modify_current_user_voice_state(guild_id, body).await
@@ -181,8 +174,8 @@ impl RestClient {
 
     pub async fn modify_user_voice_state<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
         body: &B,
     ) -> Result<(), DiscordError>
     where
@@ -190,11 +183,7 @@ impl RestClient {
     {
         self.request_no_content(
             Method::PATCH,
-            &format!(
-                "/guilds/{}/voice-states/{}",
-                guild_id.into(),
-                user_id.into()
-            ),
+            &format!("/guilds/{}/voice-states/{}", guild_id, user_id),
             Some(body),
         )
         .await
@@ -202,8 +191,8 @@ impl RestClient {
 
     pub async fn modify_user_voice_state_from_request(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
         body: &ModifyUserVoiceState,
     ) -> Result<(), DiscordError> {
         self.modify_user_voice_state(guild_id, user_id, body).await

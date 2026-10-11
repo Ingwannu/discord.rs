@@ -2,22 +2,22 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::Snowflake;
+use super::GenericId;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's avatar decoration.
 pub struct AvatarDecorationData {
     /// Decoration asset hash.
     pub asset: String,
     /// SKU that owns the decoration.
-    pub sku_id: Snowflake,
+    pub sku_id: GenericId,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's profile nameplate collectible.
 pub struct UserNameplate {
     /// SKU that owns the nameplate.
-    pub sku_id: Snowflake,
+    pub sku_id: GenericId,
     /// Nameplate asset path.
     pub asset: String,
     /// Nameplate label.
@@ -39,7 +39,7 @@ pub struct UserCollectibles {
 pub struct UserPrimaryGuild {
     /// Guild ID for the displayed server identity.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity_guild_id: Option<Snowflake>,
+    pub identity_guild_id: Option<GenericId>,
     /// Whether the identity is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_enabled: Option<bool>,
@@ -51,10 +51,10 @@ pub struct UserPrimaryGuild {
     pub badge: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `User`.
 pub struct User {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_name: Option<String>,

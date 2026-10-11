@@ -2,15 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{PermissionsBitField, Snowflake};
+use super::{GenericId, PermissionsBitField};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `RoleTags`.
 pub struct RoleTags {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_id: Option<Snowflake>,
+    pub bot_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub integration_id: Option<Snowflake>,
+    pub integration_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_subscriber: Option<bool>,
 }
@@ -23,10 +23,10 @@ pub struct RoleColors {
     pub tertiary_color: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Role`.
 pub struct Role {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<u64>,
@@ -52,10 +52,10 @@ pub struct Role {
     pub flags: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `ModifyGuildRolePosition`.
 pub struct ModifyGuildRolePosition {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Option<i64>>,
 }

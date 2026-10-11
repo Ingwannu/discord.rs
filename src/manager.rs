@@ -2,7 +2,7 @@
 use std::future::Future;
 
 use crate::error::DiscordError;
-use crate::model::Snowflake;
+use crate::model::GenericId;
 
 /// Trait for cache-aware entity managers that can read from in-memory state and fall back to HTTP.
 ///
@@ -13,16 +13,13 @@ use crate::model::Snowflake;
 #[cfg(feature = "gateway")]
 pub trait CachedManager<T: Clone + Send + Sync + 'static>: Send + Sync {
     /// Fetch from cache first, falling back to HTTP API.
-    fn get(
-        &self,
-        id: impl Into<Snowflake> + Send,
-    ) -> impl Future<Output = Result<T, DiscordError>> + Send;
+    fn get(&self, id: GenericId) -> impl Future<Output = Result<T, DiscordError>> + Send;
 
     /// Get from cache only (no HTTP fallback).
-    fn cached(&self, id: impl Into<Snowflake> + Send) -> impl Future<Output = Option<T>> + Send;
+    fn cached(&self, id: GenericId) -> impl Future<Output = Option<T>> + Send;
 
     /// Check if the entity exists in cache.
-    fn contains(&self, id: impl Into<Snowflake> + Send) -> impl Future<Output = bool> + Send;
+    fn contains(&self, id: GenericId) -> impl Future<Output = bool> + Send;
 
     /// List all cached entries.
     fn list_cached(&self) -> impl Future<Output = Vec<T>> + Send;
@@ -35,8 +32,8 @@ pub trait CachedManager<T: Clone + Send + Sync + 'static>: Send + Sync {
 /// non-gateway builds.
 #[cfg(not(feature = "gateway"))]
 pub trait CachedManager<T: Clone + Send + Sync + 'static>: Send + Sync {
-    fn get(&self, id: impl Into<Snowflake>) -> Result<T, DiscordError>;
-    fn cached(&self, id: impl Into<Snowflake>) -> Option<T>;
-    fn contains(&self, id: impl Into<Snowflake>) -> bool;
+    fn get(&self, id: GenericId) -> Result<T, DiscordError>;
+    fn cached(&self, id: GenericId) -> Option<T>;
+    fn contains(&self, id: GenericId) -> bool;
     fn list_cached(&self) -> Vec<T>;
 }

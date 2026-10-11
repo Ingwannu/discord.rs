@@ -1,3 +1,4 @@
+use crate::model::test_id;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
@@ -9,7 +10,7 @@ use crate::bitfield::{permissions as p, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Guild, Member, PermissionOverwrite, PermissionsBitField, Role, Snowflake, User,
+    Channel, GenericId, Guild, Member, PermissionOverwrite, PermissionsBitField, Role, User,
 };
 
 const GUILD: u64 = 100;
@@ -24,8 +25,8 @@ const VOICE: u8 = 2;
 const CATEGORY: u8 = 4;
 const PUBLIC_THREAD: u8 = 11;
 
-fn sf(id: u64) -> Snowflake {
-    Snowflake::from(id)
+fn sf(id: u64) -> GenericId {
+    test_id(id)
 }
 
 fn bits(permissions: Permissions) -> u64 {
@@ -56,11 +57,11 @@ fn none() -> Permissions {
 /// Everyone can view and send; the member has ROLE_A and ROLE_B (no
 /// permissions of their own unless a test adds them).
 struct Fixture {
-    guild: Snowflake,
-    owner: Snowflake,
-    member: Snowflake,
-    role_a: Snowflake,
-    role_b: Snowflake,
+    guild: GenericId,
+    owner: GenericId,
+    member: GenericId,
+    role_a: GenericId,
+    role_b: GenericId,
 }
 
 impl Fixture {
@@ -74,10 +75,10 @@ impl Fixture {
         }
     }
 
-    fn input(&self, everyone: Permissions) -> MemberPermissionInput<'_> {
-        MemberPermissionInput::new(&self.guild, &self.owner, &self.member, everyone)
-            .role(&self.role_a, none())
-            .role(&self.role_b, none())
+    fn input(&self, everyone: Permissions) -> MemberPermissionInput {
+        MemberPermissionInput::new(self.guild, self.owner, self.member, everyone)
+            .role(self.role_a, none())
+            .role(self.role_b, none())
     }
 }
 
@@ -103,7 +104,7 @@ fn base_everyone() -> Permissions {
 #[test]
 fn owner_gets_everything_despite_overwrites_and_timeout() {
     let fx = Fixture::new();
-    let input = MemberPermissionInput::new(&fx.guild, &fx.owner, &fx.owner, none())
+    let input = MemberPermissionInput::new(fx.guild, fx.owner, fx.owner, none())
         .communication_disabled_until(UNIX_EPOCH + Duration::from_secs(10), UNIX_EPOCH);
     let overwrites = [member_overwrite(OWNER, none(), p::VIEW_CHANNEL)];
 
@@ -118,8 +119,8 @@ fn owner_gets_everything_despite_overwrites_and_timeout() {
 #[test]
 fn administrator_role_bypasses_overwrites_and_timeout() {
     let fx = Fixture::new();
-    let input = MemberPermissionInput::new(&fx.guild, &fx.owner, &fx.member, none())
-        .role(&fx.role_a, p::ADMINISTRATOR)
+    let input = MemberPermissionInput::new(fx.guild, fx.owner, fx.member, none())
+        .role(fx.role_a, p::ADMINISTRATOR)
         .communication_disabled_until(UNIX_EPOCH + Duration::from_secs(10), UNIX_EPOCH);
     let overwrites = [
         role_overwrite(GUILD, none(), p::VIEW_CHANNEL),
@@ -175,8 +176,8 @@ fn bypass_grants_every_documented_permission() {
 #[test]
 fn base_is_everyone_or_member_roles() {
     let fx = Fixture::new();
-    let input = MemberPermissionInput::new(&fx.guild, &fx.owner, &fx.member, p::VIEW_CHANNEL)
-        .roles([(&fx.role_a, p::KICK_MEMBERS), (&fx.role_b, p::BAN_MEMBERS)]);
+    let input = MemberPermissionInput::new(fx.guild, fx.owner, fx.member, p::VIEW_CHANNEL)
+        .roles([(fx.role_a, p::KICK_MEMBERS), (fx.role_b, p::BAN_MEMBERS)]);
     let computed = input.guild_permissions();
     assert_eq!(
         computed.permissions,
@@ -305,7 +306,7 @@ fn everyone_listed_as_member_role_is_not_a_role_overwrite() {
     // If @everyone were also aggregated as a role overwrite, its allow would
     // cancel ROLE_A's deny.
     let fx = Fixture::new();
-    let input = fx.input(base_everyone()).role(&fx.guild, none());
+    let input = fx.input(base_everyone()).role(fx.guild, none());
     let overwrites = [
         role_overwrite(GUILD, p::EMBED_LINKS, none()),
         role_overwrite(ROLE_A, none(), p::EMBED_LINKS),
@@ -335,7 +336,7 @@ fn without_view_channel_only_guild_wide_permissions_remain() {
     let input = fx
         .input(base_everyone() | p::ATTACH_FILES | p::MANAGE_ROLES)
         .role(
-            &fx.role_a,
+            fx.role_a,
             p::KICK_MEMBERS | p::MODERATE_MEMBERS | p::CONNECT,
         );
     let overwrites = [role_overwrite(GUILD, none(), p::VIEW_CHANNEL)];
@@ -475,7 +476,7 @@ fn active_timeout_keeps_only_view_and_history() {
     let now = UNIX_EPOCH + Duration::from_secs(1_000);
     let input = fx
         .input(base_everyone() | p::ADD_REACTIONS)
-        .role(&fx.role_a, p::KICK_MEMBERS)
+        .role(fx.role_a, p::KICK_MEMBERS)
         .communication_disabled_until(now + Duration::from_secs(60), now);
 
     let guild_level = input.guild_permissions();
@@ -548,7 +549,7 @@ fn obfuscated_channel_is_unknown_for_regular_members() {
 fn obfuscated_channel_is_still_known_for_owner_and_admin() {
     let fx = Fixture::new();
     let channel = text(&[]).obfuscated(true);
-    let owner = MemberPermissionInput::new(&fx.guild, &fx.owner, &fx.owner, none());
+    let owner = MemberPermissionInput::new(fx.guild, fx.owner, fx.owner, none());
     assert_eq!(
         owner.in_channel(&channel).known().map(|c| c.source),
         Some(PermissionSource::Owner)
@@ -628,7 +629,7 @@ fn role(id: u64, permissions: Permissions) -> Role {
         id: sf(id),
         name: format!("role-{id}"),
         permissions: Some(PermissionsBitField(permissions.bits())),
-        ..Role::default()
+        ..Role::fixture()
     }
 }
 
@@ -642,7 +643,7 @@ fn guild_model() -> Guild {
             role(ROLE_A, p::ATTACH_FILES),
             role(ROLE_B, p::KICK_MEMBERS),
         ],
-        ..Guild::default()
+        ..Guild::fixture()
     }
 }
 
@@ -650,7 +651,7 @@ fn user(id: u64) -> User {
     User {
         id: sf(id),
         username: format!("user-{id}"),
-        ..User::default()
+        ..User::fixture()
     }
 }
 
@@ -668,7 +669,7 @@ fn channel_model(id: u64, kind: u8, overwrites: Vec<PermissionOverwrite>) -> Cha
         guild_id: Some(sf(GUILD)),
         kind,
         permission_overwrites: Some(overwrites),
-        ..Channel::default()
+        ..Channel::fixture()
     }
 }
 
@@ -678,7 +679,7 @@ fn thread_model(id: u64, parent: u64) -> Channel {
         guild_id: Some(sf(GUILD)),
         kind: PUBLIC_THREAD,
         parent_id: Some(sf(parent)),
-        ..Channel::default()
+        ..Channel::fixture()
     }
 }
 
@@ -802,7 +803,7 @@ fn from_channel_rejects_dms_and_foreign_channels() {
     let guild = sf(GUILD);
     let dm = channel_model(500, 1, vec![]);
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &dm, None).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &dm, None).unwrap_err(),
         PermissionDataError::NotGuildChannel {
             channel_id: sf(500),
             kind: 1
@@ -812,7 +813,7 @@ fn from_channel_rejects_dms_and_foreign_channels() {
     let mut foreign = channel_model(501, TEXT, vec![]);
     foreign.guild_id = Some(sf(999));
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &foreign, None).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &foreign, None).unwrap_err(),
         PermissionDataError::GuildMismatch {
             channel_id: sf(501),
             expected: sf(GUILD),
@@ -823,7 +824,7 @@ fn from_channel_rejects_dms_and_foreign_channels() {
     // GUILD_CREATE channels carry no guild_id.
     let mut bare = channel_model(502, TEXT, vec![]);
     bare.guild_id = None;
-    assert!(ChannelPermissionInput::from_channel(&guild, &bare, None).is_ok());
+    assert!(ChannelPermissionInput::from_channel(guild, &bare, None).is_ok());
 }
 
 #[test]
@@ -832,14 +833,14 @@ fn from_channel_requires_overwrites_unless_obfuscated() {
     let mut partial = channel_model(500, TEXT, vec![]);
     partial.permission_overwrites = None;
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &partial, None).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &partial, None).unwrap_err(),
         PermissionDataError::MissingPermissionOverwrites {
             channel_id: sf(500)
         }
     );
 
     partial.flags = Some(1 << 17);
-    let input = ChannelPermissionInput::from_channel(&guild, &partial, None).unwrap();
+    let input = ChannelPermissionInput::from_channel(guild, &partial, None).unwrap();
     assert_eq!(known_or_obfuscated(&input), ChannelPermissions::Obfuscated);
 }
 
@@ -857,7 +858,7 @@ fn from_channel_ignores_parent_for_non_threads() {
         vec![role_overwrite(GUILD, none(), p::VIEW_CHANNEL)],
     );
     let channel = channel_model(500, TEXT, vec![]);
-    let input = ChannelPermissionInput::from_channel(&guild, &channel, Some(&category)).unwrap();
+    let input = ChannelPermissionInput::from_channel(guild, &channel, Some(&category)).unwrap();
     assert!(known(known_or_obfuscated(&input)).has(p::VIEW_CHANNEL));
 }
 
@@ -867,7 +868,7 @@ fn from_channel_validates_thread_parents() {
     let thread = thread_model(600, 500);
 
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &thread, None).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &thread, None).unwrap_err(),
         PermissionDataError::MissingParentChannel {
             thread_id: sf(600),
             parent_id: Some(sf(500))
@@ -876,7 +877,7 @@ fn from_channel_validates_thread_parents() {
 
     let wrong = channel_model(501, TEXT, vec![]);
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &thread, Some(&wrong)).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &thread, Some(&wrong)).unwrap_err(),
         PermissionDataError::ParentMismatch {
             thread_id: sf(600),
             expected: sf(500),
@@ -889,7 +890,7 @@ fn from_channel_validates_thread_parents() {
         ..thread_model(500, 400)
     };
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &thread, Some(&nested)).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &thread, Some(&nested)).unwrap_err(),
         PermissionDataError::InvalidParentChannel {
             thread_id: sf(600),
             parent_id: sf(500),
@@ -899,14 +900,14 @@ fn from_channel_validates_thread_parents() {
 
     let dm_parent = channel_model(500, 1, vec![]);
     assert!(matches!(
-        ChannelPermissionInput::from_channel(&guild, &thread, Some(&dm_parent)),
+        ChannelPermissionInput::from_channel(guild, &thread, Some(&dm_parent)),
         Err(PermissionDataError::NotGuildChannel { .. })
     ));
 
     let mut partial_parent = channel_model(500, TEXT, vec![]);
     partial_parent.permission_overwrites = None;
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &thread, Some(&partial_parent)).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &thread, Some(&partial_parent)).unwrap_err(),
         PermissionDataError::MissingPermissionOverwrites {
             channel_id: sf(500)
         }
@@ -919,14 +920,14 @@ fn thread_without_parent_id_accepts_the_supplied_parent() {
     let mut thread = thread_model(600, 500);
     thread.parent_id = None;
     assert_eq!(
-        ChannelPermissionInput::from_channel(&guild, &thread, None).unwrap_err(),
+        ChannelPermissionInput::from_channel(guild, &thread, None).unwrap_err(),
         PermissionDataError::MissingParentChannel {
             thread_id: sf(600),
             parent_id: None
         }
     );
     let parent = channel_model(500, TEXT, vec![]);
-    assert!(ChannelPermissionInput::from_channel(&guild, &thread, Some(&parent)).is_ok());
+    assert!(ChannelPermissionInput::from_channel(guild, &thread, Some(&parent)).is_ok());
 }
 
 #[test]
@@ -1228,7 +1229,7 @@ async fn populated_cache() -> CacheHandle {
 async fn cached_permissions_for_reads_guild_member_channel_and_roles() {
     let cache = populated_cache().await;
     let computed = known(
-        cached_permissions_for(&cache, &sf(GUILD), &sf(MEMBER), &sf(501), now())
+        cached_permissions_for(&cache, sf(GUILD), sf(MEMBER), sf(501), now())
             .await
             .unwrap(),
     );
@@ -1238,13 +1239,13 @@ async fn cached_permissions_for_reads_guild_member_channel_and_roles() {
     );
 
     let thread = known(
-        cached_permissions_for(&cache, &sf(GUILD), &sf(MEMBER), &sf(600), now())
+        cached_permissions_for(&cache, sf(GUILD), sf(MEMBER), sf(600), now())
             .await
             .unwrap(),
     );
     assert!(thread.has(p::SEND_MESSAGES_IN_THREADS | p::ATTACH_FILES));
 
-    let guild_level = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+    let guild_level = cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
         .await
         .unwrap();
     assert!(guild_level.has(p::ATTACH_FILES | p::KICK_MEMBERS | p::SEND_MESSAGES));
@@ -1257,7 +1258,7 @@ async fn cached_permissions_follow_role_updates_not_the_guild_snapshot() {
     cache
         .upsert_role(sf(GUILD), role(ROLE_B, p::BAN_MEMBERS))
         .await;
-    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+    let computed = cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
         .await
         .unwrap();
     assert!(computed.has(p::BAN_MEMBERS));
@@ -1272,33 +1273,33 @@ async fn cached_permissions_report_each_missing_piece() {
     let member = sf(MEMBER);
 
     assert_eq!(
-        cached_guild_permissions(&cache, &sf(999), &member, now())
+        cached_guild_permissions(&cache, sf(999), member, now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingGuild { guild_id: sf(999) }
     );
     // Channel 500 belongs to guild 100: a contradiction, reported first.
     assert_eq!(
-        cached_permissions_for(&cache, &sf(999), &member, &sf(500), now())
+        cached_permissions_for(&cache, sf(999), member, sf(500), now())
             .await
             .unwrap_err(),
         PermissionDataError::GuildMismatch {
             channel_id: sf(500),
             expected: sf(999),
-            found: guild.clone()
+            found: guild
         }
     );
     assert_eq!(
-        cached_permissions_for(&cache, &guild, &sf(OTHER_MEMBER), &sf(500), now())
+        cached_permissions_for(&cache, guild, sf(OTHER_MEMBER), sf(500), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingMember {
-            guild_id: guild.clone(),
+            guild_id: guild,
             user_id: sf(OTHER_MEMBER)
         }
     );
     assert_eq!(
-        cached_permissions_for(&cache, &guild, &member, &sf(777), now())
+        cached_permissions_for(&cache, guild, member, sf(777), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingChannel {
@@ -1308,7 +1309,7 @@ async fn cached_permissions_report_each_missing_piece() {
 
     cache.upsert_channel(thread_model(601, 555)).await;
     assert_eq!(
-        cached_permissions_for(&cache, &guild, &member, &sf(601), now())
+        cached_permissions_for(&cache, guild, member, sf(601), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingParentChannel {
@@ -1321,7 +1322,7 @@ async fn cached_permissions_report_each_missing_piece() {
     orphan.parent_id = None;
     cache.upsert_channel(orphan).await;
     assert_eq!(
-        cached_permissions_for(&cache, &guild, &member, &sf(602), now())
+        cached_permissions_for(&cache, guild, member, sf(602), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingParentChannel {
@@ -1330,25 +1331,25 @@ async fn cached_permissions_report_each_missing_piece() {
         }
     );
 
-    cache.remove_role(&guild, &sf(ROLE_B)).await;
+    cache.remove_role(guild, sf(ROLE_B)).await;
     assert_eq!(
-        cached_guild_permissions(&cache, &guild, &member, now())
+        cached_guild_permissions(&cache, guild, member, now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingRole {
-            guild_id: guild.clone(),
+            guild_id: guild,
             role_id: sf(ROLE_B)
         }
     );
 
-    cache.remove_role(&guild, &guild).await;
+    cache.remove_role(guild, guild).await;
     assert_eq!(
-        cached_guild_permissions(&cache, &guild, &member, now())
+        cached_guild_permissions(&cache, guild, member, now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingRole {
-            guild_id: guild.clone(),
-            role_id: guild.clone()
+            guild_id: guild,
+            role_id: guild
         }
     );
 }
@@ -1362,7 +1363,7 @@ async fn cached_permissions_report_missing_owner_and_accept_userless_members() {
     cache
         .upsert_member(sf(GUILD), sf(OTHER_MEMBER), member)
         .await;
-    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(OTHER_MEMBER), now())
+    let computed = cached_guild_permissions(&cache, sf(GUILD), sf(OTHER_MEMBER), now())
         .await
         .unwrap();
     assert!(computed.has(p::ATTACH_FILES));
@@ -1371,7 +1372,7 @@ async fn cached_permissions_report_missing_owner_and_accept_userless_members() {
     guild.owner_id = None;
     cache.upsert_guild(guild).await;
     assert_eq!(
-        cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+        cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingGuildOwner {
@@ -1558,7 +1559,7 @@ fn thread_parents_must_be_able_to_hold_threads() {
     for kind in [VOICE, 13, CATEGORY, 14] {
         let parent = channel_model(500, kind, vec![]);
         assert_eq!(
-            ChannelPermissionInput::from_channel(&guild, &thread, Some(&parent)).unwrap_err(),
+            ChannelPermissionInput::from_channel(guild, &thread, Some(&parent)).unwrap_err(),
             PermissionDataError::InvalidParentChannel {
                 thread_id: sf(600),
                 parent_id: sf(500),
@@ -1571,7 +1572,7 @@ fn thread_parents_must_be_able_to_hold_threads() {
     for kind in [TEXT, 5, 15, 16, 99] {
         let parent = channel_model(500, kind, vec![]);
         assert!(
-            ChannelPermissionInput::from_channel(&guild, &thread, Some(&parent)).is_ok(),
+            ChannelPermissionInput::from_channel(guild, &thread, Some(&parent)).is_ok(),
             "parent type {kind}"
         );
     }
@@ -1592,12 +1593,12 @@ async fn cached_owner_needs_no_member_roles_or_overwrites() {
     cache.upsert_channel(partial).await;
     cache.upsert_channel(thread_model(600, 555)).await;
 
-    let guild_level = cached_guild_permissions(&cache, &sf(GUILD), &sf(OWNER), now())
+    let guild_level = cached_guild_permissions(&cache, sf(GUILD), sf(OWNER), now())
         .await
         .unwrap();
     assert_eq!(guild_level.source, PermissionSource::Owner);
     for channel in [500, 600] {
-        let outcome = cached_permissions_for(&cache, &sf(GUILD), &sf(OWNER), &sf(channel), now())
+        let outcome = cached_permissions_for(&cache, sf(GUILD), sf(OWNER), sf(channel), now())
             .await
             .unwrap();
         assert_eq!(
@@ -1607,7 +1608,7 @@ async fn cached_owner_needs_no_member_roles_or_overwrites() {
     }
     // The channel itself is still required to check it belongs to the guild.
     assert_eq!(
-        cached_permissions_for(&cache, &sf(GUILD), &sf(OWNER), &sf(777), now())
+        cached_permissions_for(&cache, sf(GUILD), sf(OWNER), sf(777), now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingChannel {
@@ -1624,7 +1625,7 @@ async fn cached_administrator_skips_missing_member_and_roles() {
         .upsert_role(sf(GUILD), role(GUILD, p::ADMINISTRATOR))
         .await;
     // No guild object, no member: @everyone alone proves ADMINISTRATOR.
-    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+    let computed = cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
         .await
         .unwrap();
     assert_eq!(computed.source, PermissionSource::Administrator);
@@ -1633,8 +1634,8 @@ async fn cached_administrator_skips_missing_member_and_roles() {
     cache
         .upsert_role(sf(GUILD), role(ROLE_A, p::ADMINISTRATOR))
         .await;
-    cache.remove_role(&sf(GUILD), &sf(ROLE_B)).await;
-    let computed = cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+    cache.remove_role(sf(GUILD), sf(ROLE_B)).await;
+    let computed = cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
         .await
         .unwrap();
     assert_eq!(computed.source, PermissionSource::Administrator);

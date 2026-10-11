@@ -2,12 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Snowflake, User};
+use super::{GenericId, User};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `BulkGuildBanRequest`.
 pub struct BulkGuildBanRequest {
-    pub user_ids: Vec<Snowflake>,
+    pub user_ids: Vec<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_message_seconds: Option<u64>,
 }
@@ -27,18 +27,18 @@ pub struct CreateGuildBan {
 /// Typed Discord API object for `BulkGuildBanResponse`.
 pub struct BulkGuildBanResponse {
     #[serde(default)]
-    pub banned_users: Vec<Snowflake>,
+    pub banned_users: Vec<GenericId>,
     #[serde(default)]
-    pub failed_users: Vec<Snowflake>,
+    pub failed_users: Vec<GenericId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `AutoModerationRule`.
 pub struct AutoModerationRule {
-    pub id: Snowflake,
-    pub guild_id: Snowflake,
+    pub id: GenericId,
+    pub guild_id: GenericId,
     pub name: String,
-    pub creator_id: Snowflake,
+    pub creator_id: GenericId,
     pub event_type: u8,
     pub trigger_type: u8,
     #[serde(default)]
@@ -48,9 +48,9 @@ pub struct AutoModerationRule {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub exempt_roles: Vec<Snowflake>,
+    pub exempt_roles: Vec<GenericId>,
     #[serde(default)]
-    pub exempt_channels: Vec<Snowflake>,
+    pub exempt_channels: Vec<GenericId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -83,7 +83,7 @@ pub struct AutoModerationAction {
 /// Typed Discord API object for `AutoModerationActionMetadata`.
 pub struct AutoModerationActionMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +103,6 @@ pub struct Ban {
 /// Typed Discord API object for `GuildBansQuery`.
 pub struct GuildBansQuery {
     pub limit: Option<u64>,
-    pub before: Option<Snowflake>,
-    pub after: Option<Snowflake>,
+    pub before: Option<GenericId>,
+    pub after: Option<GenericId>,
 }

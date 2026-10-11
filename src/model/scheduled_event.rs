@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Member, Snowflake, User};
+use super::{GenericId, Member, User};
 
 /// Query options for `GET /guilds/{id}/scheduled-events`.
 #[derive(Clone, Debug, Default)]
@@ -15,19 +15,19 @@ pub struct GuildScheduledEventsQuery {
 pub struct GuildScheduledEventUsersQuery {
     pub limit: Option<u64>,
     pub with_member: Option<bool>,
-    pub before: Option<Snowflake>,
-    pub after: Option<Snowflake>,
+    pub before: Option<GenericId>,
+    pub after: Option<GenericId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEvent`.
 pub struct GuildScheduledEvent {
-    pub id: Snowflake,
-    pub guild_id: Snowflake,
+    pub id: GenericId,
+    pub guild_id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub creator_id: Option<Snowflake>,
+    pub creator_id: Option<GenericId>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -38,7 +38,7 @@ pub struct GuildScheduledEvent {
     pub status: u8,
     pub entity_type: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub entity_id: Option<Snowflake>,
+    pub entity_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,10 +87,10 @@ pub struct GuildScheduledEventRecurrenceRule {
     pub count: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEventUser`.
 pub struct GuildScheduledEventUser {
-    pub guild_scheduled_event_id: Snowflake,
+    pub guild_scheduled_event_id: GenericId,
     pub user: User,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,

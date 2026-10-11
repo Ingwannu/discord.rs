@@ -10,7 +10,7 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId, Snowflake,
+    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId, GenericId,
     UpdateApplicationIdentityProfile,
 };
 
@@ -28,12 +28,12 @@ impl RestClient {
     /// documented limits before sending.
     pub async fn update_application_identity_profile(
         &self,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
         provider_issued_user_id: &str,
         body: &UpdateApplicationIdentityProfile,
     ) -> Result<Option<ApplicationIdentityProfile>, DiscordError> {
         body.validate()?;
-        let path = self.identity_profile_path(user_id.into(), provider_issued_user_id)?;
+        let path = self.identity_profile_path(user_id, provider_issued_user_id)?;
         self.request_optional_typed_no_content(Method::PATCH, &path, Some(body))
             .await
     }
@@ -41,10 +41,10 @@ impl RestClient {
     /// Reads the profile stored on the user's matching Application Identity.
     pub async fn get_application_identity_profile(
         &self,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
         provider_issued_user_id: &str,
     ) -> Result<ApplicationIdentityProfile, DiscordError> {
-        let path = self.identity_profile_path(user_id.into(), provider_issued_user_id)?;
+        let path = self.identity_profile_path(user_id, provider_issued_user_id)?;
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
     }
@@ -53,15 +53,12 @@ impl RestClient {
     /// discover the exact external ID values (no profile data).
     pub async fn get_user_application_identities(
         &self,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
     ) -> Result<ApplicationIdentities, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
-            &format!(
-                "/users/{}/application-identities/{application_id}",
-                user_id.into()
-            ),
+            &format!("/users/{}/application-identities/{application_id}", user_id),
             Option::<&Value>::None,
         )
         .await
@@ -102,7 +99,7 @@ impl RestClient {
     /// `NONE` identities can always be deleted.
     pub async fn delete_application_identity(
         &self,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
         provider_type: &str,
         provider_issued_user_id: &str,
         provider_id: Option<&str>,
@@ -118,7 +115,7 @@ impl RestClient {
             Method::POST,
             &format!(
                 "/users/{}/application-identities/{application_id}/{provider_type}/{external_id}/delete",
-                user_id.into()
+                user_id
             ),
             Some(&body),
         )
@@ -127,7 +124,7 @@ impl RestClient {
 
     fn identity_profile_path(
         &self,
-        user_id: Snowflake,
+        user_id: GenericId,
         provider_issued_user_id: &str,
     ) -> Result<String, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;

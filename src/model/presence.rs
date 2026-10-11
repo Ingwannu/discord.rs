@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::Snowflake;
+use super::GenericId;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Presence`.
 pub struct Presence {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     /// Partial user object carried by gateway presence payloads
     /// (GUILD_CREATE `presences[]` and GUILD_MEMBERS_CHUNK `presences[]`
     /// identify the user this way instead of `user_id`). Only `id` is
@@ -27,9 +27,9 @@ pub struct Presence {
 
 /// Partial user object inside gateway presence payloads; Discord only
 /// guarantees `id` here.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresenceUser {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
 }
@@ -133,7 +133,7 @@ pub struct Activity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamps: Option<ActivityTimestamps>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

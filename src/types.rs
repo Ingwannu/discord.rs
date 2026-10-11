@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::constants::button_style;
 use crate::error::DiscordError;
+use crate::model::GenericId;
 
 /// Backward-compatible error type alias. Prefer `DiscordError` directly.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
@@ -19,8 +20,9 @@ pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Emoji`.
 pub struct Emoji {
+    /// Custom emoji ID; `None` for a Unicode emoji.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,11 +39,11 @@ impl Emoji {
         }
     }
 
-    /// Creates a `custom` value.
-    pub fn custom(name: &str, id: &str, animated: bool) -> Self {
+    /// Creates a custom (guild or application) emoji reference.
+    pub fn custom(name: &str, id: GenericId, animated: bool) -> Self {
         Self {
             name: Some(name.to_string()),
-            id: Some(id.to_string()),
+            id: Some(id),
             animated: Some(animated),
         }
     }
@@ -160,6 +162,7 @@ impl ButtonConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use serde_json::{json, Value};
 
     use super::{
@@ -197,9 +200,9 @@ mod tests {
             json!({ "name": "?뵦" })
         );
 
-        let custom = Emoji::custom("party", "42", true);
+        let custom = Emoji::custom("party", test_id(42), true);
         assert_eq!(custom.name.as_deref(), Some("party"));
-        assert_eq!(custom.id.as_deref(), Some("42"));
+        assert_eq!(custom.id, Some(test_id(42)));
         assert_eq!(custom.animated, Some(true));
 
         let serialized = serde_json::to_value(&custom).unwrap();
@@ -213,7 +216,7 @@ mod tests {
         );
 
         let round_trip: Emoji = serde_json::from_value(serialized).unwrap();
-        assert_eq!(round_trip.id.as_deref(), Some("42"));
+        assert_eq!(round_trip.id, Some(test_id(42)));
         assert_eq!(round_trip.name.as_deref(), Some("party"));
         assert_eq!(round_trip.animated, Some(true));
     }

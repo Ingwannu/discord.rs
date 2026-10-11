@@ -2,18 +2,18 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{AutoModerationRule, Snowflake};
+use crate::model::{AutoModerationRule, GenericId};
 
 use super::RestClient;
 
 impl RestClient {
     pub async fn get_auto_moderation_rules(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            &format!("/guilds/{}/auto-moderation/rules", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -21,11 +21,11 @@ impl RestClient {
 
     pub async fn get_auto_moderation_rules_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<AutoModerationRule>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            &format!("/guilds/{}/auto-moderation/rules", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -33,16 +33,12 @@ impl RestClient {
 
     pub async fn get_auto_moderation_rule(
         &self,
-        guild_id: impl Into<Snowflake>,
-        rule_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        rule_id: GenericId,
     ) -> Result<AutoModerationRule, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!(
-                "/guilds/{}/auto-moderation/rules/{}",
-                guild_id.into(),
-                rule_id.into()
-            ),
+            &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
             Option::<&Value>::None,
         )
         .await
@@ -50,12 +46,12 @@ impl RestClient {
 
     pub async fn create_auto_moderation_rule(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::POST,
-            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            &format!("/guilds/{}/auto-moderation/rules", guild_id),
             Some(body),
         )
         .await
@@ -63,7 +59,7 @@ impl RestClient {
 
     pub async fn create_auto_moderation_rule_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<AutoModerationRule, DiscordError>
     where
@@ -71,7 +67,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/auto-moderation/rules", guild_id.into()),
+            &format!("/guilds/{}/auto-moderation/rules", guild_id),
             Some(body),
         )
         .await
@@ -79,17 +75,13 @@ impl RestClient {
 
     pub async fn modify_auto_moderation_rule(
         &self,
-        guild_id: impl Into<Snowflake>,
-        rule_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        rule_id: GenericId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::PATCH,
-            &format!(
-                "/guilds/{}/auto-moderation/rules/{}",
-                guild_id.into(),
-                rule_id.into()
-            ),
+            &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
             Some(body),
         )
         .await
@@ -97,8 +89,8 @@ impl RestClient {
 
     pub async fn modify_auto_moderation_rule_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
-        rule_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        rule_id: GenericId,
         body: &B,
     ) -> Result<AutoModerationRule, DiscordError>
     where
@@ -106,11 +98,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!(
-                "/guilds/{}/auto-moderation/rules/{}",
-                guild_id.into(),
-                rule_id.into()
-            ),
+            &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
             Some(body),
         )
         .await
@@ -118,16 +106,12 @@ impl RestClient {
 
     pub async fn delete_auto_moderation_rule(
         &self,
-        guild_id: impl Into<Snowflake>,
-        rule_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        rule_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/guilds/{}/auto-moderation/rules/{}",
-                guild_id.into(),
-                rule_id.into()
-            ),
+            &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
             Option::<&Value>::None,
         )
         .await

@@ -11,6 +11,7 @@ use tracing::warn;
 
 use super::client::voice_state_update_payload;
 use crate::error::DiscordError;
+use crate::model::GenericId;
 use crate::sharding::{ShardIpcMessage, ShardRuntimeStatus, ShardSupervisorEvent, ShardingManager};
 use crate::types::invalid_data_error;
 
@@ -255,18 +256,15 @@ impl ShardSupervisor {
     pub fn update_voice_state(
         &self,
         shard_id: u32,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: Option<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: Option<GenericId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
         self.send(
             shard_id,
             ShardIpcMessage::SendPayload(voice_state_update_payload(
-                guild_id.into(),
-                channel_id,
-                self_mute,
-                self_deaf,
+                guild_id, channel_id, self_mute, self_deaf,
             )),
         )
     }
@@ -274,24 +272,18 @@ impl ShardSupervisor {
     pub fn join_voice(
         &self,
         shard_id: u32,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        self.update_voice_state(
-            shard_id,
-            guild_id,
-            Some(channel_id.into()),
-            self_mute,
-            self_deaf,
-        )
+        self.update_voice_state(shard_id, guild_id, Some(channel_id), self_mute, self_deaf)
     }
 
     pub fn leave_voice(
         &self,
         shard_id: u32,
-        guild_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {

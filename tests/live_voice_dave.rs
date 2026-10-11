@@ -119,8 +119,14 @@ async fn live_voice_gateway_dave_mls_transition_smoke() {
 
     let handle = connect_voice_runtime(
         VoiceRuntimeConfig::new(
-            config.server_id,
-            config.user_id,
+            config
+                .server_id
+                .parse()
+                .expect("DISCORDRS_LIVE_VOICE_SERVER_ID must be a numeric snowflake"),
+            config
+                .user_id
+                .parse()
+                .expect("DISCORDRS_LIVE_VOICE_USER_ID must be a numeric snowflake"),
             config.session_id,
             config.token,
             config.endpoint,

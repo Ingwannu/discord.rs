@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{PermissionsBitField, Snowflake};
+use super::{GenericId, PermissionsBitField};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `ApplicationCommandOptionChoice`.
@@ -140,11 +140,11 @@ impl Default for ApplicationCommandHandlerType {
 /// Typed Discord API object for `ApplicationCommand`.
 pub struct ApplicationCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<Snowflake>,
+    pub id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(rename = "type")]
     pub kind: u8,
     pub name: String,
@@ -167,7 +167,7 @@ pub struct ApplicationCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub handler: Option<ApplicationCommandHandlerType>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<Snowflake>,
+    pub version: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<bool>,
 }
@@ -177,10 +177,10 @@ pub struct ApplicationCommand {
 /// Discord accepts role, user, and channel overwrites for a guild command.
 /// The `id` can also be one of Discord's documented permission constants,
 /// such as the guild ID for `@everyone`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationCommandPermission {
     /// Role, user, or channel ID targeted by the overwrite.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Discord permission target type.
     #[serde(rename = "type")]
     pub kind: u8,
@@ -197,27 +197,27 @@ impl ApplicationCommandPermission {
     pub const CHANNEL: u8 = 3;
 
     /// Creates a role permission overwrite.
-    pub fn role(role_id: impl Into<Snowflake>, permission: bool) -> Self {
+    pub fn role(role_id: GenericId, permission: bool) -> Self {
         Self {
-            id: role_id.into(),
+            id: role_id,
             kind: Self::ROLE,
             permission,
         }
     }
 
     /// Creates a user permission overwrite.
-    pub fn user(user_id: impl Into<Snowflake>, permission: bool) -> Self {
+    pub fn user(user_id: GenericId, permission: bool) -> Self {
         Self {
-            id: user_id.into(),
+            id: user_id,
             kind: Self::USER,
             permission,
         }
     }
 
     /// Creates a channel permission overwrite.
-    pub fn channel(channel_id: impl Into<Snowflake>, permission: bool) -> Self {
+    pub fn channel(channel_id: GenericId, permission: bool) -> Self {
         Self {
-            id: channel_id.into(),
+            id: channel_id,
             kind: Self::CHANNEL,
             permission,
         }
@@ -225,14 +225,14 @@ impl ApplicationCommandPermission {
 }
 
 /// Permissions returned for one application command in one guild.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GuildApplicationCommandPermissions {
     /// Command ID.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Application ID that owns the command.
-    pub application_id: Snowflake,
+    pub application_id: GenericId,
     /// Guild ID where the permissions apply.
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     /// Permission overwrites attached to the command.
     #[serde(default)]
     pub permissions: Vec<ApplicationCommandPermission>,
@@ -256,12 +256,12 @@ impl EditApplicationCommandPermissions {
 
 impl ApplicationCommand {
     /// Returns the command ID when Discord has assigned one.
-    pub fn id_opt(&self) -> Option<&Snowflake> {
-        self.id.as_ref()
+    pub fn id_opt(&self) -> Option<GenericId> {
+        self.id
     }
 
     /// Returns the creation timestamp once Discord has assigned an ID.
     pub fn created_at(&self) -> Option<u64> {
-        self.id_opt().and_then(Snowflake::timestamp)
+        self.id_opt().map(GenericId::timestamp)
     }
 }

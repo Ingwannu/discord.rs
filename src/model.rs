@@ -16,6 +16,8 @@ mod component;
 pub mod discriminant;
 mod embed;
 mod entity;
+#[cfg(test)]
+mod fixtures;
 mod gateway;
 mod guild;
 mod guild_aux;
@@ -34,7 +36,6 @@ mod poll;
 mod presence;
 mod role;
 mod scheduled_event;
-mod snowflake;
 mod thread;
 mod user;
 mod voice;
@@ -72,9 +73,10 @@ pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
 pub use guild::{
-    CreateGuild, CreateGuildFromTemplate, CurrentUserGuild, CurrentUserGuildsQuery, GetGuildQuery,
-    Guild, GuildIncidentsData, GuildMfaLevel, GuildPreview, ModifyGuild,
-    ModifyGuildIncidentActions,
+    CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
+    CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole, CurrentUserGuild,
+    CurrentUserGuildsQuery, GetGuildQuery, Guild, GuildIncidentsData, GuildMfaLevel, GuildPreview,
+    ModifyGuild, ModifyGuildIncidentActions,
 };
 pub use guild_aux::{
     BeginGuildPruneRequest, GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate,
@@ -84,11 +86,12 @@ pub use guild_aux::{
     WelcomeScreenChannel,
 };
 pub use interaction::{
-    AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
-    CommandInteractionOption, ComponentInteraction, ComponentInteractionData, Interaction,
-    InteractionCallbackInteraction, InteractionCallbackResource, InteractionCallbackResponse,
-    InteractionCallbackResult, InteractionContextData, MessageContextMenuInteraction,
-    ModalSubmitInteraction, PingInteraction, ResolvedData, UserContextMenuInteraction,
+    AuthorizingIntegrationOwners, AutocompleteInteraction, ChatInputCommandInteraction,
+    CommandInteractionData, CommandInteractionOption, ComponentInteraction,
+    ComponentInteractionData, Interaction, InteractionCallbackInteraction,
+    InteractionCallbackResource, InteractionCallbackResponse, InteractionCallbackResult,
+    InteractionContextData, MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction,
+    ResolvedData, UserContextMenuInteraction,
 };
 pub use invite::{CreateChannelInvite, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus};
 pub use lobby::{
@@ -134,7 +137,6 @@ pub use scheduled_event::{
     GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser,
     GuildScheduledEventUsersQuery, GuildScheduledEventsQuery,
 };
-pub use snowflake::Snowflake;
 pub use thread::{
     ArchivedThreadsQuery, JoinedArchivedThreadsQuery, ThreadListResponse, ThreadMember,
     ThreadMemberQuery, ThreadMetadata,
@@ -153,9 +155,10 @@ pub use webhook::{
     WebhookMessageQuery,
 };
 
-// Phase 3 series 1: new typed primitives. Consumers still use `Snowflake`,
-// raw `u8` discriminants, and `Option<Option<T>>` until series 2–4 migrate
-// them; discriminants whose names are still taken by 2.x types stay under
+// Phase 3 primitives. Series 2 step A moved every ID field and parameter to
+// `GenericId`; step B narrows them to the per-resource aliases. Raw `u8`
+// discriminants and `Option<Option<T>>` stay until series 3–4 migrate them;
+// discriminants whose names are still taken by 2.x types stay under
 // `model::discriminant` (see that module's staging plan).
 pub use discriminant::{
     AuditLogActionType, AutoModerationActionType, AutoModerationEventType,
@@ -180,6 +183,35 @@ pub use id::{
     WidgetUserId,
 };
 pub use patch::{Nullable, NullablePatch, Patch};
+
+#[cfg(test)]
+pub(crate) use id::test_id;
+
+/// The 2.x ID type, now a plain alias for [`GenericId`].
+///
+/// 2.x `Snowflake` stored the decimal text (`String` plus a parsed `u64`),
+/// accepted any string, and converted implicitly from `u64`/`&str`/`String`.
+/// It is gone; this alias only exists so old code finds its way to the
+/// replacement. Use the per-resource IDs ([`GuildId`], [`ChannelId`],
+/// [`UserId`], ...) where the kind is known and [`GenericId`] where it is not.
+/// IDs are now `Copy`, eight bytes, never zero, and built with checked
+/// conversions:
+///
+/// ```
+/// use discordrs::{DiscordError, GenericId, GuildId};
+///
+/// # fn main() -> Result<(), DiscordError> {
+/// let from_text: GuildId = "81384788765712384".parse()?;
+/// let from_number = GenericId::try_from(81384788765712384_u64)?;
+/// assert_eq!(from_text.get(), from_number.get());
+/// # Ok(())
+/// # }
+/// ```
+#[deprecated(
+    since = "3.0.0",
+    note = "Snowflake is now the numeric, Copy GenericId; use the typed ids (GuildId, ChannelId, UserId, ...) or GenericId, built with `\"123\".parse()?` or `GenericId::try_from(123)?`"
+)]
+pub type Snowflake = GenericId;
 
 // The response state machine lives in `response.rs` next to the methods that
 // drive it; re-exported so `model::InteractionResponseState` keeps working.

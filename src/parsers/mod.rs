@@ -1,6 +1,8 @@
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::DiscordError;
+use crate::model::GenericId;
 use crate::types::invalid_data_error;
 
 /// Public module for `interaction` APIs.
@@ -27,6 +29,35 @@ pub(crate) fn value_to_u8(value: &Value) -> Option<u8> {
         Value::Number(inner) => inner.as_u64().and_then(|raw| u8::try_from(raw).ok()),
         Value::String(inner) => inner.parse::<u8>().ok(),
         _ => None,
+    }
+}
+
+/// Reads a required ID field in either of Discord's spellings (decimal
+/// string or integer). Zero and non-digit text are rejected like everywhere
+/// else IDs are parsed.
+pub(crate) fn required_id_field(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<GenericId, DiscordError> {
+    value
+        .get(field)
+        .and_then(|raw| GenericId::deserialize(raw).ok())
+        .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
+}
+
+/// Reads an optional ID field: absent or `null` is `None`, any other value
+/// must be a valid ID (a malformed ID is an error, not silently dropped).
+pub(crate) fn optional_id_field(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<Option<GenericId>, DiscordError> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => GenericId::deserialize(raw)
+            .map(Some)
+            .map_err(|_| invalid_data_error(format!("invalid {context}.{field}"))),
     }
 }
 

@@ -3,16 +3,16 @@ use serde_json::Value;
 use crate::error::DiscordError;
 use crate::model::{
     AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
-    ComponentInteraction, ComponentInteractionData, Interaction, InteractionContextData,
+    ComponentInteraction, ComponentInteractionData, GenericId, Interaction, InteractionContextData,
     InteractionResponseState, MessageContextMenuInteraction, ModalSubmitInteraction,
-    PingInteraction, Snowflake, UserContextMenuInteraction,
+    PingInteraction, UserContextMenuInteraction,
 };
 use crate::types::invalid_data_error;
 
 use super::modal::{parse_modal_submission, V2ModalSubmission};
 use super::{
-    optional_string_field, optional_string_values_field, required_object_field,
-    required_string_field, required_u8_field, value_to_string, value_to_u8,
+    optional_id_field, optional_string_field, optional_string_values_field, required_id_field,
+    required_object_field, required_string_field, required_u8_field, value_to_u8,
 };
 
 #[derive(Clone, Debug)]
@@ -22,8 +22,8 @@ pub enum RawInteraction {
     Ping,
     /// Discord API enum variant `Command`.
     Command {
-        /// Interaction ID from the raw command payload.
-        id: Option<String>,
+        /// Command ID (`data.id`) from the raw command payload.
+        id: Option<GenericId>,
         /// Command name from the raw command payload.
         name: Option<String>,
         /// Discord command type value.
@@ -33,8 +33,8 @@ pub enum RawInteraction {
     },
     /// Discord API enum variant `Autocomplete`.
     Autocomplete {
-        /// Interaction ID from the raw autocomplete payload.
-        id: Option<String>,
+        /// Command ID (`data.id`) from the raw autocomplete payload.
+        id: Option<GenericId>,
         /// Command name from the raw autocomplete payload.
         name: Option<String>,
         /// Discord command type value.
@@ -63,14 +63,14 @@ pub enum RawInteraction {
 /// The raw-handler context carries no shared response state: helpers that
 /// take its id and token are stateless (see [`crate::helpers`]).
 pub struct InteractionContext {
-    pub id: String,
+    pub id: GenericId,
     /// Interaction token. Redacted from `Debug` output, including inside
     /// [`Self::raw`].
     pub token: String,
-    pub application_id: String,
-    pub guild_id: Option<String>,
-    pub channel_id: Option<String>,
-    pub user_id: Option<String>,
+    pub application_id: GenericId,
+    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
+    pub user_id: Option<GenericId>,
     /// Full interaction payload as received, including the token.
     pub raw: Value,
 }
@@ -137,23 +137,20 @@ impl std::fmt::Debug for RedactTokens<'_> {
 
 /// Provides the `parse_interaction_context` helper.
 pub fn parse_interaction_context(raw: &Value) -> Result<InteractionContext, DiscordError> {
-    let user_id = raw
-        .get("member")
-        .and_then(|member| member.get("user"))
-        .and_then(|user| user.get("id"))
-        .and_then(value_to_string)
-        .or_else(|| {
-            raw.get("user")
-                .and_then(|user| user.get("id"))
-                .and_then(value_to_string)
-        });
+    let user_id = match raw.get("member").and_then(|member| member.get("user")) {
+        Some(user) => optional_id_field(user, "id", "interaction.member.user")?,
+        None => match raw.get("user") {
+            Some(user) => optional_id_field(user, "id", "interaction.user")?,
+            None => None,
+        },
+    };
 
     Ok(InteractionContext {
-        id: required_string_field(raw, "id", "interaction")?,
+        id: required_id_field(raw, "id", "interaction")?,
         token: required_string_field(raw, "token", "interaction")?,
-        application_id: required_string_field(raw, "application_id", "interaction")?,
-        guild_id: optional_string_field(raw, "guild_id"),
-        channel_id: optional_string_field(raw, "channel_id"),
+        application_id: required_id_field(raw, "application_id", "interaction")?,
+        guild_id: optional_id_field(raw, "guild_id", "interaction")?,
+        channel_id: optional_id_field(raw, "channel_id", "interaction")?,
         user_id,
         raw: raw.clone(),
     })
@@ -168,7 +165,7 @@ pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError
         2 => {
             let data = required_object_field(raw, "data", "interaction")?.clone();
             Ok(RawInteraction::Command {
-                id: optional_string_field(&data, "id"),
+                id: optional_id_field(&data, "id", "interaction.data")?,
                 name: optional_string_field(&data, "name"),
                 command_type: data.get("type").and_then(value_to_u8),
                 data,
@@ -177,7 +174,7 @@ pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError
         4 => {
             let data = required_object_field(raw, "data", "interaction")?.clone();
             Ok(RawInteraction::Autocomplete {
-                id: optional_string_field(&data, "id"),
+                id: optional_id_field(&data, "id", "interaction.data")?,
                 name: optional_string_field(&data, "name"),
                 command_type: data.get("type").and_then(value_to_u8),
                 data,
@@ -264,15 +261,11 @@ fn parse_typed_interaction_context(raw: &Value) -> Result<InteractionContextData
         });
 
     Ok(InteractionContextData {
-        id: Snowflake::from(required_string_field(raw, "id", "interaction")?),
-        application_id: Snowflake::from(required_string_field(
-            raw,
-            "application_id",
-            "interaction",
-        )?),
+        id: required_id_field(raw, "id", "interaction")?,
+        application_id: required_id_field(raw, "application_id", "interaction")?,
         token: required_string_field(raw, "token", "interaction")?,
-        guild_id: optional_string_field(raw, "guild_id").map(Snowflake::from),
-        channel_id: optional_string_field(raw, "channel_id").map(Snowflake::from),
+        guild_id: optional_id_field(raw, "guild_id", "interaction")?,
+        channel_id: optional_id_field(raw, "channel_id", "interaction")?,
         user,
         member,
         app_permissions: raw
@@ -310,7 +303,7 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
         .transpose()?
         .unwrap_or_default();
     Ok(CommandInteractionData {
-        id: optional_string_field(&data, "id").map(Snowflake::from),
+        id: optional_id_field(&data, "id", "interaction.data")?,
         name: optional_string_field(&data, "name"),
         kind: data.get("type").and_then(value_to_u8),
         options,
@@ -319,7 +312,7 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
             .cloned()
             .map(serde_json::from_value)
             .transpose()?,
-        target_id: optional_string_field(&data, "target_id").map(Snowflake::from),
+        target_id: optional_id_field(&data, "target_id", "interaction.data")?,
     })
 }
 
@@ -335,6 +328,7 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use serde_json::{json, Value};
 
     use super::{
@@ -366,7 +360,7 @@ mod tests {
                 command_type,
                 ..
             } => {
-                assert_eq!(id.as_deref(), Some("3"));
+                assert_eq!(id, Some(test_id(3)));
                 assert_eq!(name.as_deref(), Some("ticket"));
                 assert_eq!(command_type, Some(1));
             }
@@ -434,11 +428,11 @@ mod tests {
         });
 
         let context = parse_interaction_context(&raw).unwrap();
-        assert_eq!(context.id, "1");
-        assert_eq!(context.application_id, "2");
-        assert_eq!(context.guild_id.as_deref(), Some("3"));
-        assert_eq!(context.channel_id.as_deref(), Some("4"));
-        assert_eq!(context.user_id.as_deref(), Some("5"));
+        assert_eq!(context.id, test_id(1));
+        assert_eq!(context.application_id, test_id(2));
+        assert_eq!(context.guild_id, Some(test_id(3)));
+        assert_eq!(context.channel_id, Some(test_id(4)));
+        assert_eq!(context.user_id, Some(test_id(5)));
         assert_eq!(context.raw, raw);
     }
 
@@ -566,11 +560,11 @@ mod tests {
         });
 
         let context = parse_interaction_context(&raw).unwrap();
-        assert_eq!(context.id, "10");
-        assert_eq!(context.application_id, "20");
+        assert_eq!(context.id, test_id(10));
+        assert_eq!(context.application_id, test_id(20));
         assert_eq!(context.guild_id, None);
         assert_eq!(context.channel_id, None);
-        assert_eq!(context.user_id.as_deref(), Some("30"));
+        assert_eq!(context.user_id, Some(test_id(30)));
         assert_eq!(context.raw, raw);
     }
 
@@ -603,18 +597,26 @@ mod tests {
         .unwrap()
         {
             Interaction::UserContextMenu(interaction) => {
-                assert_eq!(interaction.data.target_id.unwrap().as_str(), "99");
+                assert_eq!(interaction.data.target_id.unwrap().get(), 99);
                 assert_eq!(interaction.context.context.unwrap().0, 1);
                 assert_eq!(interaction.context.entitlements.unwrap().len(), 1);
                 assert_eq!(
                     interaction
                         .context
                         .authorizing_integration_owners
-                        .unwrap()
-                        .get("1")
-                        .unwrap()
-                        .as_str(),
-                    "55"
+                        .as_ref()
+                        .and_then(|owners| owners.user_install)
+                        .map(|user| user.get()),
+                    Some(55)
+                );
+                assert_eq!(
+                    interaction
+                        .context
+                        .authorizing_integration_owners
+                        .and_then(|owners| owners.guild_install)
+                        .and_then(|owner| owner.guild_id())
+                        .map(|guild| guild.get()),
+                    Some(44)
                 );
             }
             other => panic!("unexpected interaction: {other:?}"),
@@ -686,9 +688,9 @@ mod tests {
         .unwrap()
         {
             Interaction::Ping(ping) => {
-                assert_eq!(ping.context.id.as_u64(), Some(1));
-                assert_eq!(ping.context.application_id.as_u64(), Some(2));
-                assert_eq!(ping.context.user.unwrap().id.as_u64(), Some(9));
+                assert_eq!(ping.context.id.get(), 1);
+                assert_eq!(ping.context.application_id.get(), 2);
+                assert_eq!(ping.context.user.unwrap().id.get(), 9);
                 assert_eq!(ping.context.app_permissions.unwrap().bits(), 2048);
                 assert_eq!(ping.context.locale.as_deref(), Some("en-US"));
                 assert_eq!(ping.context.guild_locale.as_deref(), Some("ko"));
@@ -718,7 +720,7 @@ mod tests {
         .unwrap()
         {
             Interaction::ChatInputCommand(command) => {
-                assert_eq!(command.data.id.unwrap().as_u64(), Some(5));
+                assert_eq!(command.data.id.unwrap().get(), 5);
                 assert_eq!(command.data.name.as_deref(), Some("deploy"));
                 assert_eq!(command.data.kind, Some(1));
                 assert!(command.data.options.is_empty());
@@ -727,7 +729,7 @@ mod tests {
                         .data
                         .resolved
                         .unwrap()
-                        .user(42u64)
+                        .user(test_id(42))
                         .map(|user| user.username.as_str()),
                     Some("resolved-user")
                 );
@@ -804,7 +806,7 @@ mod tests {
             } => {
                 assert_eq!(kind, 99);
                 assert_eq!(raw_data, json!(null));
-                assert_eq!(context.id.as_u64(), Some(1));
+                assert_eq!(context.id.get(), 1);
             }
             other => panic!("unexpected unknown interaction: {other:?}"),
         }

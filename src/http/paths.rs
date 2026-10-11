@@ -3,20 +3,22 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ArchivedThreadsQuery, AuditLogQuery, CurrentUserGuildsQuery, EntitlementQuery, GetGuildQuery,
-    GuildBansQuery, GuildMembersQuery, JoinedArchivedThreadsQuery, SearchGuildMembersQuery,
-    Snowflake, SubscriptionQuery, ThreadMemberQuery, WebhookExecuteQuery, WebhookMessageQuery,
+    ArchivedThreadsQuery, AuditLogQuery, CurrentUserGuildsQuery, EntitlementQuery, GenericId,
+    GetGuildQuery, GuildBansQuery, GuildMembersQuery, JoinedArchivedThreadsQuery,
+    SearchGuildMembersQuery, SubscriptionQuery, ThreadMemberQuery, WebhookExecuteQuery,
+    WebhookMessageQuery,
 };
 use crate::types::invalid_data_error;
 
-pub(crate) fn configured_application_id(application_id: u64) -> Result<String, DiscordError> {
-    if application_id == 0 {
-        return Err(invalid_data_error(
+/// The client's application ID as a path parameter. The client stores `0`
+/// for "not configured", which is not a valid ID, so it becomes an error
+/// here instead of a `/applications/0/...` request.
+pub(crate) fn configured_application_id(application_id: u64) -> Result<GenericId, DiscordError> {
+    GenericId::try_new(application_id).map_err(|_| {
+        invalid_data_error(
             "application_id must be set before follow-up webhook calls; use set_application_id() or create_followup_message_with_application_id()",
-        ));
-    }
-
-    Ok(application_id.to_string())
+        )
+    })
 }
 
 pub(crate) fn validate_token_path_segment(
@@ -49,19 +51,6 @@ pub(crate) fn validate_token_path_segment(
     Ok(())
 }
 
-pub(crate) fn validate_snowflake_path_segment(
-    name: &str,
-    value: &Snowflake,
-) -> Result<(), DiscordError> {
-    if value.is_valid() {
-        Ok(())
-    } else {
-        Err(invalid_data_error(format!(
-            "{name} must be a valid Discord snowflake containing only ASCII digits"
-        )))
-    }
-}
-
 pub(crate) fn global_commands_path(application_id: u64) -> Result<String, DiscordError> {
     let application_id = configured_application_id(application_id)?;
     Ok(format!("/applications/{application_id}/commands"))
@@ -73,10 +62,9 @@ pub(crate) fn validate_template_code(code: &str) -> Result<(), DiscordError> {
 }
 
 pub(crate) fn interaction_callback_path(
-    interaction_id: Snowflake,
+    interaction_id: GenericId,
     interaction_token: &str,
 ) -> Result<String, DiscordError> {
-    validate_snowflake_path_segment("interaction_id", &interaction_id)?;
     let interaction_token = interaction_token.trim();
     validate_token_path_segment("interaction_token", interaction_token, false)?;
     Ok(format!(
@@ -85,7 +73,7 @@ pub(crate) fn interaction_callback_path(
 }
 
 pub(crate) fn execute_webhook_path(
-    webhook_id: Snowflake,
+    webhook_id: GenericId,
     token: &str,
 ) -> Result<String, DiscordError> {
     execute_webhook_path_with_query(
@@ -100,12 +88,11 @@ pub(crate) fn execute_webhook_path(
 }
 
 pub(crate) fn execute_webhook_path_with_query(
-    webhook_id: Snowflake,
+    webhook_id: GenericId,
     token: &str,
     query: &WebhookExecuteQuery,
     suffix: Option<&str>,
 ) -> Result<String, DiscordError> {
-    validate_snowflake_path_segment("webhook_id", &webhook_id)?;
     validate_token_path_segment("webhook_token", token, false)?;
     let suffix = suffix.unwrap_or_default();
     Ok(format!(
@@ -115,7 +102,7 @@ pub(crate) fn execute_webhook_path_with_query(
 }
 
 pub(crate) fn webhook_message_path(
-    webhook_id: Snowflake,
+    webhook_id: GenericId,
     token: &str,
     message_id: &str,
 ) -> Result<String, DiscordError> {
@@ -129,13 +116,12 @@ pub(crate) fn webhook_message_path(
 }
 
 pub(crate) fn webhook_message_path_with_query(
-    webhook_id: Snowflake,
+    webhook_id: GenericId,
     token: &str,
     message_id: &str,
     query: &WebhookMessageQuery,
     include_components: bool,
 ) -> Result<String, DiscordError> {
-    validate_snowflake_path_segment("webhook_id", &webhook_id)?;
     validate_token_path_segment("webhook_token", token, false)?;
     validate_token_path_segment("message_id", message_id, true)?;
     Ok(format!(
@@ -150,7 +136,7 @@ pub(crate) fn webhook_message_query(
 ) -> String {
     let mut params = Vec::new();
     if let Some(thread_id) = &query.thread_id {
-        params.push(format!("thread_id={}", thread_id.as_str()));
+        params.push(format!("thread_id={thread_id}"));
     }
     if include_components {
         if let Some(with_components) = query.with_components {
@@ -169,7 +155,7 @@ pub(crate) fn webhook_execute_query(
         params.push(format!("wait={wait}"));
     }
     if let Some(thread_id) = &query.thread_id {
-        params.push(format!("thread_id={}", thread_id.as_str()));
+        params.push(format!("thread_id={thread_id}"));
     }
     if include_components {
         if let Some(with_components) = query.with_components {
@@ -182,7 +168,7 @@ pub(crate) fn webhook_execute_query(
 pub(crate) fn guild_prune_query(
     days: Option<u64>,
     compute_prune_count: Option<bool>,
-    include_roles: &[Snowflake],
+    include_roles: &[GenericId],
 ) -> String {
     let mut params = Vec::new();
     if let Some(days) = days {
@@ -194,7 +180,7 @@ pub(crate) fn guild_prune_query(
     if !include_roles.is_empty() {
         let roles = include_roles
             .iter()
-            .map(Snowflake::as_str)
+            .map(GenericId::to_string)
             .collect::<Vec<_>>()
             .join(",");
         params.push(format!("include_roles={roles}"));
@@ -392,7 +378,7 @@ pub(crate) fn entitlement_query(query: &EntitlementQuery) -> String {
         let sku_ids = query
             .sku_ids
             .iter()
-            .map(Snowflake::as_str)
+            .map(GenericId::to_string)
             .collect::<Vec<_>>()
             .join(",");
         params.push(format!("sku_ids={sku_ids}"));
@@ -438,7 +424,7 @@ pub(crate) fn subscription_query(query: &SubscriptionQuery) -> String {
 pub(crate) fn invite_query(
     with_counts: Option<bool>,
     with_expiration: Option<bool>,
-    guild_scheduled_event_id: Option<Snowflake>,
+    guild_scheduled_event_id: Option<GenericId>,
 ) -> String {
     let mut params = Vec::new();
     if let Some(with_counts) = with_counts {
@@ -455,7 +441,7 @@ pub(crate) fn invite_query(
     query_string(params)
 }
 
-pub(crate) fn poll_answer_voters_query(after: Option<Snowflake>, limit: Option<u64>) -> String {
+pub(crate) fn poll_answer_voters_query(after: Option<GenericId>, limit: Option<u64>) -> String {
     let mut params = Vec::new();
     if let Some(after) = after {
         params.push(format!("after={after}"));
@@ -466,19 +452,13 @@ pub(crate) fn poll_answer_voters_query(after: Option<Snowflake>, limit: Option<u
     query_string(params)
 }
 
+/// `message_id` stays a string because Discord also accepts `@original`
+/// there (the interaction's original response).
 pub(crate) fn followup_webhook_path(
-    application_id: &str,
+    application_id: GenericId,
     interaction_token: &str,
     message_id: Option<&str>,
 ) -> Result<String, DiscordError> {
-    let application_id = application_id.trim();
-    if application_id.is_empty() || application_id == "0" {
-        return Err(invalid_data_error(
-            "application_id must be set before follow-up webhook calls",
-        ));
-    }
-    validate_token_path_segment("application_id", application_id, false)?;
-
     validate_token_path_segment("interaction_token", interaction_token, false)?;
 
     match message_id {

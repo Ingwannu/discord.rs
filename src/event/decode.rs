@@ -1,7 +1,8 @@
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::Snowflake;
+use crate::model::{GenericId, PollAnswerId};
 use crate::parsers::parse_interaction;
 
 use super::*;
@@ -82,7 +83,7 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
             raw: data,
         }),
         "MESSAGE_DELETE_BULK" => {
-            let ids: Vec<Snowflake> =
+            let ids: Vec<GenericId> =
                 serde_json::from_value(data.get("ids").cloned().unwrap_or(Value::Null))?;
             Event::MessageDeleteBulk(BulkMessageDeleteEvent {
                 channel_id: read_required_snowflake(&data, "channel_id")?,
@@ -396,7 +397,7 @@ pub fn decode_event(event_name: &str, data: Value) -> Result<Event, DiscordError
     Ok(event)
 }
 
-fn read_required_snowflake(value: &Value, field: &str) -> Result<Snowflake, DiscordError> {
+fn read_required_snowflake(value: &Value, field: &str) -> Result<GenericId, DiscordError> {
     let Some(raw) = value.get(field) else {
         return Err(format!("missing field {field}").into());
     };
@@ -404,7 +405,7 @@ fn read_required_snowflake(value: &Value, field: &str) -> Result<Snowflake, Disc
     serde_json::from_value(raw.clone()).map_err(Into::into)
 }
 
-fn read_optional_snowflake(value: &Value, field: &str) -> Option<Snowflake> {
+fn read_optional_snowflake(value: &Value, field: &str) -> Option<GenericId> {
     value
         .get(field)
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -458,7 +459,9 @@ fn decode_poll_vote_event(data: Value) -> PollVoteEvent {
         channel_id: read_optional_snowflake(&data, "channel_id"),
         message_id: read_optional_snowflake(&data, "message_id"),
         guild_id: read_optional_snowflake(&data, "guild_id"),
-        answer_id: read_optional_u64(&data, "answer_id"),
+        answer_id: data
+            .get("answer_id")
+            .and_then(|value| PollAnswerId::deserialize(value).ok()),
         raw: data,
     }
 }
@@ -488,10 +491,9 @@ fn decode_reaction_event(data: Value) -> ReactionEvent {
 
 fn decode_presence_update_event(data: Value) -> PresenceUpdateEvent {
     let user = data.get("user").and_then(decode_presence_update_user);
-    let user_id = user.as_ref().map(|user| user.id.clone()).or_else(|| {
+    let user_id = user.as_ref().map(|user| user.id).or_else(|| {
         data.pointer("/user/id")
-            .and_then(Value::as_str)
-            .map(Snowflake::new)
+            .and_then(|id| GenericId::deserialize(id).ok())
     });
 
     PresenceUpdateEvent {

@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelPins, ChannelPinsQuery, CreateMessage, Message, SearchGuildMessagesQuery,
-    SearchGuildMessagesResponse, Snowflake, User,
+    ChannelPins, ChannelPinsQuery, CreateMessage, GenericId, Message, SearchGuildMessagesQuery,
+    SearchGuildMessagesResponse, User,
 };
 
 use super::paths::query_string;
@@ -13,13 +13,13 @@ use super::{FileAttachment, RestClient};
 impl RestClient {
     pub async fn create_message(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::POST,
-            &format!("/channels/{}/messages", channel_id.into()),
+            &format!("/channels/{}/messages", channel_id),
             Some(body.as_ref()),
         )
         .await
@@ -30,9 +30,9 @@ impl RestClient {
     /// discord.js's `message.forward(channel)`.
     pub async fn forward_message(
         &self,
-        from_channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-        to_channel_id: impl Into<Snowflake>,
+        from_channel_id: GenericId,
+        message_id: GenericId,
+        to_channel_id: GenericId,
     ) -> Result<Message, DiscordError> {
         let body = CreateMessage {
             message_reference: Some(crate::model::MessageReference::forward(
@@ -46,14 +46,14 @@ impl RestClient {
 
     pub async fn create_message_with_files(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::POST,
-            &format!("/channels/{}/messages", channel_id.into()),
+            &format!("/channels/{}/messages", channel_id),
             body.as_ref(),
             files,
         )
@@ -62,18 +62,14 @@ impl RestClient {
 
     pub async fn update_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
         self.request_typed(
             Method::PATCH,
-            &format!(
-                "/channels/{}/messages/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}", channel_id, message_id),
             Some(body.as_ref()),
         )
         .await
@@ -81,19 +77,15 @@ impl RestClient {
 
     pub async fn update_message_with_files(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
         self.request_typed_multipart(
             Method::PATCH,
-            &format!(
-                "/channels/{}/messages/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}", channel_id, message_id),
             body.as_ref(),
             files,
         )
@@ -102,16 +94,12 @@ impl RestClient {
 
     pub async fn get_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Message, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!(
-                "/channels/{}/messages/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -119,12 +107,12 @@ impl RestClient {
 
     pub async fn get_channel_messages(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         limit: Option<u64>,
     ) -> Result<Vec<Message>, DiscordError> {
         let path = match limit {
-            Some(limit) => format!("/channels/{}/messages?limit={}", channel_id.into(), limit),
-            None => format!("/channels/{}/messages", channel_id.into()),
+            Some(limit) => format!("/channels/{}/messages?limit={}", channel_id, limit),
+            None => format!("/channels/{}/messages", channel_id),
         };
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
@@ -132,13 +120,13 @@ impl RestClient {
 
     pub async fn search_guild_messages(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         query: &SearchGuildMessagesQuery,
     ) -> Result<SearchGuildMessagesResponse, DiscordError> {
         let query = search_guild_messages_query(query);
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/messages/search{query}", guild_id.into()),
+            &format!("/guilds/{}/messages/search{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -146,13 +134,13 @@ impl RestClient {
 
     pub async fn bulk_delete_messages(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_ids: Vec<Snowflake>,
+        channel_id: GenericId,
+        message_ids: Vec<GenericId>,
     ) -> Result<(), DiscordError> {
-        let body = serde_json::json!({ "messages": message_ids.iter().map(|id| id.as_str()).collect::<Vec<_>>() });
+        let body = serde_json::json!({ "messages": message_ids });
         self.request_no_content(
             Method::POST,
-            &format!("/channels/{}/messages/bulk-delete", channel_id.into()),
+            &format!("/channels/{}/messages/bulk-delete", channel_id),
             Some(&body),
         )
         .await
@@ -160,15 +148,13 @@ impl RestClient {
 
     pub async fn add_reaction(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}/@me",
-            channel_id.into(),
-            message_id.into(),
-            emoji
+            channel_id, message_id, emoji
         );
         self.request_no_content(Method::PUT, &path, Option::<&Value>::None)
             .await
@@ -176,15 +162,13 @@ impl RestClient {
 
     pub async fn remove_reaction(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}/@me",
-            channel_id.into(),
-            message_id.into(),
-            emoji
+            channel_id, message_id, emoji
         );
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
@@ -192,17 +176,13 @@ impl RestClient {
 
     pub(crate) async fn edit_message_json(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
             Method::PATCH,
-            &format!(
-                "/channels/{}/messages/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}", channel_id, message_id),
             Some(body),
         )
         .await
@@ -210,16 +190,12 @@ impl RestClient {
 
     pub async fn delete_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/channels/{}/messages/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -227,16 +203,12 @@ impl RestClient {
 
     pub async fn crosspost_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Message, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!(
-                "/channels/{}/messages/{}/crosspost",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}/crosspost", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -244,11 +216,11 @@ impl RestClient {
 
     pub async fn get_channel_messages_paginated(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         limit: Option<u64>,
-        before: Option<Snowflake>,
-        after: Option<Snowflake>,
-        around: Option<Snowflake>,
+        before: Option<GenericId>,
+        after: Option<GenericId>,
+        around: Option<GenericId>,
     ) -> Result<Vec<Message>, DiscordError> {
         let mut params = Vec::new();
         if let Some(limit) = limit {
@@ -264,13 +236,9 @@ impl RestClient {
             params.push(format!("around={around}"));
         }
         let path = if params.is_empty() {
-            format!("/channels/{}/messages", channel_id.into())
+            format!("/channels/{}/messages", channel_id)
         } else {
-            format!(
-                "/channels/{}/messages?{}",
-                channel_id.into(),
-                params.join("&")
-            )
+            format!("/channels/{}/messages?{}", channel_id, params.join("&"))
         };
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
@@ -278,11 +246,11 @@ impl RestClient {
 
     pub async fn get_reactions(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         emoji: &str,
         limit: Option<u64>,
-        after: Option<Snowflake>,
+        after: Option<GenericId>,
     ) -> Result<Vec<User>, DiscordError> {
         let mut params = Vec::new();
         if let Some(limit) = limit {
@@ -298,10 +266,7 @@ impl RestClient {
         };
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}{}",
-            channel_id.into(),
-            message_id.into(),
-            emoji,
-            query
+            channel_id, message_id, emoji, query
         );
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
@@ -309,13 +274,13 @@ impl RestClient {
 
     pub async fn get_channel_pins(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         query: &ChannelPinsQuery,
     ) -> Result<ChannelPins, DiscordError> {
         let query = channel_pins_query(query);
         self.request_typed(
             Method::GET,
-            &format!("/channels/{}/messages/pins{query}", channel_id.into()),
+            &format!("/channels/{}/messages/pins{query}", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -323,17 +288,14 @@ impl RestClient {
 
     pub async fn remove_user_reaction(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         emoji: &str,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}/{}",
-            channel_id.into(),
-            message_id.into(),
-            emoji,
-            user_id.into()
+            channel_id, message_id, emoji, user_id
         );
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
@@ -341,16 +303,12 @@ impl RestClient {
 
     pub async fn remove_all_reactions(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/channels/{}/messages/{}/reactions",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/{}/reactions", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -358,17 +316,15 @@ impl RestClient {
 
     pub async fn remove_all_reactions_for_emoji(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!(
                 "/channels/{}/messages/{}/reactions/{}",
-                channel_id.into(),
-                message_id.into(),
-                emoji
+                channel_id, message_id, emoji
             ),
             Option::<&Value>::None,
         )
@@ -377,12 +333,12 @@ impl RestClient {
 
     pub(crate) async fn send_message_json(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
             Method::POST,
-            &format!("/channels/{}/messages", channel_id.into()),
+            &format!("/channels/{}/messages", channel_id),
             Some(body),
         )
         .await
@@ -390,16 +346,12 @@ impl RestClient {
 
     pub async fn pin_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
-            &format!(
-                "/channels/{}/messages/pins/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/pins/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -407,16 +359,12 @@ impl RestClient {
 
     pub async fn unpin_message(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/channels/{}/messages/pins/{}",
-                channel_id.into(),
-                message_id.into()
-            ),
+            &format!("/channels/{}/messages/pins/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -424,11 +372,11 @@ impl RestClient {
 
     pub async fn get_pinned_messages(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Vec<Message>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/channels/{}/pins", channel_id.into()),
+            &format!("/channels/{}/pins", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -437,12 +385,12 @@ impl RestClient {
     /// Calls the legacy `pin_message` route.
     pub async fn pin_message_legacy(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
-            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            &format!("/channels/{}/pins/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -451,12 +399,12 @@ impl RestClient {
     /// Calls the legacy `unpin_message` route.
     pub async fn unpin_message_legacy(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            &format!("/channels/{}/pins/{}", channel_id, message_id),
             Option::<&Value>::None,
         )
         .await
@@ -541,7 +489,7 @@ fn search_guild_messages_query(query: &SearchGuildMessagesQuery) -> String {
     query_string(params)
 }
 
-fn push_snowflakes(params: &mut Vec<String>, name: &str, values: &[Snowflake]) {
+fn push_snowflakes(params: &mut Vec<String>, name: &str, values: &[GenericId]) {
     params.extend(values.iter().map(|value| format!("{name}={value}")));
 }
 

@@ -2,7 +2,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::Snowflake;
+use crate::model::GenericId;
 use crate::types::Emoji;
 
 use super::{configured_application_id, RestClient};
@@ -16,11 +16,11 @@ struct EmojiListResponse {
 impl RestClient {
     pub async fn get_guild_emojis(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/emojis", guild_id.into()),
+            &format!("/guilds/{}/emojis", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -28,11 +28,11 @@ impl RestClient {
 
     pub async fn get_guild_emojis_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<Emoji>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/emojis", guild_id.into()),
+            &format!("/guilds/{}/emojis", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -40,12 +40,12 @@ impl RestClient {
 
     pub async fn get_guild_emoji(
         &self,
-        guild_id: impl Into<Snowflake>,
-        emoji_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        emoji_id: GenericId,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::GET,
-            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
             Option::<&Value>::None,
         )
         .await
@@ -53,12 +53,12 @@ impl RestClient {
 
     pub async fn get_guild_emoji_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
-        emoji_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        emoji_id: GenericId,
     ) -> Result<Emoji, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
             Option::<&Value>::None,
         )
         .await
@@ -66,12 +66,12 @@ impl RestClient {
 
     pub async fn create_guild_emoji(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::POST,
-            &format!("/guilds/{}/emojis", guild_id.into()),
+            &format!("/guilds/{}/emojis", guild_id),
             Some(body),
         )
         .await
@@ -79,7 +79,7 @@ impl RestClient {
 
     pub async fn create_guild_emoji_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -87,7 +87,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/emojis", guild_id.into()),
+            &format!("/guilds/{}/emojis", guild_id),
             Some(body),
         )
         .await
@@ -95,13 +95,13 @@ impl RestClient {
 
     pub async fn modify_guild_emoji(
         &self,
-        guild_id: impl Into<Snowflake>,
-        emoji_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        emoji_id: GenericId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::PATCH,
-            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
             Some(body),
         )
         .await
@@ -109,8 +109,8 @@ impl RestClient {
 
     pub async fn modify_guild_emoji_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
-        emoji_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        emoji_id: GenericId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -118,7 +118,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
             Some(body),
         )
         .await
@@ -126,12 +126,12 @@ impl RestClient {
 
     pub async fn delete_guild_emoji(
         &self,
-        guild_id: impl Into<Snowflake>,
-        emoji_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        emoji_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/guilds/{}/emojis/{}", guild_id.into(), emoji_id.into()),
+            &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
             Option::<&Value>::None,
         )
         .await
@@ -167,12 +167,12 @@ impl RestClient {
 
     pub async fn get_application_emoji(
         &self,
-        emoji_id: impl Into<Snowflake>,
+        emoji_id: GenericId,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request(
             Method::GET,
-            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            &format!("/applications/{application_id}/emojis/{}", emoji_id),
             Option::<&Value>::None,
         )
         .await
@@ -180,12 +180,12 @@ impl RestClient {
 
     pub async fn get_application_emoji_typed(
         &self,
-        emoji_id: impl Into<Snowflake>,
+        emoji_id: GenericId,
     ) -> Result<Emoji, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
-            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            &format!("/applications/{application_id}/emojis/{}", emoji_id),
             Option::<&Value>::None,
         )
         .await
@@ -219,13 +219,13 @@ impl RestClient {
 
     pub async fn modify_application_emoji(
         &self,
-        emoji_id: impl Into<Snowflake>,
+        emoji_id: GenericId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request(
             Method::PATCH,
-            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            &format!("/applications/{application_id}/emojis/{}", emoji_id),
             Some(body),
         )
         .await
@@ -233,7 +233,7 @@ impl RestClient {
 
     pub async fn modify_application_emoji_typed<B>(
         &self,
-        emoji_id: impl Into<Snowflake>,
+        emoji_id: GenericId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -242,20 +242,17 @@ impl RestClient {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::PATCH,
-            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            &format!("/applications/{application_id}/emojis/{}", emoji_id),
             Some(body),
         )
         .await
     }
 
-    pub async fn delete_application_emoji(
-        &self,
-        emoji_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn delete_application_emoji(&self, emoji_id: GenericId) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::DELETE,
-            &format!("/applications/{application_id}/emojis/{}", emoji_id.into()),
+            &format!("/applications/{application_id}/emojis/{}", emoji_id),
             Option::<&Value>::None,
         )
         .await

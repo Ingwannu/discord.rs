@@ -6,9 +6,10 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    BeginGuildPruneRequest, GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate,
-    GuildWidget, GuildWidgetImageStyle, GuildWidgetSettings, Integration, ModifyGuildOnboarding,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, Snowflake, VanityUrl, WelcomeScreen,
+    BeginGuildPruneRequest, GenericId, GuildOnboarding, GuildPruneCount, GuildPruneResult,
+    GuildTemplate, GuildWidget, GuildWidgetImageStyle, GuildWidgetSettings, Integration,
+    ModifyGuildOnboarding, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, VanityUrl,
+    WelcomeScreen,
 };
 
 use super::paths::{guild_prune_query, validate_token_path_segment};
@@ -17,11 +18,11 @@ use super::{RequestAuthorization, RestClient};
 impl RestClient {
     pub async fn get_guild_integrations(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<Integration>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/integrations", guild_id.into()),
+            &format!("/guilds/{}/integrations", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -29,16 +30,12 @@ impl RestClient {
 
     pub async fn delete_guild_integration(
         &self,
-        guild_id: impl Into<Snowflake>,
-        integration_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        integration_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/guilds/{}/integrations/{}",
-                guild_id.into(),
-                integration_id.into()
-            ),
+            &format!("/guilds/{}/integrations/{}", guild_id, integration_id),
             Option::<&Value>::None,
         )
         .await
@@ -46,14 +43,14 @@ impl RestClient {
 
     pub async fn get_guild_prune_count(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         days: Option<u64>,
-        include_roles: &[Snowflake],
+        include_roles: &[GenericId],
     ) -> Result<serde_json::Value, DiscordError> {
         let query = guild_prune_query(days, None, include_roles);
         self.request(
             Method::GET,
-            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            &format!("/guilds/{}/prune{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -61,14 +58,14 @@ impl RestClient {
 
     pub async fn get_guild_prune_count_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         days: Option<u64>,
-        include_roles: &[Snowflake],
+        include_roles: &[GenericId],
     ) -> Result<GuildPruneCount, DiscordError> {
         let query = guild_prune_query(days, None, include_roles);
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            &format!("/guilds/{}/prune{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -76,15 +73,15 @@ impl RestClient {
 
     pub async fn begin_guild_prune(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         days: Option<u64>,
         compute_prune_count: Option<bool>,
-        include_roles: &[Snowflake],
+        include_roles: &[GenericId],
     ) -> Result<serde_json::Value, DiscordError> {
         let query = guild_prune_query(days, compute_prune_count, include_roles);
         self.request(
             Method::POST,
-            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            &format!("/guilds/{}/prune{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -92,15 +89,15 @@ impl RestClient {
 
     pub async fn begin_guild_prune_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         days: Option<u64>,
         compute_prune_count: Option<bool>,
-        include_roles: &[Snowflake],
+        include_roles: &[GenericId],
     ) -> Result<GuildPruneResult, DiscordError> {
         let query = guild_prune_query(days, compute_prune_count, include_roles);
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/prune{query}", guild_id.into()),
+            &format!("/guilds/{}/prune{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -108,7 +105,7 @@ impl RestClient {
 
     pub async fn begin_guild_prune_with_body<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<GuildPruneResult, DiscordError>
     where
@@ -116,7 +113,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/prune", guild_id.into()),
+            &format!("/guilds/{}/prune", guild_id),
             Some(body),
         )
         .await
@@ -124,7 +121,7 @@ impl RestClient {
 
     pub async fn begin_guild_prune_with_request(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &BeginGuildPruneRequest,
     ) -> Result<GuildPruneResult, DiscordError> {
         self.begin_guild_prune_with_body(guild_id, body).await
@@ -132,11 +129,11 @@ impl RestClient {
 
     pub async fn get_guild_vanity_url(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<VanityUrl, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/vanity-url", guild_id.into()),
+            &format!("/guilds/{}/vanity-url", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -144,11 +141,11 @@ impl RestClient {
 
     pub async fn get_guild_widget_settings(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<GuildWidgetSettings, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/widget", guild_id.into()),
+            &format!("/guilds/{}/widget", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -156,7 +153,7 @@ impl RestClient {
 
     pub async fn modify_guild_widget_settings(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<GuildWidgetSettings, DiscordError> {
         self.modify_guild_widget_settings_typed(guild_id, body)
@@ -165,7 +162,7 @@ impl RestClient {
 
     pub async fn modify_guild_widget_settings_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<GuildWidgetSettings, DiscordError>
     where
@@ -173,7 +170,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/widget", guild_id.into()),
+            &format!("/guilds/{}/widget", guild_id),
             Some(body),
         )
         .await
@@ -181,7 +178,7 @@ impl RestClient {
 
     pub async fn modify_guild_widget(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildWidgetSettings,
     ) -> Result<GuildWidgetSettings, DiscordError> {
         self.modify_guild_widget_settings_typed(guild_id, body)
@@ -190,11 +187,11 @@ impl RestClient {
 
     pub async fn get_guild_widget(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::GET,
-            &format!("/guilds/{}/widget.json", guild_id.into()),
+            &format!("/guilds/{}/widget.json", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -202,11 +199,11 @@ impl RestClient {
 
     pub async fn get_guild_widget_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<GuildWidget, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/widget.json", guild_id.into()),
+            &format!("/guilds/{}/widget.json", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -218,7 +215,7 @@ impl RestClient {
     /// the bot authorization header even when the client has a bot token.
     pub async fn get_guild_widget_image(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         style: Option<GuildWidgetImageStyle>,
     ) -> Result<Vec<u8>, DiscordError> {
         let query = style
@@ -227,18 +224,18 @@ impl RestClient {
         self.request_bytes_with_authorization(
             RequestAuthorization::None,
             Method::GET,
-            &format!("/guilds/{}/widget.png{query}", guild_id.into()),
+            &format!("/guilds/{}/widget.png{query}", guild_id),
         )
         .await
     }
 
     pub async fn get_guild_welcome_screen(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<WelcomeScreen, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/welcome-screen", guild_id.into()),
+            &format!("/guilds/{}/welcome-screen", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -246,7 +243,7 @@ impl RestClient {
 
     pub async fn modify_guild_welcome_screen(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<WelcomeScreen, DiscordError> {
         self.modify_guild_welcome_screen_typed(guild_id, body).await
@@ -254,7 +251,7 @@ impl RestClient {
 
     pub async fn modify_guild_welcome_screen_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<WelcomeScreen, DiscordError>
     where
@@ -262,7 +259,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/welcome-screen", guild_id.into()),
+            &format!("/guilds/{}/welcome-screen", guild_id),
             Some(body),
         )
         .await
@@ -270,7 +267,7 @@ impl RestClient {
 
     pub async fn modify_guild_welcome_screen_config(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildWelcomeScreen,
     ) -> Result<WelcomeScreen, DiscordError> {
         self.modify_guild_welcome_screen_typed(guild_id, body).await
@@ -278,11 +275,11 @@ impl RestClient {
 
     pub async fn get_guild_onboarding(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<GuildOnboarding, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/onboarding", guild_id.into()),
+            &format!("/guilds/{}/onboarding", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -290,7 +287,7 @@ impl RestClient {
 
     pub async fn modify_guild_onboarding(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<GuildOnboarding, DiscordError> {
         self.modify_guild_onboarding_typed(guild_id, body).await
@@ -298,7 +295,7 @@ impl RestClient {
 
     pub async fn modify_guild_onboarding_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<GuildOnboarding, DiscordError>
     where
@@ -306,7 +303,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PUT,
-            &format!("/guilds/{}/onboarding", guild_id.into()),
+            &format!("/guilds/{}/onboarding", guild_id),
             Some(body),
         )
         .await
@@ -314,7 +311,7 @@ impl RestClient {
 
     pub async fn modify_guild_onboarding_config(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildOnboarding,
     ) -> Result<GuildOnboarding, DiscordError> {
         self.modify_guild_onboarding_typed(guild_id, body).await
@@ -322,11 +319,11 @@ impl RestClient {
 
     pub async fn get_guild_templates(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<GuildTemplate>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/templates", guild_id.into()),
+            &format!("/guilds/{}/templates", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -348,12 +345,12 @@ impl RestClient {
 
     pub async fn create_guild_template(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<GuildTemplate, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/templates", guild_id.into()),
+            &format!("/guilds/{}/templates", guild_id),
             Some(body),
         )
         .await
@@ -361,13 +358,13 @@ impl RestClient {
 
     pub async fn sync_guild_template(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         template_code: &str,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
         self.request_typed(
             Method::PUT,
-            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            &format!("/guilds/{}/templates/{template_code}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -375,14 +372,14 @@ impl RestClient {
 
     pub async fn modify_guild_template(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         template_code: &str,
         body: &Value,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            &format!("/guilds/{}/templates/{template_code}", guild_id),
             Some(body),
         )
         .await
@@ -390,13 +387,13 @@ impl RestClient {
 
     pub async fn delete_guild_template(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         template_code: &str,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
         self.request_typed(
             Method::DELETE,
-            &format!("/guilds/{}/templates/{template_code}", guild_id.into()),
+            &format!("/guilds/{}/templates/{template_code}", guild_id),
             Option::<&Value>::None,
         )
         .await

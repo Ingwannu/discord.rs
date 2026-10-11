@@ -27,7 +27,7 @@ mod bot {
         AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
     };
     use discordrs::{
-        gateway_intents, Client, Context, DiscordError, EventHandler, ReadyPayload, Snowflake,
+        gateway_intents, Client, Context, DiscordError, EventHandler, GenericId, ReadyPayload,
         VoiceRuntimeConfig, VoiceServerUpdate, VoiceState,
     };
 
@@ -37,21 +37,21 @@ mod bot {
 
     #[derive(Default)]
     struct SessionState {
-        user_id: Option<String>,
+        user_id: Option<GenericId>,
         session_id: Option<String>,
         server: Option<VoiceServerUpdate>,
         started: bool,
     }
 
     pub struct Handler {
-        guild_id: String,
-        channel_id: String,
+        guild_id: GenericId,
+        channel_id: GenericId,
         input: String,
         state: Mutex<SessionState>,
     }
 
     impl Handler {
-        pub fn new(guild_id: String, channel_id: String, input: String) -> Self {
+        pub fn new(guild_id: GenericId, channel_id: GenericId, input: String) -> Self {
             Self {
                 guild_id,
                 channel_id,
@@ -69,7 +69,7 @@ mod bot {
                     return;
                 }
                 let (Some(user_id), Some(session_id), Some(server)) = (
-                    state.user_id.as_ref(),
+                    state.user_id,
                     state.session_id.as_ref(),
                     state.server.as_ref(),
                 ) else {
@@ -79,8 +79,8 @@ mod bot {
                     return;
                 };
                 let config = VoiceRuntimeConfig::new(
-                    self.guild_id.as_str(),
-                    user_id.as_str(),
+                    self.guild_id,
+                    user_id,
                     session_id.as_str(),
                     server.token.as_str(),
                     endpoint.as_str(),
@@ -159,19 +159,14 @@ mod bot {
         async fn ready(&self, ctx: Context, ready: ReadyPayload) {
             {
                 let mut state = self.state.lock().expect("session state mutex poisoned");
-                state.user_id = Some(ready.user.id.to_string());
+                state.user_id = Some(ready.user.id);
             }
             println!(
                 "ready as {}; joining voice channel {} in guild {}",
                 ready.user.username, self.channel_id, self.guild_id
             );
             if let Err(error) = ctx
-                .join_voice(
-                    Snowflake::from(self.guild_id.as_str()),
-                    Snowflake::from(self.channel_id.as_str()),
-                    false,
-                    true,
-                )
+                .join_voice(self.guild_id, self.channel_id, false, true)
                 .await
             {
                 eprintln!("failed to send voice state update: {error}");
@@ -181,11 +176,9 @@ mod bot {
         async fn voice_state_update(&self, _ctx: Context, voice_state: VoiceState) {
             let expected_user = {
                 let state = self.state.lock().expect("session state mutex poisoned");
-                state.user_id.clone()
+                state.user_id
             };
-            if voice_state.guild_id.as_ref().map(Snowflake::as_str) != Some(&self.guild_id)
-                || voice_state.user_id.as_ref().map(Snowflake::as_str) != expected_user.as_deref()
-            {
+            if voice_state.guild_id != Some(self.guild_id) || voice_state.user_id != expected_user {
                 return;
             }
             if let Some(session_id) = voice_state.session_id {
@@ -197,7 +190,7 @@ mod bot {
         }
 
         async fn voice_server_update(&self, _ctx: Context, server: VoiceServerUpdate) {
-            if server.guild_id.as_str() != self.guild_id {
+            if server.guild_id != self.guild_id {
                 return;
             }
             let mut state = self.state.lock().expect("session state mutex poisoned");
@@ -209,10 +202,14 @@ mod bot {
 
     pub async fn run() -> Result<(), DiscordError> {
         let token = std::env::var("DISCORD_TOKEN")?;
-        let guild_id = std::env::var("MUSIC_GUILD_ID")
-            .map_err(|_| DiscordError::model("set MUSIC_GUILD_ID"))?;
-        let channel_id = std::env::var("MUSIC_CHANNEL_ID")
-            .map_err(|_| DiscordError::model("set MUSIC_CHANNEL_ID"))?;
+        // IDs are validated once, here; a typo fails at startup instead of
+        // as a 404 later. `?` turns the `InvalidId` into a `DiscordError`.
+        let guild_id: GenericId = std::env::var("MUSIC_GUILD_ID")
+            .map_err(|_| DiscordError::model("set MUSIC_GUILD_ID"))?
+            .parse()?;
+        let channel_id: GenericId = std::env::var("MUSIC_CHANNEL_ID")
+            .map_err(|_| DiscordError::model("set MUSIC_CHANNEL_ID"))?
+            .parse()?;
         let input =
             std::env::var("MUSIC_INPUT").map_err(|_| DiscordError::model("set MUSIC_INPUT"))?;
 

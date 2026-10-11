@@ -7,8 +7,8 @@ use serde_json::Value;
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationCommand, EditApplicationCommandPermissions, GuildApplicationCommandPermissions,
-    Snowflake,
+    ApplicationCommand, EditApplicationCommandPermissions, GenericId,
+    GuildApplicationCommandPermissions,
 };
 
 use super::paths::{configured_application_id, global_commands_path};
@@ -39,7 +39,7 @@ impl RestClient {
 
     pub async fn bulk_overwrite_guild_commands_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         commands: &[CommandDefinition],
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
@@ -47,7 +47,7 @@ impl RestClient {
             Method::PUT,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
-                guild_id.into()
+                guild_id
             ),
             Some(commands),
         )
@@ -56,12 +56,12 @@ impl RestClient {
 
     pub async fn get_global_command(
         &self,
-        command_id: impl Into<Snowflake>,
+        command_id: GenericId,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
         self.request_typed(
             Method::GET,
-            &format!("{}/{}", path, command_id.into()),
+            &format!("{}/{}", path, command_id),
             Option::<&Value>::None,
         )
         .await
@@ -69,26 +69,23 @@ impl RestClient {
 
     pub async fn edit_global_command(
         &self,
-        command_id: impl Into<Snowflake>,
+        command_id: GenericId,
         body: &Value,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
         self.request_typed(
             Method::PATCH,
-            &format!("{}/{}", path, command_id.into()),
+            &format!("{}/{}", path, command_id),
             Some(body),
         )
         .await
     }
 
-    pub async fn delete_global_command(
-        &self,
-        command_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn delete_global_command(&self, command_id: GenericId) -> Result<(), DiscordError> {
         let path = global_commands_path(self.application_id())?;
         self.request_no_content(
             Method::DELETE,
-            &format!("{}/{}", path, command_id.into()),
+            &format!("{}/{}", path, command_id),
             Option::<&Value>::None,
         )
         .await
@@ -96,14 +93,14 @@ impl RestClient {
 
     pub async fn get_guild_commands(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
-                guild_id.into()
+                guild_id
             ),
             Option::<&Value>::None,
         )
@@ -112,7 +109,7 @@ impl RestClient {
 
     pub async fn create_guild_command(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         command: &CommandDefinition,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
@@ -120,7 +117,7 @@ impl RestClient {
             Method::POST,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
-                guild_id.into()
+                guild_id
             ),
             Some(command),
         )
@@ -129,16 +126,15 @@ impl RestClient {
 
     pub async fn get_guild_command(
         &self,
-        guild_id: impl Into<Snowflake>,
-        command_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        command_id: GenericId,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
-                guild_id.into(),
-                command_id.into()
+                guild_id, command_id
             ),
             Option::<&Value>::None,
         )
@@ -147,8 +143,8 @@ impl RestClient {
 
     pub async fn edit_guild_command(
         &self,
-        guild_id: impl Into<Snowflake>,
-        command_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        command_id: GenericId,
         body: &Value,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
@@ -156,8 +152,7 @@ impl RestClient {
             Method::PATCH,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
-                guild_id.into(),
-                command_id.into()
+                guild_id, command_id
             ),
             Some(body),
         )
@@ -166,16 +161,15 @@ impl RestClient {
 
     pub async fn delete_guild_command(
         &self,
-        guild_id: impl Into<Snowflake>,
-        command_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        command_id: GenericId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::DELETE,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
-                guild_id.into(),
-                command_id.into()
+                guild_id, command_id
             ),
             Option::<&Value>::None,
         )
@@ -185,14 +179,14 @@ impl RestClient {
     /// Returns command permissions for every application command in one guild.
     pub async fn get_guild_application_command_permissions(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<GuildApplicationCommandPermissions>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/permissions",
-                guild_id.into()
+                guild_id
             ),
             Option::<&Value>::None,
         )
@@ -202,16 +196,15 @@ impl RestClient {
     /// Returns command permissions for one application command in one guild.
     pub async fn get_application_command_permissions(
         &self,
-        guild_id: impl Into<Snowflake>,
-        command_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        command_id: GenericId,
     ) -> Result<GuildApplicationCommandPermissions, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
             Method::GET,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}/permissions",
-                guild_id.into(),
-                command_id.into()
+                guild_id, command_id
             ),
             Option::<&Value>::None,
         )
@@ -226,7 +219,7 @@ impl RestClient {
     pub async fn batch_edit_application_command_permissions<B>(
         &self,
         bearer_token: &str,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<Vec<GuildApplicationCommandPermissions>, DiscordError>
     where
@@ -239,7 +232,7 @@ impl RestClient {
             Method::PUT,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/permissions",
-                guild_id.into()
+                guild_id
             ),
             Some(body),
         )
@@ -254,8 +247,8 @@ impl RestClient {
     pub async fn edit_application_command_permissions(
         &self,
         bearer_token: &str,
-        guild_id: impl Into<Snowflake>,
-        command_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        command_id: GenericId,
         body: &EditApplicationCommandPermissions,
     ) -> Result<GuildApplicationCommandPermissions, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
@@ -265,8 +258,7 @@ impl RestClient {
             Method::PUT,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}/permissions",
-                guild_id.into(),
-                command_id.into()
+                guild_id, command_id
             ),
             Some(body),
         )

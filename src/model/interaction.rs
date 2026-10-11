@@ -7,9 +7,47 @@ use serde::{Deserialize, Serialize};
 use crate::parsers::V2ModalSubmission;
 
 use super::{
-    Attachment, Channel, Entitlement, InteractionContextType, InteractionResponseState, Member,
-    Message, PermissionsBitField, Role, Snowflake, User,
+    Attachment, Channel, Entitlement, GenericId, GuildInstallOwner, InteractionContextType,
+    InteractionResponseState, Member, Message, PermissionsBitField, Role, User, UserId,
 };
+
+/// `authorizing_integration_owners` of an interaction (or of a message's
+/// interaction metadata): which installations of the app authorized it.
+///
+/// Discord keys the object by application integration type. Key `"0"`
+/// (`GUILD_INSTALL`) holds the guild ID, or `"0"` when the interaction came
+/// from a DM with the bot, so it is a [`GuildInstallOwner`] rather than an
+/// ID. Key `"1"` (`USER_INSTALL`) holds the installing user's ID. Keys added
+/// by future integration types are kept in [`Self::other`] and written back
+/// unchanged.
+///
+/// ```
+/// use discordrs::{AuthorizingIntegrationOwners, GuildInstallOwner};
+///
+/// let owners: AuthorizingIntegrationOwners =
+///     serde_json::from_str(r#"{"0": "0", "1": "80351110224678912"}"#).unwrap();
+/// assert_eq!(owners.guild_install, Some(GuildInstallOwner::BotDm));
+/// assert_eq!(owners.user_install.map(|user| user.get()), Some(80351110224678912));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AuthorizingIntegrationOwners {
+    /// `GUILD_INSTALL` (`"0"`): the guild, or [`GuildInstallOwner::BotDm`].
+    #[serde(rename = "0", default, skip_serializing_if = "Option::is_none")]
+    pub guild_install: Option<GuildInstallOwner>,
+    /// `USER_INSTALL` (`"1"`): the user who installed the app.
+    #[serde(rename = "1", default, skip_serializing_if = "Option::is_none")]
+    pub user_install: Option<UserId>,
+    /// Entries for integration types this version does not know, as sent.
+    #[serde(flatten)]
+    pub other: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AuthorizingIntegrationOwners {
+    /// Whether no installation context is listed at all.
+    pub fn is_empty(&self) -> bool {
+        self.guild_install.is_none() && self.user_install.is_none() && self.other.is_empty()
+    }
+}
 
 /// Resolved objects referenced by interaction options, components, or a
 /// forwarded message, keyed by snowflake ID. Every map defaults to empty
@@ -17,19 +55,19 @@ use super::{
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ResolvedData {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub users: HashMap<Snowflake, User>,
+    pub users: HashMap<GenericId, User>,
     /// Partial members (no `user`, `deaf`, or `mute` fields).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub members: HashMap<Snowflake, Member>,
+    pub members: HashMap<GenericId, Member>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub roles: HashMap<Snowflake, Role>,
+    pub roles: HashMap<GenericId, Role>,
     /// Partial channels (id, name, type, permissions, and thread fields).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub channels: HashMap<Snowflake, Channel>,
+    pub channels: HashMap<GenericId, Channel>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub messages: HashMap<Snowflake, Message>,
+    pub messages: HashMap<GenericId, Message>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub attachments: HashMap<Snowflake, Attachment>,
+    pub attachments: HashMap<GenericId, Attachment>,
 }
 
 impl ResolvedData {
@@ -44,49 +82,49 @@ impl ResolvedData {
     }
 
     /// Looks up a resolved user by ID.
-    pub fn user(&self, id: impl Into<Snowflake>) -> Option<&User> {
-        self.users.get(&id.into())
+    pub fn user(&self, id: GenericId) -> Option<&User> {
+        self.users.get(&id)
     }
 
     /// Looks up a resolved partial member by user ID.
-    pub fn member(&self, id: impl Into<Snowflake>) -> Option<&Member> {
-        self.members.get(&id.into())
+    pub fn member(&self, id: GenericId) -> Option<&Member> {
+        self.members.get(&id)
     }
 
     /// Looks up a resolved role by ID.
-    pub fn role(&self, id: impl Into<Snowflake>) -> Option<&Role> {
-        self.roles.get(&id.into())
+    pub fn role(&self, id: GenericId) -> Option<&Role> {
+        self.roles.get(&id)
     }
 
     /// Looks up a resolved partial channel by ID.
-    pub fn channel(&self, id: impl Into<Snowflake>) -> Option<&Channel> {
-        self.channels.get(&id.into())
+    pub fn channel(&self, id: GenericId) -> Option<&Channel> {
+        self.channels.get(&id)
     }
 
     /// Looks up a resolved message by ID.
-    pub fn message(&self, id: impl Into<Snowflake>) -> Option<&Message> {
-        self.messages.get(&id.into())
+    pub fn message(&self, id: GenericId) -> Option<&Message> {
+        self.messages.get(&id)
     }
 
     /// Looks up a resolved attachment by ID.
-    pub fn attachment(&self, id: impl Into<Snowflake>) -> Option<&Attachment> {
-        self.attachments.get(&id.into())
+    pub fn attachment(&self, id: GenericId) -> Option<&Attachment> {
+        self.attachments.get(&id)
     }
 }
 
 // `Debug` is implemented by hand below so the token never reaches logs.
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `InteractionContextData`.
 pub struct InteractionContextData {
-    pub id: Snowflake,
-    pub application_id: Snowflake,
+    pub id: GenericId,
+    pub application_id: GenericId,
     /// Interaction token: authorizes responses and follow-ups for 15
     /// minutes. Redacted from `Debug` output.
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +140,7 @@ pub struct InteractionContextData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<InteractionContextType>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authorizing_integration_owners: Option<HashMap<String, Snowflake>>,
+    pub authorizing_integration_owners: Option<AuthorizingIntegrationOwners>,
     /// Shared response-state handle. Created once during parsing so every
     /// clone of the same interaction observes the same acknowledgement state.
     #[serde(skip)]
@@ -200,7 +238,7 @@ impl CommandInteractionOption {
 /// Typed Discord API object for `CommandInteractionData`.
 pub struct CommandInteractionData {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<Snowflake>,
+    pub id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -210,7 +248,7 @@ pub struct CommandInteractionData {
     #[serde(default)]
     pub resolved: Option<ResolvedData>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_id: Option<Snowflake>,
+    pub target_id: Option<GenericId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -222,35 +260,35 @@ pub struct ComponentInteractionData {
     pub values: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ChatInputCommandInteraction`.
 pub struct ChatInputCommandInteraction {
     pub context: InteractionContextData,
     pub data: CommandInteractionData,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `UserContextMenuInteraction`.
 pub struct UserContextMenuInteraction {
     pub context: InteractionContextData,
     pub data: CommandInteractionData,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MessageContextMenuInteraction`.
 pub struct MessageContextMenuInteraction {
     pub context: InteractionContextData,
     pub data: CommandInteractionData,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `AutocompleteInteraction`.
 pub struct AutocompleteInteraction {
     pub context: InteractionContextData,
     pub data: CommandInteractionData,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ComponentInteraction`.
 pub struct ComponentInteraction {
     pub context: InteractionContextData,
@@ -264,7 +302,7 @@ pub struct ModalSubmitInteraction {
     pub submission: V2ModalSubmission,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `PingInteraction`.
 pub struct PingInteraction {
     pub context: InteractionContextData,
@@ -313,16 +351,16 @@ impl Interaction {
         }
     }
 
-    pub fn id(&self) -> &Snowflake {
-        &self.context().id
+    pub fn id(&self) -> GenericId {
+        self.context().id
     }
 
     pub fn token(&self) -> &str {
         &self.context().token
     }
 
-    pub fn application_id(&self) -> &Snowflake {
-        &self.context().application_id
+    pub fn application_id(&self) -> GenericId {
+        self.context().application_id
     }
 
     /// Returns true when an initial response has been sent for this
@@ -354,15 +392,15 @@ pub struct InteractionCallbackResponse {
 
 /// Interaction object returned inside an interaction callback result
 /// (`POST /interactions/{id}/{token}/callback?with_response=true`).
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InteractionCallbackInteraction {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_instance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_message_id: Option<Snowflake>,
+    pub response_message_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_message_loading: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -382,7 +420,7 @@ pub struct InteractionCallbackResource {
 }
 
 /// Full interaction callback result (`with_response=true`).
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InteractionCallbackResult {
     pub interaction: InteractionCallbackInteraction,
     #[serde(skip_serializing_if = "Option::is_none")]

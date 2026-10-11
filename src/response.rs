@@ -18,9 +18,9 @@ use crate::helpers::{
 use crate::http::RestClient;
 use crate::model::{
     AllowedMentions, AutocompleteInteraction, ChatInputCommandInteraction, ComponentInteraction,
-    CreateMessage, CreatePoll, InteractionCallbackResponse, InteractionCallbackResult,
+    CreateMessage, CreatePoll, GenericId, InteractionCallbackResponse, InteractionCallbackResult,
     InteractionContextData, Message, MessageContextMenuInteraction, ModalSubmitInteraction,
-    Snowflake, UserContextMenuInteraction,
+    UserContextMenuInteraction,
 };
 
 /// Discord message flag marking a response as ephemeral.
@@ -969,7 +969,7 @@ impl InteractionContextData {
         let response = message_callback(INTERACTION_RESPONSE_CHANNEL_MESSAGE, data.into())?;
         let claim = self.response_state.begin(AckKind::Replied)?;
         let result = http
-            .create_interaction_response_with_result(self.id.clone(), &self.token, &response)
+            .create_interaction_response_with_result(self.id, &self.token, &response)
             .await;
         // The request body is an already-serialized `Value`, so a JSON error
         // can only come from decoding a 2xx response: Discord accepted it.
@@ -1049,7 +1049,7 @@ impl InteractionContextData {
         match AckKind::for_callback_type(response.kind) {
             Some(kind) => self.send_initial_response(http, kind, response).await,
             None => {
-                http.create_interaction_response_typed(self.id.clone(), &self.token, response)
+                http.create_interaction_response_typed(self.id, &self.token, response)
                     .await
             }
         }
@@ -1071,7 +1071,7 @@ impl InteractionContextData {
         self.response_state.require_acknowledged().await?;
         let message = http
             .edit_original_interaction_response_with_application_id(
-                self.application_id.as_str(),
+                self.application_id,
                 &self.token,
                 &data.into_create_message(),
             )
@@ -1085,10 +1085,7 @@ impl InteractionContextData {
     pub async fn fetch_reply(&self, http: &RestClient) -> Result<Message, DiscordError> {
         self.response_state.settled().await;
         let message = http
-            .get_original_interaction_response_with_application_id(
-                self.application_id.as_str(),
-                &self.token,
-            )
+            .get_original_interaction_response_with_application_id(self.application_id, &self.token)
             .await?;
         self.response_state.confirm_original(OriginalSeen::Exists);
         Ok(message)
@@ -1101,7 +1098,7 @@ impl InteractionContextData {
     pub async fn delete_reply(&self, http: &RestClient) -> Result<(), DiscordError> {
         self.response_state.require_acknowledged().await?;
         http.delete_original_interaction_response_with_application_id(
-            self.application_id.as_str(),
+            self.application_id,
             &self.token,
         )
         .await?;
@@ -1121,7 +1118,7 @@ impl InteractionContextData {
         let data = data.into();
         self.response_state.require_acknowledged().await?;
         http.create_followup_message_with_application_id(
-            self.application_id.as_str(),
+            self.application_id,
             &self.token,
             &data.into_create_message(),
         )
@@ -1144,16 +1141,15 @@ impl InteractionContextData {
     pub async fn edit_follow_up(
         &self,
         http: &RestClient,
-        message_id: impl Into<Snowflake>,
+        message_id: GenericId,
         data: impl Into<InteractionReplyData>,
     ) -> Result<Message, DiscordError> {
-        let message_id = message_id.into();
         let data = data.into();
         self.response_state.require_acknowledged().await?;
         http.edit_followup_message_with_application_id(
-            self.application_id.as_str(),
+            self.application_id,
             &self.token,
-            message_id.as_str(),
+            &message_id.to_string(),
             &data.into_create_message(),
         )
         .await
@@ -1166,14 +1162,13 @@ impl InteractionContextData {
     pub async fn delete_follow_up(
         &self,
         http: &RestClient,
-        message_id: impl Into<Snowflake>,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
-        let message_id = message_id.into();
         self.response_state.require_acknowledged().await?;
         http.delete_followup_message_with_application_id(
-            self.application_id.as_str(),
+            self.application_id,
             &self.token,
-            message_id.as_str(),
+            &message_id.to_string(),
         )
         .await
     }
@@ -1188,7 +1183,7 @@ impl InteractionContextData {
     ) -> Result<(), DiscordError> {
         let claim = self.response_state.begin(kind)?;
         let result = http
-            .create_interaction_response_typed(self.id.clone(), &self.token, response)
+            .create_interaction_response_typed(self.id, &self.token, response)
             .await;
         claim.settle(CallbackOutcome::of(&result));
         result
@@ -1332,21 +1327,20 @@ pub trait InteractionResponder {
     fn edit_follow_up(
         &self,
         http: &RestClient,
-        message_id: impl Into<Snowflake>,
+        message_id: GenericId,
         data: impl Into<InteractionReplyData>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context()
-            .edit_follow_up(http, message_id.into(), data.into())
+            .edit_follow_up(http, message_id, data.into())
     }
 
     /// Deletes a follow-up message sent for this interaction.
     fn delete_follow_up(
         &self,
         http: &RestClient,
-        message_id: impl Into<Snowflake>,
+        message_id: GenericId,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send {
-        self.responder_context()
-            .delete_follow_up(http, message_id.into())
+        self.responder_context().delete_follow_up(http, message_id)
     }
 
     /// Opens a modal (type 9). Discord accepts this only for command and
@@ -1438,6 +1432,7 @@ impl AutocompleteInteraction {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1456,7 +1451,7 @@ mod tests {
     use crate::model::{
         AllowedMentions, ChatInputCommandInteraction, ComponentInteraction, CreateMessage,
         CreatePoll, InteractionCallbackResponse, InteractionContextData, MessageReference,
-        ModalSubmitInteraction, PollAnswer, PollMedia, Snowflake,
+        ModalSubmitInteraction, PollAnswer, PollMedia,
     };
 
     use super::{
@@ -1473,10 +1468,10 @@ mod tests {
 
     fn sample_context() -> InteractionContextData {
         InteractionContextData {
-            id: Snowflake::from("1"),
-            application_id: Snowflake::from("2"),
+            id: test_id(1),
+            application_id: test_id(2),
             token: "token".to_string(),
-            ..InteractionContextData::default()
+            ..InteractionContextData::fixture()
         }
     }
 
@@ -1840,7 +1835,7 @@ mod tests {
             ),
             (
                 CreateMessage {
-                    sticker_ids: Some(vec![Snowflake::from("9")]),
+                    sticker_ids: Some(vec![test_id(9)]),
                     ..interaction_message()
                 },
                 "sticker_ids",
@@ -2758,7 +2753,7 @@ mod tests {
         let http = mock_client(&server, Duration::from_secs(10));
         let component = ComponentInteraction {
             context: sample_context(),
-            ..ComponentInteraction::default()
+            ..ComponentInteraction::fixture()
         };
 
         component.defer_update(&http).await.unwrap();
@@ -2766,10 +2761,13 @@ mod tests {
         component.fetch_reply(&http).await.unwrap();
         assert!(component.is_deferred());
         component
-            .edit_follow_up(&http, "30", "edited")
+            .edit_follow_up(&http, test_id(30), "edited")
             .await
             .unwrap();
-        component.delete_follow_up(&http, "30").await.unwrap();
+        component
+            .delete_follow_up(&http, test_id(30))
+            .await
+            .unwrap();
         component.delete_reply(&http).await.unwrap();
 
         let mut requests = Vec::new();
@@ -2843,11 +2841,14 @@ mod tests {
                 .unwrap_err(),
             context.delete_reply(&http).await.unwrap_err(),
             context
-                .edit_follow_up(&http, "30", "edited")
+                .edit_follow_up(&http, test_id(30), "edited")
                 .await
                 .map(drop)
                 .unwrap_err(),
-            context.delete_follow_up(&http, "30").await.unwrap_err(),
+            context
+                .delete_follow_up(&http, test_id(30))
+                .await
+                .unwrap_err(),
         ] {
             assert_model_error(&error, "has not been acknowledged");
         }
@@ -2916,10 +2917,13 @@ mod tests {
                 responder.follow_up(&http, "a").await.unwrap_err(),
                 responder.follow_up_ephemeral(&http, "a").await.unwrap_err(),
                 responder
-                    .edit_follow_up(&http, "30", "a")
+                    .edit_follow_up(&http, test_id(30), "a")
                     .await
                     .unwrap_err(),
-                responder.delete_follow_up(&http, "30").await.unwrap_err(),
+                responder
+                    .delete_follow_up(&http, test_id(30))
+                    .await
+                    .unwrap_err(),
             ]);
             errors
         })
@@ -2929,7 +2933,7 @@ mod tests {
     async fn responder_futures_are_send_for_generic_callers() {
         let interaction = ChatInputCommandInteraction {
             context: offline_context(),
-            ..ChatInputCommandInteraction::default()
+            ..ChatInputCommandInteraction::fixture()
         };
         let state = interaction.context.response_state.clone();
 
@@ -2948,7 +2952,7 @@ mod tests {
         let http = offline_client();
         let interaction = ChatInputCommandInteraction {
             context: sample_context(),
-            ..ChatInputCommandInteraction::default()
+            ..ChatInputCommandInteraction::fixture()
         };
 
         assert!(!interaction.is_acknowledged());
@@ -2970,7 +2974,7 @@ mod tests {
 
         let component = ComponentInteraction {
             context: sample_context(),
-            ..ComponentInteraction::default()
+            ..ComponentInteraction::fixture()
         };
         component
             .context
@@ -3003,7 +3007,7 @@ mod tests {
 
         let autocomplete = crate::model::AutocompleteInteraction {
             context: offline_context(),
-            ..crate::model::AutocompleteInteraction::default()
+            ..crate::model::AutocompleteInteraction::fixture()
         };
         assert_model_error(
             &autocomplete
@@ -3014,8 +3018,8 @@ mod tests {
         );
 
         for responder in [
-            &crate::model::UserContextMenuInteraction::default() as &dyn ContextOnly,
-            &crate::model::MessageContextMenuInteraction::default(),
+            &crate::model::UserContextMenuInteraction::fixture() as &dyn ContextOnly,
+            &crate::model::MessageContextMenuInteraction::fixture(),
         ] {
             assert!(!responder.acknowledged());
         }

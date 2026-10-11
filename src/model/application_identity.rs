@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 
-use super::Snowflake;
+use super::GenericId;
 
 /// Serialized size cap for [`ApplicationIdentityProfileData`] in an update.
 pub const MAX_PROFILE_DATA_BYTES: usize = 10 * 1024;
@@ -27,7 +27,7 @@ pub const MAX_PROFILE_USERNAME_CHARS: usize = 1024;
 pub struct ApplicationIdentity {
     /// Discord user the identity belongs to; present in list responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     /// External account provider type (`NONE` for profile-only identities).
     pub provider_type: String,
     /// Provider-specific disambiguator; omitted when absent or empty.

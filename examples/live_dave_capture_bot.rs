@@ -6,14 +6,14 @@ use std::io::Write;
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 use discordrs::{
-    gateway_intents, Client, Context, EventHandler, ReadyPayload, Snowflake, VoiceServerUpdate,
+    gateway_intents, Client, Context, EventHandler, GenericId, ReadyPayload, VoiceServerUpdate,
     VoiceState,
 };
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 #[derive(Default)]
 struct CaptureState {
-    user_id: Option<String>,
+    user_id: Option<GenericId>,
     session_id: Option<String>,
     server: Option<VoiceServerUpdate>,
     printed: bool,
@@ -21,14 +21,14 @@ struct CaptureState {
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 struct Handler {
-    guild_id: String,
-    channel_id: String,
+    guild_id: GenericId,
+    channel_id: GenericId,
     state: Mutex<CaptureState>,
 }
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 impl Handler {
-    fn new(guild_id: String, channel_id: String) -> Self {
+    fn new(guild_id: GenericId, channel_id: GenericId) -> Self {
         Self {
             guild_id,
             channel_id,
@@ -42,7 +42,7 @@ impl Handler {
             return;
         }
 
-        let Some(user_id) = state.user_id.as_deref() else {
+        let Some(user_id) = state.user_id else {
             return;
         };
         let Some(session_id) = state.session_id.as_deref() else {
@@ -83,10 +83,9 @@ impl Handler {
 #[cfg(all(feature = "gateway", feature = "voice"))]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: ReadyPayload) {
-        let user_id = ready.user.id.to_string();
         {
             let mut state = self.state.lock().expect("capture state mutex poisoned");
-            state.user_id = Some(user_id.clone());
+            state.user_id = Some(ready.user.id);
         }
 
         println!(
@@ -95,12 +94,7 @@ impl EventHandler for Handler {
         );
 
         if let Err(error) = ctx
-            .join_voice(
-                Snowflake::from(self.guild_id.as_str()),
-                Snowflake::from(self.channel_id.as_str()),
-                false,
-                true,
-            )
+            .join_voice(self.guild_id, self.channel_id, false, true)
             .await
         {
             eprintln!("failed to send voice state update: {error}");
@@ -108,24 +102,24 @@ impl EventHandler for Handler {
     }
 
     async fn voice_state_update(&self, _ctx: Context, state: VoiceState) {
-        let Some(guild_id) = state.guild_id.as_ref() else {
+        let Some(guild_id) = state.guild_id else {
             return;
         };
-        let Some(user_id) = state.user_id.as_ref() else {
+        let Some(user_id) = state.user_id else {
             return;
         };
-        let Some(channel_id) = state.channel_id.as_ref() else {
+        let Some(channel_id) = state.channel_id else {
             return;
         };
-        if guild_id.as_str() != self.guild_id || channel_id.as_str() != self.channel_id {
+        if guild_id != self.guild_id || channel_id != self.channel_id {
             return;
         }
 
         let expected_user_id = {
             let capture = self.state.lock().expect("capture state mutex poisoned");
-            capture.user_id.clone()
+            capture.user_id
         };
-        if expected_user_id.as_deref() != Some(user_id.as_str()) {
+        if expected_user_id != Some(user_id) {
             return;
         }
 
@@ -138,7 +132,7 @@ impl EventHandler for Handler {
     }
 
     async fn voice_server_update(&self, _ctx: Context, server: VoiceServerUpdate) {
-        if server.guild_id.as_str() != self.guild_id {
+        if server.guild_id != self.guild_id {
             return;
         }
 
@@ -153,10 +147,12 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() -> Result<(), discordrs::DiscordError> {
     let token = std::env::var("DISCORD_TOKEN")?;
-    let guild_id = std::env::var("DISCORDRS_CAPTURE_GUILD_ID")
-        .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_GUILD_ID"))?;
-    let channel_id = std::env::var("DISCORDRS_CAPTURE_CHANNEL_ID")
-        .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_CHANNEL_ID"))?;
+    let guild_id: GenericId = std::env::var("DISCORDRS_CAPTURE_GUILD_ID")
+        .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_GUILD_ID"))?
+        .parse()?;
+    let channel_id: GenericId = std::env::var("DISCORDRS_CAPTURE_CHANNEL_ID")
+        .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_CHANNEL_ID"))?
+        .parse()?;
 
     Client::builder(
         &token,

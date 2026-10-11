@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod player;
 
 use crate::error::DiscordError;
-use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
+use crate::model::{GenericId, VoiceServerUpdate, VoiceState};
 use crate::types::invalid_data_error;
 #[cfg(feature = "voice")]
 use crate::voice_runtime::VoiceRuntimeConfig;
@@ -125,8 +125,8 @@ impl VoiceSpeakingFlags {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceConnectionConfig`.
 pub struct VoiceConnectionConfig {
-    pub guild_id: Snowflake,
-    pub channel_id: Snowflake,
+    pub guild_id: GenericId,
+    pub channel_id: GenericId,
     pub endpoint: Option<String>,
     pub session_id: Option<String>,
     pub token: Option<String>,
@@ -136,10 +136,10 @@ pub struct VoiceConnectionConfig {
 
 impl VoiceConnectionConfig {
     /// Creates a `new` value.
-    pub fn new(guild_id: impl Into<Snowflake>, channel_id: impl Into<Snowflake>) -> Self {
+    pub fn new(guild_id: GenericId, channel_id: GenericId) -> Self {
         Self {
-            guild_id: guild_id.into(),
-            channel_id: channel_id.into(),
+            guild_id,
+            channel_id,
             endpoint: None,
             session_id: None,
             token: None,
@@ -214,8 +214,8 @@ impl VoiceSpeakingState {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceConnectionState`.
 pub struct VoiceConnectionState {
-    pub guild_id: Snowflake,
-    pub channel_id: Snowflake,
+    pub guild_id: GenericId,
+    pub channel_id: GenericId,
     pub endpoint: Option<String>,
     pub session_id: Option<String>,
     pub token: Option<String>,
@@ -295,7 +295,7 @@ impl VoiceConnectionState {
     }
 
     pub fn apply_voice_state(&mut self, state: &VoiceState) {
-        if let Some(channel_id) = state.channel_id.clone() {
+        if let Some(channel_id) = state.channel_id {
             self.channel_id = channel_id;
         } else {
             self.self_mute = state.self_mute;
@@ -448,9 +448,9 @@ pub enum VoiceGatewayCommand {
     /// Discord API enum variant `Identify`.
     Identify {
         /// Guild or server ID for the voice session.
-        server_id: Snowflake,
+        server_id: GenericId,
         /// Current user ID.
-        user_id: Snowflake,
+        user_id: GenericId,
         /// Voice session ID from Gateway voice state.
         session_id: String,
         /// Voice server token from Gateway voice server update.
@@ -463,7 +463,7 @@ pub enum VoiceGatewayCommand {
     /// Discord API enum variant `Resume`.
     Resume {
         /// Guild or server ID for the voice session.
-        server_id: Snowflake,
+        server_id: GenericId,
         /// Voice session ID from the previous connection.
         session_id: String,
         /// Voice server token for resuming the session.
@@ -792,73 +792,73 @@ pub enum VoiceEvent {
     /// Discord API enum variant `Connecting`.
     Connecting {
         /// Guild ID for the voice connection.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Voice channel ID being joined.
-        channel_id: Snowflake,
+        channel_id: GenericId,
     },
     /// Discord API enum variant `Connected`.
     Connected(VoiceConnectionState),
     /// Discord API enum variant `Disconnected`.
     Disconnected {
         /// Guild ID for the disconnected voice session.
-        guild_id: Snowflake,
+        guild_id: GenericId,
     },
     /// Discord API enum variant `ServerUpdated`.
     ServerUpdated {
         /// Guild ID whose voice server data changed.
-        guild_id: Snowflake,
+        guild_id: GenericId,
     },
     /// Discord API enum variant `SessionUpdated`.
     SessionUpdated {
         /// Guild ID whose voice session data changed.
-        guild_id: Snowflake,
+        guild_id: GenericId,
     },
     /// Discord API enum variant `TransportConfigured`.
     TransportConfigured {
         /// Guild ID for the configured transport.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Voice transport details.
         transport: VoiceTransportState,
     },
     /// Discord API enum variant `SpeakingUpdated`.
     SpeakingUpdated {
         /// Guild ID for the speaking update.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Current speaking state.
         speaking: VoiceSpeakingState,
     },
     /// Discord API enum variant `PlayerStarted`.
     PlayerStarted {
         /// Guild ID for the player event.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Track that started.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerStopped`.
     PlayerStopped {
         /// Guild ID for the player event.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Track that stopped.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerPaused`.
     PlayerPaused {
         /// Guild ID for the player event.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Track that paused.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerResumed`.
     PlayerResumed {
         /// Guild ID for the player event.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Track that resumed.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerSkipped`.
     PlayerSkipped {
         /// Guild ID for the player event.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Track that was skipped.
         track: AudioTrack,
     },
@@ -867,8 +867,8 @@ pub enum VoiceEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `VoiceManager`.
 pub struct VoiceManager {
-    connections: HashMap<Snowflake, VoiceConnectionState>,
-    players: HashMap<Snowflake, AudioPlayer>,
+    connections: HashMap<GenericId, VoiceConnectionState>,
+    players: HashMap<GenericId, AudioPlayer>,
     events: Vec<VoiceEvent>,
 }
 
@@ -879,10 +879,10 @@ impl VoiceManager {
     }
 
     pub fn connect(&mut self, config: VoiceConnectionConfig) -> VoiceConnectionState {
-        let guild_id = config.guild_id.clone();
-        let channel_id = config.channel_id.clone();
+        let guild_id = config.guild_id;
+        let channel_id = config.channel_id;
         self.events.push(VoiceEvent::Connecting {
-            guild_id: guild_id.clone(),
+            guild_id,
             channel_id,
         });
 
@@ -891,19 +891,16 @@ impl VoiceManager {
             self.events.push(VoiceEvent::Connected(state.clone()));
         }
 
-        self.connections.insert(guild_id.clone(), state.clone());
+        self.connections.insert(guild_id, state.clone());
         self.players.entry(guild_id).or_default();
         state
     }
 
-    pub fn disconnect(&mut self, guild_id: impl Into<Snowflake>) -> Option<VoiceConnectionState> {
-        let guild_id = guild_id.into();
+    pub fn disconnect(&mut self, guild_id: GenericId) -> Option<VoiceConnectionState> {
         self.players.remove(&guild_id);
         let mut state = self.connections.remove(&guild_id)?;
         state.mark_disconnected();
-        self.events.push(VoiceEvent::Disconnected {
-            guild_id: guild_id.clone(),
-        });
+        self.events.push(VoiceEvent::Disconnected { guild_id });
         Some(state)
     }
 
@@ -915,14 +912,10 @@ impl VoiceManager {
         let state = self.connections.get_mut(&update.guild_id)?;
         let was_disconnected = state.status == VoiceConnectionStatus::Disconnected;
         state.apply_server_update(&update);
-        let guild_id = state.guild_id.clone();
-        self.events.push(VoiceEvent::ServerUpdated {
-            guild_id: guild_id.clone(),
-        });
+        let guild_id = state.guild_id;
+        self.events.push(VoiceEvent::ServerUpdated { guild_id });
         if !was_disconnected && state.status == VoiceConnectionStatus::Disconnected {
-            self.events.push(VoiceEvent::Disconnected {
-                guild_id: guild_id.clone(),
-            });
+            self.events.push(VoiceEvent::Disconnected { guild_id });
         }
         if state.status == VoiceConnectionStatus::Connected {
             self.events.push(VoiceEvent::Connected(state.clone()));
@@ -931,29 +924,24 @@ impl VoiceManager {
     }
 
     pub fn update_voice_state(&mut self, update: &VoiceState) -> Option<VoiceConnectionState> {
-        let guild_id = update.guild_id.clone()?;
+        let guild_id = update.guild_id?;
         let state = match self.connections.get_mut(&guild_id) {
             Some(state) => state,
             None => {
-                let channel_id = update.channel_id.clone()?;
+                let channel_id = update.channel_id?;
                 let state = VoiceConnectionState::from_config(VoiceConnectionConfig::new(
-                    guild_id.clone(),
-                    channel_id,
+                    guild_id, channel_id,
                 ));
-                self.players.entry(guild_id.clone()).or_default();
-                self.connections.entry(guild_id.clone()).or_insert(state)
+                self.players.entry(guild_id).or_default();
+                self.connections.entry(guild_id).or_insert(state)
             }
         };
 
         let was_disconnected = state.status == VoiceConnectionStatus::Disconnected;
         state.apply_voice_state(update);
-        self.events.push(VoiceEvent::SessionUpdated {
-            guild_id: guild_id.clone(),
-        });
+        self.events.push(VoiceEvent::SessionUpdated { guild_id });
         if !was_disconnected && state.status == VoiceConnectionStatus::Disconnected {
-            self.events.push(VoiceEvent::Disconnected {
-                guild_id: guild_id.clone(),
-            });
+            self.events.push(VoiceEvent::Disconnected { guild_id });
         }
         if state.status == VoiceConnectionStatus::Connected {
             self.events.push(VoiceEvent::Connected(state.clone()));
@@ -963,10 +951,9 @@ impl VoiceManager {
 
     pub fn configure_transport(
         &mut self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         transport: VoiceTransportState,
     ) -> Option<VoiceTransportState> {
-        let guild_id = guild_id.into();
         let state = self.connections.get_mut(&guild_id)?;
         state.set_transport(transport.clone());
         self.events.push(VoiceEvent::TransportConfigured {
@@ -978,10 +965,9 @@ impl VoiceManager {
 
     pub fn set_speaking(
         &mut self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         speaking: VoiceSpeakingState,
     ) -> Option<VoiceSpeakingState> {
-        let guild_id = guild_id.into();
         let state = self.connections.get_mut(&guild_id)?;
         state.set_speaking(speaking.clone());
         self.events.push(VoiceEvent::SpeakingUpdated {
@@ -993,11 +979,9 @@ impl VoiceManager {
 
     pub fn identify_command(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Option<VoiceGatewayCommand> {
-        let guild_id = guild_id.into();
-        let user_id = user_id.into();
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceGatewayCommand::Identify {
             server_id: guild_id,
@@ -1009,11 +993,9 @@ impl VoiceManager {
 
     pub fn runtime_config(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Option<VoiceRuntimeConfig> {
-        let guild_id = guild_id.into();
-        let user_id = user_id.into();
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceRuntimeConfig::new(
             guild_id,
@@ -1024,8 +1006,7 @@ impl VoiceManager {
         ))
     }
 
-    pub fn resume_command(&self, guild_id: impl Into<Snowflake>) -> Option<VoiceGatewayCommand> {
-        let guild_id = guild_id.into();
+    pub fn resume_command(&self, guild_id: GenericId) -> Option<VoiceGatewayCommand> {
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceGatewayCommand::Resume {
             server_id: guild_id,
@@ -1034,11 +1015,7 @@ impl VoiceManager {
         })
     }
 
-    pub fn select_protocol_command(
-        &self,
-        guild_id: impl Into<Snowflake>,
-    ) -> Option<VoiceGatewayCommand> {
-        let guild_id = guild_id.into();
+    pub fn select_protocol_command(&self, guild_id: GenericId) -> Option<VoiceGatewayCommand> {
         let transport = self.connections.get(&guild_id)?.transport.clone()?;
         Some(VoiceGatewayCommand::SelectProtocol(
             VoiceSelectProtocolCommand::new(
@@ -1050,13 +1027,12 @@ impl VoiceManager {
 
     pub fn speaking_command(
         &mut self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         flags: VoiceSpeakingFlags,
         delay: u32,
     ) -> Option<VoiceGatewayCommand> {
-        let guild_id = guild_id.into();
         let transport = self.connections.get(&guild_id)?.transport.clone()?;
-        self.set_speaking(guild_id.clone(), VoiceSpeakingState::new(flags, delay))?;
+        self.set_speaking(guild_id, VoiceSpeakingState::new(flags, delay))?;
         Some(VoiceGatewayCommand::Speaking(
             VoiceSpeakingCommand::new(transport.ssrc)
                 .speaking(flags)
@@ -1064,25 +1040,21 @@ impl VoiceManager {
         ))
     }
 
-    pub fn connection(&self, guild_id: impl Into<Snowflake>) -> Option<&VoiceConnectionState> {
-        let guild_id = guild_id.into();
+    pub fn connection(&self, guild_id: GenericId) -> Option<&VoiceConnectionState> {
         self.connections.get(&guild_id)
     }
 
-    pub fn player(&self, guild_id: impl Into<Snowflake>) -> Option<&AudioPlayer> {
-        let guild_id = guild_id.into();
+    pub fn player(&self, guild_id: GenericId) -> Option<&AudioPlayer> {
         self.players.get(&guild_id)
     }
 
-    pub fn enqueue(&mut self, guild_id: impl Into<Snowflake>, track: AudioTrack) -> Option<usize> {
-        let guild_id = guild_id.into();
+    pub fn enqueue(&mut self, guild_id: GenericId, track: AudioTrack) -> Option<usize> {
         let player = self.players.get_mut(&guild_id)?;
         player.enqueue(track);
         Some(player.queue_len())
     }
 
-    pub fn start_next(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
-        let guild_id = guild_id.into();
+    pub fn start_next(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let started_track = player.play_next().cloned()?;
         self.events.push(VoiceEvent::PlayerStarted {
@@ -1092,8 +1064,7 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn stop(&mut self, guild_id: impl Into<Snowflake>) -> Option<AudioTrack> {
-        let guild_id = guild_id.into();
+    pub fn stop(&mut self, guild_id: GenericId) -> Option<AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let stopped_track = player.stop()?;
         self.events.push(VoiceEvent::PlayerStopped {
@@ -1103,8 +1074,7 @@ impl VoiceManager {
         Some(stopped_track)
     }
 
-    pub fn pause(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
-        let guild_id = guild_id.into();
+    pub fn pause(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         player.pause();
         let paused_track = player.current().cloned()?;
@@ -1115,8 +1085,7 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn resume(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
-        let guild_id = guild_id.into();
+    pub fn resume(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         player.resume();
         let resumed_track = player.current().cloned()?;
@@ -1127,16 +1096,13 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn skip(&mut self, guild_id: impl Into<Snowflake>) -> Option<&AudioTrack> {
-        let guild_id = guild_id.into();
+    pub fn skip(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let skipped_track = player.current().cloned();
         let next_track = player.skip().cloned()?;
         if let Some(track) = skipped_track {
-            self.events.push(VoiceEvent::PlayerSkipped {
-                guild_id: guild_id.clone(),
-                track,
-            });
+            self.events
+                .push(VoiceEvent::PlayerSkipped { guild_id, track });
         }
         self.events.push(VoiceEvent::PlayerStarted {
             guild_id,
@@ -1145,15 +1111,13 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn clear_queue(&mut self, guild_id: impl Into<Snowflake>) -> Option<usize> {
-        let guild_id = guild_id.into();
+    pub fn clear_queue(&mut self, guild_id: GenericId) -> Option<usize> {
         self.players
             .get_mut(&guild_id)
             .map(AudioPlayer::clear_queue)
     }
 
-    pub fn set_volume(&mut self, guild_id: impl Into<Snowflake>, volume: f32) -> Option<f32> {
-        let guild_id = guild_id.into();
+    pub fn set_volume(&mut self, guild_id: GenericId, volume: f32) -> Option<f32> {
         let player = self.players.get_mut(&guild_id)?;
         player.set_volume(volume);
         Some(player.volume())
@@ -1172,32 +1136,33 @@ mod tests {
         VoiceManager, VoiceSelectProtocolCommand, VoiceSpeakingCommand, VoiceSpeakingFlags,
         VoiceTransportProtocol, VoiceTransportState, VoiceUdpDiscoveryPacket,
     };
-    use crate::model::{Snowflake, VoiceServerUpdate, VoiceState};
+    use crate::model::test_id;
+    use crate::model::{VoiceServerUpdate, VoiceState};
 
     #[test]
     fn voice_manager_promotes_gateway_updates_into_ready_connection() {
         let mut manager = VoiceManager::new();
-        let guild_id = Snowflake::from("1");
-        let channel_id = Snowflake::from("2");
+        let guild_id = test_id(1);
+        let channel_id = test_id(2);
 
-        let state = manager.connect(VoiceConnectionConfig::new(guild_id.clone(), channel_id));
+        let state = manager.connect(VoiceConnectionConfig::new(guild_id, channel_id));
         assert_eq!(state.status, VoiceConnectionStatus::Connecting);
 
         manager.update_voice_state(&VoiceState {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(Snowflake::from("2")),
+            guild_id: Some(guild_id),
+            channel_id: Some(test_id(2)),
             session_id: Some("session".to_string()),
             self_mute: false,
             self_deaf: false,
             ..VoiceState::default()
         });
         manager.update_server(VoiceServerUpdate {
-            guild_id: guild_id.clone(),
+            guild_id,
             token: "token".to_string(),
             endpoint: Some("voice.discord.media".to_string()),
         });
         manager.configure_transport(
-            guild_id.clone(),
+            guild_id,
             VoiceTransportState::udp(
                 "127.0.0.1",
                 5000,
@@ -1207,12 +1172,12 @@ mod tests {
         );
 
         let identify = manager
-            .identify_command(guild_id.clone(), Snowflake::from("3"))
+            .identify_command(guild_id, test_id(3))
             .expect("identify command should be available after voice session is ready");
         assert_eq!(identify.opcode().code(), 0);
 
         let speaking = manager
-            .speaking_command(guild_id.clone(), VoiceSpeakingFlags::MICROPHONE, 0)
+            .speaking_command(guild_id, VoiceSpeakingFlags::MICROPHONE, 0)
             .expect("speaking command should use configured transport");
         assert_eq!(speaking.opcode().code(), 5);
         assert_eq!(
@@ -1248,8 +1213,8 @@ mod tests {
         let commands = [
             (
                 VoiceGatewayCommand::Identify {
-                    server_id: Snowflake::from("1"),
-                    user_id: Snowflake::from("2"),
+                    server_id: test_id(1),
+                    user_id: test_id(2),
                     session_id: "session".to_string(),
                     token: "token".to_string(),
                 },
@@ -1263,7 +1228,7 @@ mod tests {
             ),
             (
                 VoiceGatewayCommand::Resume {
-                    server_id: Snowflake::from("1"),
+                    server_id: test_id(1),
                     session_id: "session".to_string(),
                     token: "token".to_string(),
                 },
@@ -1352,7 +1317,7 @@ mod tests {
     fn voice_player_queue_still_works_with_transport_state() {
         let mut manager = VoiceManager::new();
         manager.connect(
-            VoiceConnectionConfig::new("1", "2")
+            VoiceConnectionConfig::new(test_id(1), test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
@@ -1360,27 +1325,27 @@ mod tests {
 
         manager
             .enqueue(
-                "1",
+                test_id(1),
                 AudioTrack::new("track-1", "memory://track").title("Track 1"),
             )
             .unwrap();
-        let current = manager.start_next("1").unwrap();
+        let current = manager.start_next(test_id(1)).unwrap();
         assert_eq!(current.id, "track-1");
     }
 
     #[test]
     fn voice_state_disconnect_clears_runtime_state_and_marks_disconnected() {
         let mut manager = VoiceManager::new();
-        let guild_id = Snowflake::from("1");
+        let guild_id = test_id(1);
 
         manager.connect(
-            VoiceConnectionConfig::new(guild_id.clone(), "2")
+            VoiceConnectionConfig::new(guild_id, test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
         );
         manager.configure_transport(
-            guild_id.clone(),
+            guild_id,
             VoiceTransportState::udp(
                 "127.0.0.1",
                 5000,
@@ -1389,13 +1354,13 @@ mod tests {
             ),
         );
         manager.set_speaking(
-            guild_id.clone(),
+            guild_id,
             super::VoiceSpeakingState::new(VoiceSpeakingFlags::MICROPHONE, 0),
         );
 
         let state = manager
             .update_voice_state(&VoiceState {
-                guild_id: Some(guild_id.clone()),
+                guild_id: Some(guild_id),
                 channel_id: None,
                 session_id: None,
                 self_mute: true,
@@ -1410,7 +1375,7 @@ mod tests {
         assert_eq!(state.token, None);
         assert_eq!(state.transport, None);
         assert_eq!(state.speaking, None);
-        assert_eq!(manager.identify_command(guild_id.clone(), "3"), None);
+        assert_eq!(manager.identify_command(guild_id, test_id(3)), None);
         assert!(matches!(
             manager.events().last(),
             Some(super::VoiceEvent::Disconnected { guild_id: event_guild_id }) if *event_guild_id == guild_id
@@ -1428,16 +1393,16 @@ mod tests {
     #[test]
     fn voice_server_endpoint_loss_clears_runtime_state_and_marks_disconnected() {
         let mut manager = VoiceManager::new();
-        let guild_id = Snowflake::from("1");
+        let guild_id = test_id(1);
 
         manager.connect(
-            VoiceConnectionConfig::new(guild_id.clone(), "2")
+            VoiceConnectionConfig::new(guild_id, test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
         );
         manager.configure_transport(
-            guild_id.clone(),
+            guild_id,
             VoiceTransportState::udp(
                 "127.0.0.1",
                 5000,
@@ -1446,13 +1411,13 @@ mod tests {
             ),
         );
         manager.set_speaking(
-            guild_id.clone(),
+            guild_id,
             super::VoiceSpeakingState::new(VoiceSpeakingFlags::MICROPHONE, 0),
         );
 
         let state = manager
             .update_server(VoiceServerUpdate {
-                guild_id: guild_id.clone(),
+                guild_id,
                 token: "replacement-token".to_string(),
                 endpoint: None,
             })
@@ -1464,8 +1429,8 @@ mod tests {
         assert_eq!(state.token, None);
         assert_eq!(state.transport, None);
         assert_eq!(state.speaking, None);
-        assert_eq!(manager.resume_command(guild_id.clone()), None);
-        assert_eq!(manager.runtime_config(guild_id.clone(), "3"), None);
+        assert_eq!(manager.resume_command(guild_id), None);
+        assert_eq!(manager.runtime_config(guild_id, test_id(3)), None);
         assert!(matches!(
             manager.events().last(),
             Some(super::VoiceEvent::Disconnected { guild_id: event_guild_id }) if *event_guild_id == guild_id
@@ -1515,7 +1480,8 @@ mod tests {
 
     #[test]
     fn voice_connection_state_stays_connecting_until_all_runtime_fields_exist() {
-        let config = VoiceConnectionConfig::new("1", "2").endpoint("voice.discord.media");
+        let config =
+            VoiceConnectionConfig::new(test_id(1), test_id(2)).endpoint("voice.discord.media");
         let mut state = VoiceConnectionState::from_config(config);
         assert_eq!(state.status, VoiceConnectionStatus::Connecting);
         assert!(!state.is_ready());
@@ -1532,7 +1498,7 @@ mod tests {
         ));
 
         state.apply_server_update(&VoiceServerUpdate {
-            guild_id: Snowflake::from("1"),
+            guild_id: test_id(1),
             token: "token".to_string(),
             endpoint: Some("voice-next.discord.media".to_string()),
         });
@@ -1543,8 +1509,8 @@ mod tests {
         assert_eq!(state.speaking, None);
 
         state.apply_voice_state(&VoiceState {
-            guild_id: Some(Snowflake::from("1")),
-            channel_id: Some(Snowflake::from("2")),
+            guild_id: Some(test_id(1)),
+            channel_id: Some(test_id(2)),
             session_id: Some("session".to_string()),
             self_mute: true,
             self_deaf: false,
@@ -1563,43 +1529,43 @@ mod tests {
         assert_eq!(manager.update_voice_state(&VoiceState::default()), None);
         assert_eq!(
             manager.update_voice_state(&VoiceState {
-                guild_id: Some(Snowflake::from("1")),
+                guild_id: Some(test_id(1)),
                 ..VoiceState::default()
             }),
             None
         );
 
         manager.connect(
-            VoiceConnectionConfig::new("1", "2")
+            VoiceConnectionConfig::new(test_id(1), test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
         );
         manager
-            .enqueue("1", AudioTrack::new("track-1", "memory://track"))
+            .enqueue(test_id(1), AudioTrack::new("track-1", "memory://track"))
             .unwrap();
 
-        let disconnected = manager.disconnect("1").unwrap();
+        let disconnected = manager.disconnect(test_id(1)).unwrap();
         assert_eq!(disconnected.status, VoiceConnectionStatus::Disconnected);
-        assert_eq!(manager.connection("1"), None);
-        assert_eq!(manager.player("1"), None);
+        assert_eq!(manager.connection(test_id(1)), None);
+        assert_eq!(manager.player(test_id(1)), None);
         assert!(matches!(
             manager.events().last(),
-            Some(super::VoiceEvent::Disconnected { guild_id }) if *guild_id == Snowflake::from("1")
+            Some(super::VoiceEvent::Disconnected { guild_id }) if *guild_id == test_id(1)
         ));
     }
 
     #[test]
     fn voice_manager_command_helpers_return_none_without_required_runtime_data() {
         let mut manager = VoiceManager::new();
-        manager.connect(VoiceConnectionConfig::new("1", "2"));
+        manager.connect(VoiceConnectionConfig::new(test_id(1), test_id(2)));
 
-        assert_eq!(manager.identify_command("1", "3"), None);
-        assert_eq!(manager.runtime_config("1", "3"), None);
-        assert_eq!(manager.resume_command("1"), None);
-        assert_eq!(manager.select_protocol_command("1"), None);
+        assert_eq!(manager.identify_command(test_id(1), test_id(3)), None);
+        assert_eq!(manager.runtime_config(test_id(1), test_id(3)), None);
+        assert_eq!(manager.resume_command(test_id(1)), None);
+        assert_eq!(manager.select_protocol_command(test_id(1)), None);
         assert_eq!(
-            manager.speaking_command("1", VoiceSpeakingFlags::MICROPHONE, 0),
+            manager.speaking_command(test_id(1), VoiceSpeakingFlags::MICROPHONE, 0),
             None
         );
     }
@@ -1607,9 +1573,9 @@ mod tests {
     #[test]
     fn voice_manager_records_event_order_for_connect_and_updates() {
         let mut manager = VoiceManager::new();
-        let guild_id = Snowflake::from("1");
+        let guild_id = test_id(1);
         manager.connect(
-            VoiceConnectionConfig::new(guild_id.clone(), "2")
+            VoiceConnectionConfig::new(guild_id, test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
@@ -1620,11 +1586,11 @@ mod tests {
             [
                 super::VoiceEvent::Connecting { guild_id: connect_guild, channel_id },
                 super::VoiceEvent::Connected(state),
-            ] if *connect_guild == guild_id && *channel_id == Snowflake::from("2") && state.guild_id == guild_id
+            ] if *connect_guild == guild_id && *channel_id == test_id(2) && state.guild_id == guild_id
         ));
 
         manager.update_server(VoiceServerUpdate {
-            guild_id: guild_id.clone(),
+            guild_id,
             token: "next-token".to_string(),
             endpoint: Some("voice-next.discord.media".to_string()),
         });
@@ -1637,8 +1603,8 @@ mod tests {
         ));
 
         manager.update_voice_state(&VoiceState {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(Snowflake::from("2")),
+            guild_id: Some(guild_id),
+            channel_id: Some(test_id(2)),
             session_id: Some("next-session".to_string()),
             self_mute: false,
             self_deaf: true,
@@ -1695,48 +1661,40 @@ mod tests {
     #[test]
     fn voice_manager_exposes_playback_queue_controls_and_events() {
         let mut manager = VoiceManager::new();
-        let guild_id = Snowflake::from("1");
+        let guild_id = test_id(1);
         manager.connect(
-            VoiceConnectionConfig::new(guild_id.clone(), "2")
+            VoiceConnectionConfig::new(guild_id, test_id(2))
                 .session_id("session")
                 .token("token")
                 .endpoint("voice.discord.media"),
         );
         manager
-            .enqueue(guild_id.clone(), AudioTrack::new("track-1", "memory://one"))
+            .enqueue(guild_id, AudioTrack::new("track-1", "memory://one"))
             .unwrap();
         manager
-            .enqueue(guild_id.clone(), AudioTrack::new("track-2", "memory://two"))
+            .enqueue(guild_id, AudioTrack::new("track-2", "memory://two"))
             .unwrap();
 
-        assert_eq!(manager.set_volume(guild_id.clone(), 2.0), Some(1.0));
+        assert_eq!(manager.set_volume(guild_id, 2.0), Some(1.0));
         assert_eq!(
-            manager
-                .start_next(guild_id.clone())
-                .map(|track| track.id.as_str()),
+            manager.start_next(guild_id).map(|track| track.id.as_str()),
             Some("track-1")
         );
         assert_eq!(
-            manager
-                .pause(guild_id.clone())
-                .map(|track| track.id.as_str()),
+            manager.pause(guild_id).map(|track| track.id.as_str()),
             Some("track-1")
         );
-        assert!(manager.player(guild_id.clone()).unwrap().is_paused());
+        assert!(manager.player(guild_id).unwrap().is_paused());
         assert_eq!(
-            manager
-                .resume(guild_id.clone())
-                .map(|track| track.id.as_str()),
+            manager.resume(guild_id).map(|track| track.id.as_str()),
             Some("track-1")
         );
-        assert!(!manager.player(guild_id.clone()).unwrap().is_paused());
+        assert!(!manager.player(guild_id).unwrap().is_paused());
         assert_eq!(
-            manager
-                .skip(guild_id.clone())
-                .map(|track| track.id.as_str()),
+            manager.skip(guild_id).map(|track| track.id.as_str()),
             Some("track-2")
         );
-        assert_eq!(manager.clear_queue(guild_id.clone()), Some(0));
+        assert_eq!(manager.clear_queue(guild_id), Some(0));
         assert!(matches!(
             manager.events(),
             events if events.iter().any(|event| matches!(

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, Guild, Member, Message, Presence, Role, Snowflake, SoundboardSound, StageInstance,
+    Channel, GenericId, Guild, Member, Message, Presence, Role, SoundboardSound, StageInstance,
     Sticker, User, VoiceState,
 };
 use crate::types::Emoji;
@@ -100,41 +100,41 @@ where
 
 #[derive(Clone, Default)]
 pub(super) struct CacheStore {
-    pub(super) guilds: HashMap<Snowflake, Guild>,
-    pub(super) channels: HashMap<Snowflake, Channel>,
-    pub(super) users: HashMap<Snowflake, User>,
-    pub(super) members: HashMap<(Snowflake, Snowflake), Arc<Member>>,
-    pub(super) messages: HashMap<(Snowflake, Snowflake), Arc<Message>>,
-    pub(super) roles: HashMap<(Snowflake, Snowflake), Role>,
-    pub(super) presences: HashMap<(Snowflake, Snowflake), Arc<Presence>>,
-    pub(super) voice_states: HashMap<(Snowflake, Snowflake), VoiceState>,
-    pub(super) soundboard_sounds: HashMap<(Snowflake, Snowflake), SoundboardSound>,
-    pub(super) emojis: HashMap<(Snowflake, Snowflake), Emoji>,
-    pub(super) stickers: HashMap<(Snowflake, Snowflake), Sticker>,
-    pub(super) scheduled_events: HashMap<(Snowflake, Snowflake), ScheduledEvent>,
-    pub(super) stage_instances: HashMap<(Snowflake, Snowflake), StageInstance>,
-    pub(super) guild_order: LruOrder<Snowflake>,
-    pub(super) channel_order: LruOrder<Snowflake>,
-    pub(super) user_order: LruOrder<Snowflake>,
-    pub(super) member_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) message_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) role_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) presence_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) voice_state_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) soundboard_sound_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) emoji_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) sticker_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) scheduled_event_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) stage_instance_order: LruOrder<(Snowflake, Snowflake)>,
-    pub(super) member_seen: HashMap<(Snowflake, Snowflake), Instant>,
-    pub(super) message_seen: HashMap<(Snowflake, Snowflake), Instant>,
-    pub(super) presence_seen: HashMap<(Snowflake, Snowflake), Instant>,
+    pub(super) guilds: HashMap<GenericId, Guild>,
+    pub(super) channels: HashMap<GenericId, Channel>,
+    pub(super) users: HashMap<GenericId, User>,
+    pub(super) members: HashMap<(GenericId, GenericId), Arc<Member>>,
+    pub(super) messages: HashMap<(GenericId, GenericId), Arc<Message>>,
+    pub(super) roles: HashMap<(GenericId, GenericId), Role>,
+    pub(super) presences: HashMap<(GenericId, GenericId), Arc<Presence>>,
+    pub(super) voice_states: HashMap<(GenericId, GenericId), VoiceState>,
+    pub(super) soundboard_sounds: HashMap<(GenericId, GenericId), SoundboardSound>,
+    pub(super) emojis: HashMap<(GenericId, GenericId), Emoji>,
+    pub(super) stickers: HashMap<(GenericId, GenericId), Sticker>,
+    pub(super) scheduled_events: HashMap<(GenericId, GenericId), ScheduledEvent>,
+    pub(super) stage_instances: HashMap<(GenericId, GenericId), StageInstance>,
+    pub(super) guild_order: LruOrder<GenericId>,
+    pub(super) channel_order: LruOrder<GenericId>,
+    pub(super) user_order: LruOrder<GenericId>,
+    pub(super) member_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) message_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) role_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) presence_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) voice_state_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) soundboard_sound_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) emoji_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) sticker_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) scheduled_event_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) stage_instance_order: LruOrder<(GenericId, GenericId)>,
+    pub(super) member_seen: HashMap<(GenericId, GenericId), Instant>,
+    pub(super) message_seen: HashMap<(GenericId, GenericId), Instant>,
+    pub(super) presence_seen: HashMap<(GenericId, GenericId), Instant>,
     /// Number of cached members per guild, kept in sync incrementally so
     /// per-guild caps never require scanning every member key.
-    pub(super) member_counts: HashMap<Snowflake, usize>,
+    pub(super) member_counts: HashMap<GenericId, usize>,
     /// Number of cached messages per channel, kept in sync incrementally so
     /// per-channel caps never require scanning every message key.
-    pub(super) message_counts: HashMap<Snowflake, usize>,
+    pub(super) message_counts: HashMap<GenericId, usize>,
     /// When the last full TTL sweep ran; used to throttle sweeps triggered
     /// from hot upsert paths.
     pub(super) last_prune: Option<Instant>,
@@ -171,11 +171,11 @@ where
         .collect()
 }
 
-fn decrement_count(counts: &mut HashMap<Snowflake, usize>, id: &Snowflake) {
-    if let Some(count) = counts.get_mut(id) {
+fn decrement_count(counts: &mut HashMap<GenericId, usize>, id: GenericId) {
+    if let Some(count) = counts.get_mut(&id) {
         *count = count.saturating_sub(1);
         if *count == 0 {
-            counts.remove(id);
+            counts.remove(&id);
         }
     }
 }
@@ -185,14 +185,14 @@ fn decrement_count(counts: &mut HashMap<Snowflake, usize>, id: &Snowflake) {
 /// counter.
 pub(super) fn insert_member_entry(
     store: &mut CacheStore,
-    key: (Snowflake, Snowflake),
+    key: (GenericId, GenericId),
     member: Arc<Member>,
     now: Instant,
 ) {
-    if store.members.insert(key.clone(), member).is_none() {
-        *store.member_counts.entry(key.0.clone()).or_insert(0) += 1;
+    if store.members.insert(key, member).is_none() {
+        *store.member_counts.entry(key.0).or_insert(0) += 1;
     }
-    store.member_seen.insert(key.clone(), now);
+    store.member_seen.insert(key, now);
     store.member_order.touch(key);
 }
 
@@ -201,14 +201,14 @@ pub(super) fn insert_member_entry(
 /// counter.
 pub(super) fn insert_message_entry(
     store: &mut CacheStore,
-    key: (Snowflake, Snowflake),
+    key: (GenericId, GenericId),
     message: Arc<Message>,
     now: Instant,
 ) {
-    if store.messages.insert(key.clone(), message).is_none() {
-        *store.message_counts.entry(key.0.clone()).or_insert(0) += 1;
+    if store.messages.insert(key, message).is_none() {
+        *store.message_counts.entry(key.0).or_insert(0) += 1;
     }
-    store.message_seen.insert(key.clone(), now);
+    store.message_seen.insert(key, now);
     store.message_order.touch(key);
 }
 
@@ -222,7 +222,7 @@ pub(super) fn enforce_guild_limit(store: &mut CacheStore, config: &CacheConfig) 
             break;
         };
         if store.guilds.contains_key(&guild_id) {
-            evict_guild_entries(store, &guild_id);
+            evict_guild_entries(store, guild_id);
         }
     }
 }
@@ -237,7 +237,7 @@ pub(super) fn enforce_channel_limit(store: &mut CacheStore, config: &CacheConfig
             break;
         };
         if store.channels.contains_key(&channel_id) {
-            evict_channel_entries(store, &channel_id);
+            evict_channel_entries(store, channel_id);
         }
     }
 }
@@ -245,12 +245,12 @@ pub(super) fn enforce_channel_limit(store: &mut CacheStore, config: &CacheConfig
 pub(super) fn enforce_message_limits(
     store: &mut CacheStore,
     config: &CacheConfig,
-    channel_id: &Snowflake,
+    channel_id: GenericId,
 ) {
     if let Some(max) = config.max_messages_per_channel {
         let count = store
             .message_counts
-            .get(channel_id)
+            .get(&channel_id)
             .copied()
             .unwrap_or_default();
         if count > max {
@@ -259,12 +259,12 @@ pub(super) fn enforce_message_limits(
             let excess: Vec<_> = store
                 .message_order
                 .iter()
-                .filter(|(stored_channel_id, _)| stored_channel_id == channel_id)
+                .filter(|(stored_channel_id, _)| *stored_channel_id == channel_id)
                 .take(count - max)
                 .cloned()
                 .collect();
             for key in excess {
-                remove_message_key(store, &key);
+                remove_message_key(store, key);
             }
         }
     }
@@ -275,7 +275,7 @@ pub(super) fn enforce_message_limits(
                 break;
             };
             if store.messages.remove(&key).is_some() {
-                decrement_count(&mut store.message_counts, &key.0);
+                decrement_count(&mut store.message_counts, key.0);
             }
             store.message_seen.remove(&key);
         }
@@ -285,14 +285,14 @@ pub(super) fn enforce_message_limits(
 pub(super) fn enforce_member_limit(
     store: &mut CacheStore,
     config: &CacheConfig,
-    guild_id: &Snowflake,
+    guild_id: GenericId,
 ) {
     let Some(max) = config.max_members_per_guild else {
         return;
     };
     let count = store
         .member_counts
-        .get(guild_id)
+        .get(&guild_id)
         .copied()
         .unwrap_or_default();
     if count > max {
@@ -301,36 +301,36 @@ pub(super) fn enforce_member_limit(
         let excess: Vec<_> = store
             .member_order
             .iter()
-            .filter(|(stored_guild_id, _)| stored_guild_id == guild_id)
+            .filter(|(stored_guild_id, _)| *stored_guild_id == guild_id)
             .take(count - max)
             .cloned()
             .collect();
         for key in excess {
-            remove_member_key(store, &key);
+            remove_member_key(store, key);
         }
     }
 }
 
-pub(super) fn remove_message_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    if store.messages.remove(key).is_some() {
-        decrement_count(&mut store.message_counts, &key.0);
+pub(super) fn remove_message_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+    if store.messages.remove(&key).is_some() {
+        decrement_count(&mut store.message_counts, key.0);
     }
-    store.message_seen.remove(key);
-    store.message_order.remove(key);
+    store.message_seen.remove(&key);
+    store.message_order.remove(&key);
 }
 
-pub(super) fn remove_member_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    if store.members.remove(key).is_some() {
-        decrement_count(&mut store.member_counts, &key.0);
+pub(super) fn remove_member_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+    if store.members.remove(&key).is_some() {
+        decrement_count(&mut store.member_counts, key.0);
     }
-    store.member_seen.remove(key);
-    store.member_order.remove(key);
+    store.member_seen.remove(&key);
+    store.member_order.remove(&key);
 }
 
-pub(super) fn remove_presence_key(store: &mut CacheStore, key: &(Snowflake, Snowflake)) {
-    store.presences.remove(key);
-    store.presence_seen.remove(key);
-    store.presence_order.remove(key);
+pub(super) fn remove_presence_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+    store.presences.remove(&key);
+    store.presence_seen.remove(&key);
+    store.presence_order.remove(&key);
 }
 
 /// Runs the full TTL sweep only if one has not run within
@@ -357,10 +357,10 @@ pub(super) fn prune_expired(store: &mut CacheStore, config: &CacheConfig, now: I
             .message_seen
             .iter()
             .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .collect();
         for key in expired {
-            remove_message_key(store, &key);
+            remove_message_key(store, key);
         }
     }
 
@@ -369,10 +369,10 @@ pub(super) fn prune_expired(store: &mut CacheStore, config: &CacheConfig, now: I
             .presence_seen
             .iter()
             .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .collect();
         for key in expired {
-            remove_presence_key(store, &key);
+            remove_presence_key(store, key);
         }
     }
 
@@ -381,10 +381,10 @@ pub(super) fn prune_expired(store: &mut CacheStore, config: &CacheConfig, now: I
             .member_seen
             .iter()
             .filter(|(_, seen)| now.duration_since(**seen) >= ttl)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .collect();
         for key in expired {
-            remove_member_key(store, &key);
+            remove_member_key(store, key);
         }
     }
 }
@@ -393,22 +393,22 @@ pub(super) fn seen_expired(seen: Option<&Instant>, ttl: Option<Duration>, now: I
     ttl.is_some_and(|ttl| seen.is_some_and(|seen| now.duration_since(*seen) >= ttl))
 }
 
-pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: &Snowflake) {
-    store.channels.remove(channel_id);
-    store.channel_order.remove(channel_id);
+pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: GenericId) {
+    store.channels.remove(&channel_id);
+    store.channel_order.remove(&channel_id);
     let removed_message_keys: Vec<_> = store
         .messages
         .keys()
-        .filter(|(stored_channel_id, _)| stored_channel_id == channel_id)
+        .filter(|(stored_channel_id, _)| *stored_channel_id == channel_id)
         .cloned()
         .collect();
     for key in removed_message_keys {
-        remove_message_key(store, &key);
+        remove_message_key(store, key);
     }
 }
 
-pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) {
-    evict_guilds_matching(store, |stored_guild_id| stored_guild_id == guild_id);
+pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: GenericId) {
+    evict_guilds_matching(store, |stored_guild_id| *stored_guild_id == guild_id);
 }
 
 /// Removes every guild-scoped entry whose guild satisfies `evict`, in one
@@ -419,12 +419,12 @@ pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: &Snowflake) 
 /// map once per guild (O(guilds × entries)) while holding the write lock.
 /// Keying the scan on a predicate keeps both callers on one implementation.
 /// Users are intentionally untouched: they are global, not guild-scoped.
-pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&Snowflake) -> bool) {
+pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&GenericId) -> bool) {
     let removed_channel_ids: HashSet<_> = store
         .channels
         .iter()
         .filter(|(_, channel)| channel.guild_id.as_ref().is_some_and(&evict))
-        .map(|(channel_id, _)| channel_id.clone())
+        .map(|(channel_id, _)| *channel_id)
         .collect();
 
     store
@@ -444,7 +444,7 @@ pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&Snow
         .cloned()
         .collect();
     for key in removed_member_keys {
-        remove_member_key(store, &key);
+        remove_member_key(store, key);
     }
     let removed_message_keys: Vec<_> = store
         .messages
@@ -453,10 +453,10 @@ pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&Snow
             removed_channel_ids.contains(stored_channel_id)
                 || message.as_ref().guild_id.as_ref().is_some_and(&evict)
         })
-        .map(|(key, _)| key.clone())
+        .map(|(key, _)| *key)
         .collect();
     for key in removed_message_keys {
-        remove_message_key(store, &key);
+        remove_message_key(store, key);
     }
     store
         .roles
@@ -515,7 +515,7 @@ pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&Snow
 /// replaces; see [`super::CacheHandle::clear_shard`] for the contract.
 pub(super) fn evict_shard_entries(store: &mut CacheStore, shard_id: u32, shard_count: u32) {
     evict_guilds_matching(store, |guild_id| {
-        super::shard_for_guild_id(guild_id, shard_count) == Some(shard_id)
+        super::shard_for_guild_id(*guild_id, shard_count) == shard_id
     });
 
     // Discord delivers direct messages only to shard 0, so DM channels (the
@@ -525,10 +525,10 @@ pub(super) fn evict_shard_entries(store: &mut CacheStore, shard_id: u32, shard_c
             .channels
             .iter()
             .filter(|(_, channel)| channel.guild_id.is_none())
-            .map(|(channel_id, _)| channel_id.clone())
+            .map(|(channel_id, _)| *channel_id)
             .collect();
         for channel_id in dm_channel_ids {
-            evict_channel_entries(store, &channel_id);
+            evict_channel_entries(store, channel_id);
         }
     }
 }

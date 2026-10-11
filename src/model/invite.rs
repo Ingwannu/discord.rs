@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Role, Snowflake, User};
+use super::{GenericId, Role, User};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Invite`.
@@ -61,22 +61,22 @@ pub struct CreateChannelInvite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_type: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_user_id: Option<Snowflake>,
+    pub target_user_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_application_id: Option<Snowflake>,
+    pub target_application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_ids: Option<Vec<Snowflake>>,
+    pub role_ids: Option<Vec<GenericId>>,
     /// Users allowed to see and accept the invite (max 1000). Mutually
     /// exclusive with a `target_users_file` CSV upload.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_user_ids: Option<Vec<Snowflake>>,
+    pub target_user_ids: Option<Vec<GenericId>>,
 }
 
 /// JSON body for the invite target-user bulk-add and bulk-delete routes.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct InviteTargetUserIds {
     /// Users to add or remove; Discord accepts at most 1000 per request.
-    pub user_ids: Vec<Snowflake>,
+    pub user_ids: Vec<GenericId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -4,7 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{CreateMessage, InteractionCallbackResponse, Message, Snowflake};
+use crate::model::{CreateMessage, GenericId, InteractionCallbackResponse, Message};
 
 use super::paths::{configured_application_id, followup_webhook_path, interaction_callback_path};
 use super::{FileAttachment, RestClient};
@@ -12,11 +12,11 @@ use super::{FileAttachment, RestClient};
 impl RestClient {
     pub async fn create_interaction_response_typed(
         &self,
-        interaction_id: impl Into<Snowflake>,
+        interaction_id: GenericId,
         interaction_token: &str,
         body: &InteractionCallbackResponse,
     ) -> Result<(), DiscordError> {
-        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        let path = interaction_callback_path(interaction_id, interaction_token)?;
         let body = self.interaction_response_with_default_allowed_mentions(body);
         self.request_no_content(Method::POST, &path, Some(body.as_ref()))
             .await
@@ -24,23 +24,23 @@ impl RestClient {
 
     pub async fn create_interaction_response_with_files(
         &self,
-        interaction_id: impl Into<Snowflake>,
+        interaction_id: GenericId,
         interaction_token: &str,
         body: &InteractionCallbackResponse,
         files: &[FileAttachment],
     ) -> Result<(), DiscordError> {
-        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        let path = interaction_callback_path(interaction_id, interaction_token)?;
         self.request_multipart_no_content(Method::POST, &path, body, files)
             .await
     }
 
     pub(crate) async fn create_interaction_response_json(
         &self,
-        interaction_id: impl Into<Snowflake>,
+        interaction_id: GenericId,
         interaction_token: &str,
         body: &Value,
     ) -> Result<(), DiscordError> {
-        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        let path = interaction_callback_path(interaction_id, interaction_token)?;
         self.request_no_content(Method::POST, &path, Some(body))
             .await
     }
@@ -52,7 +52,7 @@ impl RestClient {
     ) -> Result<Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.create_followup_message_json_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
             body,
         )
@@ -61,7 +61,7 @@ impl RestClient {
 
     pub(crate) async fn create_followup_message_json_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         body: &Value,
     ) -> Result<Value, DiscordError> {
@@ -75,7 +75,7 @@ impl RestClient {
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.create_followup_message_with_application_id(&application_id, interaction_token, body)
+        self.create_followup_message_with_application_id(application_id, interaction_token, body)
             .await
     }
 
@@ -87,7 +87,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.create_followup_message_with_application_id_and_files(
-            &application_id,
+            application_id,
             interaction_token,
             body,
             files,
@@ -97,7 +97,7 @@ impl RestClient {
 
     pub async fn create_followup_message_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
@@ -107,7 +107,7 @@ impl RestClient {
 
     pub async fn create_followup_message_with_application_id_and_files(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         body: &CreateMessage,
         files: &[FileAttachment],
@@ -123,7 +123,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.get_original_interaction_response_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
         )
         .await
@@ -131,7 +131,7 @@ impl RestClient {
 
     pub async fn get_original_interaction_response_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
     ) -> Result<Message, DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some("@original"))?;
@@ -146,7 +146,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_original_interaction_response_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
             body,
         )
@@ -161,7 +161,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_original_interaction_response_with_application_id_and_files(
-            &application_id,
+            application_id,
             interaction_token,
             body,
             files,
@@ -171,7 +171,7 @@ impl RestClient {
 
     pub async fn edit_original_interaction_response_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
@@ -181,7 +181,7 @@ impl RestClient {
 
     pub async fn edit_original_interaction_response_with_application_id_and_files(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         body: &CreateMessage,
         files: &[FileAttachment],
@@ -197,7 +197,7 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.delete_original_interaction_response_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
         )
         .await
@@ -205,7 +205,7 @@ impl RestClient {
 
     pub async fn delete_original_interaction_response_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
     ) -> Result<(), DiscordError> {
         let path = followup_webhook_path(application_id, interaction_token, Some("@original"))?;
@@ -221,7 +221,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_followup_message_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
             message_id,
             body,
@@ -238,7 +238,7 @@ impl RestClient {
     ) -> Result<Message, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.edit_followup_message_with_application_id_and_files(
-            &application_id,
+            application_id,
             interaction_token,
             message_id,
             body,
@@ -249,7 +249,7 @@ impl RestClient {
 
     pub async fn edit_followup_message_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         message_id: &str,
         body: &CreateMessage,
@@ -260,7 +260,7 @@ impl RestClient {
 
     pub async fn edit_followup_message_with_application_id_and_files(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         message_id: &str,
         body: &CreateMessage,
@@ -278,7 +278,7 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.delete_followup_message_with_application_id(
-            &application_id,
+            application_id,
             interaction_token,
             message_id,
         )
@@ -287,7 +287,7 @@ impl RestClient {
 
     pub async fn delete_followup_message_with_application_id(
         &self,
-        application_id: &str,
+        application_id: GenericId,
         interaction_token: &str,
         message_id: &str,
     ) -> Result<(), DiscordError> {
@@ -301,11 +301,11 @@ impl RestClient {
     /// `withResponse: true`.
     pub async fn create_interaction_response_with_result(
         &self,
-        interaction_id: impl Into<Snowflake>,
+        interaction_id: GenericId,
         interaction_token: &str,
         response: &InteractionCallbackResponse,
     ) -> Result<crate::model::InteractionCallbackResult, DiscordError> {
-        let path = interaction_callback_path(interaction_id.into(), interaction_token)?;
+        let path = interaction_callback_path(interaction_id, interaction_token)?;
         self.request_typed(
             Method::POST,
             &format!("{path}?with_response=true"),

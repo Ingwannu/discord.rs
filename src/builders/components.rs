@@ -641,6 +641,7 @@ mod tests {
         ContainerBuilder, FileBuilder, MediaGalleryBuilder, SectionBuilder, SeparatorBuilder,
     };
     use crate::constants::{button_style, component_type, text_input_style};
+    use crate::model::test_id;
     use crate::types::{Emoji, MediaGalleryItem, SelectOption};
     use serde_json::json;
 
@@ -772,7 +773,7 @@ mod tests {
         let payload = ButtonBuilder::new()
             .style(button_style::SUCCESS)
             .label("Ship")
-            .emoji(Emoji::custom("party", "123", true))
+            .emoji(Emoji::custom("party", test_id(123), true))
             .disabled(true)
             .build();
 

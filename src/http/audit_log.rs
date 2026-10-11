@@ -4,7 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{AuditLog, AuditLogQuery, Snowflake};
+use crate::model::{AuditLog, AuditLogQuery, GenericId};
 
 use super::paths::audit_log_query;
 use super::RestClient;
@@ -17,10 +17,10 @@ impl RestClient {
     )]
     pub async fn get_guild_audit_log(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: Option<Snowflake>,
+        guild_id: GenericId,
+        user_id: Option<GenericId>,
         action_type: Option<u64>,
-        before: Option<Snowflake>,
+        before: Option<GenericId>,
         limit: Option<u64>,
     ) -> Result<serde_json::Value, DiscordError> {
         let query = audit_log_query(&AuditLogQuery {
@@ -32,7 +32,7 @@ impl RestClient {
         });
         self.request(
             Method::GET,
-            &format!("/guilds/{}/audit-logs{}", guild_id.into(), query),
+            &format!("/guilds/{}/audit-logs{}", guild_id, query),
             Option::<&Value>::None,
         )
         .await
@@ -40,13 +40,13 @@ impl RestClient {
 
     pub async fn get_guild_audit_log_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         query: &AuditLogQuery,
     ) -> Result<AuditLog, DiscordError> {
         let query = audit_log_query(query);
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/audit-logs{}", guild_id.into(), query),
+            &format!("/guilds/{}/audit-logs{}", guild_id, query),
             Option::<&Value>::None,
         )
         .await

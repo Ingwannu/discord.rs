@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::Snowflake;
+use super::{ComponentId, GenericId};
 
 /// A single component attached to a received message, modal, or snapshot.
 ///
@@ -24,9 +24,10 @@ pub struct MessageComponent {
     /// Raw Discord component type (see the associated constants).
     #[serde(rename = "type", default)]
     pub kind: u8,
-    /// Optional 32-bit identifier for the component within the message.
+    /// Numeric component ID (32-bit, unique within the message). Not a
+    /// snowflake; see [`ComponentId`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<u64>,
+    pub id: Option<ComponentId>,
     /// Developer-defined identifier (buttons, selects, text inputs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_id: Option<String>,
@@ -47,7 +48,7 @@ pub struct MessageComponent {
     pub url: Option<String>,
     /// SKU targeted by premium-style buttons.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku_id: Option<Snowflake>,
+    pub sku_id: Option<GenericId>,
     /// Whether the interactive component is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
@@ -201,11 +202,10 @@ pub struct MessageSelectOption {
     pub default: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Default value of an auto-populated select menu component.
 pub struct MessageSelectDefaultValue {
-    #[serde(default)]
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Target type: `"user"`, `"role"`, or `"channel"`.
     #[serde(rename = "type", default)]
     pub kind: String,
@@ -225,7 +225,7 @@ pub struct UnfurledMediaItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachment_id: Option<Snowflake>,
+    pub attachment_id: Option<GenericId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

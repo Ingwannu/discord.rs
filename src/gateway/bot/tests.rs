@@ -1,3 +1,4 @@
+use crate::model::test_id;
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -11,6 +12,19 @@ use tokio::task::JoinHandle;
 #[cfg(feature = "sharding")]
 use tokio::time::sleep;
 use tokio::time::Duration;
+
+/// Maps a readable test label ("a", "old-member") to a stable ID. Decimal
+/// labels keep their value so they line up with `test_id(n)`; other labels
+/// hash (FNV-1a) into the top half of the range, away from small literals.
+fn named_id(label: &str) -> GenericId {
+    if let Ok(id) = label.parse() {
+        return id;
+    }
+    let hash = label.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    test_id(hash | (1 << 63))
+}
 
 #[cfg(feature = "sharding")]
 use super::{auto_shard_plan, ShardSupervisor};
@@ -30,8 +44,8 @@ use crate::event::{
 use crate::gateway::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    Activity, Attachment, ComponentInteraction, ComponentInteractionData, Embed, Interaction,
-    InteractionContextData, Member, Message, Reaction, RequestChannelInfo, Role, Snowflake,
+    Activity, Attachment, ComponentInteraction, ComponentInteractionData, Embed, GenericId,
+    Interaction, InteractionContextData, Member, Message, Reaction, RequestChannelInfo, Role,
     SoundboardSound, StageInstance, Sticker, User, VoiceServerUpdate, VoiceState,
 };
 #[cfg(feature = "sharding")]
@@ -66,23 +80,23 @@ fn typed_event_decoder_maps_message_create() {
 #[tokio::test]
 async fn apply_cache_updates_clears_cache_on_ready() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("1");
-    let channel_id = Snowflake::from("10");
-    let message_id = Snowflake::from("11");
+    let guild_id = test_id(1);
+    let channel_id = test_id(10);
+    let message_id = test_id(11);
 
     cache
         .upsert_guild(crate::model::Guild {
-            id: guild_id.clone(),
+            id: guild_id,
             name: "discordrs".to_string(),
-            ..crate::model::Guild::default()
+            ..crate::model::Guild::fixture()
         })
         .await;
     cache
         .upsert_message(Message {
-            id: message_id.clone(),
-            channel_id: channel_id.clone(),
+            id: message_id,
+            channel_id,
             content: "cached".to_string(),
-            ..Message::default()
+            ..Message::fixture()
         })
         .await;
 
@@ -92,9 +106,9 @@ async fn apply_cache_updates_clears_cache_on_ready() {
         &Event::Ready(ReadyEvent {
             data: ReadyPayload {
                 user: User {
-                    id: Snowflake::from("2"),
+                    id: test_id(2),
                     username: "bot".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 },
                 session_id: "session".to_string(),
                 application: None,
@@ -105,38 +119,38 @@ async fn apply_cache_updates_clears_cache_on_ready() {
     )
     .await;
 
-    assert!(cache.guild(&guild_id).await.is_none());
-    assert!(cache.message(&channel_id, &message_id).await.is_none());
+    assert!(cache.guild(guild_id).await.is_none());
+    assert!(cache.message(channel_id, message_id).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached_fields() {
     let cache = crate::cache::CacheHandle::new();
-    let channel_id = Snowflake::from("1");
-    let message_id = Snowflake::from("2");
+    let channel_id = test_id(1);
+    let message_id = test_id(2);
 
     cache
         .upsert_message(Message {
-            id: message_id.clone(),
-            channel_id: channel_id.clone(),
+            id: message_id,
+            channel_id,
             content: "before".to_string(),
             author: Some(User {
-                id: Snowflake::from("3"),
+                id: test_id(3),
                 username: "alice".to_string(),
-                ..User::default()
+                ..User::fixture()
             }),
             attachments: vec![crate::model::Attachment {
-                id: Snowflake::from("4"),
+                id: test_id(4),
                 filename: "file.txt".to_string(),
-                ..crate::model::Attachment::default()
+                ..crate::model::Attachment::fixture()
             }],
             mentions: vec![User {
-                id: Snowflake::from("5"),
+                id: test_id(5),
                 username: "bob".to_string(),
-                ..User::default()
+                ..User::fixture()
             }],
-            ..Message::default()
+            ..Message::fixture()
         })
         .await;
 
@@ -145,21 +159,21 @@ async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached
         SINGLE_SHARD,
         &Event::MessageUpdate(MessageEvent {
             message: Message {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
+                id: message_id,
+                channel_id,
                 content: "after".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({
-                "id": message_id.as_str(),
-                "channel_id": channel_id.as_str(),
+                "id": message_id,
+                "channel_id": channel_id,
                 "content": "after"
             }),
         }),
     )
     .await;
 
-    let cached = cache.message(&channel_id, &message_id).await.unwrap();
+    let cached = cache.message(channel_id, message_id).await.unwrap();
     assert_eq!(cached.content, "after");
     assert_eq!(cached.author.unwrap().username, "alice");
     assert_eq!(cached.attachments.len(), 1);
@@ -170,46 +184,46 @@ async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached
 #[tokio::test]
 async fn apply_cache_updates_ignores_partial_message_update_without_cached_message() {
     let cache = crate::cache::CacheHandle::new();
-    let channel_id = Snowflake::from("1");
-    let message_id = Snowflake::from("2");
+    let channel_id = test_id(1);
+    let message_id = test_id(2);
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::MessageUpdate(MessageEvent {
             message: Message {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
+                id: message_id,
+                channel_id,
                 content: "after".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({
-                "id": message_id.as_str(),
-                "channel_id": channel_id.as_str(),
+                "id": message_id,
+                "channel_id": channel_id,
                 "content": "after"
             }),
         }),
     )
     .await;
 
-    assert!(cache.message(&channel_id, &message_id).await.is_none());
+    assert!(cache.message(channel_id, message_id).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_evicts_bulk_deleted_messages() {
     let cache = crate::cache::CacheHandle::new();
-    let channel_id = Snowflake::from("1");
-    let first = Snowflake::from("2");
-    let second = Snowflake::from("3");
+    let channel_id = test_id(1);
+    let first = test_id(2);
+    let second = test_id(3);
 
-    for message_id in [first.clone(), second.clone()] {
+    for message_id in [first, second] {
         cache
             .upsert_message(Message {
                 id: message_id,
-                channel_id: channel_id.clone(),
+                channel_id,
                 content: "hello".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             })
             .await;
     }
@@ -218,82 +232,82 @@ async fn apply_cache_updates_evicts_bulk_deleted_messages() {
         &cache,
         SINGLE_SHARD,
         &Event::MessageDeleteBulk(BulkMessageDeleteEvent {
-            ids: vec![first.clone(), second.clone()],
-            channel_id: channel_id.clone(),
+            ids: vec![first, second],
+            channel_id,
             guild_id: None,
             raw: json!({}),
         }),
     )
     .await;
 
-    assert!(cache.message(&channel_id, &first).await.is_none());
-    assert!(cache.message(&channel_id, &second).await.is_none());
+    assert!(cache.message(channel_id, first).await.is_none());
+    assert!(cache.message(channel_id, second).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("1");
-    let channel_id = Snowflake::from("2");
-    let user_id = Snowflake::from("3");
-    let message_id = Snowflake::from("4");
+    let guild_id = test_id(1);
+    let channel_id = test_id(2);
+    let user_id = test_id(3);
+    let message_id = test_id(4);
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::UserUpdate(UserUpdateEvent {
             user: User {
-                id: user_id.clone(),
+                id: user_id,
                 username: "updated".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
-            raw: json!({ "id": user_id.as_str(), "username": "updated" }),
+            raw: json!({ "id": user_id, "username": "updated" }),
         }),
     )
     .await;
-    assert_eq!(cache.user(&user_id).await.unwrap().username, "updated");
+    assert_eq!(cache.user(user_id).await.unwrap().username, "updated");
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::MessageCreate(MessageEvent {
             message: Message {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: message_id,
+                channel_id,
+                guild_id: Some(guild_id),
                 author: Some(User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "author".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 }),
                 content: "hello".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({
-                "id": message_id.as_str(),
-                "channel_id": channel_id.as_str()
+                "id": message_id,
+                "channel_id": channel_id
             }),
         }),
     )
     .await;
-    assert_eq!(cache.user(&user_id).await.unwrap().username, "author");
-    assert!(cache.message(&channel_id, &message_id).await.is_some());
+    assert_eq!(cache.user(user_id).await.unwrap().username, "author");
+    assert!(cache.message(channel_id, message_id).await.is_some());
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: Some(user_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            user_id: Some(user_id),
+            guild_id: Some(guild_id),
             status: Some("online".to_string()),
             activities: vec![Activity {
                 name: "testing".to_string(),
                 ..Activity::default()
             }],
             raw: json!({
-                "user": { "id": user_id.as_str() },
-                "guild_id": guild_id.as_str(),
+                "user": { "id": user_id },
+                "guild_id": guild_id,
                 "status": "online",
                 "activities": [{ "name": "testing" }]
             }),
@@ -301,7 +315,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
         }),
     )
     .await;
-    let presence = cache.presence(&guild_id, &user_id).await.unwrap();
+    let presence = cache.presence(guild_id, user_id).await.unwrap();
     assert_eq!(presence.status.as_deref(), Some("online"));
     assert_eq!(presence.activities.unwrap().len(), 1);
 
@@ -310,59 +324,59 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
         SINGLE_SHARD,
         &Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
-                guild_id: Some(guild_id.clone()),
-                channel_id: Some(channel_id.clone()),
-                user_id: Some(user_id.clone()),
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                user_id: Some(user_id),
                 member: Some(Member {
                     user: Some(User {
-                        id: user_id.clone(),
+                        id: user_id,
                         username: "voice".to_string(),
-                        ..User::default()
+                        ..User::fixture()
                     }),
                     ..Member::default()
                 }),
                 ..VoiceState::default()
             },
             raw: json!({
-                "guild_id": guild_id.as_str(),
-                "channel_id": channel_id.as_str(),
-                "user_id": user_id.as_str()
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "user_id": user_id
             }),
         }),
     )
     .await;
-    assert_eq!(cache.user(&user_id).await.unwrap().username, "voice");
-    assert!(cache.member(&guild_id, &user_id).await.is_some());
-    assert!(cache.voice_state(&guild_id, &user_id).await.is_some());
+    assert_eq!(cache.user(user_id).await.unwrap().username, "voice");
+    assert!(cache.member(guild_id, user_id).await.is_some());
+    assert!(cache.voice_state(guild_id, user_id).await.is_some());
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
-                guild_id: Some(guild_id.clone()),
+                guild_id: Some(guild_id),
                 channel_id: None,
-                user_id: Some(user_id.clone()),
+                user_id: Some(user_id),
                 ..VoiceState::default()
             },
             raw: json!({
-                "guild_id": guild_id.as_str(),
+                "guild_id": guild_id,
                 "channel_id": null,
-                "user_id": user_id.as_str()
+                "user_id": user_id
             }),
         }),
     )
     .await;
-    assert!(cache.voice_state(&guild_id, &user_id).await.is_none());
+    assert!(cache.voice_state(guild_id, user_id).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_tracks_soundboard_sound_events() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("1");
-    let first_sound_id = Snowflake::from("10");
-    let second_sound_id = Snowflake::from("11");
+    let guild_id = test_id(1);
+    let first_sound_id = test_id(10);
+    let second_sound_id = test_id(11);
 
     super::apply_cache_updates(
         &cache,
@@ -370,18 +384,18 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
         &Event::GuildSoundboardSoundCreate(crate::event::SoundboardSoundEvent {
             sound: SoundboardSound {
                 name: "one".to_string(),
-                sound_id: first_sound_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                sound_id: first_sound_id,
+                guild_id: Some(guild_id),
                 volume: 1.0,
                 available: true,
-                ..SoundboardSound::default()
+                ..SoundboardSound::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
     assert!(cache
-        .soundboard_sound(&guild_id, &first_sound_id)
+        .soundboard_sound(guild_id, first_sound_id)
         .await
         .is_some());
 
@@ -389,26 +403,26 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
         &cache,
         SINGLE_SHARD,
         &Event::SoundboardSounds(crate::event::SoundboardSoundsEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             soundboard_sounds: vec![SoundboardSound {
                 name: "two".to_string(),
-                sound_id: second_sound_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                sound_id: second_sound_id,
+                guild_id: Some(guild_id),
                 volume: 1.0,
                 available: true,
-                ..SoundboardSound::default()
+                ..SoundboardSound::fixture()
             }],
             raw: json!({}),
         }),
     )
     .await;
     assert!(cache
-        .soundboard_sound(&guild_id, &first_sound_id)
+        .soundboard_sound(guild_id, first_sound_id)
         .await
         .is_none());
     assert_eq!(
         cache
-            .soundboard_sound(&guild_id, &second_sound_id)
+            .soundboard_sound(guild_id, second_sound_id)
             .await
             .unwrap()
             .name,
@@ -419,14 +433,14 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
         &cache,
         SINGLE_SHARD,
         &Event::GuildSoundboardSoundDelete(crate::event::SoundboardSoundDeleteEvent {
-            sound_id: second_sound_id.clone(),
-            guild_id: guild_id.clone(),
+            sound_id: second_sound_id,
+            guild_id,
             raw: json!({}),
         }),
     )
     .await;
     assert!(cache
-        .soundboard_sound(&guild_id, &second_sound_id)
+        .soundboard_sound(guild_id, second_sound_id)
         .await
         .is_none());
 }
@@ -435,20 +449,20 @@ async fn apply_cache_updates_tracks_soundboard_sound_events() {
 #[tokio::test]
 async fn apply_cache_updates_tracks_guild_metadata_events() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("900");
-    let emoji_id = Snowflake::from("901");
-    let sticker_id = Snowflake::from("902");
-    let scheduled_event_id = Snowflake::from("903");
-    let stage_instance_id = Snowflake::from("904");
-    let stage_channel_id = Snowflake::from("905");
+    let guild_id = test_id(900);
+    let emoji_id = test_id(901);
+    let sticker_id = test_id(902);
+    let scheduled_event_id = test_id(903);
+    let stage_instance_id = test_id(904);
+    let stage_channel_id = test_id(905);
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             emojis: vec![Emoji {
-                id: Some(emoji_id.to_string()),
+                id: Some(emoji_id),
                 name: Some("wave".to_string()),
                 ..Emoji::default()
             }],
@@ -458,7 +472,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     .await;
     assert_eq!(
         cache
-            .emoji(&guild_id, &emoji_id)
+            .emoji(guild_id, emoji_id)
             .await
             .unwrap()
             .name
@@ -470,21 +484,21 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
         &cache,
         SINGLE_SHARD,
         &Event::GuildStickersUpdate(GuildStickersUpdateEvent {
-            guild_id: Some(guild_id.clone()),
+            guild_id: Some(guild_id),
             stickers: vec![Sticker {
-                id: sticker_id.clone(),
+                id: sticker_id,
                 name: "ship".to_string(),
                 kind: 1,
                 format_type: 1,
-                guild_id: Some(guild_id.clone()),
-                ..Sticker::default()
+                guild_id: Some(guild_id),
+                ..Sticker::fixture()
             }],
             raw: json!({}),
         }),
     )
     .await;
     assert_eq!(
-        cache.sticker(&guild_id, &sticker_id).await.unwrap().name,
+        cache.sticker(guild_id, sticker_id).await.unwrap().name,
         "ship"
     );
 
@@ -492,8 +506,8 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
         &cache,
         SINGLE_SHARD,
         &Event::GuildScheduledEventCreate(ScheduledEvent {
-            id: Some(scheduled_event_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            id: Some(scheduled_event_id),
+            guild_id: Some(guild_id),
             name: Some("town hall".to_string()),
             raw: json!({}),
             ..ScheduledEvent::default()
@@ -502,7 +516,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     .await;
     assert_eq!(
         cache
-            .scheduled_event(&guild_id, &scheduled_event_id)
+            .scheduled_event(guild_id, scheduled_event_id)
             .await
             .unwrap()
             .name
@@ -515,12 +529,12 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
         SINGLE_SHARD,
         &Event::StageInstanceCreate(StageInstanceEvent {
             stage_instance: StageInstance {
-                id: stage_instance_id.clone(),
-                guild_id: guild_id.clone(),
+                id: stage_instance_id,
+                guild_id,
                 channel_id: stage_channel_id,
                 topic: "live".to_string(),
                 privacy_level: 2,
-                ..StageInstance::default()
+                ..StageInstance::fixture()
             },
             raw: json!({}),
         }),
@@ -528,7 +542,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
     .await;
     assert_eq!(
         cache
-            .stage_instance(&guild_id, &stage_instance_id)
+            .stage_instance(guild_id, stage_instance_id)
             .await
             .unwrap()
             .topic,
@@ -539,15 +553,15 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
         &cache,
         SINGLE_SHARD,
         &Event::GuildScheduledEventDelete(ScheduledEvent {
-            id: Some(scheduled_event_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            id: Some(scheduled_event_id),
+            guild_id: Some(guild_id),
             raw: json!({}),
             ..ScheduledEvent::default()
         }),
     )
     .await;
     assert!(cache
-        .scheduled_event(&guild_id, &scheduled_event_id)
+        .scheduled_event(guild_id, scheduled_event_id)
         .await
         .is_none());
 
@@ -556,16 +570,16 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
         SINGLE_SHARD,
         &Event::StageInstanceDelete(StageInstanceEvent {
             stage_instance: StageInstance {
-                id: stage_instance_id.clone(),
-                guild_id: guild_id.clone(),
-                ..StageInstance::default()
+                id: stage_instance_id,
+                guild_id,
+                ..StageInstance::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
     assert!(cache
-        .stage_instance(&guild_id, &stage_instance_id)
+        .stage_instance(guild_id, stage_instance_id)
         .await
         .is_none());
 }
@@ -626,9 +640,9 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
             Event::Ready(ReadyEvent {
                 data: ReadyPayload {
                     user: User {
-                        id: Snowflake::from("1"),
+                        id: test_id(1),
                         username: "bot".to_string(),
-                        ..User::default()
+                        ..User::fixture()
                     },
                     session_id: "session".to_string(),
                     application: None,
@@ -643,10 +657,10 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
             context.clone(),
             Event::MessageCreate(MessageEvent {
                 message: Message {
-                    id: Snowflake::from("2"),
-                    channel_id: Snowflake::from("3"),
+                    id: test_id(2),
+                    channel_id: test_id(3),
                     content: "hello".to_string(),
-                    ..Message::default()
+                    ..Message::fixture()
                 },
                 raw: json!({}),
             }),
@@ -671,8 +685,8 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
         .handle_event(
             context.clone(),
             Event::MessageDeleteBulk(BulkMessageDeleteEvent {
-                ids: vec![Snowflake::from("6"), Snowflake::from("7")],
-                channel_id: Snowflake::from("3"),
+                ids: vec![test_id(6), test_id(7)],
+                channel_id: test_id(3),
                 guild_id: None,
                 raw: json!({}),
             }),
@@ -843,14 +857,17 @@ async fn context_forwards_shard_commands_and_reports_missing_messenger() {
     context.update_presence("online").await.unwrap();
     context.reconnect_shard().await.unwrap();
     context.shutdown_shard().await.unwrap();
-    context.join_voice("1", "2", true, false).await.unwrap();
-    context.leave_voice("1", false, true).await.unwrap();
     context
-        .request_soundboard_sounds(vec![Snowflake::from("3")])
+        .join_voice(test_id(1), test_id(2), true, false)
+        .await
+        .unwrap();
+    context.leave_voice(test_id(1), false, true).await.unwrap();
+    context
+        .request_soundboard_sounds(vec![test_id(3)])
         .await
         .unwrap();
     context
-        .request_channel_info(RequestChannelInfo::voice_metadata("3"))
+        .request_channel_info(RequestChannelInfo::voice_metadata(test_id(3)))
         .await
         .unwrap();
 
@@ -898,7 +915,7 @@ async fn context_forwards_shard_commands_and_reports_missing_messenger() {
 
     match command_rx.try_recv().unwrap() {
         GatewayCommand::RequestChannelInfo(request) => {
-            assert_eq!(request.guild_id.as_str(), "3");
+            assert_eq!(request.guild_id.get(), 3);
             assert_eq!(
                 request.fields,
                 vec!["status".to_string(), "voice_start_time".to_string()]
@@ -1054,10 +1071,10 @@ async fn shared_runtime_context_reuses_collectors_hub() {
         .collectors
         .publish(Event::MessageCreate(MessageEvent {
             message: Message {
-                id: Snowflake::from("88"),
-                channel_id: Snowflake::from("89"),
+                id: test_id(88),
+                channel_id: test_id(89),
                 content: "shared".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({}),
         }));
@@ -1145,49 +1162,49 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
 #[tokio::test]
 async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_paths() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("100");
-    let channel_id = Snowflake::from("101");
-    let user_id = Snowflake::from("102");
-    let role_id = Snowflake::from("103");
+    let guild_id = test_id(100);
+    let channel_id = test_id(101);
+    let user_id = test_id(102);
+    let role_id = test_id(103);
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::GuildCreate(GuildEvent {
             guild: crate::model::Guild {
-                id: guild_id.clone(),
+                id: guild_id,
                 name: "guild".to_string(),
                 roles: vec![Role {
-                    id: role_id.clone(),
+                    id: role_id,
                     name: "admin".to_string(),
-                    ..Role::default()
+                    ..Role::fixture()
                 }],
-                ..crate::model::Guild::default()
+                ..crate::model::Guild::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert_eq!(cache.guild(&guild_id).await.unwrap().name, "guild");
-    assert_eq!(cache.role(&guild_id, &role_id).await.unwrap().name, "admin");
+    assert_eq!(cache.guild(guild_id).await.unwrap().name, "guild");
+    assert_eq!(cache.role(guild_id, role_id).await.unwrap().name, "admin");
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::ChannelCreate(ChannelEvent {
             channel: crate::model::Channel {
-                id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: channel_id,
+                guild_id: Some(guild_id),
                 kind: 0,
                 name: Some("general".to_string()),
-                ..crate::model::Channel::default()
+                ..crate::model::Channel::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
     assert_eq!(
-        cache.channel(&channel_id).await.unwrap().name.as_deref(),
+        cache.channel(channel_id).await.unwrap().name.as_deref(),
         Some("general")
     );
 
@@ -1195,12 +1212,12 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         &cache,
         SINGLE_SHARD,
         &Event::MemberAdd(MemberEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             member: Member {
                 user: Some(User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "alice".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 }),
                 nick: Some("ally".to_string()),
                 ..Member::default()
@@ -1211,7 +1228,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     .await;
     assert_eq!(
         cache
-            .member(&guild_id, &user_id)
+            .member(guild_id, user_id)
             .await
             .unwrap()
             .nick
@@ -1223,7 +1240,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         &cache,
         SINGLE_SHARD,
         &Event::MemberUpdate(MemberEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             member: Member::default(),
             raw: json!({}),
         }),
@@ -1231,7 +1248,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     .await;
     assert_eq!(
         cache
-            .member(&guild_id, &user_id)
+            .member(guild_id, user_id)
             .await
             .unwrap()
             .nick
@@ -1243,47 +1260,44 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         &cache,
         SINGLE_SHARD,
         &Event::RoleDelete(RoleDeleteEvent {
-            data: RoleDeletePayload {
-                guild_id: guild_id.clone(),
-                role_id: role_id.clone(),
-            },
+            data: RoleDeletePayload { guild_id, role_id },
             raw: json!({}),
         }),
     )
     .await;
-    assert!(cache.role(&guild_id, &role_id).await.is_none());
+    assert!(cache.role(guild_id, role_id).await.is_none());
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::MemberRemove(MemberRemoveEvent {
             data: MemberRemovePayload {
-                guild_id: guild_id.clone(),
+                guild_id,
                 user: User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "alice".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 },
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert!(cache.member(&guild_id, &user_id).await.is_none());
+    assert!(cache.member(guild_id, user_id).await.is_none());
 
-    let interaction_channel_id = Snowflake::from("104");
+    let interaction_channel_id = test_id(104);
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::InteractionCreate(crate::event::InteractionEvent {
             interaction: Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
-                    id: Snowflake::from("105"),
-                    application_id: Snowflake::from("106"),
+                    id: test_id(105),
+                    application_id: test_id(106),
                     token: "token".to_string(),
-                    guild_id: Some(guild_id.clone()),
-                    channel_id: Some(interaction_channel_id.clone()),
-                    ..InteractionContextData::default()
+                    guild_id: Some(guild_id),
+                    channel_id: Some(interaction_channel_id),
+                    ..InteractionContextData::fixture()
                 },
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
@@ -1296,132 +1310,132 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
     )
     .await;
 
-    let interaction_channel = cache.channel(&interaction_channel_id).await.unwrap();
-    assert_eq!(interaction_channel.guild_id, Some(guild_id.clone()));
+    let interaction_channel = cache.channel(interaction_channel_id).await.unwrap();
+    assert_eq!(interaction_channel.guild_id, Some(guild_id));
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::ChannelDelete(ChannelEvent {
             channel: crate::model::Channel {
-                id: channel_id.clone(),
-                ..crate::model::Channel::default()
+                id: channel_id,
+                ..crate::model::Channel::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert!(cache.channel(&channel_id).await.is_none());
+    assert!(cache.channel(channel_id).await.is_none());
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::GuildDelete(GuildDeleteEvent {
             data: GuildDeletePayload {
-                id: guild_id.clone(),
+                id: guild_id,
                 unavailable: None,
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert!(cache.guild(&guild_id).await.is_none());
-    assert!(cache.channel(&interaction_channel_id).await.is_none());
+    assert!(cache.guild(guild_id).await.is_none());
+    assert!(cache.channel(interaction_channel_id).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("300");
-    let channel_id = Snowflake::from("301");
-    let message_id = Snowflake::from("302");
+    let guild_id = test_id(300);
+    let channel_id = test_id(301);
+    let message_id = test_id(302);
 
     cache
         .upsert_guild(crate::model::Guild {
-            id: guild_id.clone(),
+            id: guild_id,
             name: "guild".to_string(),
-            ..crate::model::Guild::default()
+            ..crate::model::Guild::fixture()
         })
         .await;
     cache
         .upsert_channel(crate::model::Channel {
-            id: channel_id.clone(),
-            guild_id: Some(guild_id.clone()),
+            id: channel_id,
+            guild_id: Some(guild_id),
             kind: 0,
             name: Some("general".to_string()),
-            ..crate::model::Channel::default()
+            ..crate::model::Channel::fixture()
         })
         .await;
     cache
         .upsert_message(Message {
-            id: message_id.clone(),
-            channel_id: channel_id.clone(),
-            guild_id: Some(guild_id.clone()),
+            id: message_id,
+            channel_id,
+            guild_id: Some(guild_id),
             content: "cached".to_string(),
-            ..Message::default()
+            ..Message::fixture()
         })
         .await;
 
     let events = vec![
         Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
-                guild_id: Some(guild_id.clone()),
-                channel_id: Some(channel_id.clone()),
-                user_id: Some(Snowflake::from("400")),
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                user_id: Some(test_id(400)),
                 ..VoiceState::default()
             },
             raw: json!({}),
         }),
         Event::VoiceServerUpdate(VoiceServerEvent {
             data: VoiceServerUpdate {
-                guild_id: guild_id.clone(),
+                guild_id,
                 token: "voice-token".to_string(),
                 endpoint: Some("voice.example.test".to_string()),
             },
             raw: json!({}),
         }),
         Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
-            channel_id: channel_id.clone(),
-            guild_id: Some(guild_id.clone()),
+            channel_id,
+            guild_id: Some(guild_id),
             last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
             raw: json!({}),
         }),
         Event::GuildBanAdd(GuildBanEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             user: User {
-                id: Snowflake::from("401"),
+                id: test_id(401),
                 username: "banned".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildBanRemove(GuildBanEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             user: User {
-                id: Snowflake::from("402"),
+                id: test_id(402),
                 username: "unbanned".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             emojis: vec![],
             raw: json!({}),
         }),
         Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-            guild_id: Some(guild_id.clone()),
+            guild_id: Some(guild_id),
             raw: json!({}),
         }),
         Event::WebhooksUpdate(WebhooksUpdateEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             raw: json!({}),
         }),
         Event::InviteCreate(InviteEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             code: Some("invite".to_string()),
             inviter: None,
             uses: None,
@@ -1435,8 +1449,8 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
             raw: json!({}),
         }),
         Event::InviteDelete(InviteEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             code: Some("invite".to_string()),
             inviter: None,
             uses: None,
@@ -1450,39 +1464,39 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
             raw: json!({}),
         }),
         Event::MessageReactionAdd(ReactionEvent {
-            user_id: Some(Snowflake::from("403")),
-            channel_id: Some(channel_id.clone()),
-            message_id: Some(message_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            user_id: Some(test_id(403)),
+            channel_id: Some(channel_id),
+            message_id: Some(message_id),
+            guild_id: Some(guild_id),
             emoji: None,
             raw: json!({}),
             ..ReactionEvent::default()
         }),
         Event::MessageReactionRemove(ReactionEvent {
-            user_id: Some(Snowflake::from("404")),
-            channel_id: Some(channel_id.clone()),
-            message_id: Some(message_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            user_id: Some(test_id(404)),
+            channel_id: Some(channel_id),
+            message_id: Some(message_id),
+            guild_id: Some(guild_id),
             emoji: None,
             raw: json!({}),
             ..ReactionEvent::default()
         }),
         Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-            channel_id: Some(channel_id.clone()),
-            message_id: Some(message_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            channel_id: Some(channel_id),
+            message_id: Some(message_id),
+            guild_id: Some(guild_id),
             raw: json!({}),
         }),
         Event::TypingStart(TypingStartEvent {
-            channel_id: Some(channel_id.clone()),
-            guild_id: Some(guild_id.clone()),
-            user_id: Some(Snowflake::from("405")),
+            channel_id: Some(channel_id),
+            guild_id: Some(guild_id),
+            user_id: Some(test_id(405)),
             timestamp: Some(123),
             raw: json!({}),
         }),
         Event::PresenceUpdate(PresenceUpdateEvent {
-            user_id: Some(Snowflake::from("406")),
-            guild_id: Some(guild_id.clone()),
+            user_id: Some(test_id(406)),
+            guild_id: Some(guild_id),
             status: Some("online".to_string()),
             raw: json!({}),
             ..PresenceUpdateEvent::default()
@@ -1500,17 +1514,13 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         NoopEventHandler.handle_event(context.clone(), event).await;
     }
 
-    assert_eq!(cache.guild(&guild_id).await.unwrap().name, "guild");
+    assert_eq!(cache.guild(guild_id).await.unwrap().name, "guild");
     assert_eq!(
-        cache.channel(&channel_id).await.unwrap().name.as_deref(),
+        cache.channel(channel_id).await.unwrap().name.as_deref(),
         Some("general")
     );
     assert_eq!(
-        cache
-            .message(&channel_id, &message_id)
-            .await
-            .unwrap()
-            .content,
+        cache.message(channel_id, message_id).await.unwrap().content,
         "cached"
     );
 }
@@ -1522,57 +1532,53 @@ async fn event_handler_routes_additional_typed_hooks() {
     }
 
     impl super::EventHandler for ExtendedHandler {
-        async fn member_add(&self, _ctx: super::Context, guild_id: Snowflake, member: Member) {
+        async fn member_add(&self, _ctx: super::Context, guild_id: GenericId, member: Member) {
             self.hits.lock().await.push(format!(
                 "member_add:{}:{}",
-                guild_id.as_str(),
-                member.user.as_ref().unwrap().id.as_str()
+                guild_id,
+                member.user.as_ref().unwrap().id
             ));
         }
 
-        async fn role_delete(&self, _ctx: super::Context, guild_id: Snowflake, role_id: Snowflake) {
-            self.hits.lock().await.push(format!(
-                "role_delete:{}:{}",
-                guild_id.as_str(),
-                role_id.as_str()
-            ));
+        async fn role_delete(&self, _ctx: super::Context, guild_id: GenericId, role_id: GenericId) {
+            self.hits
+                .lock()
+                .await
+                .push(format!("role_delete:{}:{}", guild_id, role_id));
         }
 
         async fn message_delete(
             &self,
             _ctx: super::Context,
-            channel_id: Snowflake,
-            message_id: Snowflake,
+            channel_id: GenericId,
+            message_id: GenericId,
         ) {
-            self.hits.lock().await.push(format!(
-                "message_delete:{}:{}",
-                channel_id.as_str(),
-                message_id.as_str()
-            ));
+            self.hits
+                .lock()
+                .await
+                .push(format!("message_delete:{}:{}", channel_id, message_id));
         }
 
         async fn channel_pins_update(&self, _ctx: super::Context, event: ChannelPinsUpdateEvent) {
             self.hits.lock().await.push(format!(
                 "pins:{}:{}",
-                event.channel_id.as_str(),
+                event.channel_id,
                 event.last_pin_timestamp.unwrap()
             ));
         }
 
         async fn guild_ban_add(&self, _ctx: super::Context, event: GuildBanEvent) {
-            self.hits.lock().await.push(format!(
-                "ban_add:{}:{}",
-                event.guild_id.as_str(),
-                event.user.id.as_str()
-            ));
+            self.hits
+                .lock()
+                .await
+                .push(format!("ban_add:{}:{}", event.guild_id, event.user.id));
         }
 
         async fn voice_server_update(&self, _ctx: super::Context, data: VoiceServerUpdate) {
-            self.hits.lock().await.push(format!(
-                "voice_server:{}:{}",
-                data.guild_id.as_str(),
-                data.token
-            ));
+            self.hits
+                .lock()
+                .await
+                .push(format!("voice_server:{}:{}", data.guild_id, data.token));
         }
 
         async fn reaction_remove_all(
@@ -1582,15 +1588,15 @@ async fn event_handler_routes_additional_typed_hooks() {
         ) {
             self.hits.lock().await.push(format!(
                 "reaction_all:{}:{}",
-                event.channel_id.unwrap().as_str(),
-                event.message_id.unwrap().as_str()
+                event.channel_id.unwrap(),
+                event.message_id.unwrap()
             ));
         }
 
         async fn presence_update(&self, _ctx: super::Context, event: PresenceUpdateEvent) {
             self.hits.lock().await.push(format!(
                 "presence:{}:{}",
-                event.user_id.unwrap().as_str(),
+                event.user_id.unwrap(),
                 event.status.unwrap()
             ));
         }
@@ -1616,12 +1622,12 @@ async fn event_handler_routes_additional_typed_hooks() {
         .handle_event(
             context.clone(),
             Event::MemberAdd(MemberEvent {
-                guild_id: Snowflake::from("1"),
+                guild_id: test_id(1),
                 member: Member {
                     user: Some(User {
-                        id: Snowflake::from("2"),
+                        id: test_id(2),
                         username: "alice".to_string(),
-                        ..User::default()
+                        ..User::fixture()
                     }),
                     ..Member::default()
                 },
@@ -1634,8 +1640,8 @@ async fn event_handler_routes_additional_typed_hooks() {
             context.clone(),
             Event::RoleDelete(RoleDeleteEvent {
                 data: RoleDeletePayload {
-                    guild_id: Snowflake::from("3"),
-                    role_id: Snowflake::from("4"),
+                    guild_id: test_id(3),
+                    role_id: test_id(4),
                 },
                 raw: json!({}),
             }),
@@ -1646,8 +1652,8 @@ async fn event_handler_routes_additional_typed_hooks() {
             context.clone(),
             Event::MessageDelete(MessageDeleteEvent {
                 data: MessageDeletePayload {
-                    id: Snowflake::from("5"),
-                    channel_id: Snowflake::from("6"),
+                    id: test_id(5),
+                    channel_id: test_id(6),
                     guild_id: None,
                 },
                 raw: json!({}),
@@ -1658,7 +1664,7 @@ async fn event_handler_routes_additional_typed_hooks() {
         .handle_event(
             context.clone(),
             Event::ChannelPinsUpdate(ChannelPinsUpdateEvent {
-                channel_id: Snowflake::from("7"),
+                channel_id: test_id(7),
                 guild_id: None,
                 last_pin_timestamp: Some("2024-01-01T00:00:00Z".to_string()),
                 raw: json!({}),
@@ -1669,11 +1675,11 @@ async fn event_handler_routes_additional_typed_hooks() {
         .handle_event(
             context.clone(),
             Event::GuildBanAdd(GuildBanEvent {
-                guild_id: Snowflake::from("8"),
+                guild_id: test_id(8),
                 user: User {
-                    id: Snowflake::from("9"),
+                    id: test_id(9),
                     username: "banned".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 },
                 raw: json!({}),
             }),
@@ -1684,7 +1690,7 @@ async fn event_handler_routes_additional_typed_hooks() {
             context.clone(),
             Event::VoiceServerUpdate(VoiceServerEvent {
                 data: VoiceServerUpdate {
-                    guild_id: Snowflake::from("10"),
+                    guild_id: test_id(10),
                     token: "voice-token".to_string(),
                     endpoint: Some("voice.discord.media".to_string()),
                 },
@@ -1696,8 +1702,8 @@ async fn event_handler_routes_additional_typed_hooks() {
         .handle_event(
             context.clone(),
             Event::MessageReactionRemoveAll(ReactionRemoveAllEvent {
-                channel_id: Some(Snowflake::from("11")),
-                message_id: Some(Snowflake::from("12")),
+                channel_id: Some(test_id(11)),
+                message_id: Some(test_id(12)),
                 guild_id: None,
                 raw: json!({}),
             }),
@@ -1707,8 +1713,8 @@ async fn event_handler_routes_additional_typed_hooks() {
         .handle_event(
             context.clone(),
             Event::PresenceUpdate(PresenceUpdateEvent {
-                user_id: Some(Snowflake::from("13")),
-                guild_id: Some(Snowflake::from("14")),
+                user_id: Some(test_id(13)),
+                guild_id: Some(test_id(14)),
                 status: Some("online".to_string()),
                 raw: json!({}),
                 ..PresenceUpdateEvent::default()
@@ -1755,72 +1761,72 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
 
-    let guild_id = Snowflake::from("500");
-    let channel_id = Snowflake::from("501");
-    let user_id = Snowflake::from("502");
-    let role_id = Snowflake::from("503");
-    let message_id = Snowflake::from("504");
+    let guild_id = test_id(500);
+    let channel_id = test_id(501);
+    let user_id = test_id(502);
+    let role_id = test_id(503);
+    let message_id = test_id(504);
 
     let events = vec![
         Event::GuildCreate(GuildEvent {
             guild: crate::model::Guild {
-                id: guild_id.clone(),
+                id: guild_id,
                 name: "guild".to_string(),
-                ..crate::model::Guild::default()
+                ..crate::model::Guild::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildUpdate(GuildEvent {
             guild: crate::model::Guild {
-                id: guild_id.clone(),
+                id: guild_id,
                 name: "guild-updated".to_string(),
-                ..crate::model::Guild::default()
+                ..crate::model::Guild::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildDelete(GuildDeleteEvent {
             data: GuildDeletePayload {
-                id: guild_id.clone(),
+                id: guild_id,
                 unavailable: Some(true),
             },
             raw: json!({}),
         }),
         Event::ChannelCreate(ChannelEvent {
             channel: crate::model::Channel {
-                id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: channel_id,
+                guild_id: Some(guild_id),
                 kind: 0,
                 name: Some("general".to_string()),
-                ..crate::model::Channel::default()
+                ..crate::model::Channel::fixture()
             },
             raw: json!({}),
         }),
         Event::ChannelUpdate(ChannelEvent {
             channel: crate::model::Channel {
-                id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: channel_id,
+                guild_id: Some(guild_id),
                 kind: 0,
                 name: Some("general-2".to_string()),
-                ..crate::model::Channel::default()
+                ..crate::model::Channel::fixture()
             },
             raw: json!({}),
         }),
         Event::ChannelDelete(ChannelEvent {
             channel: crate::model::Channel {
-                id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: channel_id,
+                guild_id: Some(guild_id),
                 kind: 0,
-                ..crate::model::Channel::default()
+                ..crate::model::Channel::fixture()
             },
             raw: json!({}),
         }),
         Event::MemberUpdate(MemberEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             member: Member {
                 user: Some(User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "member".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 }),
                 ..Member::default()
             },
@@ -1828,68 +1834,68 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         }),
         Event::MemberRemove(MemberRemoveEvent {
             data: MemberRemovePayload {
-                guild_id: guild_id.clone(),
+                guild_id,
                 user: User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "member".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 },
             },
             raw: json!({}),
         }),
         Event::RoleCreate(RoleEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             role: Role {
-                id: role_id.clone(),
+                id: role_id,
                 name: "role".to_string(),
-                ..Role::default()
+                ..Role::fixture()
             },
             raw: json!({}),
         }),
         Event::RoleUpdate(RoleEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             role: Role {
-                id: role_id.clone(),
+                id: role_id,
                 name: "role-updated".to_string(),
-                ..Role::default()
+                ..Role::fixture()
             },
             raw: json!({}),
         }),
         Event::MessageUpdate(MessageEvent {
             message: Message {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
+                id: message_id,
+                channel_id,
                 content: "updated".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildBanRemove(GuildBanEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             user: User {
-                id: user_id.clone(),
+                id: user_id,
                 username: "member".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
             raw: json!({}),
         }),
         Event::GuildEmojisUpdate(GuildEmojisUpdateEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             emojis: vec![],
             raw: json!({}),
         }),
         Event::GuildIntegrationsUpdate(GuildIntegrationsUpdateEvent {
-            guild_id: Some(guild_id.clone()),
+            guild_id: Some(guild_id),
             raw: json!({}),
         }),
         Event::WebhooksUpdate(WebhooksUpdateEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             raw: json!({}),
         }),
         Event::InviteCreate(InviteEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             code: Some("invite-create".to_string()),
             inviter: None,
             uses: None,
@@ -1903,8 +1909,8 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             raw: json!({}),
         }),
         Event::InviteDelete(InviteEvent {
-            guild_id: Some(guild_id.clone()),
-            channel_id: Some(channel_id.clone()),
+            guild_id: Some(guild_id),
+            channel_id: Some(channel_id),
             code: Some("invite-delete".to_string()),
             inviter: None,
             uses: None,
@@ -1919,25 +1925,25 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         }),
         Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
-                guild_id: Some(guild_id.clone()),
-                channel_id: Some(channel_id.clone()),
-                user_id: Some(user_id.clone()),
+                guild_id: Some(guild_id),
+                channel_id: Some(channel_id),
+                user_id: Some(user_id),
                 ..VoiceState::default()
             },
             raw: json!({}),
         }),
         Event::MessageReactionAdd(ReactionEvent {
-            user_id: Some(user_id.clone()),
-            channel_id: Some(channel_id.clone()),
-            message_id: Some(message_id.clone()),
-            guild_id: Some(guild_id.clone()),
+            user_id: Some(user_id),
+            channel_id: Some(channel_id),
+            message_id: Some(message_id),
+            guild_id: Some(guild_id),
             emoji: None,
             raw: json!({}),
             ..ReactionEvent::default()
         }),
         Event::MessageReactionRemove(ReactionEvent {
             user_id: Some(user_id),
-            channel_id: Some(channel_id.clone()),
+            channel_id: Some(channel_id),
             message_id: Some(message_id),
             guild_id: Some(guild_id),
             emoji: None,
@@ -1946,8 +1952,8 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         }),
         Event::TypingStart(TypingStartEvent {
             channel_id: Some(channel_id),
-            guild_id: Some(Snowflake::from("500")),
-            user_id: Some(Snowflake::from("502")),
+            guild_id: Some(test_id(500)),
+            user_id: Some(test_id(502)),
             timestamp: Some(321),
             raw: json!({}),
         }),
@@ -1962,70 +1968,60 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
 #[tokio::test]
 async fn apply_cache_updates_handles_message_create_delete_and_non_channel_component_cases() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("700");
-    let channel_id = Snowflake::from("701");
-    let message_id = Snowflake::from("702");
-    let role_id = Snowflake::from("703");
+    let guild_id = test_id(700);
+    let channel_id = test_id(701);
+    let message_id = test_id(702);
+    let role_id = test_id(703);
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::RoleCreate(RoleEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             role: Role {
-                id: role_id.clone(),
+                id: role_id,
                 name: "reader".to_string(),
-                ..Role::default()
+                ..Role::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert_eq!(
-        cache.role(&guild_id, &role_id).await.unwrap().name,
-        "reader"
-    );
+    assert_eq!(cache.role(guild_id, role_id).await.unwrap().name, "reader");
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::RoleUpdate(RoleEvent {
-            guild_id: guild_id.clone(),
+            guild_id,
             role: Role {
-                id: role_id.clone(),
+                id: role_id,
                 name: "writer".to_string(),
-                ..Role::default()
+                ..Role::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert_eq!(
-        cache.role(&guild_id, &role_id).await.unwrap().name,
-        "writer"
-    );
+    assert_eq!(cache.role(guild_id, role_id).await.unwrap().name, "writer");
 
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::MessageCreate(MessageEvent {
             message: Message {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: message_id,
+                channel_id,
+                guild_id: Some(guild_id),
                 content: "created".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
     assert_eq!(
-        cache
-            .message(&channel_id, &message_id)
-            .await
-            .unwrap()
-            .content,
+        cache.message(channel_id, message_id).await.unwrap().content,
         "created"
     );
 
@@ -2034,29 +2030,29 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
         SINGLE_SHARD,
         &Event::MessageDelete(MessageDeleteEvent {
             data: MessageDeletePayload {
-                id: message_id.clone(),
-                channel_id: channel_id.clone(),
-                guild_id: Some(guild_id.clone()),
+                id: message_id,
+                channel_id,
+                guild_id: Some(guild_id),
             },
             raw: json!({}),
         }),
     )
     .await;
-    assert!(cache.message(&channel_id, &message_id).await.is_none());
+    assert!(cache.message(channel_id, message_id).await.is_none());
 
-    let missing_channel_id = Snowflake::from("704");
+    let missing_channel_id = test_id(704);
     super::apply_cache_updates(
         &cache,
         SINGLE_SHARD,
         &Event::InteractionCreate(crate::event::InteractionEvent {
             interaction: Interaction::Component(ComponentInteraction {
                 context: InteractionContextData {
-                    id: Snowflake::from("705"),
-                    application_id: Snowflake::from("706"),
+                    id: test_id(705),
+                    application_id: test_id(706),
                     token: "token".to_string(),
                     guild_id: Some(guild_id),
                     channel_id: None,
-                    ..InteractionContextData::default()
+                    ..InteractionContextData::fixture()
                 },
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
@@ -2068,7 +2064,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
         }),
     )
     .await;
-    assert!(cache.channel(&missing_channel_id).await.is_none());
+    assert!(cache.channel(missing_channel_id).await.is_none());
 }
 
 #[cfg(feature = "cache")]
@@ -2078,40 +2074,40 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
         Arc::new(DiscordHttpClient::new("token", 0)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    let guild_id = Snowflake::from("720");
-    let channel_id = Snowflake::from("721");
-    let user_id = Snowflake::from("722");
-    let message_id = Snowflake::from("723");
-    let role_id = Snowflake::from("724");
+    let guild_id = test_id(720);
+    let channel_id = test_id(721);
+    let user_id = test_id(722);
+    let message_id = test_id(723);
+    let role_id = test_id(724);
 
     context
         .cache
         .upsert_guild(crate::model::Guild {
-            id: guild_id.clone(),
+            id: guild_id,
             name: "guild".to_string(),
-            ..crate::model::Guild::default()
+            ..crate::model::Guild::fixture()
         })
         .await;
     context
         .cache
         .upsert_channel(crate::model::Channel {
-            id: channel_id.clone(),
-            guild_id: Some(guild_id.clone()),
+            id: channel_id,
+            guild_id: Some(guild_id),
             kind: 0,
             name: Some("general".to_string()),
-            ..crate::model::Channel::default()
+            ..crate::model::Channel::fixture()
         })
         .await;
     context
         .cache
         .upsert_member(
-            guild_id.clone(),
-            user_id.clone(),
+            guild_id,
+            user_id,
             Member {
                 user: Some(User {
-                    id: user_id.clone(),
+                    id: user_id,
                     username: "alice".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 }),
                 ..Member::default()
             },
@@ -2120,38 +2116,33 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
     context
         .cache
         .upsert_message(Message {
-            id: message_id.clone(),
-            channel_id: channel_id.clone(),
-            guild_id: Some(guild_id.clone()),
+            id: message_id,
+            channel_id,
+            guild_id: Some(guild_id),
             content: "cached".to_string(),
-            ..Message::default()
+            ..Message::fixture()
         })
         .await;
     context
         .cache
         .upsert_role(
-            guild_id.clone(),
+            guild_id,
             Role {
-                id: role_id.clone(),
+                id: role_id,
                 name: "reader".to_string(),
-                ..Role::default()
+                ..Role::fixture()
             },
         )
         .await;
 
     assert_eq!(
-        context
-            .guilds()
-            .cached(guild_id.clone())
-            .await
-            .unwrap()
-            .name,
+        context.guilds().cached(guild_id).await.unwrap().name,
         "guild"
     );
     assert_eq!(
         context
             .channels()
-            .cached(channel_id.clone())
+            .cached(channel_id)
             .await
             .unwrap()
             .name
@@ -2161,7 +2152,7 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
     assert_eq!(
         context
             .members()
-            .cached(guild_id.clone(), user_id.clone())
+            .cached(guild_id, user_id)
             .await
             .unwrap()
             .user
@@ -2172,7 +2163,7 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
     assert_eq!(
         context
             .messages()
-            .cached(channel_id.clone(), message_id.clone())
+            .cached(channel_id, message_id)
             .await
             .unwrap()
             .content,
@@ -2181,38 +2172,20 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
     assert_eq!(
         context
             .roles()
-            .cached(guild_id.clone(), role_id.clone())
+            .cached(guild_id, role_id)
             .await
             .unwrap()
             .name,
         "reader"
     );
-    assert!(context.guilds().contains(guild_id.clone()).await);
-    assert!(context.channels().contains(channel_id.clone()).await);
-    assert!(
-        context
-            .members()
-            .contains(guild_id.clone(), user_id.clone())
-            .await
-    );
-    assert!(
-        context
-            .messages()
-            .contains(channel_id.clone(), message_id.clone())
-            .await
-    );
-    assert!(
-        context
-            .roles()
-            .contains(guild_id.clone(), role_id.clone())
-            .await
-    );
+    assert!(context.guilds().contains(guild_id).await);
+    assert!(context.channels().contains(channel_id).await);
+    assert!(context.members().contains(guild_id, user_id).await);
+    assert!(context.messages().contains(channel_id, message_id).await);
+    assert!(context.roles().contains(guild_id, role_id).await);
     assert_eq!(context.guilds().list_cached().await.len(), 1);
     assert_eq!(context.channels().list_cached().await.len(), 1);
-    assert_eq!(
-        context.members().list_cached(guild_id.clone()).await.len(),
-        1
-    );
+    assert_eq!(context.members().list_cached(guild_id).await.len(), 1);
     assert_eq!(context.messages().list_cached(channel_id).await.len(), 1);
     assert_eq!(context.roles().list_cached(guild_id).await.len(), 1);
 }
@@ -2241,24 +2214,24 @@ async fn apply_cache_updates_ignores_non_component_interactions() {
 #[test]
 fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
     let cached = Message {
-        id: Snowflake::from("1"),
-        channel_id: Snowflake::from("10"),
-        guild_id: Some(Snowflake::from("20")),
+        id: test_id(1),
+        channel_id: test_id(10),
+        guild_id: Some(test_id(20)),
         content: "before".to_string(),
         author: Some(User {
-            id: Snowflake::from("2"),
+            id: test_id(2),
             username: "alice".to_string(),
-            ..User::default()
+            ..User::fixture()
         }),
         pinned: Some(true),
         tts: Some(true),
         flags: Some(64),
-        webhook_id: Some(Snowflake::from("30")),
-        ..Message::default()
+        webhook_id: Some(test_id(30)),
+        ..Message::fixture()
     };
     let partial = Message {
-        id: Snowflake::from("1"),
-        channel_id: Snowflake::from("10"),
+        id: test_id(1),
+        channel_id: test_id(10),
         guild_id: None,
         content: "after".to_string(),
         author: None,
@@ -2266,7 +2239,7 @@ fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
         tts: Some(false),
         flags: Some(0),
         webhook_id: None,
-        ..Message::default()
+        ..Message::fixture()
     };
 
     let merged = super::merge_message_update(
@@ -2280,23 +2253,23 @@ fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
 
     assert_eq!(merged.content, "after");
     assert_eq!(merged.pinned, Some(false));
-    assert_eq!(merged.guild_id, Some(Snowflake::from("20")));
+    assert_eq!(merged.guild_id, Some(test_id(20)));
     assert_eq!(merged.author.unwrap().username, "alice");
     assert_eq!(merged.tts, Some(true));
     assert_eq!(merged.flags, Some(64));
-    assert_eq!(merged.webhook_id, Some(Snowflake::from("30")));
+    assert_eq!(merged.webhook_id, Some(test_id(30)));
 }
 
 #[test]
 fn merge_message_update_replaces_only_selected_complex_fields() {
     let cached = Message {
-        id: Snowflake::from("1"),
-        channel_id: Snowflake::from("10"),
-        guild_id: Some(Snowflake::from("20")),
+        id: test_id(1),
+        channel_id: test_id(10),
+        guild_id: Some(test_id(20)),
         author: Some(User {
-            id: Snowflake::from("2"),
+            id: test_id(2),
             username: "alice".to_string(),
-            ..User::default()
+            ..User::fixture()
         }),
         member: Some(Member {
             nick: Some("ally".to_string()),
@@ -2305,20 +2278,20 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
         timestamp: Some("before-ts".to_string()),
         edited_timestamp: Some("before-edit".to_string()),
         mentions: vec![User {
-            id: Snowflake::from("3"),
+            id: test_id(3),
             username: "bob".to_string(),
-            ..User::default()
+            ..User::fixture()
         }],
         attachments: vec![Attachment {
-            id: Snowflake::from("4"),
+            id: test_id(4),
             filename: "old.txt".to_string(),
-            ..Attachment::default()
+            ..Attachment::fixture()
         }],
         kind: Some(1),
         pinned: Some(true),
         tts: Some(true),
         flags: Some(64),
-        webhook_id: Some(Snowflake::from("5")),
+        webhook_id: Some(test_id(5)),
         embeds: vec![Embed {
             title: Some("old".to_string()),
             ..Embed::default()
@@ -2328,16 +2301,16 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
             me: true,
             ..Reaction::default()
         }],
-        ..Message::default()
+        ..Message::fixture()
     };
     let partial = Message {
-        id: Snowflake::from("1"),
-        channel_id: Snowflake::from("10"),
-        guild_id: Some(Snowflake::from("21")),
+        id: test_id(1),
+        channel_id: test_id(10),
+        guild_id: Some(test_id(21)),
         author: Some(User {
-            id: Snowflake::from("6"),
+            id: test_id(6),
             username: "eve".to_string(),
-            ..User::default()
+            ..User::fixture()
         }),
         member: Some(Member {
             nick: Some("eve-nick".to_string()),
@@ -2346,20 +2319,20 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
         timestamp: Some("after-ts".to_string()),
         edited_timestamp: Some("after-edit".to_string()),
         mentions: vec![User {
-            id: Snowflake::from("7"),
+            id: test_id(7),
             username: "mallory".to_string(),
-            ..User::default()
+            ..User::fixture()
         }],
         attachments: vec![Attachment {
-            id: Snowflake::from("8"),
+            id: test_id(8),
             filename: "new.txt".to_string(),
-            ..Attachment::default()
+            ..Attachment::fixture()
         }],
         kind: Some(19),
         pinned: Some(false),
         tts: Some(false),
         flags: Some(0),
-        webhook_id: Some(Snowflake::from("9")),
+        webhook_id: Some(test_id(9)),
         embeds: vec![Embed {
             title: Some("new".to_string()),
             ..Embed::default()
@@ -2369,7 +2342,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
             me: false,
             ..Reaction::default()
         }],
-        ..Message::default()
+        ..Message::fixture()
     };
 
     let merged = super::merge_message_update(
@@ -2390,7 +2363,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
         })),
     );
 
-    assert_eq!(merged.guild_id, Some(Snowflake::from("21")));
+    assert_eq!(merged.guild_id, Some(test_id(21)));
     assert_eq!(merged.author.unwrap().username, "eve");
     assert_eq!(merged.member.unwrap().nick.as_deref(), Some("eve-nick"));
     assert_eq!(merged.timestamp.as_deref(), Some("after-ts"));
@@ -2401,7 +2374,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
     assert_eq!(merged.pinned, Some(true));
     assert_eq!(merged.tts, Some(false));
     assert_eq!(merged.flags, Some(0));
-    assert_eq!(merged.webhook_id, Some(Snowflake::from("5")));
+    assert_eq!(merged.webhook_id, Some(test_id(5)));
     assert_eq!(merged.embeds[0].title.as_deref(), Some("new"));
     assert_eq!(merged.reactions[0].count, 9);
 }
@@ -2414,7 +2387,9 @@ fn shard_messenger_builds_voice_state_update_gateway_payload() {
         command_tx,
     };
 
-    messenger.join_voice("1", "2", false, true).unwrap();
+    messenger
+        .join_voice(test_id(1), test_id(2), false, true)
+        .unwrap();
 
     match command_rx.try_recv().unwrap() {
         GatewayCommand::SendPayload(payload) => {
@@ -2505,7 +2480,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
         "collector-message"
     );
     let component = component_collector.next().await.unwrap();
-    assert_eq!(component.context.channel_id, Some(Snowflake::from("205")));
+    assert_eq!(component.context.channel_id, Some(test_id(205)));
     assert_eq!(component.data.custom_id, "button");
 }
 
@@ -2516,19 +2491,16 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
         Arc::new(DiscordHttpClient::new("token", 0)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    let guild_id = Snowflake::from("301");
-    let channel_id = Snowflake::from("302");
-    let user_id = Snowflake::from("303");
+    let guild_id = test_id(301);
+    let channel_id = test_id(302);
+    let user_id = test_id(303);
 
     let state = context
-        .connect_voice(VoiceConnectionConfig::new(
-            guild_id.clone(),
-            channel_id.clone(),
-        ))
+        .connect_voice(VoiceConnectionConfig::new(guild_id, channel_id))
         .await;
     assert_eq!(state.guild_id, guild_id);
     assert!(matches!(
-        context.voice().read().await.connection("301"),
+        context.voice().read().await.connection(test_id(301)),
         Some(existing) if existing.channel_id == channel_id
     ));
 
@@ -2536,9 +2508,9 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
         &context.voice(),
         &Event::VoiceStateUpdate(VoiceStateEvent {
             state: VoiceState {
-                guild_id: Some(Snowflake::from("301")),
-                channel_id: Some(Snowflake::from("302")),
-                user_id: Some(user_id.clone()),
+                guild_id: Some(test_id(301)),
+                channel_id: Some(test_id(302)),
+                user_id: Some(user_id),
                 session_id: Some("session".to_string()),
                 self_mute: false,
                 self_deaf: false,
@@ -2552,7 +2524,7 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
         &context.voice(),
         &Event::VoiceServerUpdate(VoiceServerEvent {
             data: VoiceServerUpdate {
-                guild_id: Snowflake::from("301"),
+                guild_id: test_id(301),
                 token: "voice-token".to_string(),
                 endpoint: Some("voice.discord.media".to_string()),
             },
@@ -2562,13 +2534,13 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
     .await;
 
     let runtime = context
-        .voice_runtime_config("301", user_id.clone())
+        .voice_runtime_config(test_id(301), user_id)
         .await
         .expect("voice runtime config should be ready after updates");
-    assert_eq!(runtime.server_id, Snowflake::from("301"));
+    assert_eq!(runtime.server_id, test_id(301));
 
     let queue_position = context
-        .enqueue_voice_track("301", AudioTrack::new("track-1", "memory://track"))
+        .enqueue_voice_track(test_id(301), AudioTrack::new("track-1", "memory://track"))
         .await;
     assert_eq!(queue_position, Some(1));
 
@@ -2577,9 +2549,9 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
         &Event::Ready(ReadyEvent {
             data: ReadyPayload {
                 user: User {
-                    id: Snowflake::from("1"),
+                    id: test_id(1),
                     username: "bot".to_string(),
-                    ..User::default()
+                    ..User::fixture()
                 },
                 session_id: "session".to_string(),
                 application: None,
@@ -2589,13 +2561,16 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
         }),
     )
     .await;
-    assert!(context.voice_runtime_config("301", user_id).await.is_some());
+    assert!(context
+        .voice_runtime_config(test_id(301), user_id)
+        .await
+        .is_some());
 
     let disconnected = context
-        .disconnect_voice("301")
+        .disconnect_voice(test_id(301))
         .await
         .expect("tracked voice connection should disconnect");
-    assert_eq!(disconnected.guild_id, Snowflake::from("301"));
+    assert_eq!(disconnected.guild_id, test_id(301));
 }
 
 #[cfg(feature = "voice")]
@@ -2607,27 +2582,35 @@ async fn apply_voice_updates_ignores_non_voice_events_and_runtime_connect_requir
     );
 
     context
-        .connect_voice(VoiceConnectionConfig::new("401", "402"))
+        .connect_voice(VoiceConnectionConfig::new(test_id(401), test_id(402)))
         .await;
     super::apply_voice_updates(
         &context.voice(),
         &Event::MessageCreate(MessageEvent {
             message: Message {
-                id: Snowflake::from("403"),
-                channel_id: Snowflake::from("402"),
+                id: test_id(403),
+                channel_id: test_id(402),
                 content: "noop".to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({}),
         }),
     )
     .await;
 
-    assert!(context.voice().read().await.connection("401").is_some());
-    assert!(context.voice_runtime_config("401", "404").await.is_none());
+    assert!(context
+        .voice()
+        .read()
+        .await
+        .connection(test_id(401))
+        .is_some());
+    assert!(context
+        .voice_runtime_config(test_id(401), test_id(404))
+        .await
+        .is_none());
 
     let error = context
-        .connect_voice_runtime("401", "404")
+        .connect_voice_runtime(test_id(401), test_id(404))
         .await
         .err()
         .expect("runtime connect should fail without endpoint/session/token");
@@ -2976,8 +2959,10 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
 
     supervisor.update_presence(1, "dnd").unwrap();
     supervisor.reconnect(1).unwrap();
-    supervisor.join_voice(0, "10", "20", false, true).unwrap();
-    supervisor.leave_voice(0, "10", true, false).unwrap();
+    supervisor
+        .join_voice(0, test_id(10), test_id(20), false, true)
+        .unwrap();
+    supervisor.leave_voice(0, test_id(10), true, false).unwrap();
     supervisor
         .broadcast(crate::sharding::ShardIpcMessage::Shutdown)
         .unwrap();
@@ -3048,7 +3033,7 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
 #[tokio::test]
 async fn apply_cache_updates_populates_entities_from_guild_create() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("9000");
+    let guild_id = test_id(9000);
 
     let guild: crate::model::Guild = serde_json::from_value(json!({
         "id": "9000",
@@ -3075,41 +3060,29 @@ async fn apply_cache_updates_populates_entities_from_guild_create() {
     )
     .await;
 
-    let cached_guild = cache.guild(&guild_id).await.expect("guild cached");
+    let cached_guild = cache.guild(guild_id).await.expect("guild cached");
     assert!(
         cached_guild.channels.is_empty(),
         "cached guild should be stripped of bulk collections"
     );
     let channel = cache
-        .channel(&Snowflake::from("9002"))
+        .channel(test_id(9002))
         .await
         .expect("channel cached from GUILD_CREATE");
-    assert_eq!(channel.guild_id, Some(guild_id.clone()));
-    assert!(cache.channel(&Snowflake::from("9003")).await.is_some());
-    assert!(cache
-        .member(&guild_id, &Snowflake::from("9004"))
-        .await
-        .is_some());
-    assert!(cache.user(&Snowflake::from("9004")).await.is_some());
-    assert!(cache
-        .voice_state(&guild_id, &Snowflake::from("9004"))
-        .await
-        .is_some());
-    assert!(cache
-        .presence(&guild_id, &Snowflake::from("9004"))
-        .await
-        .is_some());
-    assert!(cache
-        .role(&guild_id, &Snowflake::from("9001"))
-        .await
-        .is_some());
+    assert_eq!(channel.guild_id, Some(guild_id));
+    assert!(cache.channel(test_id(9003)).await.is_some());
+    assert!(cache.member(guild_id, test_id(9004)).await.is_some());
+    assert!(cache.user(test_id(9004)).await.is_some());
+    assert!(cache.voice_state(guild_id, test_id(9004)).await.is_some());
+    assert!(cache.presence(guild_id, test_id(9004)).await.is_some());
+    assert!(cache.role(guild_id, test_id(9001)).await.is_some());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
     let cache = crate::cache::CacheHandle::new();
-    let guild_id = Snowflake::from("9100");
+    let guild_id = test_id(9100);
 
     let chunk = decode_event(
         "GUILD_MEMBERS_CHUNK",
@@ -3127,14 +3100,8 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
     .unwrap();
     super::apply_cache_updates(&cache, SINGLE_SHARD, &chunk).await;
 
-    assert!(cache
-        .member(&guild_id, &Snowflake::from("9101"))
-        .await
-        .is_some());
-    assert!(cache
-        .presence(&guild_id, &Snowflake::from("9101"))
-        .await
-        .is_some());
+    assert!(cache.member(guild_id, test_id(9101)).await.is_some());
+    assert!(cache.presence(guild_id, test_id(9101)).await.is_some());
 
     let thread_create = decode_event(
         "THREAD_CREATE",
@@ -3142,7 +3109,7 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
     )
     .unwrap();
     super::apply_cache_updates(&cache, SINGLE_SHARD, &thread_create).await;
-    assert!(cache.channel(&Snowflake::from("9102")).await.is_some());
+    assert!(cache.channel(test_id(9102)).await.is_some());
 
     let thread_delete = decode_event(
         "THREAD_DELETE",
@@ -3150,21 +3117,21 @@ async fn apply_cache_updates_caches_guild_members_chunk_and_threads() {
     )
     .unwrap();
     super::apply_cache_updates(&cache, SINGLE_SHARD, &thread_delete).await;
-    assert!(cache.channel(&Snowflake::from("9102")).await.is_none());
+    assert!(cache.channel(test_id(9102)).await.is_none());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn component_interaction_stub_does_not_overwrite_cached_channel() {
     let cache = crate::cache::CacheHandle::new();
-    let channel_id = Snowflake::from("9200");
+    let channel_id = test_id(9200);
 
     cache
         .upsert_channel(crate::model::Channel {
-            id: channel_id.clone(),
+            id: channel_id,
             kind: 5,
             name: Some("announcements".to_string()),
-            ..crate::model::Channel::default()
+            ..crate::model::Channel::fixture()
         })
         .await;
 
@@ -3182,7 +3149,7 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
     .unwrap();
     super::apply_cache_updates(&cache, SINGLE_SHARD, &interaction).await;
 
-    let channel = cache.channel(&channel_id).await.expect("channel kept");
+    let channel = cache.channel(channel_id).await.expect("channel kept");
     assert_eq!(channel.kind, 5, "stub must not overwrite the cached type");
     assert_eq!(channel.name.as_deref(), Some("announcements"));
 }
@@ -3192,7 +3159,7 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
 struct RecordingBackend {
     calls: std::sync::Mutex<Vec<String>>,
     /// Messages stored by `put_message`, served by `get_message`.
-    messages: std::sync::Mutex<std::collections::HashMap<(Snowflake, Snowflake), Message>>,
+    messages: std::sync::Mutex<std::collections::HashMap<(GenericId, GenericId), Message>>,
     /// When set, every `put_message` waits for a permit before recording,
     /// modelling a slow remote store.
     put_message_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -3262,7 +3229,7 @@ impl RecordingBackend {
         self.messages
             .lock()
             .expect("recorder mutex")
-            .get(&(Snowflake::from(channel_id), Snowflake::from(message_id)))
+            .get(&(named_id(channel_id), named_id(message_id)))
             .cloned()
     }
 }
@@ -3297,8 +3264,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn put_member(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         _member: Member,
     ) -> Result<(), crate::error::DiscordError> {
         if self
@@ -3314,15 +3281,15 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn get_member(
         &self,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
         Ok(None)
     }
 
     async fn list_members(
         &self,
-        _guild_id: &Snowflake,
+        _guild_id: GenericId,
     ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3330,8 +3297,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_member(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_member:{guild_id}:{user_id}"));
@@ -3354,14 +3321,14 @@ impl crate::cache::CacheBackend for RecordingBackend {
         self.messages
             .lock()
             .expect("recorder mutex")
-            .insert((message.channel_id.clone(), message.id.clone()), message);
+            .insert((message.channel_id, message.id), message);
         Ok(())
     }
 
     async fn get_message(
         &self,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
         if self.fail_get_message {
             return Err(crate::error::DiscordError::model("backend unreachable"));
@@ -3370,14 +3337,14 @@ impl crate::cache::CacheBackend for RecordingBackend {
             .messages
             .lock()
             .expect("recorder mutex")
-            .get(&(channel_id.clone(), message_id.clone()))
+            .get(&(channel_id, message_id))
             .cloned()
             .map(Arc::new))
     }
 
     async fn list_messages(
         &self,
-        _channel_id: &Snowflake,
+        _channel_id: GenericId,
     ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3385,23 +3352,23 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_message(
         &self,
         epoch: u64,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_message:{channel_id}:{message_id}"));
         self.messages
             .lock()
             .expect("recorder mutex")
-            .remove(&(channel_id.clone(), message_id.clone()));
+            .remove(&(channel_id, message_id));
         Ok(())
     }
 
     async fn put_presence(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         presence: crate::model::Presence,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
@@ -3414,15 +3381,15 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn get_presence(
         &self,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         Ok(None)
     }
 
     async fn list_presences(
         &self,
-        _guild_id: &Snowflake,
+        _guild_id: GenericId,
     ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3430,8 +3397,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_presence:{guild_id}:{user_id}"));
@@ -3447,12 +3414,12 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     let cache = crate::cache::CacheHandle::new();
 
     let member_event = Event::MemberAdd(MemberEvent {
-        guild_id: Snowflake::from("1"),
+        guild_id: test_id(1),
         member: Member {
             user: Some(User {
-                id: Snowflake::from("2"),
+                id: test_id(2),
                 username: "wumpus".to_string(),
-                ..User::default()
+                ..User::fixture()
             }),
             ..Member::default()
         },
@@ -3460,34 +3427,34 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     });
     let message_event = Event::MessageCreate(MessageEvent {
         message: Message {
-            id: Snowflake::from("11"),
-            channel_id: Snowflake::from("10"),
+            id: test_id(11),
+            channel_id: test_id(10),
             content: "hello".to_string(),
-            ..Message::default()
+            ..Message::fixture()
         },
         raw: json!({}),
     });
     let presence_event = Event::PresenceUpdate(PresenceUpdateEvent {
-        guild_id: Some(Snowflake::from("1")),
-        user_id: Some(Snowflake::from("2")),
+        guild_id: Some(test_id(1)),
+        user_id: Some(test_id(2)),
         status: Some("online".to_string()),
         ..PresenceUpdateEvent::default()
     });
     let message_delete_event = Event::MessageDelete(MessageDeleteEvent {
         data: MessageDeletePayload {
-            id: Snowflake::from("11"),
-            channel_id: Snowflake::from("10"),
+            id: test_id(11),
+            channel_id: test_id(10),
             guild_id: None,
         },
         raw: json!({}),
     });
     let member_remove_event = Event::MemberRemove(MemberRemoveEvent {
         data: MemberRemovePayload {
-            guild_id: Snowflake::from("1"),
+            guild_id: test_id(1),
             user: User {
-                id: Snowflake::from("2"),
+                id: test_id(2),
                 username: "wumpus".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
         },
         raw: json!({}),
@@ -3512,8 +3479,8 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         &cache,
         SINGLE_SHARD,
         &Event::RoleCreate(RoleEvent {
-            guild_id: Snowflake::from("1"),
-            role: Role::default(),
+            guild_id: test_id(1),
+            role: Role::fixture(),
             raw: json!({}),
         }),
     )
@@ -3546,9 +3513,9 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
     let ready_event = Event::Ready(ReadyEvent {
         data: ReadyPayload {
             user: User {
-                id: Snowflake::from("2"),
+                id: test_id(2),
                 username: "bot".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
             session_id: "session".to_string(),
             application: None,
@@ -3558,21 +3525,21 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
     });
     let chunk_event = Event::GuildMembersChunk(crate::event::GuildMembersChunkEvent {
         data: crate::event::GuildMembersChunkPayload {
-            guild_id: Snowflake::from("1"),
+            guild_id: test_id(1),
             members: vec![
                 Member {
                     user: Some(User {
-                        id: Snowflake::from("2"),
+                        id: test_id(2),
                         username: "first".to_string(),
-                        ..User::default()
+                        ..User::fixture()
                     }),
                     ..Member::default()
                 },
                 Member {
                     user: Some(User {
-                        id: Snowflake::from("3"),
+                        id: test_id(3),
                         username: "second".to_string(),
-                        ..User::default()
+                        ..User::fixture()
                     }),
                     ..Member::default()
                 },
@@ -3581,7 +3548,7 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
             chunk_count: 1,
             not_found: Vec::new(),
             presences: Some(vec![crate::model::Presence {
-                user_id: Some(Snowflake::from("2")),
+                user_id: Some(test_id(2)),
                 user: None,
                 status: Some("idle".to_string()),
                 activities: None,
@@ -3638,7 +3605,7 @@ fn client_builder_stores_default_allowed_mentions() {
 #[tokio::test]
 async fn shared_runtime_propagates_default_allowed_mentions_to_context_and_rest() {
     let mentions = crate::model::AllowedMentions {
-        users: vec![Snowflake::from("7")],
+        users: vec![test_id(7)],
         replied_user: Some(false),
         ..crate::model::AllowedMentions::default()
     };
@@ -3741,11 +3708,7 @@ fn members_chunk_dispatch(
 async fn wait_for_cached_message(cache: &crate::cache::CacheHandle, id: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if cache
-                .message(&Snowflake::from("500"), &Snowflake::from(id))
-                .await
-                .is_some()
-            {
+            if cache.message(test_id(500), named_id(id)).await.is_some() {
                 return;
             }
             tokio::task::yield_now().await;
@@ -3759,9 +3722,9 @@ fn ready_dispatch_event() -> Event {
     Event::Ready(ReadyEvent {
         data: ReadyPayload {
             user: User {
-                id: Snowflake::from("2"),
+                id: test_id(2),
                 username: "bot".to_string(),
-                ..User::default()
+                ..User::fixture()
             },
             session_id: "session".to_string(),
             application: None,
@@ -3780,7 +3743,7 @@ async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
     impl super::EventHandler for FetchingHandler {
         async fn message_create(&self, ctx: super::Context, _message: Message) {
             let result = ctx
-                .fetch_members_with_timeout("42", None, None, Duration::from_secs(5))
+                .fetch_members_with_timeout(test_id(42), None, None, Duration::from_secs(5))
                 .await
                 .map(|members| {
                     members
@@ -3828,7 +3791,7 @@ async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
     assert_eq!(result, Ok(vec!["7".to_string(), "8".to_string()]));
     assert!(context
         .cache
-        .member(&Snowflake::from("42"), &Snowflake::from("8"))
+        .member(test_id(42), test_id(8))
         .await
         .is_some());
     assert!(super::lock_member_chunk_waiters(&context.member_chunk_waiters).is_empty());
@@ -4132,7 +4095,7 @@ async fn ingress_overflow_raises_a_shard_fault_without_waiting() {
     assert_eq!(probe.finished(), vec!["m1", "m2", "m3", "m4"]);
     assert!(context
         .cache
-        .message(&Snowflake::from("500"), &Snowflake::from("5"))
+        .message(test_id(500), test_id(5))
         .await
         .is_none());
 }
@@ -4233,7 +4196,7 @@ async fn fetch_members_unregisters_its_waiter_on_timeout_cancellation_and_send_f
     let waiter_count = || super::lock_member_chunk_waiters(&context.member_chunk_waiters).len();
 
     let error = context
-        .fetch_members_with_timeout("42", None, None, Duration::from_millis(10))
+        .fetch_members_with_timeout(test_id(42), None, None, Duration::from_millis(10))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("timed out"), "{error}");
@@ -4245,7 +4208,7 @@ async fn fetch_members_unregisters_its_waiter_on_timeout_cancellation_and_send_f
 
     let pending = tokio::spawn({
         let context = context.clone();
-        async move { context.fetch_members("42", None, None).await }
+        async move { context.fetch_members(test_id(42), None, None).await }
     });
     assert!(matches!(
         commands.recv().await,
@@ -4261,7 +4224,10 @@ async fn fetch_members_unregisters_its_waiter_on_timeout_cancellation_and_send_f
     );
 
     drop(commands);
-    let error = context.fetch_members("42", None, None).await.unwrap_err();
+    let error = context
+        .fetch_members(test_id(42), None, None)
+        .await
+        .unwrap_err();
     assert!(
         error.to_string().contains("failed to send gateway command"),
         "{error}"
@@ -4285,7 +4251,7 @@ async fn stopping_a_shard_fails_its_pending_fetch_members_immediately() {
         gateway_commands: Arc::clone(&runtime.gateway_commands),
         member_chunk_waiters: Arc::clone(&runtime.member_chunk_waiters),
     };
-    let pending = tokio::spawn(async move { context.fetch_members("42", None, None).await });
+    let pending = tokio::spawn(async move { context.fetch_members(test_id(42), None, None).await });
     assert!(matches!(
         commands.recv().await,
         Some(GatewayCommand::RequestGuildMembers(_))
@@ -4306,11 +4272,11 @@ async fn guild_scoped_commands_go_to_the_shard_that_owns_the_guild() {
     let context = pipeline_test_context((0, 2));
     let mut shard0 = attach_test_messenger(&context, 0);
     let mut shard1 = attach_test_messenger(&context, 1);
-    let shard1_guild = Snowflake::from(1_u64 << 22);
+    let shard1_guild = test_id(1_u64 << 22);
 
     context
         .request_guild_members(crate::model::RequestGuildMembers {
-            guild_id: shard1_guild.clone(),
+            guild_id: shard1_guild,
             query: Some(String::new()),
             limit: Some(0),
             presences: None,
@@ -4320,7 +4286,7 @@ async fn guild_scoped_commands_go_to_the_shard_that_owns_the_guild() {
         .await
         .unwrap();
     context
-        .join_voice(shard1_guild.clone(), "9", false, false)
+        .join_voice(shard1_guild, test_id(9), false, false)
         .await
         .unwrap();
     assert!(matches!(
@@ -4335,7 +4301,7 @@ async fn guild_scoped_commands_go_to_the_shard_that_owns_the_guild() {
 
     let pending = tokio::spawn({
         let context = context.clone();
-        let guild_id = shard1_guild.clone();
+        let guild_id = shard1_guild;
         async move {
             context
                 .fetch_members_with_timeout(guild_id, None, None, Duration::from_millis(50))
@@ -4393,32 +4359,20 @@ async fn ready_on_one_shard_keeps_the_guilds_of_other_shards() {
 
     // Shard 1 starts a new session; shard 0's guild must survive.
     super::apply_cache_updates(&cache, (1, 2), &ready_dispatch_event()).await;
+    assert!(cache.guild(named_id(&shard0_guild)).await.is_some());
+    assert!(cache.channel(test_id(10)).await.is_some());
     assert!(cache
-        .guild(&Snowflake::from(shard0_guild.as_str()))
+        .member(named_id(&shard0_guild), test_id(11))
         .await
         .is_some());
-    assert!(cache.channel(&Snowflake::from("10")).await.is_some());
+    assert!(cache.guild(named_id(&shard1_guild)).await.is_none());
+    assert!(cache.channel(test_id(20)).await.is_none());
     assert!(cache
-        .member(
-            &Snowflake::from(shard0_guild.as_str()),
-            &Snowflake::from("11")
-        )
-        .await
-        .is_some());
-    assert!(cache
-        .guild(&Snowflake::from(shard1_guild.as_str()))
-        .await
-        .is_none());
-    assert!(cache.channel(&Snowflake::from("20")).await.is_none());
-    assert!(cache
-        .member(
-            &Snowflake::from(shard1_guild.as_str()),
-            &Snowflake::from("21")
-        )
+        .member(named_id(&shard1_guild), test_id(21))
         .await
         .is_none());
     assert!(
-        cache.user(&Snowflake::from("21")).await.is_some(),
+        cache.user(test_id(21)).await.is_some(),
         "users are shared by every shard"
     );
 }
@@ -4480,9 +4434,9 @@ async fn full_cache_backend_queue_schedules_an_ordered_shard_resync() {
     let health = forwarder.health_handle();
     let message = |id: &str| {
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from(id),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: named_id(id),
+            channel_id: test_id(10),
+            ..Message::fixture()
         }))
     };
     // Current-thread test without yields: the worker cannot drain between
@@ -4492,8 +4446,8 @@ async fn full_cache_backend_queue_schedules_an_ordered_shard_resync() {
     forwarder.forward(
         (1, 2),
         super::BackendWrite::DeleteMessages {
-            channel_id: Snowflake::from("10"),
-            message_ids: vec![Snowflake::from("1")],
+            channel_id: test_id(10),
+            message_ids: vec![test_id(1)],
         },
     );
     forwarder.forward((0, 2), message("3"));
@@ -4673,10 +4627,10 @@ fn merge_message_update_applies_every_field_present_in_the_payload() {
     let payload = full_message_update_payload();
     let partial: Message = serde_json::from_value(payload.clone()).unwrap();
     let cached = Message {
-        id: Snowflake::from("1"),
-        channel_id: Snowflake::from("2"),
+        id: test_id(1),
+        channel_id: test_id(2),
         content: "stale".to_string(),
-        ..Message::default()
+        ..Message::fixture()
     };
 
     let merged = super::merge_message_update(
@@ -5261,11 +5215,11 @@ async fn client_builder_start_returns_the_gateway_error_to_its_caller() {
 fn member_chunk_progress_requires_every_chunk_index() {
     fn chunk(index: u64, count: u64, user_id: &str) -> crate::event::GuildMembersChunkPayload {
         crate::event::GuildMembersChunkPayload {
-            guild_id: Snowflake::from("42"),
+            guild_id: test_id(42),
             members: vec![Member {
                 user: Some(User {
-                    id: Snowflake::from(user_id),
-                    ..User::default()
+                    id: named_id(user_id),
+                    ..User::fixture()
                 }),
                 ..Member::default()
             }],
@@ -5287,9 +5241,9 @@ fn member_chunk_progress_requires_every_chunk_index() {
     let members = progress.add(chunk(1, 3, "b")).unwrap().expect("complete");
     let ids: Vec<_> = members
         .iter()
-        .filter_map(|member| member.user.as_ref().map(|user| user.id.to_string()))
+        .filter_map(|member| member.user.as_ref().map(|user| user.id))
         .collect();
-    assert_eq!(ids, vec!["c", "a", "b"]);
+    assert_eq!(ids, vec![named_id("c"), named_id("a"), named_id("b")]);
 
     let mut inconsistent = super::MemberChunkProgress::default();
     assert!(inconsistent.add(chunk(0, 2, "a")).unwrap().is_none());
@@ -5318,7 +5272,7 @@ async fn fetch_members_fails_instead_of_returning_a_list_with_a_missing_chunk() 
         let context = context.clone();
         async move {
             context
-                .fetch_members_with_timeout("42", None, None, Duration::from_millis(200))
+                .fetch_members_with_timeout(test_id(42), None, None, Duration::from_millis(200))
                 .await
         }
     });
@@ -5414,7 +5368,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
     ));
 
     tokio::time::timeout(Duration::from_secs(5), async {
-        while runtime.cache.guild(&Snowflake::from("77")).await.is_none() {
+        while runtime.cache.guild(test_id(77)).await.is_none() {
             tokio::task::yield_now().await;
         }
     })
@@ -5422,7 +5376,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
     .expect("GUILD_CREATE was cached");
     let fetch = tokio::spawn({
         let context = runtime.context((0, 1));
-        async move { context.fetch_members("77", None, None).await }
+        async move { context.fetch_members(test_id(77), None, None).await }
     });
     // Let the member request reach the (silent) gateway.
     tokio::task::yield_now().await;
@@ -5449,7 +5403,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
         "{fetch_error}"
     );
     assert!(
-        runtime.cache.guild(&Snowflake::from("77")).await.is_none(),
+        runtime.cache.guild(test_id(77)).await.is_none(),
         "the shard's cache generation was invalidated"
     );
     server.abort();
@@ -5470,12 +5424,7 @@ async fn collectors_created_by_a_queued_handler_replay_events_published_before_i
             }
             // Reproduce the race deterministically: the processor already
             // published B before this handler creates its collectors.
-            while self
-                .cache
-                .message(&Snowflake::from("500"), &Snowflake::from("2"))
-                .await
-                .is_none()
-            {
+            while self.cache.message(test_id(500), test_id(2)).await.is_none() {
                 tokio::task::yield_now().await;
             }
             let mut from_cursor = ctx
@@ -5529,10 +5478,10 @@ async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag
     let message = |id: &str| {
         Event::MessageCreate(MessageEvent {
             message: Message {
-                id: Snowflake::from(id),
-                channel_id: Snowflake::from("1"),
+                id: named_id(id),
+                channel_id: test_id(1),
                 content: id.to_string(),
-                ..Message::default()
+                ..Message::fixture()
             },
             raw: json!({}),
         })
@@ -5564,9 +5513,9 @@ async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag
     // Reaction collectors replay from a cursor too.
     let reaction_start = hub.cursor();
     hub.publish(Event::MessageReactionAdd(ReactionEvent {
-        user_id: Some(Snowflake::from("7")),
-        message_id: Some(Snowflake::from("99")),
-        channel_id: Some(Snowflake::from("1")),
+        user_id: Some(test_id(7)),
+        message_id: Some(test_id(99)),
+        channel_id: Some(test_id(1)),
         emoji: Some(Emoji::unicode("👍")),
         raw: json!({}),
         ..ReactionEvent::default()
@@ -5576,7 +5525,7 @@ async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag
         handler_ctx.collectors = hub.clone();
         handler_ctx.event_cursor = Some(reaction_start);
         let mut reactions = handler_ctx
-            .reaction_collector("99")
+            .reaction_collector(test_id(99))
             .timeout(std::time::Duration::from_secs(1));
         assert!(reactions.next().await.is_some());
     }
@@ -5825,9 +5774,9 @@ async fn failed_backend_writes_quarantine_the_shard_and_retry_the_resync_on_a_ti
     let health = forwarder.health_handle();
     let message = |id: &str| {
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from(id),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: named_id(id),
+            channel_id: test_id(10),
+            ..Message::fixture()
         }))
     };
     forwarder.forward((0, 1), super::BackendWrite::ClearShard);
@@ -5919,9 +5868,9 @@ async fn backend_worker_shutdown_aborts_a_hung_call_so_no_write_lands_afterwards
     forwarder.forward(
         (0, 1),
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from("1"),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: test_id(1),
+            channel_id: test_id(10),
+            ..Message::fixture()
         })),
     );
     drop(forwarder);
@@ -5949,18 +5898,12 @@ async fn dm_messages_are_tied_to_shard_zero_and_cleared_by_its_ready() {
     )
     .unwrap();
     super::apply_cache_updates(&cache, (0, 2), &dm).await;
-    assert_eq!(cache.channel(&Snowflake::from("30")).await.unwrap().kind, 1);
+    assert_eq!(cache.channel(test_id(30)).await.unwrap().kind, 1);
 
     super::apply_cache_updates(&cache, (1, 2), &ready_dispatch_event()).await;
-    assert!(cache
-        .message(&Snowflake::from("30"), &Snowflake::from("31"))
-        .await
-        .is_some());
+    assert!(cache.message(test_id(30), test_id(31)).await.is_some());
     super::apply_cache_updates(&cache, (0, 2), &ready_dispatch_event()).await;
-    assert!(cache
-        .message(&Snowflake::from("30"), &Snowflake::from("31"))
-        .await
-        .is_none());
+    assert!(cache.message(test_id(30), test_id(31)).await.is_none());
 }
 
 #[cfg(feature = "sharding")]
@@ -6379,8 +6322,8 @@ async fn backend_panics_are_contained_and_resynced_and_a_stopped_worker_is_repor
         super::CacheBackendForwarder::spawn(recorder.clone(), 16, Duration::from_secs(5));
     let health = forwarder.health_handle();
     let member = super::BackendWrite::PutMember {
-        guild_id: Snowflake::from("1"),
-        user_id: Snowflake::from("2"),
+        guild_id: test_id(1),
+        user_id: test_id(2),
         member: Box::new(Member::default()),
     };
     forwarder.forward((0, 1), member);
@@ -6417,8 +6360,8 @@ async fn backend_panics_are_contained_and_resynced_and_a_stopped_worker_is_repor
     forwarder.forward(
         (0, 1),
         super::BackendWrite::DeleteMember {
-            guild_id: Snowflake::from("1"),
-            user_id: Snowflake::from("2"),
+            guild_id: test_id(1),
+            user_id: test_id(2),
         },
     );
     let stopped = health.health();
@@ -6439,14 +6382,14 @@ async fn further_losses_cannot_postpone_a_pending_resync() {
         super::CacheBackendForwarder::spawn(recorder.clone(), 1, Duration::from_secs(5));
     let put = |id: &str| {
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from(id),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: named_id(id),
+            channel_id: test_id(10),
+            ..Message::fixture()
         }))
     };
     let delete = || super::BackendWrite::DeleteMember {
-        guild_id: Snowflake::from("1"),
-        user_id: Snowflake::from("2"),
+        guild_id: test_id(1),
+        user_id: test_id(2),
     };
     // Establish shard 0/2's generation first.
     gate.add_permits(0);
@@ -6493,7 +6436,7 @@ struct DelayedStore {
     /// Every clear waits for a permit.
     clear_gate: Arc<tokio::sync::Semaphore>,
     /// Message ids whose `put_message` fails.
-    fail_put: std::sync::Mutex<std::collections::HashSet<String>>,
+    fail_put: std::sync::Mutex<std::collections::HashSet<GenericId>>,
     /// The next this many clears commit but report a failure, as if the
     /// response were lost.
     lose_clear_responses: std::sync::atomic::AtomicUsize,
@@ -6583,8 +6526,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn put_member(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         member: Member,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
@@ -6594,15 +6537,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_member(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
         self.store.get_member(guild_id, user_id).await
     }
 
     async fn list_members(
         &self,
-        guild_id: &Snowflake,
+        guild_id: GenericId,
     ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
         self.store.list_members(guild_id).await
     }
@@ -6610,8 +6553,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_member(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store.delete_member(epoch, guild_id, user_id).await
     }
@@ -6622,7 +6565,7 @@ impl crate::cache::CacheBackend for DelayedStore {
         message: Message,
     ) -> Result<(), crate::error::DiscordError> {
         self.put_gate.acquire().await.expect("gate open").forget();
-        if self.fail_put.lock().unwrap().contains(message.id.as_str()) {
+        if self.fail_put.lock().unwrap().contains(&message.id) {
             return Err(crate::error::DiscordError::model("put refused"));
         }
         self.store.put_message(epoch, message).await
@@ -6630,15 +6573,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_message(
         &self,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
         self.store.get_message(channel_id, message_id).await
     }
 
     async fn list_messages(
         &self,
-        channel_id: &Snowflake,
+        channel_id: GenericId,
     ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
         self.store.list_messages(channel_id).await
     }
@@ -6646,8 +6589,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_message(
         &self,
         epoch: u64,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
             .delete_message(epoch, channel_id, message_id)
@@ -6657,8 +6600,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn put_presence(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         presence: crate::model::Presence,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
@@ -6668,15 +6611,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_presence(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         self.store.get_presence(guild_id, user_id).await
     }
 
     async fn list_presences(
         &self,
-        guild_id: &Snowflake,
+        guild_id: GenericId,
     ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         self.store.list_presences(guild_id).await
     }
@@ -6684,8 +6627,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store.delete_presence(epoch, guild_id, user_id).await
     }
@@ -6699,19 +6642,14 @@ async fn a_previous_clients_late_write_and_late_clear_are_both_rejected() {
     let old_puts = Arc::clone(&old_backend.put_gate);
     let message = |id: &str| {
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from(id),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: named_id(id),
+            channel_id: test_id(10),
+            ..Message::fixture()
         }))
     };
     let cached = |id: &'static str| {
         let store = store.clone();
-        async move {
-            store
-                .message(&Snowflake::from("10"), &Snowflake::from(id))
-                .await
-                .is_some()
-        }
+        async move { store.message(test_id(10), named_id(id)).await.is_some() }
     };
 
     // The old client claims the store and submits a write that is delayed
@@ -7013,18 +6951,15 @@ async fn dropping_an_unpolled_wait_future_aborts_the_shards() {
 #[cfg(feature = "cache")]
 fn put_message_write(id: &str) -> super::BackendWrite {
     super::BackendWrite::PutMessage(Box::new(Message {
-        id: Snowflake::from(id),
-        channel_id: Snowflake::from("10"),
-        ..Message::default()
+        id: named_id(id),
+        channel_id: test_id(10),
+        ..Message::fixture()
     }))
 }
 
 #[cfg(feature = "cache")]
 async fn store_has_message(store: &crate::cache::CacheHandle, id: &str) -> bool {
-    store
-        .message(&Snowflake::from("10"), &Snowflake::from(id))
-        .await
-        .is_some()
+    store.message(test_id(10), named_id(id)).await.is_some()
 }
 
 #[cfg(feature = "cache")]
@@ -7037,7 +6972,7 @@ async fn recovery_discards_writes_admitted_before_it_instead_of_replaying_them_a
         tokio::sync::Semaphore::MAX_PERMITS,
         1,
     ));
-    backend.fail_put.lock().unwrap().insert("a".to_string());
+    backend.fail_put.lock().unwrap().insert(named_id("a"));
     let clear_gate = Arc::clone(&backend.clear_gate);
     let (forwarder, _worker) =
         super::CacheBackendForwarder::spawn(backend, 16, Duration::from_secs(5));
@@ -7062,8 +6997,8 @@ async fn recovery_discards_writes_admitted_before_it_instead_of_replaying_them_a
     forwarder.forward(
         (0, 1),
         super::BackendWrite::DeleteMessages {
-            channel_id: Snowflake::from("10"),
-            message_ids: vec![Snowflake::from("b")],
+            channel_id: test_id(10),
+            message_ids: vec![named_id("b")],
         },
     );
 
@@ -7083,8 +7018,8 @@ async fn recovery_discards_writes_admitted_before_it_instead_of_replaying_them_a
 async fn a_new_shard_layout_claims_the_store_and_old_layout_writes_cannot_touch_it() {
     let store = crate::cache::CacheHandle::new();
     let member_write = |guild: u64, user: &str| super::BackendWrite::PutMember {
-        guild_id: Snowflake::from(guild),
-        user_id: Snowflake::from(user),
+        guild_id: test_id(guild),
+        user_id: named_id(user),
         member: Box::new(Member::default()),
     };
     // Guild on shard 1 of 2 in the new layout.
@@ -7119,11 +7054,8 @@ async fn a_new_shard_layout_claims_the_store_and_old_layout_writes_cannot_touch_
     new_client.forward((0, 2), put_message_write("new"));
     new_client.forward((1, 2), member_write(shard1_guild, "new-member"));
     new_client.flush().await;
-    let shard1 = Snowflake::from(shard1_guild);
-    assert!(store
-        .member(&shard1, &Snowflake::from("old-member"))
-        .await
-        .is_none());
+    let shard1 = test_id(shard1_guild);
+    assert!(store.member(shard1, named_id("old-member")).await.is_none());
     assert!(!store_has_message(&store, "old").await);
 
     // The old layout's writer can neither insert stale data nor delete
@@ -7132,24 +7064,21 @@ async fn a_new_shard_layout_claims_the_store_and_old_layout_writes_cannot_touch_
     old_client.forward(
         (0, 1),
         super::BackendWrite::DeleteMessages {
-            channel_id: Snowflake::from("10"),
-            message_ids: vec![Snowflake::from("new")],
+            channel_id: test_id(10),
+            message_ids: vec![named_id("new")],
         },
     );
     old_client.forward(
         (0, 1),
         super::BackendWrite::DeleteMember {
-            guild_id: shard1.clone(),
-            user_id: Snowflake::from("new-member"),
+            guild_id: shard1,
+            user_id: named_id("new-member"),
         },
     );
     old_client.flush().await;
     assert!(!store_has_message(&store, "stale").await);
     assert!(store_has_message(&store, "new").await);
-    assert!(store
-        .member(&shard1, &Snowflake::from("new-member"))
-        .await
-        .is_some());
+    assert!(store.member(shard1, named_id("new-member")).await.is_some());
 }
 
 #[cfg(feature = "cache")]
@@ -7286,9 +7215,9 @@ async fn a_lost_rejection_of_the_initial_claim_is_epoch_discovery_not_a_takeover
         &store,
         1,
         Message {
-            id: Snowflake::from("left-over"),
-            channel_id: Snowflake::from("10"),
-            ..Message::default()
+            id: named_id("left-over"),
+            channel_id: test_id(10),
+            ..Message::fixture()
         },
     )
     .await

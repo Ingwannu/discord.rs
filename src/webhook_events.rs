@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{Application, Channel, Entitlement, Guild, Snowflake, User};
+use crate::model::{Application, Channel, Entitlement, GenericId, Guild, User};
 use crate::types::invalid_data_error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,7 +21,7 @@ impl WebhookPayloadType {
 /// Typed Discord API object for `WebhookEventPayload`.
 pub struct WebhookEventPayload {
     pub version: u8,
-    pub application_id: Snowflake,
+    pub application_id: GenericId,
     pub kind: WebhookPayloadType,
     pub event: Option<WebhookEventBody>,
     pub raw: Value,
@@ -92,21 +92,21 @@ pub struct ApplicationDeauthorizedWebhookEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookSocialMessage`.
 pub struct WebhookSocialMessage {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub kind: Option<u8>,
     pub content: Option<String>,
-    pub lobby_id: Option<Snowflake>,
-    pub channel_id: Snowflake,
+    pub lobby_id: Option<GenericId>,
+    pub channel_id: GenericId,
     pub author: Option<User>,
     pub metadata: Option<HashMap<String, String>>,
     pub flags: Option<u64>,
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     pub timestamp: Option<String>,
     pub edited_timestamp: Option<String>,
     pub attachments: Vec<Value>,
     pub components: Vec<Value>,
     pub channel: Option<Channel>,
-    pub recipient_id: Option<Snowflake>,
+    pub recipient_id: Option<GenericId>,
     pub activity: Option<Value>,
     pub application: Option<Application>,
     pub raw: Value,
@@ -115,8 +115,8 @@ pub struct WebhookSocialMessage {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookDeletedMessage`.
 pub struct WebhookDeletedMessage {
-    pub id: Snowflake,
-    pub lobby_id: Option<Snowflake>,
+    pub id: GenericId,
+    pub lobby_id: Option<GenericId>,
     pub raw: Value,
 }
 
@@ -302,11 +302,11 @@ where
     }
 }
 
-fn required_snowflake(data: &Value, field: &str) -> Result<Snowflake, DiscordError> {
+fn required_snowflake(data: &Value, field: &str) -> Result<GenericId, DiscordError> {
     from_field(data, field)
 }
 
-fn optional_snowflake(data: &Value, field: &str) -> Result<Option<Snowflake>, DiscordError> {
+fn optional_snowflake(data: &Value, field: &str) -> Result<Option<GenericId>, DiscordError> {
     optional_from_field(data, field)
 }
 
@@ -437,8 +437,8 @@ mod tests {
         .unwrap();
         match entitlement.event.unwrap().event {
             WebhookEvent::EntitlementCreate(entitlement) => {
-                assert_eq!(entitlement.id.as_str(), "10");
-                assert_eq!(entitlement.user_id.unwrap().as_str(), "40");
+                assert_eq!(entitlement.id.get(), 10);
+                assert_eq!(entitlement.user_id.unwrap().get(), 40);
             }
             other => panic!("unexpected webhook event: {other:?}"),
         }
@@ -466,8 +466,8 @@ mod tests {
         .unwrap();
         match lobby_message.event.unwrap().event {
             WebhookEvent::LobbyMessageCreate(message) => {
-                assert_eq!(message.id.as_str(), "50");
-                assert_eq!(message.lobby_id.unwrap().as_str(), "60");
+                assert_eq!(message.id.get(), 50);
+                assert_eq!(message.lobby_id.unwrap().get(), 60);
                 assert_eq!(
                     message.metadata.unwrap().get("mood").map(String::as_str),
                     Some("ready")
@@ -495,8 +495,8 @@ mod tests {
         .unwrap();
         match deleted.event.unwrap().event {
             WebhookEvent::LobbyMessageDelete(message) => {
-                assert_eq!(message.id.as_str(), "70");
-                assert_eq!(message.lobby_id.unwrap().as_str(), "60");
+                assert_eq!(message.id.get(), 70);
+                assert_eq!(message.lobby_id.unwrap().get(), 60);
             }
             other => panic!("unexpected webhook event: {other:?}"),
         }
@@ -558,7 +558,7 @@ mod tests {
             match parsed.event.unwrap().event {
                 WebhookEvent::EntitlementUpdate(entitlement)
                 | WebhookEvent::EntitlementDelete(entitlement) => {
-                    assert_eq!(entitlement.sku_id.as_str(), "20");
+                    assert_eq!(entitlement.sku_id.get(), 20);
                 }
                 other => panic!("unexpected webhook event: {other:?}"),
             }
@@ -593,8 +593,8 @@ mod tests {
                 WebhookEvent::GameDirectMessageCreate(message)
                 | WebhookEvent::GameDirectMessageUpdate(message)
                 | WebhookEvent::GameDirectMessageDelete(message) => {
-                    assert_eq!(message.channel_id.as_str(), "91");
-                    assert_eq!(message.recipient_id.unwrap().as_str(), "92");
+                    assert_eq!(message.channel_id.get(), 91);
+                    assert_eq!(message.recipient_id.unwrap().get(), 92);
                 }
                 other => panic!("unexpected webhook event: {other:?}"),
             }

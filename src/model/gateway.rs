@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::Snowflake;
+use super::GenericId;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `SessionStartLimit`.
@@ -30,7 +30,7 @@ pub struct GatewayBot {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `RequestGuildMembers`.
 pub struct RequestGuildMembers {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,7 +38,7 @@ pub struct RequestGuildMembers {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presences: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_ids: Option<Vec<Snowflake>>,
+    pub user_ids: Option<Vec<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 }
@@ -50,7 +50,7 @@ pub struct RequestGuildMembers {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestChannelInfo {
     /// Guild whose channel metadata should be requested.
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     /// Metadata fields to request.
     pub fields: Vec<String>,
 }
@@ -62,21 +62,21 @@ impl RequestChannelInfo {
     pub const VOICE_START_TIME: &'static str = "voice_start_time";
 
     /// Creates a channel-info request for explicit field names.
-    pub fn new<I, S>(guild_id: impl Into<Snowflake>, fields: I) -> Self
+    pub fn new<I, S>(guild_id: GenericId, fields: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         Self {
-            guild_id: guild_id.into(),
+            guild_id,
             fields: fields.into_iter().map(Into::into).collect(),
         }
     }
 
     /// Creates a request for Discord's documented voice metadata fields.
-    pub fn voice_metadata(guild_id: impl Into<Snowflake>) -> Self {
+    pub fn voice_metadata(guild_id: GenericId) -> Self {
         Self {
-            guild_id: guild_id.into(),
+            guild_id,
             fields: vec![Self::STATUS.to_string(), Self::VOICE_START_TIME.to_string()],
         }
     }

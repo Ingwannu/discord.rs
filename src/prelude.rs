@@ -60,12 +60,21 @@ pub use crate::model::{
     ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField,
     PollAnswerVoters, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, ResolvedData,
     RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SessionStartLimit,
-    SetVoiceChannelStatus, SharedClientTheme, Sku, Snowflake, SoundboardSound, SoundboardSoundList,
+    SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
     Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery,
     UpdatePresence, UpdateUserApplicationRoleConnection, UserApplicationRoleConnection,
     UserConnection, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState, WebhookExecuteQuery,
     WebhookMessageQuery,
 };
+// Typed IDs (docs/design/3.0-types-events-requests.md §1): the common
+// resource kinds plus `GenericId`, which every ID parameter takes until the
+// per-domain narrowing of series 2 step B.
+pub use crate::model::{
+    ApplicationId, ChannelId, GenericId, GuildId, InvalidId, MessageId, RoleId, UserId,
+};
+// Deprecated 2.x name; glob importers get a note pointing at the typed IDs.
+#[allow(deprecated)]
+pub use crate::model::Snowflake;
 pub use crate::oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,
@@ -147,7 +156,7 @@ mod tests {
             responder.response_phase()
         }
 
-        let command = crate::model::ChatInputCommandInteraction::default();
+        let command = crate::model::ChatInputCommandInteraction::fixture();
         assert_eq!(phase_of(&command), InteractionResponsePhase::Unacknowledged);
         let _reply = InteractionReplyData::from("hi").ephemeral();
         let _choice = AutocompleteChoice::new("name", "value");

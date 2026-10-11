@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{PermissionsBitField, Snowflake, ThreadMetadata};
+use super::{GenericId, PermissionsBitField, ThreadMetadata};
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Attachment`.
 pub struct Attachment {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub filename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -60,10 +60,10 @@ pub enum ChannelType {
     GuildMedia = 16,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `PermissionOverwrite`.
 pub struct PermissionOverwrite {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,7 +95,7 @@ pub struct CreateGuildChannel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_overwrites: Option<Option<Vec<PermissionOverwrite>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<Snowflake>>,
+    pub parent_id: Option<Option<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<Option<bool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,12 +127,12 @@ pub struct EditChannelPermission {
     pub deny: Option<PermissionsBitField>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Channel`.
 pub struct Channel {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,7 +140,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Snowflake>,
+    pub parent_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,11 +150,11 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_per_user: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_message_id: Option<Snowflake>,
+    pub last_message_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_id: Option<Snowflake>,
+    pub owner_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +182,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_tags: Option<Vec<ForumTag>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub applied_tags: Option<Vec<Snowflake>>,
+    pub applied_tags: Option<Vec<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reaction_emoji: Option<DefaultReaction>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,24 +193,72 @@ pub struct Channel {
     pub default_forum_layout: Option<u64>,
 }
 
+impl Channel {
+    /// A channel known only by ID, guild, and type, such as the channel of a
+    /// DM message or of a component interaction. Every other field is
+    /// unknown (`None`).
+    ///
+    /// Crate-private: `Channel` has no `Default` because its ID is
+    /// required, and the cache needs these stubs to tie entries to an owner
+    /// (see the gateway cache updates). Listing every field here, rather
+    /// than a `..` fill, makes a newly added field a compile error until its
+    /// stub value is chosen.
+    #[cfg(feature = "gateway")]
+    pub(crate) fn stub(id: GenericId, guild_id: Option<GenericId>, kind: u8) -> Self {
+        Self {
+            id,
+            guild_id,
+            kind,
+            name: None,
+            topic: None,
+            parent_id: None,
+            nsfw: None,
+            bitrate: None,
+            user_limit: None,
+            rate_limit_per_user: None,
+            last_message_id: None,
+            owner_id: None,
+            application_id: None,
+            position: None,
+            permission_overwrites: None,
+            icon: None,
+            rtc_region: None,
+            video_quality_mode: None,
+            default_auto_archive_duration: None,
+            flags: None,
+            last_pin_timestamp: None,
+            thread_metadata: None,
+            message_count: None,
+            member_count: None,
+            total_message_sent: None,
+            available_tags: None,
+            applied_tags: None,
+            default_reaction_emoji: None,
+            default_thread_rate_limit_per_user: None,
+            default_sort_order: None,
+            default_forum_layout: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `DefaultReaction`.
 pub struct DefaultReaction {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<Snowflake>,
+    pub emoji_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ForumTag`.
 pub struct ForumTag {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(default)]
     pub moderated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<Snowflake>,
+    pub emoji_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
 }
@@ -219,10 +267,10 @@ pub struct ForumTag {
 ///
 /// The outer `Option` controls whether a field is omitted. Use `Some(None)` to
 /// send JSON `null` for nullable Discord fields such as `parent_id`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModifyGuildChannelPosition {
     /// Channel to modify.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// New sorting position, or `Some(None)` to send `null`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Option<i64>>,
@@ -231,20 +279,20 @@ pub struct ModifyGuildChannelPosition {
     pub lock_permissions: Option<Option<bool>>,
     /// New parent category ID, or `Some(None)` to remove the parent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<Snowflake>>,
+    pub parent_id: Option<Option<GenericId>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `CreateDmChannel`.
 pub struct CreateDmChannel {
-    pub recipient_id: Snowflake,
+    pub recipient_id: GenericId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 /// Typed Discord API object for `CreateGroupDmChannel`.
 pub struct CreateGroupDmChannel {
     pub access_tokens: Vec<String>,
-    pub nicks: HashMap<Snowflake, String>,
+    pub nicks: HashMap<GenericId, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -254,9 +302,9 @@ pub struct AddGroupDmRecipient {
     pub nick: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `FollowedChannel`.
 pub struct FollowedChannel {
-    pub channel_id: Snowflake,
-    pub webhook_id: Snowflake,
+    pub channel_id: GenericId,
+    pub webhook_id: GenericId,
 }

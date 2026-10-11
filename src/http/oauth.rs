@@ -5,8 +5,8 @@ use super::paths::{configured_application_id, current_user_guilds_query};
 use super::{validate_authorization_token, RequestAuthorization, RestClient};
 use crate::error::DiscordError;
 use crate::model::{
-    Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, Member,
-    ModifyCurrentUser, Snowflake, UpdateUserApplicationRoleConnection, User,
+    Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, GenericId,
+    Member, ModifyCurrentUser, UpdateUserApplicationRoleConnection, User,
     UserApplicationRoleConnection, UserConnection,
 };
 
@@ -25,10 +25,10 @@ impl RestClient {
             .await
     }
 
-    pub async fn get_user(&self, user_id: impl Into<Snowflake>) -> Result<User, DiscordError> {
+    pub async fn get_user(&self, user_id: GenericId) -> Result<User, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/users/{}", user_id.into()),
+            &format!("/users/{}", user_id),
             Option::<&Value>::None,
         )
         .await
@@ -76,22 +76,22 @@ impl RestClient {
     pub async fn get_current_user_guild_member(
         &self,
         bearer_token: &str,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Member, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
             RequestAuthorization::Bearer(bearer_token),
             Method::GET,
-            &format!("/users/@me/guilds/{}/member", guild_id.into()),
+            &format!("/users/@me/guilds/{}/member", guild_id),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn leave_guild(&self, guild_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn leave_guild(&self, guild_id: GenericId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/users/@me/guilds/{}", guild_id.into()),
+            &format!("/users/@me/guilds/{}", guild_id),
             Option::<&Value>::None,
         )
         .await

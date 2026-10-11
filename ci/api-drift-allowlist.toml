@@ -71,21 +71,21 @@ reason = "Built by global_commands_path(), which validates the configured applic
 method = "GET"
 path = "/applications/{application.id}/commands/{command.id}"
 functions = ["get_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id.into())']
+evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
 reason = "global_commands_path() plus '/{command_id}' appended at the call site."
 
 [[helper_route]]
 method = "PATCH"
 path = "/applications/{application.id}/commands/{command.id}"
 functions = ["edit_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id.into())']
+evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
 reason = "global_commands_path() plus '/{command_id}' appended at the call site."
 
 [[helper_route]]
 method = "DELETE"
 path = "/applications/{application.id}/commands/{command.id}"
 functions = ["delete_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id.into())']
+evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
 reason = "global_commands_path() plus '/{command_id}' appended at the call site."
 
 # --- Interaction callbacks ----------------------------------------------------

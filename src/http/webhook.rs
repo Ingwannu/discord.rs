@@ -8,14 +8,14 @@ use super::paths::{
 use super::{FileAttachment, RestClient};
 use crate::error::DiscordError;
 use crate::model::{
-    CreateMessage, CreateWebhook, Message, ModifyWebhook, ModifyWebhookWithToken, Snowflake,
+    CreateMessage, CreateWebhook, GenericId, Message, ModifyWebhook, ModifyWebhookWithToken,
     Webhook, WebhookExecuteQuery, WebhookMessageQuery,
 };
 
 impl RestClient {
     pub async fn create_webhook(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.create_webhook_raw(channel_id, body).await
@@ -23,7 +23,7 @@ impl RestClient {
 
     pub async fn create_webhook_typed<B>(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &B,
     ) -> Result<Webhook, DiscordError>
     where
@@ -31,7 +31,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::POST,
-            &format!("/channels/{}/webhooks", channel_id.into()),
+            &format!("/channels/{}/webhooks", channel_id),
             Some(body),
         )
         .await
@@ -39,7 +39,7 @@ impl RestClient {
 
     pub async fn create_webhook_from_request(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &CreateWebhook,
     ) -> Result<Webhook, DiscordError> {
         self.create_webhook_typed(channel_id, body).await
@@ -47,12 +47,12 @@ impl RestClient {
 
     pub async fn create_webhook_raw(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
             Method::POST,
-            &format!("/channels/{}/webhooks", channel_id.into()),
+            &format!("/channels/{}/webhooks", channel_id),
             Some(body),
         )
         .await
@@ -60,18 +60,18 @@ impl RestClient {
 
     pub async fn get_channel_webhooks(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Vec<Value>, DiscordError> {
         self.get_channel_webhooks_raw(channel_id).await
     }
 
     pub async fn get_channel_webhooks_typed(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Vec<Webhook>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/channels/{}/webhooks", channel_id.into()),
+            &format!("/channels/{}/webhooks", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -79,12 +79,12 @@ impl RestClient {
 
     pub async fn get_channel_webhooks_raw(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Vec<Value>, DiscordError> {
         let response = self
             .request(
                 Method::GET,
-                &format!("/channels/{}/webhooks", channel_id.into()),
+                &format!("/channels/{}/webhooks", channel_id),
                 Option::<&Value>::None,
             )
             .await?;
@@ -96,181 +96,172 @@ impl RestClient {
 
     pub async fn execute_webhook(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        let path = execute_webhook_path(webhook_id.into(), token)?;
+        let path = execute_webhook_path(webhook_id, token)?;
         let body = self.json_with_default_allowed_mentions(body);
         self.request(Method::POST, &path, Some(body.as_ref())).await
     }
 
     pub async fn execute_webhook_with_query(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        let path = execute_webhook_path_with_query(webhook_id.into(), token, query, None)?;
+        let path = execute_webhook_path_with_query(webhook_id, token, query, None)?;
         self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn execute_slack_compatible_webhook(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        let path =
-            execute_webhook_path_with_query(webhook_id.into(), token, query, Some("/slack"))?;
+        let path = execute_webhook_path_with_query(webhook_id, token, query, Some("/slack"))?;
         self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn execute_github_compatible_webhook(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        let path =
-            execute_webhook_path_with_query(webhook_id.into(), token, query, Some("/github"))?;
+        let path = execute_webhook_path_with_query(webhook_id, token, query, Some("/github"))?;
         self.request(Method::POST, &path, Some(body)).await
     }
 
     pub async fn execute_webhook_with_files(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         body: &Value,
         files: &[FileAttachment],
     ) -> Result<Value, DiscordError> {
-        let path = execute_webhook_path(webhook_id.into(), token)?;
+        let path = execute_webhook_path(webhook_id, token)?;
         self.request_multipart(Method::POST, &path, body, files)
             .await
     }
 
     pub async fn get_webhook_message(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
     ) -> Result<Message, DiscordError> {
-        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        let path = webhook_message_path(webhook_id, token, message_id)?;
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
     }
 
     pub async fn get_webhook_message_with_query(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
     ) -> Result<Message, DiscordError> {
-        let path =
-            webhook_message_path_with_query(webhook_id.into(), token, message_id, query, false)?;
+        let path = webhook_message_path_with_query(webhook_id, token, message_id, query, false)?;
         self.request_typed(Method::GET, &path, Option::<&Value>::None)
             .await
     }
 
     pub async fn edit_webhook_message(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
-        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        let path = webhook_message_path(webhook_id, token, message_id)?;
         self.request_typed(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn edit_webhook_message_with_query(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
-        let path =
-            webhook_message_path_with_query(webhook_id.into(), token, message_id, query, true)?;
+        let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
         self.request_typed(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn edit_webhook_message_with_files(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
-        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        let path = webhook_message_path(webhook_id, token, message_id)?;
         self.request_typed_multipart(Method::PATCH, &path, body, files)
             .await
     }
 
     pub async fn edit_webhook_message_with_files_and_query(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
-        let path =
-            webhook_message_path_with_query(webhook_id.into(), token, message_id, query, true)?;
+        let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
         self.request_typed_multipart(Method::PATCH, &path, body, files)
             .await
     }
 
     pub async fn delete_webhook_message(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
     ) -> Result<(), DiscordError> {
-        let path = webhook_message_path(webhook_id.into(), token, message_id)?;
+        let path = webhook_message_path(webhook_id, token, message_id)?;
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
     }
 
     pub async fn delete_webhook_message_with_query(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
     ) -> Result<(), DiscordError> {
-        let path =
-            webhook_message_path_with_query(webhook_id.into(), token, message_id, query, false)?;
+        let path = webhook_message_path_with_query(webhook_id, token, message_id, query, false)?;
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
     }
 
     pub async fn get_guild_webhooks(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<Webhook>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/webhooks", guild_id.into()),
+            &format!("/guilds/{}/webhooks", guild_id),
             Option::<&Value>::None,
         )
         .await
     }
 
-    pub async fn get_webhook(
-        &self,
-        webhook_id: impl Into<Snowflake>,
-    ) -> Result<Webhook, DiscordError> {
+    pub async fn get_webhook(&self, webhook_id: GenericId) -> Result<Webhook, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/webhooks/{}", webhook_id.into()),
+            &format!("/webhooks/{}", webhook_id),
             Option::<&Value>::None,
         )
         .await
@@ -278,13 +269,13 @@ impl RestClient {
 
     pub async fn get_webhook_with_token(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
         self.request_typed(
             Method::GET,
-            &format!("/webhooks/{}/{}", webhook_id.into(), token),
+            &format!("/webhooks/{}/{}", webhook_id, token),
             Option::<&Value>::None,
         )
         .await
@@ -292,12 +283,12 @@ impl RestClient {
 
     pub async fn modify_webhook(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         body: &Value,
     ) -> Result<Webhook, DiscordError> {
         self.request_typed(
             Method::PATCH,
-            &format!("/webhooks/{}", webhook_id.into()),
+            &format!("/webhooks/{}", webhook_id),
             Some(body),
         )
         .await
@@ -305,7 +296,7 @@ impl RestClient {
 
     pub async fn modify_webhook_typed<B>(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         body: &B,
     ) -> Result<Webhook, DiscordError>
     where
@@ -313,7 +304,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/webhooks/{}", webhook_id.into()),
+            &format!("/webhooks/{}", webhook_id),
             Some(body),
         )
         .await
@@ -321,19 +312,16 @@ impl RestClient {
 
     pub async fn modify_webhook_from_request(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         body: &ModifyWebhook,
     ) -> Result<Webhook, DiscordError> {
         self.modify_webhook_typed(webhook_id, body).await
     }
 
-    pub async fn delete_webhook(
-        &self,
-        webhook_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn delete_webhook(&self, webhook_id: GenericId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/webhooks/{}", webhook_id.into()),
+            &format!("/webhooks/{}", webhook_id),
             Option::<&Value>::None,
         )
         .await
@@ -341,18 +329,18 @@ impl RestClient {
 
     pub async fn modify_webhook_with_token(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         body: &Value,
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
-        let path = format!("/webhooks/{}/{}", webhook_id.into(), token);
+        let path = format!("/webhooks/{}/{}", webhook_id, token);
         self.request_typed(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn modify_webhook_with_token_typed<B>(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         body: &B,
     ) -> Result<Webhook, DiscordError>
@@ -360,13 +348,13 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         validate_token_path_segment("webhook_token", token, false)?;
-        let path = format!("/webhooks/{}/{}", webhook_id.into(), token);
+        let path = format!("/webhooks/{}/{}", webhook_id, token);
         self.request_typed(Method::PATCH, &path, Some(body)).await
     }
 
     pub async fn modify_webhook_with_token_from_request(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
         body: &ModifyWebhookWithToken,
     ) -> Result<Webhook, DiscordError> {
@@ -376,11 +364,11 @@ impl RestClient {
 
     pub async fn delete_webhook_with_token(
         &self,
-        webhook_id: impl Into<Snowflake>,
+        webhook_id: GenericId,
         token: &str,
     ) -> Result<(), DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
-        let path = format!("/webhooks/{}/{}", webhook_id.into(), token);
+        let path = format!("/webhooks/{}/{}", webhook_id, token);
         self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
             .await
     }

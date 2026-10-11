@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AvatarDecorationData, PermissionsBitField, Snowflake, User, UserCollectibles};
+use super::{AvatarDecorationData, GenericId, PermissionsBitField, User, UserCollectibles};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Member`.
@@ -10,7 +10,7 @@ pub struct Member {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(default)]
-    pub roles: Vec<Snowflake>,
+    pub roles: Vec<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nick: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +52,7 @@ pub struct AddGuildMember {
     pub nick: Option<String>,
     /// Optional initial guild roles for the member.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Vec<Snowflake>>,
+    pub roles: Option<Vec<GenericId>>,
     /// Whether the member should be muted in voice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute: Option<bool>,
@@ -73,7 +73,7 @@ pub struct ModifyGuildMember {
     pub nick: Option<Option<String>>,
     /// Replacement role IDs for the member.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Option<Vec<Snowflake>>>,
+    pub roles: Option<Option<Vec<GenericId>>>,
     /// Whether the member should be muted in voice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute: Option<Option<bool>>,
@@ -82,7 +82,7 @@ pub struct ModifyGuildMember {
     pub deaf: Option<Option<bool>>,
     /// Voice channel to move the member to, or `Some(None)` to disconnect them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Option<Snowflake>>,
+    pub channel_id: Option<Option<GenericId>>,
     /// Timeout expiration timestamp, or `Some(None)` to remove the timeout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub communication_disabled_until: Option<Option<String>>,
@@ -115,7 +115,7 @@ pub struct ModifyCurrentMember {
 /// Typed Discord API object for `GuildMembersQuery`.
 pub struct GuildMembersQuery {
     pub limit: Option<u64>,
-    pub after: Option<Snowflake>,
+    pub after: Option<GenericId>,
 }
 
 #[derive(Clone, Debug, Default)]

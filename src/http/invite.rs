@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateChannelInvite, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus, Snowflake,
+    CreateChannelInvite, GenericId, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus,
 };
 use crate::types::invalid_data_error;
 
@@ -19,11 +19,11 @@ const MAX_INVITE_TARGET_USERS: usize = 1000;
 impl RestClient {
     pub async fn get_guild_invites(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<Invite>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/invites", guild_id.into()),
+            &format!("/guilds/{}/invites", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -45,7 +45,7 @@ impl RestClient {
         code: &str,
         with_counts: Option<bool>,
         with_expiration: Option<bool>,
-        guild_scheduled_event_id: Option<Snowflake>,
+        guild_scheduled_event_id: Option<GenericId>,
     ) -> Result<Invite, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -112,13 +112,13 @@ impl RestClient {
     pub async fn add_invite_target_user(
         &self,
         code: &str,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
         self.request_no_content(
             Method::PUT,
-            &format!("/invites/{code}/target-users/{}", user_id.into()),
+            &format!("/invites/{code}/target-users/{}", user_id),
             Option::<&Value>::None,
         )
         .await
@@ -128,13 +128,13 @@ impl RestClient {
     pub async fn remove_invite_target_user(
         &self,
         code: &str,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
         self.request_no_content(
             Method::DELETE,
-            &format!("/invites/{code}/target-users/{}", user_id.into()),
+            &format!("/invites/{code}/target-users/{}", user_id),
             Option::<&Value>::None,
         )
         .await
@@ -145,7 +145,7 @@ impl RestClient {
     pub async fn bulk_add_invite_target_users(
         &self,
         code: &str,
-        user_ids: &[Snowflake],
+        user_ids: &[GenericId],
     ) -> Result<(), DiscordError> {
         self.bulk_invite_target_users(code, "bulk-add", user_ids)
             .await
@@ -155,7 +155,7 @@ impl RestClient {
     pub async fn bulk_delete_invite_target_users(
         &self,
         code: &str,
-        user_ids: &[Snowflake],
+        user_ids: &[GenericId],
     ) -> Result<(), DiscordError> {
         self.bulk_invite_target_users(code, "bulk-delete", user_ids)
             .await
@@ -165,7 +165,7 @@ impl RestClient {
         &self,
         code: &str,
         action: &str,
-        user_ids: &[Snowflake],
+        user_ids: &[GenericId],
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -202,12 +202,12 @@ impl RestClient {
 
     pub async fn create_channel_invite(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: Option<&Value>,
     ) -> Result<Invite, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/channels/{}/invites", channel_id.into()),
+            &format!("/channels/{}/invites", channel_id),
             body,
         )
         .await
@@ -215,11 +215,11 @@ impl RestClient {
 
     pub async fn get_channel_invites(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Vec<Invite>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/channels/{}/invites", channel_id.into()),
+            &format!("/channels/{}/invites", channel_id),
             Option::<&Value>::None,
         )
         .await
@@ -227,12 +227,12 @@ impl RestClient {
 
     pub async fn create_channel_invite_typed(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/channels/{}/invites", channel_id.into()),
+            &format!("/channels/{}/invites", channel_id),
             Some(body),
         )
         .await
@@ -240,14 +240,14 @@ impl RestClient {
 
     pub async fn create_channel_invite_with_target_users_file(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &CreateChannelInvite,
         target_users_file: &FileAttachment,
     ) -> Result<Invite, DiscordError> {
         decode_response(
             self.request_with_headers(
                 Method::POST,
-                &format!("/channels/{}/invites", channel_id.into()),
+                &format!("/channels/{}/invites", channel_id),
                 Some(payload_named_file_multipart_body(
                     body,
                     "target_users_file",

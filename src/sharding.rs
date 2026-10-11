@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::Snowflake;
+use crate::model::GenericId;
 use crate::types::invalid_data_error;
 use crate::ws::GatewayConnectionConfig;
 
@@ -311,9 +311,10 @@ impl ShardingManager {
             .collect()
     }
 
-    pub fn shard_for_guild(&self, guild_id: &Snowflake) -> Option<ShardInfo> {
-        let raw_id = guild_id.as_u64()?;
-        let shard_id = ((raw_id >> 22) % u64::from(self.config.total_shards)) as u32;
+    /// Returns the shard that owns `guild_id` (`(guild_id >> 22) %
+    /// total_shards`), or `None` when no shards are configured.
+    pub fn shard_for_guild(&self, guild_id: GenericId) -> Option<ShardInfo> {
+        let shard_id = crate::cache::shard_for_guild_id(guild_id, self.config.total_shards);
         self.config.shard_info(shard_id)
     }
 
@@ -463,17 +464,17 @@ impl ShardingManager {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use std::sync::mpsc::channel;
 
     use super::{
         ShardConfig, ShardIpcMessage, ShardRuntimeState, ShardSupervisorEvent, ShardingManager,
     };
-    use crate::model::Snowflake;
 
     #[test]
     fn shard_for_guild_uses_discord_formula() {
         let manager = ShardingManager::new(ShardConfig::new(4));
-        let shard = manager.shard_for_guild(&Snowflake::from("81384788765712384"));
+        let shard = manager.shard_for_guild(test_id(81384788765712384));
 
         assert_eq!(shard.unwrap().total, 4);
     }

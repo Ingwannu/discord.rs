@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationCommand, AutoModerationRule, Channel, GuildScheduledEvent, Integration, Snowflake,
+    ApplicationCommand, AutoModerationRule, Channel, GenericId, GuildScheduledEvent, Integration,
     User, Webhook,
 };
 
@@ -11,11 +11,11 @@ use super::{
 /// Typed Discord API object for `AuditLogEntry`.
 pub struct AuditLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<Snowflake>,
+    pub id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_id: Option<Snowflake>,
+    pub target_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action_type: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,9 +50,9 @@ pub struct AuditLog {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `AuditLogQuery`.
 pub struct AuditLogQuery {
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     pub action_type: Option<u64>,
-    pub before: Option<Snowflake>,
-    pub after: Option<Snowflake>,
+    pub before: Option<GenericId>,
+    pub after: Option<GenericId>,
     pub limit: Option<u64>,
 }

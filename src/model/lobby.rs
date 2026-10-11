@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Channel, Snowflake, User};
+use super::{Channel, GenericId, User};
 
 /// Lobby member object used by Discord's Lobby resource.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LobbyMember {
     /// User ID of the lobby member.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// App-defined member metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -20,12 +20,12 @@ pub struct LobbyMember {
 }
 
 /// Lobby object used by Discord matchmaking APIs.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Lobby {
     /// Lobby ID.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Application that owns the lobby.
-    pub application_id: Snowflake,
+    pub application_id: GenericId,
     /// App-defined lobby metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -118,18 +118,18 @@ pub struct LobbyMessageMember {
 }
 
 /// Message sent in a lobby.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LobbyMessage {
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Message type.
     #[serde(rename = "type", default)]
     pub kind: u8,
     #[serde(default)]
     pub content: String,
-    pub lobby_id: Snowflake,
+    pub lobby_id: GenericId,
     /// Equal to `lobby_id`; present for compatibility with message APIs.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +141,7 @@ pub struct LobbyMessage {
     #[serde(default)]
     pub flags: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
 }
 
 /// Single-use, one-hour guild invite to a lobby's linked channel.
@@ -151,10 +151,10 @@ pub struct LobbyInvite {
 }
 
 /// Request body entry for bulk lobby member updates.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LobbyMemberUpdate {
     /// User ID to add, update, or remove.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// App-defined member metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -171,5 +171,5 @@ pub struct LobbyMemberUpdate {
 pub struct LinkLobbyChannel {
     /// Channel to link. Omit this field to unlink any currently linked channel.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
 }

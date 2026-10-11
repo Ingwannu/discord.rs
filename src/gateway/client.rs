@@ -15,7 +15,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
+use crate::model::{GenericId, RequestChannelInfo, RequestGuildMembers, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
 use crate::ws::{GatewayConnectionConfig, IdentifyOutcome, IdentifyPermit};
@@ -781,8 +781,8 @@ async fn recv_control_command(
 }
 
 pub(crate) fn voice_state_update_payload(
-    guild_id: Snowflake,
-    channel_id: Option<Snowflake>,
+    guild_id: GenericId,
+    channel_id: Option<GenericId>,
     self_mute: bool,
     self_deaf: bool,
 ) -> Value {
@@ -812,8 +812,8 @@ pub(crate) fn request_guild_members_payload(request: RequestGuildMembers) -> Val
 }
 
 pub(crate) fn request_soundboard_sounds_payload(
-    guild_ids: Vec<Snowflake>,
-    channels: Option<HashMap<Snowflake, Vec<Snowflake>>>,
+    guild_ids: Vec<GenericId>,
+    channels: Option<HashMap<GenericId, Vec<GenericId>>>,
 ) -> Value {
     serde_json::json!({
         "op": 31,
@@ -987,6 +987,7 @@ impl GatewayClient {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use std::collections::{BTreeMap, VecDeque};
     use std::io::Write;
     use std::pin::Pin;
@@ -1009,7 +1010,7 @@ mod tests {
         update_presence_payload, voice_state_update_payload, AbortOnDrop, EventCallback,
         GatewayClient, GatewayCommand, ReconnectAction, GATEWAY_COMMAND_QUEUE_CAPACITY,
     };
-    use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
+    use crate::model::{RequestChannelInfo, RequestGuildMembers, UpdatePresence};
     #[cfg(feature = "sharding")]
     use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
     use crate::ws::{GatewayCompression, GatewayConnectionConfig};
@@ -1103,12 +1104,7 @@ mod tests {
 
     #[test]
     fn voice_state_update_payload_matches_gateway_shape() {
-        let payload = voice_state_update_payload(
-            Snowflake::from("1"),
-            Some(Snowflake::from("2")),
-            false,
-            true,
-        );
+        let payload = voice_state_update_payload(test_id(1), Some(test_id(2)), false, true);
 
         assert_eq!(payload["op"], serde_json::json!(4));
         assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
@@ -1129,11 +1125,11 @@ mod tests {
         );
 
         let payload = request_guild_members_payload(RequestGuildMembers {
-            guild_id: Snowflake::from("1"),
+            guild_id: test_id(1),
             query: Some("abc".to_string()),
             limit: Some(10),
             presences: Some(true),
-            user_ids: Some(vec![Snowflake::from("2")]),
+            user_ids: Some(vec![test_id(2)]),
             nonce: Some("nonce".to_string()),
         });
         assert_eq!(payload["op"], serde_json::json!(8));
@@ -1141,7 +1137,7 @@ mod tests {
         assert_eq!(payload["d"]["user_ids"], serde_json::json!(["2"]));
         assert_eq!(payload["d"]["nonce"], serde_json::json!("nonce"));
 
-        let payload = request_channel_info_payload(RequestChannelInfo::voice_metadata("1"));
+        let payload = request_channel_info_payload(RequestChannelInfo::voice_metadata(test_id(1)));
         assert_eq!(payload["op"], serde_json::json!(43));
         assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
         assert_eq!(
@@ -1164,7 +1160,7 @@ mod tests {
         );
         assert_eq!(
             classify_gateway_command(&GatewayCommand::RequestGuildMembers(RequestGuildMembers {
-                guild_id: Snowflake::from("1"),
+                guild_id: test_id(1),
                 query: None,
                 limit: Some(0),
                 presences: None,
@@ -1175,7 +1171,7 @@ mod tests {
         );
         assert_eq!(
             classify_gateway_command(&GatewayCommand::RequestChannelInfo(
-                RequestChannelInfo::new("1", ["status"])
+                RequestChannelInfo::new(test_id(1), ["status"])
             )),
             GatewayCommandClass::BurstSensitive
         );

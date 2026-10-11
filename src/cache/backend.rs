@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::error::DiscordError;
-use crate::model::{Member, Message, Presence, Snowflake};
+use crate::model::{GenericId, Member, Message, Presence};
 
 use super::CacheHandle;
 
@@ -128,28 +128,28 @@ pub trait CacheBackend: Send + Sync {
     fn put_member(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         member: Member,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     fn get_member(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> impl Future<Output = Result<Option<Arc<Member>>, DiscordError>> + Send;
 
     fn list_members(
         &self,
-        guild_id: &Snowflake,
+        guild_id: GenericId,
     ) -> impl Future<Output = Result<Vec<Arc<Member>>, DiscordError>> + Send;
 
     /// Deletes a member unless `epoch` is older than the store's epoch.
     fn delete_member(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a message unless `epoch` is older than the store's epoch.
@@ -161,49 +161,49 @@ pub trait CacheBackend: Send + Sync {
 
     fn get_message(
         &self,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> impl Future<Output = Result<Option<Arc<Message>>, DiscordError>> + Send;
 
     fn list_messages(
         &self,
-        channel_id: &Snowflake,
+        channel_id: GenericId,
     ) -> impl Future<Output = Result<Vec<Arc<Message>>, DiscordError>> + Send;
 
     /// Deletes a message unless `epoch` is older than the store's epoch.
     fn delete_message(
         &self,
         epoch: u64,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a presence unless `epoch` is older than the store's epoch.
     fn put_presence(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         presence: Presence,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     fn get_presence(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> impl Future<Output = Result<Option<Arc<Presence>>, DiscordError>> + Send;
 
     fn list_presences(
         &self,
-        guild_id: &Snowflake,
+        guild_id: GenericId,
     ) -> impl Future<Output = Result<Vec<Arc<Presence>>, DiscordError>> + Send;
 
     /// Deletes a presence unless `epoch` is older than the store's epoch.
     fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 }
 
@@ -236,8 +236,8 @@ impl CacheBackend for CacheHandle {
     async fn put_member(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         member: Member,
     ) -> Result<(), DiscordError> {
         self.fenced_upsert_member(epoch, guild_id, user_id, member)
@@ -247,21 +247,21 @@ impl CacheBackend for CacheHandle {
 
     async fn get_member(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Option<Arc<Member>>, DiscordError> {
         Ok(self.member_arc(guild_id, user_id).await)
     }
 
-    async fn list_members(&self, guild_id: &Snowflake) -> Result<Vec<Arc<Member>>, DiscordError> {
+    async fn list_members(&self, guild_id: GenericId) -> Result<Vec<Arc<Member>>, DiscordError> {
         Ok(self.members_arc(guild_id).await)
     }
 
     async fn delete_member(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.fenced_remove_member(epoch, guild_id, user_id).await;
         Ok(())
@@ -274,15 +274,15 @@ impl CacheBackend for CacheHandle {
 
     async fn get_message(
         &self,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Option<Arc<Message>>, DiscordError> {
         Ok(self.message_arc(channel_id, message_id).await)
     }
 
     async fn list_messages(
         &self,
-        channel_id: &Snowflake,
+        channel_id: GenericId,
     ) -> Result<Vec<Arc<Message>>, DiscordError> {
         Ok(self.messages_arc(channel_id).await)
     }
@@ -290,8 +290,8 @@ impl CacheBackend for CacheHandle {
     async fn delete_message(
         &self,
         epoch: u64,
-        channel_id: &Snowflake,
-        message_id: &Snowflake,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.fenced_remove_message(epoch, channel_id, message_id)
             .await;
@@ -301,8 +301,8 @@ impl CacheBackend for CacheHandle {
     async fn put_presence(
         &self,
         epoch: u64,
-        guild_id: Snowflake,
-        user_id: Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
         presence: Presence,
     ) -> Result<(), DiscordError> {
         self.fenced_upsert_presence(epoch, guild_id, user_id, presence)
@@ -312,15 +312,15 @@ impl CacheBackend for CacheHandle {
 
     async fn get_presence(
         &self,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Option<Arc<Presence>>, DiscordError> {
         Ok(self.presence_arc(guild_id, user_id).await)
     }
 
     async fn list_presences(
         &self,
-        guild_id: &Snowflake,
+        guild_id: GenericId,
     ) -> Result<Vec<Arc<Presence>>, DiscordError> {
         Ok(self.presences_arc(guild_id).await)
     }
@@ -328,8 +328,8 @@ impl CacheBackend for CacheHandle {
     async fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.fenced_remove_presence(epoch, guild_id, user_id).await;
         Ok(())

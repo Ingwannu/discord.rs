@@ -2,17 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Member, Snowflake};
+use super::{GenericId, Member};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `VoiceState`.
 pub struct VoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,7 +42,7 @@ pub struct VoiceState {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyCurrentUserVoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,15 +53,15 @@ pub struct ModifyCurrentUserVoiceState {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyUserVoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `VoiceServerUpdate`.
 pub struct VoiceServerUpdate {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
@@ -86,31 +86,31 @@ pub struct SetVoiceChannelStatus {
     pub status: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StageInstance`.
 pub struct StageInstance {
-    pub id: Snowflake,
-    pub guild_id: Snowflake,
-    pub channel_id: Snowflake,
+    pub id: GenericId,
+    pub guild_id: GenericId,
+    pub channel_id: GenericId,
     pub topic: String,
     pub privacy_level: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discoverable_disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_scheduled_event_id: Option<Snowflake>,
+    pub guild_scheduled_event_id: Option<GenericId>,
 }
 
 /// Request body for creating a stage instance.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateStageInstance {
-    pub channel_id: Snowflake,
+    pub channel_id: GenericId,
     pub topic: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_level: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub send_start_notification: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_scheduled_event_id: Option<Snowflake>,
+    pub guild_scheduled_event_id: Option<GenericId>,
 }
 
 /// Request body for modifying a stage instance.

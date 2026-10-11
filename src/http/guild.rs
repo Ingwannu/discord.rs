@@ -6,28 +6,28 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    GetGuildQuery, Guild, GuildIncidentsData, GuildPreview, ModifyGuild,
-    ModifyGuildIncidentActions, Snowflake,
+    GenericId, GetGuildQuery, Guild, GuildIncidentsData, GuildPreview, ModifyGuild,
+    ModifyGuildIncidentActions,
 };
 
 use super::paths::{self, get_guild_query};
 use super::RestClient;
 
 impl RestClient {
-    pub async fn get_guild(&self, guild_id: impl Into<Snowflake>) -> Result<Guild, DiscordError> {
+    pub async fn get_guild(&self, guild_id: GenericId) -> Result<Guild, DiscordError> {
         self.get_guild_with_query(guild_id, &GetGuildQuery::default())
             .await
     }
 
     pub async fn get_guild_with_query(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         query: &GetGuildQuery,
     ) -> Result<Guild, DiscordError> {
         let query = get_guild_query(query);
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}{query}", guild_id.into()),
+            &format!("/guilds/{}{query}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -35,7 +35,7 @@ impl RestClient {
 
     pub async fn update_guild(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<Guild, DiscordError> {
         self.update_guild_typed(guild_id, body).await
@@ -43,23 +43,19 @@ impl RestClient {
 
     pub async fn update_guild_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
     ) -> Result<Guild, DiscordError>
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
-            &format!("/guilds/{}", guild_id.into()),
-            Some(body),
-        )
-        .await
+        self.request_typed(Method::PATCH, &format!("/guilds/{}", guild_id), Some(body))
+            .await
     }
 
     pub async fn modify_guild(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuild,
     ) -> Result<Guild, DiscordError> {
         self.update_guild_typed(guild_id, body).await
@@ -67,11 +63,11 @@ impl RestClient {
 
     pub async fn get_guild_preview(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::GET,
-            &format!("/guilds/{}/preview", guild_id.into()),
+            &format!("/guilds/{}/preview", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -79,11 +75,11 @@ impl RestClient {
 
     pub async fn get_guild_preview_typed(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<GuildPreview, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/preview", guild_id.into()),
+            &format!("/guilds/{}/preview", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -91,12 +87,12 @@ impl RestClient {
 
     pub async fn modify_guild_incident_actions(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildIncidentActions,
     ) -> Result<GuildIncidentsData, DiscordError> {
         self.request_typed(
             Method::PUT,
-            &format!("/guilds/{}/incident-actions", guild_id.into()),
+            &format!("/guilds/{}/incident-actions", guild_id),
             Some(body),
         )
         .await
@@ -126,10 +122,10 @@ impl RestClient {
         since = "3.0.0",
         note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
     )]
-    pub async fn delete_guild(&self, guild_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn delete_guild(&self, guild_id: GenericId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/guilds/{}", guild_id.into()),
+            &format!("/guilds/{}", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -166,12 +162,12 @@ impl RestClient {
     )]
     pub async fn modify_guild_mfa_level(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         level: u64,
     ) -> Result<crate::model::GuildMfaLevel, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/mfa", guild_id.into()),
+            &format!("/guilds/{}/mfa", guild_id),
             Some(&crate::model::GuildMfaLevel { level }),
         )
         .await

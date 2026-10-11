@@ -22,9 +22,10 @@
 //   직렬화 왕복이 깨진다. (2)는 Id<M>의 불변식을 무너뜨린다. 전용 타입은 왜 이 값이 다른지를
 //   타입 이름과 문서로 남긴다. 모두 "ID처럼 보이지만 Id가 아닌 값"이라 id 모듈 아래에 두면
 //   찾기 쉽고, 파일을 분리하면 Id<M> 본문과 섞이지 않는다.
-// - 장점, 단점 및 영향: 타입 수가 늘지만 각 타입은 작고 Copy(위젯 ID 제외)다. 시리즈 2가
-//   해당 필드(GuildWidgetMember.id, authorizing_integration_owners, 업로드 첨부,
-//   컴포넌트 id, 투표 answer_id)를 이 타입으로 옮긴다.
+// - 장점, 단점 및 영향: 타입 수가 늘지만 각 타입은 작고 Copy(위젯 ID 제외)다. 시리즈 2의
+//   A 단계에서 GuildWidgetMember.id, authorizing_integration_owners(구조체
+//   AuthorizingIntegrationOwners), MessageComponent.id, 투표 answer_id를 옮겼다. UploadId를
+//   담는 타입 요청 필드는 아직 없다(5단계 첨부 메타데이터 enum에서 쓴다).
 
 use std::fmt;
 use std::str::FromStr;

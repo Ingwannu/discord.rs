@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::User;
+use super::{PollAnswerId, User};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `PollMedia`.
@@ -18,15 +18,17 @@ pub struct PollMedia {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `PollAnswer`.
 pub struct PollAnswer {
+    /// Set by Discord on received polls; leave `None` when creating one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub answer_id: Option<u64>,
+    pub answer_id: Option<PollAnswerId>,
     pub poll_media: PollMedia,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `PollAnswerCount`.
 pub struct PollAnswerCount {
-    pub id: u64,
+    /// The [`PollAnswer::answer_id`] this count belongs to.
+    pub id: PollAnswerId,
     pub count: u64,
     pub me_voted: bool,
 }

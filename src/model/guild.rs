@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::Emoji;
 
 use super::{
-    Channel, Member, Presence, Role, Snowflake, SoundboardSound, StageInstance, Sticker, VoiceState,
+    Channel, GenericId, Member, PermissionsBitField, Presence, Role, SoundboardSound,
+    StageInstance, Sticker, VoiceState,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -27,18 +28,96 @@ pub struct CreateGuild {
     pub default_message_notifications: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit_content_filter: Option<u64>,
+    /// Roles to create; the first entry edits `@everyone`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Vec<Role>>,
+    pub roles: Option<Vec<CreateGuildPlaceholderRole>>,
+    /// Channels to create (categories before their children).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channels: Option<Vec<Channel>>,
+    pub channels: Option<Vec<CreateGuildPlaceholderChannel>>,
+    /// Placeholder of an entry in [`Self::channels`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub afk_channel_id: Option<Snowflake>,
+    pub afk_channel_id: Option<CreateGuildPlaceholderId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
+    /// Placeholder of an entry in [`Self::channels`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_channel_id: Option<Snowflake>,
+    pub system_channel_id: Option<CreateGuildPlaceholderId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_channel_flags: Option<u64>,
+}
+
+/// Local reference inside one [`CreateGuild`] body.
+///
+/// The legacy create-guild route let a request name the roles and channels
+/// it was creating with small integers (the `@everyone` entry was usually
+/// `0`) so that channel `parent_id`, permission overwrites, and
+/// `afk_channel_id`/`system_channel_id` could point at them before Discord
+/// assigned real IDs. Those numbers are not snowflakes and mean nothing
+/// outside the request, so they get this type instead of [`GenericId`]
+/// (docs/design/3.0-types-events-requests.md §1 exceptions). Serialized as a
+/// JSON integer. Only used by the deprecated `RestClient::create_guild`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CreateGuildPlaceholderId(u64);
+
+impl CreateGuildPlaceholderId {
+    /// Wraps a placeholder number; `0` is allowed.
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// Returns the placeholder number.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Role entry of a [`CreateGuild`] body.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateGuildPlaceholderRole {
+    /// Placeholder other entries use to refer to this role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<CreateGuildPlaceholderId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hoist: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PermissionsBitField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mentionable: Option<bool>,
+}
+
+/// Channel entry of a [`CreateGuild`] body.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateGuildPlaceholderChannel {
+    /// Placeholder other entries use to refer to this channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<CreateGuildPlaceholderId>,
+    pub name: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<u8>,
+    /// Placeholder of a category channel listed earlier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<CreateGuildPlaceholderId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_overwrites: Option<Vec<CreateGuildPlaceholderOverwrite>>,
+}
+
+/// Permission overwrite of a [`CreateGuildPlaceholderChannel`], targeting a
+/// role placeholder.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateGuildPlaceholderOverwrite {
+    /// Placeholder of a role in [`CreateGuild::roles`].
+    pub id: CreateGuildPlaceholderId,
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow: Option<PermissionsBitField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deny: Option<PermissionsBitField>,
 }
 
 /// Request body for creating a guild from a guild template
@@ -74,7 +153,7 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit_content_filter: Option<Option<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub afk_channel_id: Option<Option<Snowflake>>,
+    pub afk_channel_id: Option<Option<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,13 +165,13 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banner: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_channel_id: Option<Option<Snowflake>>,
+    pub system_channel_id: Option<Option<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_channel_flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rules_channel_id: Option<Option<Snowflake>>,
+    pub rules_channel_id: Option<Option<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_updates_channel_id: Option<Option<Snowflake>>,
+    pub public_updates_channel_id: Option<Option<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_locale: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,16 +181,16 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_progress_bar_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub safety_alerts_channel_id: Option<Option<Snowflake>>,
+    pub safety_alerts_channel_id: Option<Option<GenericId>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Guild`.
 pub struct Guild {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_id: Option<Snowflake>,
+    pub owner_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
     #[serde(default)]
@@ -137,13 +216,13 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vanity_url_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_channel_id: Option<Snowflake>,
+    pub system_channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rules_channel_id: Option<Snowflake>,
+    pub rules_channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_locale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub afk_channel_id: Option<Snowflake>,
+    pub afk_channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,11 +234,11 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfa_level: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_channel_flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_updates_channel_id: Option<Snowflake>,
+    pub public_updates_channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw_level: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +246,7 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_progress_bar_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub safety_alerts_channel_id: Option<Snowflake>,
+    pub safety_alerts_channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approximate_member_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,10 +334,10 @@ pub struct ModifyGuildIncidentActions {
     pub dms_disabled_until: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `CurrentUserGuild`.
 pub struct CurrentUserGuild {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -279,8 +358,8 @@ pub struct CurrentUserGuild {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `CurrentUserGuildsQuery`.
 pub struct CurrentUserGuildsQuery {
-    pub before: Option<Snowflake>,
-    pub after: Option<Snowflake>,
+    pub before: Option<GenericId>,
+    pub after: Option<GenericId>,
     pub limit: Option<u64>,
     pub with_counts: Option<bool>,
     /// Returns only the guilds stored in this shard (`0` to
@@ -290,10 +369,10 @@ pub struct CurrentUserGuildsQuery {
     pub shard: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildPreview`.
 pub struct GuildPreview {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,

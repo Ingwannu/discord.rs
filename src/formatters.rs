@@ -46,7 +46,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::model::Snowflake;
+use crate::model::GenericId;
 
 // ---------------------------------------------------------------------------
 // Display building blocks
@@ -1440,15 +1440,15 @@ pub enum MentionKind {
 /// `None`, which leaves the mention untouched (discord.js does the same for
 /// uncached targets).
 ///
-/// Any `Fn(MentionKind, &Snowflake) -> Option<String>` closure is a
+/// Any `Fn(MentionKind, GenericId) -> Option<String>` closure is a
 /// resolver; annotate the parameter types when passing a closure literal:
 ///
 /// ```
 /// use discordrs::formatters::{clean_content, MentionKind};
-/// use discordrs::model::Snowflake;
+/// use discordrs::GenericId;
 ///
-/// let resolver = |kind: MentionKind, id: &Snowflake| match (kind, id.as_str()) {
-///     (MentionKind::User, "80351110224678912") => Some("Nelly".to_string()),
+/// let resolver = |kind: MentionKind, id: GenericId| match (kind, id.get()) {
+///     (MentionKind::User, 80351110224678912) => Some("Nelly".to_string()),
 ///     _ => None,
 /// };
 /// assert_eq!(
@@ -1459,34 +1459,34 @@ pub enum MentionKind {
 pub trait MentionResolver {
     /// Display name for a user (discord.js uses the member's display name,
     /// then the user's).
-    fn user(&self, _id: &Snowflake) -> Option<String> {
+    fn user(&self, _id: GenericId) -> Option<String> {
         None
     }
 
     /// Name of a role.
-    fn role(&self, _id: &Snowflake) -> Option<String> {
+    fn role(&self, _id: GenericId) -> Option<String> {
         None
     }
 
     /// Name of a channel.
-    fn channel(&self, _id: &Snowflake) -> Option<String> {
+    fn channel(&self, _id: GenericId) -> Option<String> {
         None
     }
 }
 
 impl<F> MentionResolver for F
 where
-    F: Fn(MentionKind, &Snowflake) -> Option<String>,
+    F: Fn(MentionKind, GenericId) -> Option<String>,
 {
-    fn user(&self, id: &Snowflake) -> Option<String> {
+    fn user(&self, id: GenericId) -> Option<String> {
         self(MentionKind::User, id)
     }
 
-    fn role(&self, id: &Snowflake) -> Option<String> {
+    fn role(&self, id: GenericId) -> Option<String> {
         self(MentionKind::Role, id)
     }
 
-    fn channel(&self, id: &Snowflake) -> Option<String> {
+    fn channel(&self, id: GenericId) -> Option<String> {
         self(MentionKind::Channel, id)
     }
 }
@@ -1524,7 +1524,7 @@ where
 }
 
 enum Tag<'t> {
-    Mention(MentionKind, Snowflake),
+    Mention(MentionKind, GenericId),
     Command(&'t str),
     Emoji(&'t str),
 }
@@ -1533,13 +1533,13 @@ impl Tag<'_> {
     fn resolve<R: MentionResolver + ?Sized>(&self, resolver: &R) -> Option<String> {
         match self {
             Self::Mention(MentionKind::User, id) => {
-                resolver.user(id).map(|name| format!("@{name}"))
+                resolver.user(*id).map(|name| format!("@{name}"))
             }
             Self::Mention(MentionKind::Role, id) => {
-                resolver.role(id).map(|name| format!("@{name}"))
+                resolver.role(*id).map(|name| format!("@{name}"))
             }
             Self::Mention(MentionKind::Channel, id) => {
-                resolver.channel(id).map(|name| format!("#{name}"))
+                resolver.channel(*id).map(|name| format!("#{name}"))
             }
             Self::Command(name) => Some(format!("/{name}")),
             Self::Emoji(name) => Some(format!(":{name}:")),
@@ -1566,7 +1566,10 @@ fn parse_tag(text: &str, open: usize) -> Option<(usize, Tag<'_>)> {
 
     if let Some(kind) = kind {
         let (id, end) = snowflake_then_close(text, body_offset)?;
-        return Some((end, Tag::Mention(kind, Snowflake::new(id))));
+        // Twenty digits can exceed u64 and all-zero digits are not an ID.
+        // Neither can name a real target, so the tag stays text, exactly
+        // what an unresolved mention produces.
+        return id.parse().ok().map(|id| (end, Tag::Mention(kind, id)));
     }
 
     if let Some(command) = rest.strip_prefix('/') {

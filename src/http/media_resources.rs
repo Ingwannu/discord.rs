@@ -3,20 +3,17 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateGuildSticker, ModifyGuildSticker, Snowflake, SoundboardSound, SoundboardSoundList,
+    CreateGuildSticker, GenericId, ModifyGuildSticker, SoundboardSound, SoundboardSoundList,
     Sticker, StickerPack, StickerPackList,
 };
 
 use super::{decode_response, serialize_body, FileAttachment, RequestBody, RestClient};
 
 impl RestClient {
-    pub async fn get_sticker(
-        &self,
-        sticker_id: impl Into<Snowflake>,
-    ) -> Result<Sticker, DiscordError> {
+    pub async fn get_sticker(&self, sticker_id: GenericId) -> Result<Sticker, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/stickers/{}", sticker_id.into()),
+            &format!("/stickers/{}", sticker_id),
             Option::<&Value>::None,
         )
         .await
@@ -27,13 +24,10 @@ impl RestClient {
             .await
     }
 
-    pub async fn get_sticker_pack(
-        &self,
-        pack_id: impl Into<Snowflake>,
-    ) -> Result<StickerPack, DiscordError> {
+    pub async fn get_sticker_pack(&self, pack_id: GenericId) -> Result<StickerPack, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/sticker-packs/{}", pack_id.into()),
+            &format!("/sticker-packs/{}", pack_id),
             Option::<&Value>::None,
         )
         .await
@@ -41,11 +35,11 @@ impl RestClient {
 
     pub async fn get_guild_stickers(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<Vec<Sticker>, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/stickers", guild_id.into()),
+            &format!("/guilds/{}/stickers", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -53,12 +47,12 @@ impl RestClient {
 
     pub async fn get_guild_sticker(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sticker_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sticker_id: GenericId,
     ) -> Result<Sticker, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
             Option::<&Value>::None,
         )
         .await
@@ -66,11 +60,11 @@ impl RestClient {
 
     pub async fn create_guild_sticker(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
-        let path = format!("/guilds/{}/stickers", guild_id.into());
+        let path = format!("/guilds/{}/stickers", guild_id);
         decode_response(
             self.request_with_headers(
                 Method::POST,
@@ -86,14 +80,14 @@ impl RestClient {
 
     pub async fn create_guild_sticker_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &B,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError>
     where
         B: serde::Serialize + ?Sized,
     {
-        let path = format!("/guilds/{}/stickers", guild_id.into());
+        let path = format!("/guilds/{}/stickers", guild_id);
         decode_response(
             self.request_with_headers(
                 Method::POST,
@@ -109,7 +103,7 @@ impl RestClient {
 
     pub async fn create_guild_sticker_from_request(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &CreateGuildSticker,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
@@ -118,13 +112,13 @@ impl RestClient {
 
     pub async fn modify_guild_sticker(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sticker_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sticker_id: GenericId,
         body: &Value,
     ) -> Result<Sticker, DiscordError> {
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
             Some(body),
         )
         .await
@@ -132,8 +126,8 @@ impl RestClient {
 
     pub async fn modify_guild_sticker_typed<B>(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sticker_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sticker_id: GenericId,
         body: &B,
     ) -> Result<Sticker, DiscordError>
     where
@@ -141,7 +135,7 @@ impl RestClient {
     {
         self.request_typed(
             Method::PATCH,
-            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
             Some(body),
         )
         .await
@@ -149,8 +143,8 @@ impl RestClient {
 
     pub async fn modify_guild_sticker_from_request(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sticker_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sticker_id: GenericId,
         body: &ModifyGuildSticker,
     ) -> Result<Sticker, DiscordError> {
         self.modify_guild_sticker_typed(guild_id, sticker_id, body)
@@ -159,12 +153,12 @@ impl RestClient {
 
     pub async fn delete_guild_sticker(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sticker_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sticker_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/guilds/{}/stickers/{}", guild_id.into(), sticker_id.into()),
+            &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
             Option::<&Value>::None,
         )
         .await
@@ -172,12 +166,12 @@ impl RestClient {
 
     pub async fn send_soundboard_sound(
         &self,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
         body: &Value,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::POST,
-            &format!("/channels/{}/send-soundboard-sound", channel_id.into()),
+            &format!("/channels/{}/send-soundboard-sound", channel_id),
             Some(body),
         )
         .await
@@ -196,11 +190,11 @@ impl RestClient {
 
     pub async fn list_guild_soundboard_sounds(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<SoundboardSoundList, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/guilds/{}/soundboard-sounds", guild_id.into()),
+            &format!("/guilds/{}/soundboard-sounds", guild_id),
             Option::<&Value>::None,
         )
         .await
@@ -208,16 +202,12 @@ impl RestClient {
 
     pub async fn get_guild_soundboard_sound(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sound_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sound_id: GenericId,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!(
-                "/guilds/{}/soundboard-sounds/{}",
-                guild_id.into(),
-                sound_id.into()
-            ),
+            &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
             Option::<&Value>::None,
         )
         .await
@@ -225,12 +215,12 @@ impl RestClient {
 
     pub async fn create_guild_soundboard_sound(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/guilds/{}/soundboard-sounds", guild_id.into()),
+            &format!("/guilds/{}/soundboard-sounds", guild_id),
             Some(body),
         )
         .await
@@ -238,17 +228,13 @@ impl RestClient {
 
     pub async fn modify_guild_soundboard_sound(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sound_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sound_id: GenericId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
             Method::PATCH,
-            &format!(
-                "/guilds/{}/soundboard-sounds/{}",
-                guild_id.into(),
-                sound_id.into()
-            ),
+            &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
             Some(body),
         )
         .await
@@ -256,16 +242,12 @@ impl RestClient {
 
     pub async fn delete_guild_soundboard_sound(
         &self,
-        guild_id: impl Into<Snowflake>,
-        sound_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        sound_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!(
-                "/guilds/{}/soundboard-sounds/{}",
-                guild_id.into(),
-                sound_id.into()
-            ),
+            &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
             Option::<&Value>::None,
         )
         .await

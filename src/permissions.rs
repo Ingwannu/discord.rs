@@ -66,7 +66,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::bitfield::{permissions as flag, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
-use crate::model::{Channel, Guild, Member, PermissionOverwrite, Role, Snowflake};
+use crate::model::{Channel, GenericId, Guild, Member, PermissionOverwrite, Role};
 
 /// Permissions that cannot be set in channel overwrites (no T/V/S column in
 /// Discord's table): KICK_MEMBERS, BAN_MEMBERS, ADMINISTRATOR, MANAGE_GUILD,
@@ -272,38 +272,41 @@ impl ChannelClass {
 ///
 /// ```
 /// use discordrs::bitfield::permissions;
-/// use discordrs::model::Snowflake;
 /// use discordrs::permissions::{ChannelClass, ChannelPermissionInput, MemberPermissionInput};
+/// use discordrs::GenericId;
 ///
-/// let guild = Snowflake::from(100u64);
-/// let owner = Snowflake::from(1u64);
-/// let member = Snowflake::from(2u64);
-/// let moderators = Snowflake::from(300u64);
+/// # fn main() -> Result<(), discordrs::InvalidId> {
+/// let guild = GenericId::try_from(100_u64)?;
+/// let owner = GenericId::try_from(1_u64)?;
+/// let member = GenericId::try_from(2_u64)?;
+/// let moderators: GenericId = "300".parse()?;
 ///
-/// let input = MemberPermissionInput::new(&guild, &owner, &member, permissions::VIEW_CHANNEL)
-///     .role(&moderators, permissions::SEND_MESSAGES | permissions::ATTACH_FILES);
+/// let input = MemberPermissionInput::new(guild, owner, member, permissions::VIEW_CHANNEL)
+///     .role(moderators, permissions::SEND_MESSAGES | permissions::ATTACH_FILES);
 ///
 /// let channel = ChannelPermissionInput::new(ChannelClass::Text, &[]);
 /// let result = input.in_channel(&channel).known().unwrap();
 /// assert!(result.has(permissions::ATTACH_FILES));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug)]
-pub struct MemberPermissionInput<'a> {
-    guild_id: &'a Snowflake,
-    owner_id: &'a Snowflake,
-    member_id: &'a Snowflake,
+pub struct MemberPermissionInput {
+    guild_id: GenericId,
+    owner_id: GenericId,
+    member_id: GenericId,
     everyone: Permissions,
-    roles: Vec<(&'a Snowflake, Permissions)>,
+    roles: Vec<(GenericId, Permissions)>,
     timed_out: bool,
 }
 
-impl<'a> MemberPermissionInput<'a> {
+impl MemberPermissionInput {
     /// Starts an input for `member_id` in `guild_id` (owned by `owner_id`),
     /// where `everyone` is the `@everyone` role's permissions.
     pub fn new(
-        guild_id: &'a Snowflake,
-        owner_id: &'a Snowflake,
-        member_id: &'a Snowflake,
+        guild_id: GenericId,
+        owner_id: GenericId,
+        member_id: GenericId,
         everyone: Permissions,
     ) -> Self {
         Self {
@@ -319,7 +322,7 @@ impl<'a> MemberPermissionInput<'a> {
     /// Adds one of the member's roles with its guild-level permissions.
     /// An entry for the `@everyone` role (ID equal to the guild ID) only adds
     /// its permissions to the base; it never counts as a role overwrite.
-    pub fn role(mut self, role_id: &'a Snowflake, permissions: Permissions) -> Self {
+    pub fn role(mut self, role_id: GenericId, permissions: Permissions) -> Self {
         self.roles.push((role_id, permissions));
         self
     }
@@ -327,7 +330,7 @@ impl<'a> MemberPermissionInput<'a> {
     /// Adds several roles; see [`MemberPermissionInput::role`].
     pub fn roles<I>(mut self, roles: I) -> Self
     where
-        I: IntoIterator<Item = (&'a Snowflake, Permissions)>,
+        I: IntoIterator<Item = (GenericId, Permissions)>,
     {
         self.roles.extend(roles);
         self
@@ -411,7 +414,7 @@ impl<'a> MemberPermissionInput<'a> {
             .fold(self.everyone, |acc, (_, permissions)| acc | *permissions)
     }
 
-    fn has_role(&self, role_id: &Snowflake) -> bool {
+    fn has_role(&self, role_id: GenericId) -> bool {
         role_id != self.guild_id && self.roles.iter().any(|(id, _)| *id == role_id)
     }
 
@@ -423,9 +426,9 @@ impl<'a> MemberPermissionInput<'a> {
         let mut member = (0u64, 0u64);
         for overwrite in overwrites {
             let tier = match overwrite.kind {
-                OVERWRITE_ROLE if overwrite.id == *self.guild_id => &mut everyone,
-                OVERWRITE_ROLE if self.has_role(&overwrite.id) => &mut roles,
-                OVERWRITE_MEMBER if overwrite.id == *self.member_id => &mut member,
+                OVERWRITE_ROLE if overwrite.id == self.guild_id => &mut everyone,
+                OVERWRITE_ROLE if self.has_role(overwrite.id) => &mut roles,
+                OVERWRITE_MEMBER if overwrite.id == self.member_id => &mut member,
                 // Other members' and roles' overwrites, plus overwrite types
                 // Discord has not defined, do not apply to this member.
                 _ => continue,
@@ -519,7 +522,7 @@ impl<'a> ChannelPermissionInput<'a> {
     /// rejected. Parents of channel types this crate does not know yet are
     /// accepted as the caller asserts them.
     pub fn from_channel(
-        guild_id: &Snowflake,
+        guild_id: GenericId,
         channel: &'a Channel,
         parent: Option<&'a Channel>,
     ) -> Result<Self, PermissionDataError> {
@@ -527,9 +530,9 @@ impl<'a> ChannelPermissionInput<'a> {
         if class != ChannelClass::Thread {
             return overwrite_source(class, channel, channel.is_obfuscated());
         }
-        let parent = parent.ok_or_else(|| PermissionDataError::MissingParentChannel {
-            thread_id: channel.id.clone(),
-            parent_id: channel.parent_id.clone(),
+        let parent = parent.ok_or(PermissionDataError::MissingParentChannel {
+            thread_id: channel.id,
+            parent_id: channel.parent_id,
         })?;
         overwrite_source(
             ChannelClass::Thread,
@@ -544,7 +547,7 @@ impl<'a> ChannelPermissionInput<'a> {
 /// absent is left to [`ChannelPermissionInput::from_channel`], so owners and
 /// administrators, whose answer needs no overwrites, are not blocked by it.
 fn validate_target(
-    guild_id: &Snowflake,
+    guild_id: GenericId,
     channel: &Channel,
     parent: Option<&Channel>,
 ) -> Result<ChannelClass, PermissionDataError> {
@@ -555,9 +558,9 @@ fn validate_target(
     if let Some(expected) = &channel.parent_id {
         if *expected != parent.id {
             return Err(PermissionDataError::ParentMismatch {
-                thread_id: channel.id.clone(),
-                expected: expected.clone(),
-                found: parent.id.clone(),
+                thread_id: channel.id,
+                expected: *expected,
+                found: parent.id,
             });
         }
     }
@@ -570,8 +573,8 @@ fn validate_target(
     ) || parent.kind == GUILD_DIRECTORY;
     if impossible {
         return Err(PermissionDataError::InvalidParentChannel {
-            thread_id: channel.id.clone(),
-            parent_id: parent.id.clone(),
+            thread_id: channel.id,
+            parent_id: parent.id,
             kind: parent.kind,
         });
     }
@@ -579,23 +582,23 @@ fn validate_target(
 }
 
 fn guild_channel_class(
-    guild_id: &Snowflake,
+    guild_id: GenericId,
     channel: &Channel,
 ) -> Result<ChannelClass, PermissionDataError> {
-    let class = ChannelClass::from_channel_type(channel.kind).ok_or_else(|| {
+    let class = ChannelClass::from_channel_type(channel.kind).ok_or({
         PermissionDataError::NotGuildChannel {
-            channel_id: channel.id.clone(),
+            channel_id: channel.id,
             kind: channel.kind,
         }
     })?;
     // GUILD_CREATE channels omit `guild_id`; only a contradicting value is
     // an error.
     if let Some(found) = &channel.guild_id {
-        if found != guild_id {
+        if *found != guild_id {
             return Err(PermissionDataError::GuildMismatch {
-                channel_id: channel.id.clone(),
-                expected: guild_id.clone(),
-                found: found.clone(),
+                channel_id: channel.id,
+                expected: guild_id,
+                found: *found,
             });
         }
     }
@@ -612,7 +615,7 @@ fn overwrite_source(
         (None, true) => &[],
         (None, false) => {
             return Err(PermissionDataError::MissingPermissionOverwrites {
-                channel_id: source.id.clone(),
+                channel_id: source.id,
             })
         }
     };
@@ -631,32 +634,32 @@ pub enum PermissionDataError {
     /// The guild is not cached.
     MissingGuild {
         /// Guild that was looked up.
-        guild_id: Snowflake,
+        guild_id: GenericId,
     },
     /// The guild object has no `owner_id`.
     MissingGuildOwner {
         /// Guild whose owner is unknown.
-        guild_id: Snowflake,
+        guild_id: GenericId,
     },
     /// A role (the `@everyone` role when `role_id == guild_id`) is not
     /// available.
     MissingRole {
         /// Guild the role belongs to.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// Role that was looked up.
-        role_id: Snowflake,
+        role_id: GenericId,
     },
     /// A role object has no `permissions` field.
     MissingRolePermissions {
         /// Role without permissions.
-        role_id: Snowflake,
+        role_id: GenericId,
     },
     /// The member is not cached.
     MissingMember {
         /// Guild that was looked up.
-        guild_id: Snowflake,
+        guild_id: GenericId,
         /// User whose member object is missing.
-        user_id: Snowflake,
+        user_id: GenericId,
     },
     /// The member object has no `user`, so its ID (needed for the owner
     /// check and member overwrites) is unknown. Message `member` objects are
@@ -665,53 +668,53 @@ pub enum PermissionDataError {
     /// The channel is not cached.
     MissingChannel {
         /// Channel that was looked up.
-        channel_id: Snowflake,
+        channel_id: GenericId,
     },
     /// A thread was given without its parent channel (or the parent is not
     /// cached).
     MissingParentChannel {
         /// The thread.
-        thread_id: Snowflake,
+        thread_id: GenericId,
         /// The thread's `parent_id`, when the thread object has one.
-        parent_id: Option<Snowflake>,
+        parent_id: Option<GenericId>,
     },
     /// The channel has no `permission_overwrites` (a partial channel).
     MissingPermissionOverwrites {
         /// Channel without overwrites.
-        channel_id: Snowflake,
+        channel_id: GenericId,
     },
     /// The channel is a DM or group DM.
     NotGuildChannel {
         /// The channel.
-        channel_id: Snowflake,
+        channel_id: GenericId,
         /// Its Discord channel type.
         kind: u8,
     },
     /// The channel belongs to another guild.
     GuildMismatch {
         /// The channel.
-        channel_id: Snowflake,
+        channel_id: GenericId,
         /// Guild the calculation is for.
-        expected: Snowflake,
+        expected: GenericId,
         /// Guild the channel says it belongs to.
-        found: Snowflake,
+        found: GenericId,
     },
     /// The supplied parent is not the thread's `parent_id`.
     ParentMismatch {
         /// The thread.
-        thread_id: Snowflake,
+        thread_id: GenericId,
         /// The thread's `parent_id`.
-        expected: Snowflake,
+        expected: GenericId,
         /// ID of the channel supplied as parent.
-        found: Snowflake,
+        found: GenericId,
     },
     /// The supplied parent cannot contain threads (a voice, stage,
     /// category, directory, or thread channel).
     InvalidParentChannel {
         /// The thread.
-        thread_id: Snowflake,
+        thread_id: GenericId,
         /// The supplied parent.
-        parent_id: Snowflake,
+        parent_id: GenericId,
         /// The parent's Discord channel type.
         kind: u8,
     },
@@ -847,11 +850,11 @@ pub fn permissions_for(
     parent: Option<&Channel>,
     now: SystemTime,
 ) -> Result<ChannelPermissions, PermissionDataError> {
-    validate_target(&guild.id, channel, parent)?;
+    validate_target(guild.id, channel, parent)?;
     match MemberFacts::from_guild(guild, member).resolve(now)? {
         Resolution::Bypass(bypass) => Ok(ChannelPermissions::Known(bypass)),
         Resolution::Member(resolved) => {
-            let target = ChannelPermissionInput::from_channel(&guild.id, channel, parent)?;
+            let target = ChannelPermissionInput::from_channel(guild.id, channel, parent)?;
             Ok(resolved.input().in_channel(&target))
         }
     }
@@ -861,8 +864,8 @@ pub fn permissions_for(
 /// for what is read.
 pub async fn cached_guild_permissions(
     cache: &CacheHandle,
-    guild_id: &Snowflake,
-    user_id: &Snowflake,
+    guild_id: GenericId,
+    user_id: GenericId,
     now: SystemTime,
 ) -> Result<ComputedPermissions, PermissionDataError> {
     match MemberFacts::from_cache(cache, guild_id, user_id)
@@ -890,21 +893,18 @@ pub async fn cached_guild_permissions(
 /// administrators need nothing else beyond what proves their status.
 pub async fn cached_permissions_for(
     cache: &CacheHandle,
-    guild_id: &Snowflake,
-    user_id: &Snowflake,
-    channel_id: &Snowflake,
+    guild_id: GenericId,
+    user_id: GenericId,
+    channel_id: GenericId,
     now: SystemTime,
 ) -> Result<ChannelPermissions, PermissionDataError> {
     let facts = MemberFacts::from_cache(cache, guild_id, user_id).await?;
-    let channel =
-        cache
-            .channel(channel_id)
-            .await
-            .ok_or_else(|| PermissionDataError::MissingChannel {
-                channel_id: channel_id.clone(),
-            })?;
+    let channel = cache
+        .channel(channel_id)
+        .await
+        .ok_or(PermissionDataError::MissingChannel { channel_id })?;
     let parent = match (&channel.parent_id, channel.is_thread()) {
-        (Some(parent_id), true) => cache.channel(parent_id).await,
+        (Some(parent_id), true) => cache.channel(*parent_id).await,
         _ => None,
     };
     validate_target(guild_id, &channel, parent.as_ref())?;
@@ -927,13 +927,13 @@ type Found<T> = Result<T, PermissionDataError>;
 /// the facts that prove their status, while everyone else still gets an
 /// error naming the first missing piece.
 struct MemberFacts {
-    guild_id: Snowflake,
-    user_id: Found<Snowflake>,
-    owner_id: Found<Snowflake>,
+    guild_id: GenericId,
+    user_id: Found<GenericId>,
+    owner_id: Found<GenericId>,
     everyone: Found<Permissions>,
     /// `Err` when the member object itself is missing; otherwise one entry
     /// per role the member lists.
-    roles: Found<Vec<Found<(Snowflake, Permissions)>>>,
+    roles: Found<Vec<Found<(GenericId, Permissions)>>>,
     communication_disabled_until: Option<String>,
 }
 
@@ -946,32 +946,30 @@ enum Resolution {
 
 impl MemberFacts {
     fn from_guild(guild: &Guild, member: &Member) -> Self {
-        let find = |role_id: &Snowflake| {
+        let find = |role_id: GenericId| {
             guild
                 .roles
                 .iter()
-                .find(|role| role.id == *role_id)
-                .ok_or_else(|| PermissionDataError::MissingRole {
-                    guild_id: guild.id.clone(),
-                    role_id: role_id.clone(),
+                .find(|role| role.id == role_id)
+                .ok_or(PermissionDataError::MissingRole {
+                    guild_id: guild.id,
+                    role_id,
                 })
                 .and_then(role_permissions)
         };
         Self {
-            guild_id: guild.id.clone(),
+            guild_id: guild.id,
             user_id: member
                 .user
                 .as_ref()
-                .map(|user| user.id.clone())
+                .map(|user| user.id)
                 .ok_or(PermissionDataError::MissingMemberUser),
-            owner_id: guild.owner_id.clone().ok_or_else(|| {
-                PermissionDataError::MissingGuildOwner {
-                    guild_id: guild.id.clone(),
-                }
-            }),
-            everyone: find(&guild.id),
+            owner_id: guild
+                .owner_id
+                .ok_or(PermissionDataError::MissingGuildOwner { guild_id: guild.id }),
+            everyone: find(guild.id),
             roles: Ok(member_role_ids(&guild.id, member)
-                .map(|role_id| find(role_id).map(|permissions| (role_id.clone(), permissions)))
+                .map(|role_id| find(*role_id).map(|permissions| (*role_id, permissions)))
                 .collect()),
             communication_disabled_until: member.communication_disabled_until.clone(),
         }
@@ -979,8 +977,8 @@ impl MemberFacts {
 
     async fn from_cache(
         cache: &CacheHandle,
-        guild_id: &Snowflake,
-        user_id: &Snowflake,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Self, PermissionDataError> {
         if !cache.is_enabled() {
             return Err(PermissionDataError::CacheDisabled);
@@ -988,35 +986,28 @@ impl MemberFacts {
         let owner_id = match cache.guild(guild_id).await {
             Some(guild) => guild
                 .owner_id
-                .ok_or_else(|| PermissionDataError::MissingGuildOwner {
-                    guild_id: guild_id.clone(),
-                }),
-            None => Err(PermissionDataError::MissingGuild {
-                guild_id: guild_id.clone(),
-            }),
+                .ok_or(PermissionDataError::MissingGuildOwner { guild_id }),
+            None => Err(PermissionDataError::MissingGuild { guild_id }),
         };
         let everyone = cached_role(cache, guild_id, guild_id).await;
         let mut communication_disabled_until = None;
         let roles = match cache.member(guild_id, user_id).await {
             Some(member) => {
                 let mut roles = Vec::with_capacity(member.roles.len());
-                for role_id in member_role_ids(guild_id, &member) {
-                    let permissions = cached_role(cache, guild_id, role_id).await;
-                    roles.push(permissions.map(|permissions| (role_id.clone(), permissions)));
+                for role_id in member_role_ids(&guild_id, &member) {
+                    let permissions = cached_role(cache, guild_id, *role_id).await;
+                    roles.push(permissions.map(|permissions| (*role_id, permissions)));
                 }
                 communication_disabled_until = member.communication_disabled_until.clone();
                 Ok(roles)
             }
-            None => Err(PermissionDataError::MissingMember {
-                guild_id: guild_id.clone(),
-                user_id: user_id.clone(),
-            }),
+            None => Err(PermissionDataError::MissingMember { guild_id, user_id }),
         };
         // The cache key is the user ID, so a member stored without its
         // `user` object (possible through `upsert_member`) is still usable.
         Ok(Self {
-            guild_id: guild_id.clone(),
-            user_id: Ok(user_id.clone()),
+            guild_id,
+            user_id: Ok(user_id),
             owner_id,
             everyone,
             roles,
@@ -1073,28 +1064,20 @@ impl MemberFacts {
 
 /// Owned member-side data for the full calculation.
 struct ResolvedMember {
-    guild_id: Snowflake,
-    owner_id: Snowflake,
-    user_id: Snowflake,
+    guild_id: GenericId,
+    owner_id: GenericId,
+    user_id: GenericId,
     everyone: Permissions,
-    roles: Vec<(Snowflake, Permissions)>,
+    roles: Vec<(GenericId, Permissions)>,
     timeout: Option<SystemTime>,
     now: SystemTime,
 }
 
 impl ResolvedMember {
-    fn input(&self) -> MemberPermissionInput<'_> {
-        let input = MemberPermissionInput::new(
-            &self.guild_id,
-            &self.owner_id,
-            &self.user_id,
-            self.everyone,
-        )
-        .roles(
-            self.roles
-                .iter()
-                .map(|(id, permissions)| (id, *permissions)),
-        );
+    fn input(&self) -> MemberPermissionInput {
+        let input =
+            MemberPermissionInput::new(self.guild_id, self.owner_id, self.user_id, self.everyone)
+                .roles(self.roles.iter().copied());
         match self.timeout {
             Some(until) => input.communication_disabled_until(until, self.now),
             None => input,
@@ -1105,9 +1088,9 @@ impl ResolvedMember {
 /// The member's role IDs without `@everyone`, which Discord never lists but
 /// a hand-built member might.
 fn member_role_ids<'m>(
-    guild_id: &'m Snowflake,
+    guild_id: &'m GenericId,
     member: &'m Member,
-) -> impl Iterator<Item = &'m Snowflake> + 'm {
+) -> impl Iterator<Item = &'m GenericId> + 'm {
     member
         .roles
         .iter()
@@ -1117,24 +1100,18 @@ fn member_role_ids<'m>(
 fn role_permissions(role: &Role) -> Result<Permissions, PermissionDataError> {
     role.permissions
         .map(|bits| Permissions::from_bits(bits.bits()))
-        .ok_or_else(|| PermissionDataError::MissingRolePermissions {
-            role_id: role.id.clone(),
-        })
+        .ok_or(PermissionDataError::MissingRolePermissions { role_id: role.id })
 }
 
 async fn cached_role(
     cache: &CacheHandle,
-    guild_id: &Snowflake,
-    role_id: &Snowflake,
+    guild_id: GenericId,
+    role_id: GenericId,
 ) -> Result<Permissions, PermissionDataError> {
-    let role =
-        cache
-            .role(guild_id, role_id)
-            .await
-            .ok_or_else(|| PermissionDataError::MissingRole {
-                guild_id: guild_id.clone(),
-                role_id: role_id.clone(),
-            })?;
+    let role = cache
+        .role(guild_id, role_id)
+        .await
+        .ok_or(PermissionDataError::MissingRole { guild_id, role_id })?;
     role_permissions(&role)
 }
 

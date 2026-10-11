@@ -15,8 +15,8 @@ use tracing::warn;
 use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationCommandOptionChoice, Interaction, InteractionContextData, InteractionResponseState,
-    Snowflake,
+    ApplicationCommandOptionChoice, GenericId, Interaction, InteractionContextData,
+    InteractionResponseState,
 };
 use crate::parsers::{
     parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
@@ -467,11 +467,11 @@ where
         }
     };
     let context: InteractionContextData = interaction.context().clone();
-    let interaction_id = context.id.clone();
+    let interaction_id = context.id;
     let response_state = context.response_state.clone();
 
     let response = state.handler.handle_typed(context, interaction).await;
-    typed_endpoint_answer(&response_state, &interaction_id, response).into_response()
+    typed_endpoint_answer(&response_state, interaction_id, response).into_response()
 }
 
 /// Decides which transport owns the initial response and answers Discord
@@ -490,7 +490,7 @@ where
 /// body can still be rejected by Discord.
 fn typed_endpoint_answer(
     state: &InteractionResponseState,
-    interaction_id: &Snowflake,
+    interaction_id: GenericId,
     response: InteractionResponse,
 ) -> EndpointAnswer {
     if matches!(response, InteractionResponse::Accepted) {
@@ -564,8 +564,9 @@ mod tests {
     use crate::builders::ModalBuilder;
     use crate::framework::{AppContext, AppFramework};
     use crate::http::RestClient;
+    use crate::model::test_id;
     use crate::model::ApplicationCommandOptionChoice;
-    use crate::model::{Interaction, InteractionContextData, InteractionResponseState, Snowflake};
+    use crate::model::{Interaction, InteractionContextData, InteractionResponseState};
     use crate::parsers::{InteractionContext, RawInteraction};
     use crate::response::{
         AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
@@ -1194,9 +1195,9 @@ mod tests {
         assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
         let records = handler.records.lock().unwrap();
         let (ctx, interaction) = &records[0];
-        assert_eq!(ctx.id, "100");
-        assert_eq!(ctx.application_id, "200");
-        assert_eq!(ctx.user_id.as_deref(), Some("500"));
+        assert_eq!(ctx.id, test_id(100));
+        assert_eq!(ctx.application_id, test_id(200));
+        assert_eq!(ctx.user_id, Some(test_id(500)));
         assert!(matches!(interaction, RawInteraction::Command { .. }));
     }
 
@@ -1337,7 +1338,7 @@ mod tests {
     }
 
     fn answer(state: &InteractionResponseState, response: InteractionResponse) -> EndpointAnswer {
-        typed_endpoint_answer(state, &Snowflake::from("1"), response)
+        typed_endpoint_answer(state, test_id(1), response)
     }
 
     #[test]

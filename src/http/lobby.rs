@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel, Lobby,
-    LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, ModifyLobby, Snowflake,
+    AddLobbyMember, CreateLobby, CreateLobbyMessage, GenericId, GetOrCreateLobby, LinkLobbyChannel,
+    Lobby, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, ModifyLobby,
 };
 use crate::types::invalid_data_error;
 
@@ -20,10 +20,10 @@ impl RestClient {
     }
 
     /// Returns one lobby by ID.
-    pub async fn get_lobby(&self, lobby_id: impl Into<Snowflake>) -> Result<Lobby, DiscordError> {
+    pub async fn get_lobby(&self, lobby_id: GenericId) -> Result<Lobby, DiscordError> {
         self.request_typed(
             Method::GET,
-            &format!("/lobbies/{}", lobby_id.into()),
+            &format!("/lobbies/{}", lobby_id),
             Option::<&Value>::None,
         )
         .await
@@ -32,22 +32,18 @@ impl RestClient {
     /// Modifies one lobby.
     pub async fn modify_lobby(
         &self,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
         body: &ModifyLobby,
     ) -> Result<Lobby, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
-            &format!("/lobbies/{}", lobby_id.into()),
-            Some(body),
-        )
-        .await
+        self.request_typed(Method::PATCH, &format!("/lobbies/{}", lobby_id), Some(body))
+            .await
     }
 
     /// Deletes one lobby.
-    pub async fn delete_lobby(&self, lobby_id: impl Into<Snowflake>) -> Result<(), DiscordError> {
+    pub async fn delete_lobby(&self, lobby_id: GenericId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/lobbies/{}", lobby_id.into()),
+            &format!("/lobbies/{}", lobby_id),
             Option::<&Value>::None,
         )
         .await
@@ -56,13 +52,13 @@ impl RestClient {
     /// Adds or updates one lobby member.
     pub async fn add_lobby_member(
         &self,
-        lobby_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
+        user_id: GenericId,
         body: &AddLobbyMember,
     ) -> Result<LobbyMember, DiscordError> {
         self.request_typed(
             Method::PUT,
-            &format!("/lobbies/{}/members/{}", lobby_id.into(), user_id.into()),
+            &format!("/lobbies/{}/members/{}", lobby_id, user_id),
             Some(body),
         )
         .await
@@ -71,12 +67,12 @@ impl RestClient {
     /// Adds, updates, or removes lobby members in bulk.
     pub async fn bulk_update_lobby_members(
         &self,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
         body: &[LobbyMemberUpdate],
     ) -> Result<Vec<LobbyMember>, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!("/lobbies/{}/members/bulk", lobby_id.into()),
+            &format!("/lobbies/{}/members/bulk", lobby_id),
             Some(body),
         )
         .await
@@ -85,12 +81,12 @@ impl RestClient {
     /// Removes one lobby member.
     pub async fn remove_lobby_member(
         &self,
-        lobby_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
+        user_id: GenericId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
-            &format!("/lobbies/{}/members/{}", lobby_id.into(), user_id.into()),
+            &format!("/lobbies/{}/members/{}", lobby_id, user_id),
             Option::<&Value>::None,
         )
         .await
@@ -100,13 +96,13 @@ impl RestClient {
     pub async fn leave_lobby(
         &self,
         bearer_token: &str,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
     ) -> Result<(), DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_with_headers_authorized(
             RequestAuthorization::Bearer(bearer_token),
             Method::DELETE,
-            &format!("/lobbies/{}/members/@me", lobby_id.into()),
+            &format!("/lobbies/{}/members/@me", lobby_id),
             None,
         )
         .await
@@ -117,14 +113,14 @@ impl RestClient {
     pub async fn link_lobby_channel(
         &self,
         bearer_token: &str,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
         body: &LinkLobbyChannel,
     ) -> Result<Lobby, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
             RequestAuthorization::Bearer(bearer_token),
             Method::PATCH,
-            &format!("/lobbies/{}/channel-linking", lobby_id.into()),
+            &format!("/lobbies/{}/channel-linking", lobby_id),
             Some(body),
         )
         .await
@@ -133,16 +129,15 @@ impl RestClient {
     /// Updates app-scoped moderation metadata for lobby messages.
     pub async fn update_lobby_message_moderation_metadata(
         &self,
-        lobby_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
+        message_id: GenericId,
         metadata: &HashMap<String, String>,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
             &format!(
                 "/lobbies/{}/messages/{}/moderation-metadata",
-                lobby_id.into(),
-                message_id.into()
+                lobby_id, message_id
             ),
             Some(metadata),
         )
@@ -172,14 +167,14 @@ impl RestClient {
     pub async fn send_lobby_message(
         &self,
         bearer_token: &str,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
         body: &CreateLobbyMessage,
     ) -> Result<LobbyMessage, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
             RequestAuthorization::Bearer(bearer_token),
             Method::POST,
-            &format!("/lobbies/{}/messages", lobby_id.into()),
+            &format!("/lobbies/{}/messages", lobby_id),
             Some(body),
         )
         .await
@@ -190,7 +185,7 @@ impl RestClient {
     pub async fn get_lobby_messages(
         &self,
         bearer_token: &str,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
         limit: Option<u8>,
     ) -> Result<Vec<LobbyMessage>, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
@@ -206,7 +201,7 @@ impl RestClient {
         self.request_typed_with_authorization(
             RequestAuthorization::Bearer(bearer_token),
             Method::GET,
-            &format!("/lobbies/{}/messages{query}", lobby_id.into()),
+            &format!("/lobbies/{}/messages{query}", lobby_id),
             Option::<&Value>::None,
         )
         .await
@@ -217,13 +212,13 @@ impl RestClient {
     pub async fn create_lobby_channel_invite_for_self(
         &self,
         bearer_token: &str,
-        lobby_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
     ) -> Result<LobbyInvite, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
             RequestAuthorization::Bearer(bearer_token),
             Method::POST,
-            &format!("/lobbies/{}/members/@me/invites", lobby_id.into()),
+            &format!("/lobbies/{}/members/@me/invites", lobby_id),
             Option::<&Value>::None,
         )
         .await
@@ -233,16 +228,12 @@ impl RestClient {
     /// for `user_id`, on behalf of the application (Bot token).
     pub async fn create_lobby_channel_invite_for_user(
         &self,
-        lobby_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        lobby_id: GenericId,
+        user_id: GenericId,
     ) -> Result<LobbyInvite, DiscordError> {
         self.request_typed(
             Method::POST,
-            &format!(
-                "/lobbies/{}/members/{}/invites",
-                lobby_id.into(),
-                user_id.into()
-            ),
+            &format!("/lobbies/{}/members/{}/invites", lobby_id, user_id),
             Option::<&Value>::None,
         )
         .await

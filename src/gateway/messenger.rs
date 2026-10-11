@@ -4,6 +4,7 @@ use super::client::{
     request_soundboard_sounds_payload, voice_state_update_payload, GatewayCommand,
 };
 use crate::error::DiscordError;
+use crate::model::GenericId;
 
 #[derive(Clone)]
 /// Typed Discord API object for `ShardMessenger`.
@@ -45,22 +46,19 @@ impl ShardMessenger {
 
     pub fn update_voice_state(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: Option<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: Option<GenericId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
         self.send(GatewayCommand::SendPayload(voice_state_update_payload(
-            guild_id.into(),
-            channel_id,
-            self_mute,
-            self_deaf,
+            guild_id, channel_id, self_mute, self_deaf,
         )))
     }
 
     pub fn request_soundboard_sounds(
         &self,
-        guild_ids: impl IntoIterator<Item = crate::model::Snowflake>,
+        guild_ids: impl IntoIterator<Item = GenericId>,
     ) -> Result<(), DiscordError> {
         self.send(GatewayCommand::SendPayload(
             request_soundboard_sounds_payload(guild_ids.into_iter().collect(), None),
@@ -69,17 +67,17 @@ impl ShardMessenger {
 
     pub fn join_voice(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        self.update_voice_state(guild_id, Some(channel_id.into()), self_mute, self_deaf)
+        self.update_voice_state(guild_id, Some(channel_id), self_mute, self_deaf)
     }
 
     pub fn leave_voice(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -105,11 +103,12 @@ impl ShardMessenger {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use tokio::sync::mpsc;
 
     use super::super::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
     use super::ShardMessenger;
-    use crate::model::{RequestChannelInfo, RequestGuildMembers, Snowflake, UpdatePresence};
+    use crate::model::{RequestChannelInfo, RequestGuildMembers, UpdatePresence};
 
     #[test]
     fn shard_messenger_sends_all_public_command_shapes() {
@@ -126,7 +125,7 @@ mod tests {
             .unwrap();
         messenger
             .request_guild_members(RequestGuildMembers {
-                guild_id: Snowflake::from(1),
+                guild_id: test_id(1),
                 query: Some("a".to_string()),
                 limit: Some(1),
                 presences: Some(true),
@@ -135,20 +134,18 @@ mod tests {
             })
             .unwrap();
         messenger
-            .request_channel_info(RequestChannelInfo::voice_metadata("1"))
+            .request_channel_info(RequestChannelInfo::voice_metadata(test_id(1)))
             .unwrap();
         messenger
-            .update_voice_state(Snowflake::from(1), Some(Snowflake::from(2)), true, false)
+            .update_voice_state(test_id(1), Some(test_id(2)), true, false)
             .unwrap();
         messenger
-            .request_soundboard_sounds([Snowflake::from(1), Snowflake::from(2)])
+            .request_soundboard_sounds([test_id(1), test_id(2)])
             .unwrap();
         messenger
-            .join_voice(Snowflake::from(3), Snowflake::from(4), false, true)
+            .join_voice(test_id(3), test_id(4), false, true)
             .unwrap();
-        messenger
-            .leave_voice(Snowflake::from(3), false, false)
-            .unwrap();
+        messenger.leave_voice(test_id(3), false, false).unwrap();
         messenger.reconnect().unwrap();
         messenger.shutdown().unwrap();
 
@@ -163,12 +160,12 @@ mod tests {
         assert!(matches!(
             rx.blocking_recv(),
             Some(GatewayCommand::RequestGuildMembers(request))
-                if request.guild_id == Snowflake::from(1)
+                if request.guild_id == test_id(1)
         ));
         assert!(matches!(
             rx.blocking_recv(),
             Some(GatewayCommand::RequestChannelInfo(request))
-                if request.guild_id == Snowflake::from(1)
+                if request.guild_id == test_id(1)
         ));
         assert!(matches!(
             rx.blocking_recv(),

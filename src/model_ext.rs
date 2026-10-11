@@ -23,7 +23,7 @@
 //!
 //! Discord's member payload does not include the guild ID (verified against
 //! [`Member`]'s fields), so every REST method on `Member` takes
-//! `guild_id: impl Into<Snowflake>` explicitly rather than pretending the
+//! `guild_id: GenericId` explicitly rather than pretending the
 //! entity knows which guild it came from.
 //!
 //! # Testing strategy
@@ -41,8 +41,8 @@ use crate::error::DiscordError;
 use crate::http::RestClient;
 use crate::model::{
     Channel, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateMessage, Guild, GuildMfaLevel, Invite, Member, Message,
-    MessageReference, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, Snowflake, User,
+    CreateGuildRole, CreateMessage, GenericId, Guild, GuildMfaLevel, Invite, Member, Message,
+    MessageReference, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, User,
 };
 
 /// Discord CDN base used by the synchronous URL helpers.
@@ -70,7 +70,7 @@ const CHANNEL_STAGE_VOICE: u8 = 13;
 fn reply_body(message: &Message, content: &str) -> CreateMessage {
     CreateMessage {
         content: Some(content.to_string()),
-        message_reference: Some(MessageReference::reply(message.id.clone())),
+        message_reference: Some(MessageReference::reply(message.id)),
         ..CreateMessage::default()
     }
 }
@@ -109,7 +109,7 @@ fn timeout_body(until: Option<String>) -> ModifyGuildMember {
 
 /// Formats a CDN asset URL such as `/icons/{id}/{hash}.png?size=128`,
 /// switching to `.gif` for animated hashes (prefixed with `a_`).
-fn cdn_asset_url(kind: &str, id: &Snowflake, hash: &str, size: Option<u16>) -> String {
+fn cdn_asset_url(kind: &str, id: GenericId, hash: &str, size: Option<u16>) -> String {
     let ext = if hash.starts_with("a_") { "gif" } else { "png" };
     match size {
         Some(size) => format!("{CDN_BASE}/{kind}/{id}/{hash}.{ext}?size={size}"),
@@ -117,19 +117,18 @@ fn cdn_asset_url(kind: &str, id: &Snowflake, hash: &str, size: Option<u16>) -> S
     }
 }
 
-/// Index of the default embed avatar for `user`: `(id >> 22) % 6`, falling
-/// back to `0` when the snowflake is not numeric.
+/// Index of the default embed avatar for `user`: `(id >> 22) % 6`.
 fn default_avatar_index(user: &User) -> u64 {
-    user.id.as_u64().map(|id| (id >> 22) % 6).unwrap_or(0)
+    (user.id.get() >> 22) % 6
 }
 
 /// Returns the ID of the [`User`] carried by a [`Member`], or a
 /// [`DiscordError::Model`] when the payload omitted the user object.
-fn member_user_id(member: &Member) -> Result<Snowflake, DiscordError> {
+fn member_user_id(member: &Member) -> Result<GenericId, DiscordError> {
     member
         .user
         .as_ref()
-        .map(|user| user.id.clone())
+        .map(|user| user.id)
         .ok_or_else(|| DiscordError::model("member payload has no user object"))
 }
 
@@ -145,7 +144,7 @@ impl Message {
         http: &RestClient,
         content: impl AsRef<str>,
     ) -> Result<Message, DiscordError> {
-        http.create_message(self.channel_id.clone(), &reply_body(self, content.as_ref()))
+        http.create_message(self.channel_id, &reply_body(self, content.as_ref()))
             .await
     }
 
@@ -155,12 +154,8 @@ impl Message {
         http: &RestClient,
         content: impl AsRef<str>,
     ) -> Result<Message, DiscordError> {
-        http.update_message(
-            self.channel_id.clone(),
-            self.id.clone(),
-            &content_body(content.as_ref()),
-        )
-        .await
+        http.update_message(self.channel_id, self.id, &content_body(content.as_ref()))
+            .await
     }
 
     /// Edits this message with a full [`CreateMessage`] body (embeds,
@@ -170,47 +165,40 @@ impl Message {
         http: &RestClient,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
-        http.update_message(self.channel_id.clone(), self.id.clone(), body)
-            .await
+        http.update_message(self.channel_id, self.id, body).await
     }
 
     /// Deletes this message.
     pub async fn delete(&self, http: &RestClient) -> Result<(), DiscordError> {
-        http.delete_message(self.channel_id.clone(), self.id.clone())
-            .await
+        http.delete_message(self.channel_id, self.id).await
     }
 
     /// Adds a reaction from the current user; `emoji` is a unicode emoji or
     /// `name:id` for custom emoji, in the format `RestClient::add_reaction`
     /// expects.
     pub async fn react(&self, http: &RestClient, emoji: &str) -> Result<(), DiscordError> {
-        http.add_reaction(self.channel_id.clone(), self.id.clone(), emoji)
-            .await
+        http.add_reaction(self.channel_id, self.id, emoji).await
     }
 
     /// Removes the current user's reaction with `emoji`.
     pub async fn unreact(&self, http: &RestClient, emoji: &str) -> Result<(), DiscordError> {
-        http.remove_reaction(self.channel_id.clone(), self.id.clone(), emoji)
-            .await
+        http.remove_reaction(self.channel_id, self.id, emoji).await
     }
 
     /// Pins this message in its channel.
     pub async fn pin(&self, http: &RestClient) -> Result<(), DiscordError> {
-        http.pin_message(self.channel_id.clone(), self.id.clone())
-            .await
+        http.pin_message(self.channel_id, self.id).await
     }
 
     /// Unpins this message from its channel.
     pub async fn unpin(&self, http: &RestClient) -> Result<(), DiscordError> {
-        http.unpin_message(self.channel_id.clone(), self.id.clone())
-            .await
+        http.unpin_message(self.channel_id, self.id).await
     }
 
     /// Crossposts this message to channels following its announcement
     /// channel.
     pub async fn crosspost(&self, http: &RestClient) -> Result<Message, DiscordError> {
-        http.crosspost_message(self.channel_id.clone(), self.id.clone())
-            .await
+        http.crosspost_message(self.channel_id, self.id).await
     }
 
     /// Forwards this message into another channel, like discord.js's
@@ -218,9 +206,9 @@ impl Message {
     pub async fn forward_to(
         &self,
         http: &RestClient,
-        channel_id: impl Into<Snowflake>,
+        channel_id: GenericId,
     ) -> Result<Message, DiscordError> {
-        http.forward_message(self.channel_id.clone(), self.id.clone(), channel_id)
+        http.forward_message(self.channel_id, self.id, channel_id)
             .await
     }
 
@@ -230,26 +218,23 @@ impl Message {
         http: &RestClient,
         name: impl AsRef<str>,
     ) -> Result<Channel, DiscordError> {
-        http.create_thread_from_message(
-            self.channel_id.clone(),
-            self.id.clone(),
-            &start_thread_body(name.as_ref()),
-        )
-        .await
+        http.create_thread_from_message(self.channel_id, self.id, &start_thread_body(name.as_ref()))
+            .await
     }
 
     /// Returns the `https://discord.com/channels/...` jump link for this
     /// message, using `@me` for direct messages.
     pub fn link(&self) -> String {
-        let guild = self
-            .guild_id
-            .as_ref()
-            .map(Snowflake::as_str)
-            .unwrap_or("@me");
-        format!(
-            "https://discord.com/channels/{guild}/{}/{}",
-            self.channel_id, self.id
-        )
+        match self.guild_id {
+            Some(guild_id) => format!(
+                "https://discord.com/channels/{guild_id}/{}/{}",
+                self.channel_id, self.id
+            ),
+            None => format!(
+                "https://discord.com/channels/@me/{}/{}",
+                self.channel_id, self.id
+            ),
+        }
     }
 }
 
@@ -260,11 +245,7 @@ impl Message {
 impl Member {
     /// Kicks this member from `guild_id`. For an audit-log reason use
     /// [`Member::kick_with_reason`] or call via `http.with_reason(...)`.
-    pub async fn kick(
-        &self,
-        http: &RestClient,
-        guild_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
+    pub async fn kick(&self, http: &RestClient, guild_id: GenericId) -> Result<(), DiscordError> {
         http.remove_guild_member(guild_id, member_user_id(self)?)
             .await
     }
@@ -273,7 +254,7 @@ impl Member {
     pub async fn kick_with_reason(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         reason: impl Into<String>,
     ) -> Result<(), DiscordError> {
         self.kick(&http.with_reason(reason), guild_id).await
@@ -286,7 +267,7 @@ impl Member {
     pub async fn ban(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
         http.create_guild_ban_typed(
@@ -301,7 +282,7 @@ impl Member {
     pub async fn ban_with_reason(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         reason: impl Into<String>,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
@@ -315,7 +296,7 @@ impl Member {
     pub async fn timeout(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         until: impl Into<String>,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(
@@ -331,7 +312,7 @@ impl Member {
     pub async fn remove_timeout(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(guild_id, member_user_id(self)?, &timeout_body(None))
             .await
@@ -341,8 +322,8 @@ impl Member {
     pub async fn add_role(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        role_id: GenericId,
     ) -> Result<(), DiscordError> {
         http.add_guild_member_role(guild_id, member_user_id(self)?, role_id)
             .await
@@ -352,8 +333,8 @@ impl Member {
     pub async fn remove_role(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        role_id: GenericId,
     ) -> Result<(), DiscordError> {
         http.remove_guild_member_role(guild_id, member_user_id(self)?, role_id)
             .await
@@ -364,7 +345,7 @@ impl Member {
     pub async fn edit(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildMember,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(guild_id, member_user_id(self)?, body)
@@ -392,7 +373,7 @@ impl Member {
 impl Guild {
     /// Edits this guild's settings and returns the updated guild.
     pub async fn edit(&self, http: &RestClient, body: &ModifyGuild) -> Result<Guild, DiscordError> {
-        http.modify_guild(self.id.clone(), body).await
+        http.modify_guild(self.id, body).await
     }
 
     /// Deletes this guild. Requires ownership, which bots no longer have.
@@ -402,17 +383,17 @@ impl Guild {
     )]
     #[allow(deprecated)]
     pub async fn delete(&self, http: &RestClient) -> Result<(), DiscordError> {
-        http.delete_guild(self.id.clone()).await
+        http.delete_guild(self.id).await
     }
 
     /// Makes the current user leave this guild.
     pub async fn leave(&self, http: &RestClient) -> Result<(), DiscordError> {
-        http.leave_guild(self.id.clone()).await
+        http.leave_guild(self.id).await
     }
 
     /// Fetches this guild's channels from the API.
     pub async fn fetch_channels(&self, http: &RestClient) -> Result<Vec<Channel>, DiscordError> {
-        http.get_guild_channels(self.id.clone()).await
+        http.get_guild_channels(self.id).await
     }
 
     /// Creates a channel in this guild.
@@ -421,22 +402,21 @@ impl Guild {
         http: &RestClient,
         body: &CreateGuildChannel,
     ) -> Result<Channel, DiscordError> {
-        http.create_guild_channel_from_request(self.id.clone(), body)
-            .await
+        http.create_guild_channel_from_request(self.id, body).await
     }
 
     /// Fetches a single member of this guild.
     pub async fn fetch_member(
         &self,
         http: &RestClient,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
     ) -> Result<Member, DiscordError> {
-        http.get_member(self.id.clone(), user_id).await
+        http.get_member(self.id, user_id).await
     }
 
     /// Fetches this guild's roles from the API.
     pub async fn fetch_roles(&self, http: &RestClient) -> Result<Vec<Role>, DiscordError> {
-        http.list_roles(self.id.clone()).await
+        http.list_roles(self.id).await
     }
 
     /// Creates a role in this guild.
@@ -445,7 +425,7 @@ impl Guild {
         http: &RestClient,
         body: &CreateGuildRole,
     ) -> Result<Role, DiscordError> {
-        http.create_role_typed(self.id.clone(), body).await
+        http.create_role_typed(self.id, body).await
     }
 
     /// Bans a user from this guild, deleting up to `delete_message_seconds`
@@ -454,30 +434,22 @@ impl Guild {
     pub async fn ban(
         &self,
         http: &RestClient,
-        user_id: impl Into<Snowflake>,
+        user_id: GenericId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
-        http.create_guild_ban_typed(self.id.clone(), user_id, &ban_body(delete_message_seconds))
+        http.create_guild_ban_typed(self.id, user_id, &ban_body(delete_message_seconds))
             .await
     }
 
     /// Removes a ban from this guild.
-    pub async fn unban(
-        &self,
-        http: &RestClient,
-        user_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
-        http.remove_guild_ban(self.id.clone(), user_id).await
+    pub async fn unban(&self, http: &RestClient, user_id: GenericId) -> Result<(), DiscordError> {
+        http.remove_guild_ban(self.id, user_id).await
     }
 
     /// Kicks a user from this guild. Pass a `with_reason` client for an
     /// audit-log reason.
-    pub async fn kick(
-        &self,
-        http: &RestClient,
-        user_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
-        http.remove_guild_member(self.id.clone(), user_id).await
+    pub async fn kick(&self, http: &RestClient, user_id: GenericId) -> Result<(), DiscordError> {
+        http.remove_guild_member(self.id, user_id).await
     }
 
     /// Sets this guild's required MFA level for moderation actions and
@@ -492,7 +464,7 @@ impl Guild {
         http: &RestClient,
         level: u64,
     ) -> Result<GuildMfaLevel, DiscordError> {
-        http.modify_guild_mfa_level(self.id.clone(), level).await
+        http.modify_guild_mfa_level(self.id, level).await
     }
 
     /// Returns the CDN URL of this guild's icon (`.gif` when animated), or
@@ -500,7 +472,7 @@ impl Guild {
     pub fn icon_url(&self, size: Option<u16>) -> Option<String> {
         self.icon
             .as_deref()
-            .map(|hash| cdn_asset_url("icons", &self.id, hash, size))
+            .map(|hash| cdn_asset_url("icons", self.id, hash, size))
     }
 
     /// Returns the CDN URL of this guild's banner (`.gif` when animated), or
@@ -508,7 +480,7 @@ impl Guild {
     pub fn banner_url(&self, size: Option<u16>) -> Option<String> {
         self.banner
             .as_deref()
-            .map(|hash| cdn_asset_url("banners", &self.id, hash, size))
+            .map(|hash| cdn_asset_url("banners", self.id, hash, size))
     }
 }
 
@@ -541,7 +513,7 @@ impl Channel {
         http: &RestClient,
         content: impl AsRef<str>,
     ) -> Result<Message, DiscordError> {
-        http.create_message(self.id.clone(), &content_body(content.as_ref()))
+        http.create_message(self.id, &content_body(content.as_ref()))
             .await
     }
 
@@ -552,7 +524,7 @@ impl Channel {
         http: &RestClient,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
-        http.create_message(self.id.clone(), body).await
+        http.create_message(self.id, body).await
     }
 
     /// Edits this channel with any serializable modify-channel body (the
@@ -562,13 +534,13 @@ impl Channel {
     where
         B: serde::Serialize + ?Sized,
     {
-        http.update_channel_typed(self.id.clone(), body).await
+        http.update_channel_typed(self.id, body).await
     }
 
     /// Deletes this channel (or closes it, for DMs) and returns the deleted
     /// channel.
     pub async fn delete(&self, http: &RestClient) -> Result<Channel, DiscordError> {
-        http.delete_channel(self.id.clone()).await
+        http.delete_channel(self.id).await
     }
 
     /// Creates an invite to this channel.
@@ -577,8 +549,7 @@ impl Channel {
         http: &RestClient,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
-        http.create_channel_invite_typed(self.id.clone(), body)
-            .await
+        http.create_channel_invite_typed(self.id, body).await
     }
 
     /// Returns the `<#id>` mention for this channel.
@@ -627,20 +598,15 @@ impl Role {
     pub async fn edit(
         &self,
         http: &RestClient,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         body: &ModifyGuildRole,
     ) -> Result<Role, DiscordError> {
-        http.modify_guild_role(guild_id, self.id.clone(), body)
-            .await
+        http.modify_guild_role(guild_id, self.id, body).await
     }
 
     /// Deletes this role from `guild_id`.
-    pub async fn delete(
-        &self,
-        http: &RestClient,
-        guild_id: impl Into<Snowflake>,
-    ) -> Result<(), DiscordError> {
-        http.delete_role(guild_id, self.id.clone()).await
+    pub async fn delete(&self, http: &RestClient, guild_id: GenericId) -> Result<(), DiscordError> {
+        http.delete_role(guild_id, self.id).await
     }
 
     /// Returns the `<@&id>` mention for this role.
@@ -657,7 +623,7 @@ impl User {
     /// Opens (or reuses) the DM channel with this user.
     pub async fn create_dm(&self, http: &RestClient) -> Result<Channel, DiscordError> {
         http.create_dm_channel_typed(&CreateDmChannel {
-            recipient_id: self.id.clone(),
+            recipient_id: self.id,
         })
         .await
     }
@@ -694,7 +660,7 @@ impl User {
     pub fn avatar_url(&self, size: Option<u16>) -> Option<String> {
         self.avatar
             .as_deref()
-            .map(|hash| cdn_asset_url("avatars", &self.id, hash, size))
+            .map(|hash| cdn_asset_url("avatars", self.id, hash, size))
     }
 
     /// Returns the user's default embed avatar URL,
@@ -784,12 +750,13 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::test_id;
 
     fn user(id: u64) -> User {
         User {
-            id: Snowflake::from(id),
+            id: test_id(id),
             username: "tester".to_string(),
-            ..User::default()
+            ..User::fixture()
         }
     }
 
@@ -798,10 +765,10 @@ mod tests {
     #[test]
     fn message_link_uses_guild_id_when_present() {
         let message = Message {
-            id: Snowflake::from(3u64),
-            channel_id: Snowflake::from(2u64),
-            guild_id: Some(Snowflake::from(1u64)),
-            ..Message::default()
+            id: test_id(3),
+            channel_id: test_id(2),
+            guild_id: Some(test_id(1)),
+            ..Message::fixture()
         };
         assert_eq!(message.link(), "https://discord.com/channels/1/2/3");
     }
@@ -809,9 +776,9 @@ mod tests {
     #[test]
     fn message_link_uses_at_me_for_dms() {
         let message = Message {
-            id: Snowflake::from(3u64),
-            channel_id: Snowflake::from(2u64),
-            ..Message::default()
+            id: test_id(3),
+            channel_id: test_id(2),
+            ..Message::fixture()
         };
         assert_eq!(message.link(), "https://discord.com/channels/@me/2/3");
     }
@@ -819,15 +786,15 @@ mod tests {
     #[test]
     fn reply_body_sets_default_reply_reference() {
         let message = Message {
-            id: Snowflake::from(42u64),
-            channel_id: Snowflake::from(7u64),
-            ..Message::default()
+            id: test_id(42),
+            channel_id: test_id(7),
+            ..Message::fixture()
         };
         let body = reply_body(&message, "hi");
         assert_eq!(body.content.as_deref(), Some("hi"));
         let reference = body.message_reference.clone().expect("reply reference");
         assert_eq!(reference.kind, Some(0));
-        assert_eq!(reference.message_id, Some(Snowflake::from(42u64)));
+        assert_eq!(reference.message_id, Some(test_id(42)));
         // Same-channel reply: channel_id omitted, fail_if_not_exists left at
         // Discord's default.
         assert_eq!(reference.channel_id, None);
@@ -886,7 +853,7 @@ mod tests {
             user: Some(user(9)),
             ..Member::default()
         };
-        assert_eq!(member_user_id(&member).unwrap(), Snowflake::from(9u64));
+        assert_eq!(member_user_id(&member).unwrap(), test_id(9));
     }
 
     #[test]
@@ -918,10 +885,10 @@ mod tests {
     #[test]
     fn guild_icon_and_banner_urls() {
         let guild = Guild {
-            id: Snowflake::from(10u64),
+            id: test_id(10),
             icon: Some("abc".to_string()),
             banner: Some("a_def".to_string()),
-            ..Guild::default()
+            ..Guild::fixture()
         };
         assert_eq!(
             guild.icon_url(Some(128)).as_deref(),
@@ -937,8 +904,8 @@ mod tests {
             Some("https://cdn.discordapp.com/banners/10/a_def.gif?size=512")
         );
         let bare = Guild {
-            id: Snowflake::from(10u64),
-            ..Guild::default()
+            id: test_id(10),
+            ..Guild::fixture()
         };
         assert_eq!(bare.icon_url(None), None);
         assert_eq!(bare.banner_url(None), None);
@@ -949,9 +916,9 @@ mod tests {
     #[test]
     fn channel_mention_and_type_classification() {
         let channel = |kind: u8| Channel {
-            id: Snowflake::from(5u64),
+            id: test_id(5),
             kind,
-            ..Channel::default()
+            ..Channel::fixture()
         };
         assert_eq!(channel(0).mention(), "<#5>");
 
@@ -975,8 +942,8 @@ mod tests {
     #[test]
     fn role_mention_format() {
         let role = Role {
-            id: Snowflake::from(77u64),
-            ..Role::default()
+            id: test_id(77),
+            ..Role::fixture()
         };
         assert_eq!(role.mention(), "<@&77>");
     }
@@ -1038,12 +1005,5 @@ mod tests {
             u.display_avatar_url(Some(128)),
             "https://cdn.discordapp.com/embed/avatars/1.png"
         );
-        // Non-numeric snowflake falls back to index 0.
-        let odd = User {
-            id: Snowflake::new("not-numeric"),
-            username: "x".to_string(),
-            ..User::default()
-        };
-        assert_eq!(default_avatar_index(&odd), 0);
     }
 }

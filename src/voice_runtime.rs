@@ -22,7 +22,7 @@ use tokio::time::{interval, sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::error::DiscordError;
-use crate::model::Snowflake;
+use crate::model::GenericId;
 use crate::types::invalid_data_error;
 use crate::voice::{
     VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayOpcode, VoiceGatewayReady,
@@ -66,8 +66,8 @@ const DISCORD_OPUS_FRAME_MS: u64 = 20;
 #[derive(Clone, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceRuntimeConfig`.
 pub struct VoiceRuntimeConfig {
-    pub server_id: Snowflake,
-    pub user_id: Snowflake,
+    pub server_id: GenericId,
+    pub user_id: GenericId,
     pub session_id: String,
     pub token: String,
     pub endpoint: String,
@@ -94,15 +94,15 @@ impl fmt::Debug for VoiceRuntimeConfig {
 impl VoiceRuntimeConfig {
     /// Creates a `new` value.
     pub fn new(
-        server_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        server_id: GenericId,
+        user_id: GenericId,
         session_id: impl Into<String>,
         token: impl Into<String>,
         endpoint: impl Into<String>,
     ) -> Self {
         Self {
-            server_id: server_id.into(),
-            user_id: user_id.into(),
+            server_id,
+            user_id,
             session_id: session_id.into(),
             token: token.into(),
             endpoint: endpoint.into(),
@@ -225,7 +225,7 @@ pub struct VoiceRuntimeState {
     pub discovery: VoiceUdpDiscoveryPacket,
     pub selected_mode: VoiceEncryptionMode,
     pub session_description: Option<VoiceSessionDescription>,
-    pub ssrc_users: HashMap<u32, Snowflake>,
+    pub ssrc_users: HashMap<u32, GenericId>,
     pub speaking: HashMap<u32, VoiceSpeakingUpdate>,
     pub dave: VoiceDaveState,
     pub resumed: bool,
@@ -288,7 +288,7 @@ pub struct VoiceRtpHeader {
 pub struct VoiceReceivedPacket {
     pub raw: VoiceRawUdpPacket,
     pub rtp: VoiceRtpHeader,
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
     pub opus_frame: Vec<u8>,
 }
 
@@ -824,7 +824,7 @@ pub trait VoiceDaveFrameDecryptor {
     fn decrypt_frame(
         &mut self,
         rtp: &VoiceRtpHeader,
-        user_id: Option<&Snowflake>,
+        user_id: Option<GenericId>,
         frame: &VoiceDaveFrame,
     ) -> Result<Vec<u8>, DiscordError>;
 }
@@ -943,11 +943,11 @@ impl VoiceDaveFrameDecryptor for VoiceDaveySession {
     fn decrypt_frame(
         &mut self,
         _rtp: &VoiceRtpHeader,
-        user_id: Option<&Snowflake>,
+        user_id: Option<GenericId>,
         frame: &VoiceDaveFrame,
     ) -> Result<Vec<u8>, DiscordError> {
         let user_id = user_id
-            .and_then(Snowflake::as_u64)
+            .map(GenericId::get)
             .ok_or_else(|| invalid_data_error("DAVE frame decrypt requires a mapped user_id"))?;
         self.session
             .decrypt(user_id, davey::MediaType::AUDIO, &frame.bytes)
@@ -961,7 +961,7 @@ pub struct VoiceSpeakingUpdate {
     pub speaking: u64,
     pub ssrc: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
 }
 
 fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
@@ -1151,7 +1151,7 @@ impl VoiceRuntimeHandle {
             &session_description.mode,
             &session_description.secret_key,
         )?;
-        let user_id = state.ssrc_users.get(&rtp.ssrc).cloned();
+        let user_id = state.ssrc_users.get(&rtp.ssrc).copied();
 
         Ok(VoiceReceivedPacket {
             raw,
@@ -1185,7 +1185,7 @@ impl VoiceRuntimeHandle {
         let user_id = state.ssrc_users.get(&rtp.ssrc).cloned();
         let opus_frame = if session_description.dave_protocol_version.unwrap_or(0) > 0 {
             let dave_frame = parse_dave_frame(&transport_frame)?;
-            dave_decryptor.decrypt_frame(&rtp, user_id.as_ref(), &dave_frame)?
+            dave_decryptor.decrypt_frame(&rtp, user_id, &dave_frame)?
         } else {
             transport_frame
         };
@@ -1652,7 +1652,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                         payload.get("d").cloned().ok_or_else(|| invalid_data_error("missing speaking data"))?
                                     )?;
                                     update_state(&state_tx, |state| {
-                                        if let Some(user_id) = update.user_id.clone() {
+                                        if let Some(user_id) = update.user_id {
                                             state.ssrc_users.insert(update.ssrc, user_id);
                                         }
                                         state.speaking.insert(update.ssrc, update);
@@ -2026,6 +2026,7 @@ async fn wait_for_voice_opcode(
 
 #[cfg(test)]
 mod tests {
+    use crate::model::test_id;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -2112,16 +2113,21 @@ mod tests {
 
     #[test]
     fn voice_runtime_config_normalizes_voice_gateway_url() {
-        let config =
-            VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media:443");
+        let config = VoiceRuntimeConfig::new(
+            test_id(1),
+            test_id(2),
+            "session",
+            "token",
+            "voice.discord.media:443",
+        );
         assert_eq!(config.websocket_url(), "wss://voice.discord.media:443/?v=8");
     }
 
     #[test]
     fn voice_runtime_config_clamps_version_and_extends_existing_query() {
         let config = VoiceRuntimeConfig::new(
-            "1",
-            "2",
+            test_id(1),
+            test_id(2),
             "session",
             "token",
             "ws://127.0.0.1/socket?encoding=json",
@@ -2144,8 +2150,8 @@ mod tests {
     #[test]
     fn voice_runtime_debug_redacts_live_secret_material() {
         let config = VoiceRuntimeConfig::new(
-            "1",
-            "2",
+            test_id(1),
+            test_id(2),
             "session",
             "voice-token-value",
             "voice.discord.media",
@@ -2188,7 +2194,13 @@ mod tests {
     fn voice_runtime_helper_builders_cover_optional_and_fallback_fields() {
         let config = VoiceRuntimeConfig {
             max_dave_protocol_version: None,
-            ..VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
+            ..VoiceRuntimeConfig::new(
+                test_id(1),
+                test_id(2),
+                "session",
+                "token",
+                "voice.discord.media",
+            )
         };
         assert_eq!(
             build_identify_payload(&config),
@@ -2278,14 +2290,25 @@ mod tests {
         let ready = VoiceGatewayReady::new(42, "127.0.0.1", 5000)
             .mode(fallback.clone())
             .mode(preferred.clone());
-        let config = VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
-            .preferred_mode(preferred.clone());
+        let config = VoiceRuntimeConfig::new(
+            test_id(1),
+            test_id(2),
+            "session",
+            "token",
+            "voice.discord.media",
+        )
+        .preferred_mode(preferred.clone());
         assert_eq!(select_encryption_mode(&config, &ready).unwrap(), preferred);
 
         let fallback_only = VoiceGatewayReady::new(42, "127.0.0.1", 5000).mode(fallback.clone());
-        let config_without_match =
-            VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media")
-                .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize());
+        let config_without_match = VoiceRuntimeConfig::new(
+            test_id(1),
+            test_id(2),
+            "session",
+            "token",
+            "voice.discord.media",
+        )
+        .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize());
         assert_eq!(
             select_encryption_mode(&config_without_match, &fallback_only).unwrap(),
             fallback
@@ -2293,7 +2316,13 @@ mod tests {
 
         let empty_ready = VoiceGatewayReady::new(42, "127.0.0.1", 5000);
         assert!(select_encryption_mode(
-            &VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media"),
+            &VoiceRuntimeConfig::new(
+                test_id(1),
+                test_id(2),
+                "session",
+                "token",
+                "voice.discord.media"
+            ),
             &empty_ready
         )
         .unwrap_err()
@@ -2586,7 +2615,13 @@ mod tests {
     #[test]
     fn voice_runtime_update_state_publishes_changes_and_reports_closed_receivers() {
         let initial_state = VoiceRuntimeState {
-            config: VoiceRuntimeConfig::new("1", "2", "session", "token", "voice.discord.media"),
+            config: VoiceRuntimeConfig::new(
+                test_id(1),
+                test_id(2),
+                "session",
+                "token",
+                "voice.discord.media",
+            ),
             heartbeat_interval_ms: 250,
             last_sequence: Some(3),
             ready: VoiceGatewayReady::new(42, "127.0.0.1", 5000),
@@ -2758,8 +2793,8 @@ mod tests {
         });
 
         let handle = connect(VoiceRuntimeConfig::new(
-            "1",
-            "2",
+            test_id(1),
+            test_id(2),
             "session",
             "token",
             format!("ws://127.0.0.1:{ws_port}"),
@@ -2901,8 +2936,8 @@ mod tests {
         });
 
         let handle = connect(VoiceRuntimeConfig::new(
-            "1",
-            "2",
+            test_id(1),
+            test_id(2),
             "session",
             "token",
             format!("ws://127.0.0.1:{ws_port}"),
@@ -3173,8 +3208,8 @@ mod tests {
 
         let handle = connect(
             VoiceRuntimeConfig::new(
-                "1",
-                "2",
+                test_id(1),
+                test_id(2),
                 "session",
                 "token",
                 format!("ws://127.0.0.1:{ws_port}"),

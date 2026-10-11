@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use discordrs::cache::{CacheBackend, CacheClear, CacheClearId};
 use discordrs::model::Presence;
-use discordrs::{DiscordError, Member, Message, Snowflake};
+use discordrs::{DiscordError, GenericId, Member, Message};
 
 struct NotSend;
 
@@ -38,8 +38,8 @@ impl CacheBackend for NotSend {
     async fn put_member(
         &self,
         _epoch: u64,
-        _guild_id: Snowflake,
-        _user_id: Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
         _member: Member,
     ) -> Result<(), DiscordError> {
         Ok(())
@@ -47,21 +47,21 @@ impl CacheBackend for NotSend {
 
     async fn get_member(
         &self,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<Option<Arc<Member>>, DiscordError> {
         Ok(None)
     }
 
-    async fn list_members(&self, _guild_id: &Snowflake) -> Result<Vec<Arc<Member>>, DiscordError> {
+    async fn list_members(&self, _guild_id: GenericId) -> Result<Vec<Arc<Member>>, DiscordError> {
         Ok(Vec::new())
     }
 
     async fn delete_member(
         &self,
         _epoch: u64,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<(), DiscordError> {
         Ok(())
     }
@@ -72,15 +72,15 @@ impl CacheBackend for NotSend {
 
     async fn get_message(
         &self,
-        _channel_id: &Snowflake,
-        _message_id: &Snowflake,
+        _channel_id: GenericId,
+        _message_id: GenericId,
     ) -> Result<Option<Arc<Message>>, DiscordError> {
         Ok(None)
     }
 
     async fn list_messages(
         &self,
-        _channel_id: &Snowflake,
+        _channel_id: GenericId,
     ) -> Result<Vec<Arc<Message>>, DiscordError> {
         Ok(Vec::new())
     }
@@ -88,8 +88,8 @@ impl CacheBackend for NotSend {
     async fn delete_message(
         &self,
         _epoch: u64,
-        _channel_id: &Snowflake,
-        _message_id: &Snowflake,
+        _channel_id: GenericId,
+        _message_id: GenericId,
     ) -> Result<(), DiscordError> {
         Ok(())
     }
@@ -97,8 +97,8 @@ impl CacheBackend for NotSend {
     async fn put_presence(
         &self,
         _epoch: u64,
-        _guild_id: Snowflake,
-        _user_id: Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
         _presence: Presence,
     ) -> Result<(), DiscordError> {
         Ok(())
@@ -106,15 +106,15 @@ impl CacheBackend for NotSend {
 
     async fn get_presence(
         &self,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<Option<Arc<Presence>>, DiscordError> {
         Ok(None)
     }
 
     async fn list_presences(
         &self,
-        _guild_id: &Snowflake,
+        _guild_id: GenericId,
     ) -> Result<Vec<Arc<Presence>>, DiscordError> {
         Ok(Vec::new())
     }
@@ -122,8 +122,8 @@ impl CacheBackend for NotSend {
     async fn delete_presence(
         &self,
         _epoch: u64,
-        _guild_id: &Snowflake,
-        _user_id: &Snowflake,
+        _guild_id: GenericId,
+        _user_id: GenericId,
     ) -> Result<(), DiscordError> {
         Ok(())
     }

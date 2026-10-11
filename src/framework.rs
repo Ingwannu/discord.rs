@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::{
     interactions::{InteractionResponse, TypedInteractionHandler},
-    model::{Interaction, InteractionContextData, Snowflake},
+    model::{GenericId, Interaction, InteractionContextData},
     response::InteractionResponder,
 };
 
@@ -51,13 +51,13 @@ pub struct AppContext {
 
 impl AppContext {
     /// Returns the best available user ID from the interaction context.
-    pub fn user_id(&self) -> Option<&Snowflake> {
-        self.context.user.as_ref().map(|user| &user.id).or_else(|| {
+    pub fn user_id(&self) -> Option<GenericId> {
+        self.context.user.as_ref().map(|user| user.id).or_else(|| {
             self.context
                 .member
                 .as_ref()
                 .and_then(|member| member.user.as_ref())
-                .map(|user| &user.id)
+                .map(|user| user.id)
         })
     }
 }
@@ -113,12 +113,12 @@ pub struct AppFramework {
     routes: HashMap<RouteKey, Arc<dyn AppRouteHandler>>,
     guards: Vec<Arc<dyn AppGuard>>,
     cooldowns: HashMap<RouteKey, Duration>,
-    cooldown_state: Arc<Mutex<HashMap<(RouteKey, Snowflake), Instant>>>,
+    cooldown_state: Arc<Mutex<HashMap<(RouteKey, GenericId), Instant>>>,
     fallback: Arc<dyn AppRouteHandler>,
 }
 
 impl AppFramework {
-    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<(RouteKey, Snowflake), Instant>> {
+    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<(RouteKey, GenericId), Instant>> {
         self.cooldown_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -166,7 +166,7 @@ impl AppFramework {
 
     fn check_cooldown(&self, ctx: &AppContext) -> Option<InteractionResponse> {
         let cooldown = self.cooldowns.get(&ctx.route)?;
-        let user_id = ctx.user_id()?.clone();
+        let user_id = ctx.user_id()?;
         let now = Instant::now();
         let mut state = self.lock_cooldowns();
         state.retain(|(route, _), last_seen| {
@@ -324,6 +324,7 @@ fn route_key(interaction: &Interaction) -> RouteKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::test_id;
     use crate::model::{
         AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
         ComponentInteraction, ComponentInteractionData, MessageContextMenuInteraction,
@@ -333,15 +334,15 @@ mod tests {
 
     fn context(user_id: &str) -> InteractionContextData {
         InteractionContextData {
-            id: Snowflake::from("1"),
-            application_id: Snowflake::from("2"),
+            id: test_id(1),
+            application_id: test_id(2),
             token: "token".to_string(),
             user: Some(User {
-                id: Snowflake::from(user_id),
+                id: user_id.parse().unwrap(),
                 username: "user".to_string(),
-                ..User::default()
+                ..User::fixture()
             }),
-            ..InteractionContextData::default()
+            ..InteractionContextData::fixture()
         }
     }
 
@@ -429,14 +430,14 @@ mod tests {
         }
 
         let (mut ctx, interaction) = command("secure", "11");
-        ctx.guild_id = Some(Snowflake::from("200"));
+        ctx.guild_id = Some(test_id(200));
         assert!(matches!(
             framework.dispatch(ctx, interaction).await,
             InteractionResponse::ChannelMessage(_)
         ));
 
         let (mut ctx, interaction) = command("secure", "11");
-        ctx.guild_id = Some(Snowflake::from("200"));
+        ctx.guild_id = Some(test_id(200));
         match framework.dispatch(ctx, interaction).await {
             InteractionResponse::ChannelMessage(value) => {
                 assert_eq!(value["content"], json!("This action is on cooldown."));
@@ -455,14 +456,14 @@ mod tests {
             .build();
 
         let (mut ctx, interaction) = command("short", "12");
-        ctx.guild_id = Some(Snowflake::from("200"));
+        ctx.guild_id = Some(test_id(200));
         assert!(matches!(
             framework.dispatch(ctx, interaction).await,
             InteractionResponse::ChannelMessage(_)
         ));
         tokio::time::sleep(Duration::from_millis(5)).await;
         let (mut ctx, interaction) = command("short", "12");
-        ctx.guild_id = Some(Snowflake::from("200"));
+        ctx.guild_id = Some(test_id(200));
         match framework.dispatch(ctx, interaction).await {
             InteractionResponse::ChannelMessage(value) => {
                 assert_eq!(value["content"], json!("ok"));

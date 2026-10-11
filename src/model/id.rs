@@ -12,8 +12,9 @@
 // - 목적과 의도: ID를 Copy 가능한 8바이트 값으로 만들고, 종류가 다른 ID의 혼용과 0·공백·부호
 //   같은 잘못된 와이어 값을 경계에서 거부한다(docs/design/3.0-types-events-requests.md §1).
 // - 기존 구현 및 제약 조건: 2.x Snowflake는 String + Option<u64>라 복사마다 할당하고,
-//   "abc"도 받아들이며, 종류 구분이 없다. 3단계 시리즈 1은 새 타입만 추가하고 기존 사용처는
-//   시리즈 2에서 옮긴다. 그래서 이름 `Snowflake`는 아직 쓰지 않는다.
+//   "abc"도 받아들이며, 종류 구분이 없다. 3단계 시리즈 1이 새 타입을 추가했고, 시리즈 2의
+//   A 단계가 모든 사용처를 GenericId로 옮기고 옛 구조체를 지웠다(이름 `Snowflake`는
+//   model.rs의 deprecated 별칭으로만 남는다). B 단계가 도메인별 마커로 좁힌다.
 // - 검토한 주요 대안: (1) Snowflake를 u64 newtype으로만 교체, (2) Id<M>(u64),
 //   (3) Id<M>(NonZeroU64) + PhantomData<fn() -> M>.
 // - 선택한 방식: (3). 비교·해시·포맷은 숫자 값만 보고 마커 트레이트를 요구하지 않게 직접
@@ -459,6 +460,21 @@ pub type OnboardingOptionId = Id<marker::OnboardingOption>;
 /// ID whose resource kind is not statically known, such as an audit log
 /// `target_id`.
 pub type GenericId = Id<marker::Generic>;
+
+/// Builds an ID from a test literal, inferring the marker from context.
+///
+/// Test-only: it panics on zero, which production code must never do (use
+/// [`Id::try_new`] or `parse` there). Kept generic over the marker so that
+/// narrowing a field from `GenericId` to a typed ID does not touch the
+/// fixtures that fill it.
+#[cfg(test)]
+#[track_caller]
+pub(crate) fn test_id<M: IdMarker>(value: u64) -> Id<M> {
+    match Id::try_new(value) {
+        Ok(id) => id,
+        Err(error) => panic!("test fixture ID {value}: {error}"),
+    }
+}
 
 #[cfg(test)]
 mod tests;

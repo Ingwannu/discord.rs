@@ -25,7 +25,7 @@ use crate::collector::CollectorHub;
 use crate::error::DiscordError;
 use crate::event::Event;
 use crate::http::DiscordHttpClient;
-use crate::model::{Interaction, Snowflake};
+use crate::model::{GenericId, Interaction};
 #[cfg(feature = "sharding")]
 use crate::sharding::{
     ShardInfo, ShardIpcMessage, ShardRuntimeChannels, ShardRuntimeState, ShardSupervisorEvent,
@@ -353,10 +353,11 @@ impl Context {
     /// in any guild served by this process. Falls back to the context's own
     /// shard when the owner runs elsewhere (for example another process), so
     /// single-shard and externally sharded setups behave as before.
-    fn messenger_for_guild(&self, guild_id: &Snowflake) -> Result<ShardMessenger, DiscordError> {
+    fn messenger_for_guild(&self, guild_id: GenericId) -> Result<ShardMessenger, DiscordError> {
         let commands = read_gateway_commands(&self.gateway_commands);
-        crate::cache::shard_for_guild_id(guild_id, self.shard_count)
-            .and_then(|owner| commands.get(&owner))
+        let owner = crate::cache::shard_for_guild_id(guild_id, self.shard_count);
+        commands
+            .get(&owner)
             .or_else(|| commands.get(&self.shard_id))
             .cloned()
             .ok_or_else(|| invalid_data_error("missing shard messenger"))
@@ -387,7 +388,7 @@ impl Context {
         &self,
         request: crate::model::RequestGuildMembers,
     ) -> Result<(), DiscordError> {
-        self.messenger_for_guild(&request.guild_id)?
+        self.messenger_for_guild(request.guild_id)?
             .request_guild_members(request)
     }
 
@@ -407,7 +408,7 @@ impl Context {
     /// runs in this process.
     pub async fn fetch_members(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         query: Option<String>,
         limit: Option<u32>,
     ) -> Result<Vec<crate::model::Member>, DiscordError> {
@@ -421,14 +422,13 @@ impl Context {
     /// is cancelled, and the call fails promptly if the shard stops.
     pub async fn fetch_members_with_timeout(
         &self,
-        guild_id: impl Into<Snowflake>,
+        guild_id: GenericId,
         query: Option<String>,
         limit: Option<u32>,
         timeout: Duration,
     ) -> Result<Vec<crate::model::Member>, DiscordError> {
         static FETCH_NONCE: AtomicU64 = AtomicU64::new(0);
-        let guild_id = guild_id.into();
-        let messenger = self.messenger_for_guild(&guild_id)?;
+        let messenger = self.messenger_for_guild(guild_id)?;
         let nonce = format!(
             "drs{}-{}",
             messenger.shard_id(),
@@ -512,19 +512,18 @@ impl Context {
     /// Sends a voice state update on the shard that owns the guild.
     pub async fn update_voice_state(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: Option<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: Option<GenericId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        let guild_id = guild_id.into();
-        self.messenger_for_guild(&guild_id)?
+        self.messenger_for_guild(guild_id)?
             .update_voice_state(guild_id, channel_id, self_mute, self_deaf)
     }
 
     pub async fn request_soundboard_sounds(
         &self,
-        guild_ids: impl IntoIterator<Item = crate::model::Snowflake>,
+        guild_ids: impl IntoIterator<Item = GenericId>,
     ) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -536,25 +535,23 @@ impl Context {
     /// Joins a voice channel through the shard that owns the guild.
     pub async fn join_voice(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        channel_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
+        channel_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        let guild_id = guild_id.into();
-        self.messenger_for_guild(&guild_id)?
+        self.messenger_for_guild(guild_id)?
             .join_voice(guild_id, channel_id, self_mute, self_deaf)
     }
 
     /// Leaves voice through the shard that owns the guild.
     pub async fn leave_voice(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        let guild_id = guild_id.into();
-        self.messenger_for_guild(&guild_id)?
+        self.messenger_for_guild(guild_id)?
             .leave_voice(guild_id, self_mute, self_deaf)
     }
 
@@ -570,10 +567,7 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
-    pub async fn disconnect_voice(
-        &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-    ) -> Option<VoiceConnectionState> {
+    pub async fn disconnect_voice(&self, guild_id: GenericId) -> Option<VoiceConnectionState> {
         let mut voice = self.voice.write().await;
         voice.disconnect(guild_id)
     }
@@ -581,7 +575,7 @@ impl Context {
     #[cfg(feature = "voice")]
     pub async fn enqueue_voice_track(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
         track: AudioTrack,
     ) -> Option<usize> {
         let mut voice = self.voice.write().await;
@@ -591,8 +585,8 @@ impl Context {
     #[cfg(feature = "voice")]
     pub async fn voice_runtime_config(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        user_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Option<VoiceRuntimeConfig> {
         let voice = self.voice.read().await;
         voice.runtime_config(guild_id, user_id)
@@ -601,8 +595,8 @@ impl Context {
     #[cfg(feature = "voice")]
     pub async fn connect_voice_runtime(
         &self,
-        guild_id: impl Into<crate::model::Snowflake>,
-        user_id: impl Into<crate::model::Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<VoiceRuntimeHandle, DiscordError> {
         let config = self
             .voice_runtime_config(guild_id, user_id)
@@ -672,10 +666,7 @@ impl Context {
 
     /// Like [`Context::message_collector`], for reactions on one message.
     #[cfg(feature = "collectors")]
-    pub fn reaction_collector(
-        &self,
-        message_id: impl Into<Snowflake>,
-    ) -> crate::collector::ReactionCollector {
+    pub fn reaction_collector(&self, message_id: GenericId) -> crate::collector::ReactionCollector {
         self.collectors
             .reaction_collector_from(self.collector_start(), message_id)
     }
@@ -921,7 +912,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_add(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
+        _guild_id: GenericId,
         _member: crate::model::Member,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -929,7 +920,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_update(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
+        _guild_id: GenericId,
         _member: crate::model::Member,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -937,7 +928,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_remove(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
+        _guild_id: GenericId,
         _user: crate::model::User,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -952,7 +943,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_create(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
+        _guild_id: GenericId,
         _role: crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -960,7 +951,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_update(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
+        _guild_id: GenericId,
         _role: crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -968,8 +959,8 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_delete(
         &self,
         _ctx: Context,
-        _guild_id: crate::model::Snowflake,
-        _role_id: crate::model::Snowflake,
+        _guild_id: GenericId,
+        _role_id: GenericId,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -990,8 +981,8 @@ pub trait EventHandler: Send + Sync + 'static {
     fn message_delete(
         &self,
         _ctx: Context,
-        _channel_id: crate::model::Snowflake,
-        _message_id: crate::model::Snowflake,
+        _channel_id: GenericId,
+        _message_id: GenericId,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -2619,7 +2610,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         Event::GuildMembersChunk(event) => {
             cache
                 .apply_members_chunk(
-                    &event.data.guild_id,
+                    event.data.guild_id,
                     &event.data.members,
                     event.data.presences.as_deref(),
                 )
@@ -2629,52 +2620,46 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             cache.upsert_channel(event.thread.clone()).await;
         }
         Event::ThreadDelete(event) => {
-            cache.remove_channel(&event.thread.id).await;
+            cache.remove_channel(event.thread.id).await;
         }
         Event::ThreadListSync(event) => {
             for thread in &event.threads {
                 let mut thread = thread.clone();
                 if thread.guild_id.is_none() {
-                    thread.guild_id = event.guild_id.clone();
+                    thread.guild_id = event.guild_id;
                 }
                 cache.upsert_channel(thread).await;
             }
         }
         Event::GuildDelete(event) => {
-            cache.remove_guild(&event.data.id).await;
+            cache.remove_guild(event.data.id).await;
         }
         Event::ChannelCreate(event) | Event::ChannelUpdate(event) => {
             cache.upsert_channel(event.channel.clone()).await;
         }
         Event::ChannelDelete(event) => {
-            cache.remove_channel(&event.channel.id).await;
+            cache.remove_channel(event.channel.id).await;
         }
         Event::MemberAdd(event) | Event::MemberUpdate(event) => {
             if let Some(user) = event.member.user.as_ref() {
                 cache.upsert_user(user.clone()).await;
                 cache
-                    .upsert_member(
-                        event.guild_id.clone(),
-                        user.id.clone(),
-                        event.member.clone(),
-                    )
+                    .upsert_member(event.guild_id, user.id, event.member.clone())
                     .await;
             }
         }
         Event::MemberRemove(event) => {
             cache.upsert_user(event.data.user.clone()).await;
             cache
-                .remove_member(&event.data.guild_id, &event.data.user.id)
+                .remove_member(event.data.guild_id, event.data.user.id)
                 .await;
         }
         Event::RoleCreate(event) | Event::RoleUpdate(event) => {
-            cache
-                .upsert_role(event.guild_id.clone(), event.role.clone())
-                .await;
+            cache.upsert_role(event.guild_id, event.role.clone()).await;
         }
         Event::RoleDelete(event) => {
             cache
-                .remove_role(&event.data.guild_id, &event.data.role_id)
+                .remove_role(event.data.guild_id, event.data.role_id)
                 .await;
         }
         Event::MessageCreate(event) => {
@@ -2687,11 +2672,11 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             // leaving an orphan whose owner cannot be determined.
             if event.message.guild_id.is_none() {
                 cache
-                    .upsert_channel_if_absent(crate::model::Channel {
-                        id: event.message.channel_id.clone(),
-                        kind: 1,
-                        ..crate::model::Channel::default()
-                    })
+                    .upsert_channel_if_absent(crate::model::Channel::stub(
+                        event.message.channel_id,
+                        None,
+                        1,
+                    ))
                     .await;
             }
             cache.upsert_message(event.message.clone()).await;
@@ -2701,7 +2686,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 cache.upsert_user(author.clone()).await;
             }
             if let Some(cached_message) = cache
-                .message(&event.message.channel_id, &event.message.id)
+                .message(event.message.channel_id, event.message.id)
                 .await
             {
                 cache
@@ -2715,26 +2700,25 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         Event::MessageDelete(event) => {
             cache
-                .remove_message(&event.data.channel_id, &event.data.id)
+                .remove_message(event.data.channel_id, event.data.id)
                 .await;
         }
         Event::MessageDeleteBulk(event) => {
             cache
-                .remove_messages_bulk(&event.channel_id, &event.ids)
+                .remove_messages_bulk(event.channel_id, &event.ids)
                 .await;
         }
         Event::InteractionCreate(event) => {
             if let Interaction::Component(component) = &event.interaction {
-                if let Some(channel_id) = component.context.channel_id.clone() {
+                if let Some(channel_id) = component.context.channel_id {
                     // Only a stub is known here; never overwrite a full
                     // channel object already held in the cache.
                     cache
-                        .upsert_channel_if_absent(crate::model::Channel {
-                            id: channel_id,
-                            guild_id: component.context.guild_id.clone(),
-                            kind: 0,
-                            ..crate::model::Channel::default()
-                        })
+                        .upsert_channel_if_absent(crate::model::Channel::stub(
+                            channel_id,
+                            component.context.guild_id,
+                            0,
+                        ))
                         .await;
                 }
             }
@@ -2743,10 +2727,8 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             if let Some(member) = event.state.member.as_ref() {
                 if let Some(user) = member.user.as_ref() {
                     cache.upsert_user(user.clone()).await;
-                    if let Some(guild_id) = event.state.guild_id.clone() {
-                        cache
-                            .upsert_member(guild_id, user.id.clone(), member.clone())
-                            .await;
+                    if let Some(guild_id) = event.state.guild_id {
+                        cache.upsert_member(guild_id, user.id, member.clone()).await;
                     }
                 }
             }
@@ -2755,10 +2737,10 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             {
                 if event.state.channel_id.is_some() {
                     cache
-                        .upsert_voice_state(guild_id.clone(), user_id.clone(), event.state.clone())
+                        .upsert_voice_state(*guild_id, *user_id, event.state.clone())
                         .await;
                 } else {
-                    cache.remove_voice_state(guild_id, user_id).await;
+                    cache.remove_voice_state(*guild_id, *user_id).await;
                 }
             }
         }
@@ -2767,7 +2749,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         Event::GuildBanAdd(_) | Event::GuildBanRemove(_) => {}
         Event::GuildEmojisUpdate(event) => {
             cache
-                .replace_emojis(event.guild_id.clone(), event.emojis.clone())
+                .replace_emojis(event.guild_id, event.emojis.clone())
                 .await;
         }
         Event::GuildIntegrationsUpdate(_)
@@ -2775,7 +2757,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         | Event::IntegrationUpdate(_)
         | Event::IntegrationDelete(_) => {}
         Event::GuildSoundboardSoundCreate(event) | Event::GuildSoundboardSoundUpdate(event) => {
-            if let Some(guild_id) = event.sound.guild_id.clone() {
+            if let Some(guild_id) = event.sound.guild_id {
                 cache
                     .upsert_soundboard_sound(guild_id, event.sound.clone())
                     .await;
@@ -2783,16 +2765,16 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         Event::GuildSoundboardSoundDelete(event) => {
             cache
-                .remove_soundboard_sound(&event.guild_id, &event.sound_id)
+                .remove_soundboard_sound(event.guild_id, event.sound_id)
                 .await;
         }
         Event::GuildSoundboardSoundsUpdate(event) | Event::SoundboardSounds(event) => {
             cache
-                .replace_soundboard_sounds(event.guild_id.clone(), event.soundboard_sounds.clone())
+                .replace_soundboard_sounds(event.guild_id, event.soundboard_sounds.clone())
                 .await;
         }
         Event::GuildStickersUpdate(event) => {
-            if let Some(guild_id) = event.guild_id.clone() {
+            if let Some(guild_id) = event.guild_id {
                 cache
                     .replace_stickers(guild_id, event.stickers.clone())
                     .await;
@@ -2803,7 +2785,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         Event::GuildScheduledEventDelete(event) => {
             if let (Some(guild_id), Some(event_id)) = (event.guild_id.as_ref(), event.id.as_ref()) {
-                cache.remove_scheduled_event(guild_id, event_id).await;
+                cache.remove_scheduled_event(*guild_id, *event_id).await;
             }
         }
         Event::StageInstanceCreate(event) | Event::StageInstanceUpdate(event) => {
@@ -2813,7 +2795,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         Event::StageInstanceDelete(event) => {
             cache
-                .remove_stage_instance(&event.stage_instance.guild_id, &event.stage_instance.id)
+                .remove_stage_instance(event.stage_instance.guild_id, event.stage_instance.id)
                 .await;
         }
         Event::EntitlementCreate(_)
@@ -2836,11 +2818,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 (event.guild_id.as_ref(), event.user_id.as_ref())
             {
                 cache
-                    .upsert_presence(
-                        guild_id.clone(),
-                        user_id.clone(),
-                        presence_from_update(event, user_id),
-                    )
+                    .upsert_presence(*guild_id, *user_id, presence_from_update(event, *user_id))
                     .await;
             }
         }
@@ -2985,10 +2963,10 @@ fn merge_message_update(
 /// and backend paths so both store the same value.
 fn presence_from_update(
     event: &crate::event::PresenceUpdateEvent,
-    user_id: &Snowflake,
+    user_id: GenericId,
 ) -> crate::model::Presence {
     crate::model::Presence {
-        user_id: Some(user_id.clone()),
+        user_id: Some(user_id),
         user: None,
         status: event.status.clone(),
         activities: if event.activities.is_empty() {

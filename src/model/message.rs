@@ -1,23 +1,22 @@
 //! Messages, message references, pins, reactions, and message search.
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
 use super::{
-    is_false, Attachment, Channel, CreatePoll, Embed, Member, MessageComponent, PartialApplication,
-    Poll, ResolvedData, Snowflake, Sticker, StickerItem, ThreadMember, User,
+    is_false, Attachment, AuthorizingIntegrationOwners, Channel, CreatePoll, Embed, GenericId,
+    Member, MessageComponent, PartialApplication, Poll, ResolvedData, Sticker, StickerItem,
+    ThreadMember, User,
 };
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Message`.
 pub struct Message {
-    pub id: Snowflake,
-    pub channel_id: Snowflake,
+    pub id: GenericId,
+    pub channel_id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,7 +30,7 @@ pub struct Message {
     #[serde(default)]
     pub mentions: Vec<User>,
     #[serde(default)]
-    pub mention_roles: Vec<Snowflake>,
+    pub mention_roles: Vec<GenericId>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -43,9 +42,9 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub webhook_id: Option<Snowflake>,
+    pub webhook_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<Snowflake>,
+    pub application_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub application: Option<PartialApplication>,
     #[serde(default)]
@@ -101,7 +100,7 @@ pub struct MessageActivity {
 /// Typed Discord API object for `MessageCall`.
 pub struct MessageCall {
     #[serde(default)]
-    pub participants: Vec<Snowflake>,
+    pub participants: Vec<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_timestamp: Option<String>,
 }
@@ -132,7 +131,7 @@ pub struct MessageSnapshotMessage {
     #[serde(default)]
     pub mentions: Vec<User>,
     #[serde(default)]
-    pub mention_roles: Vec<Snowflake>,
+    pub mention_roles: Vec<GenericId>,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
     #[serde(default)]
@@ -141,10 +140,10 @@ pub struct MessageSnapshotMessage {
     pub components: Option<Vec<MessageComponent>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `RoleSubscriptionData`.
 pub struct RoleSubscriptionData {
-    pub role_subscription_listing_id: Snowflake,
+    pub role_subscription_listing_id: GenericId,
     pub tier_name: String,
     pub total_months_subscribed: u64,
     pub is_renewal: bool,
@@ -163,34 +162,34 @@ pub struct SharedClientTheme {
 
 /// Metadata about the interaction that caused a message
 /// (`Message::interaction_metadata`).
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageInteractionMetadata {
     /// ID of the triggering interaction.
-    #[serde(default)]
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Raw Discord interaction type of the triggering interaction.
     #[serde(rename = "type", default)]
     pub kind: u8,
     /// User who triggered the interaction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
-    /// IDs of the installation contexts that authorized the interaction,
-    /// keyed by raw integration type (`"0"` guild install, `"1"` user
-    /// install).
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub authorizing_integration_owners: HashMap<String, Snowflake>,
+    /// Installation contexts that authorized the interaction.
+    #[serde(
+        default,
+        skip_serializing_if = "AuthorizingIntegrationOwners::is_empty"
+    )]
+    pub authorizing_integration_owners: AuthorizingIntegrationOwners,
     /// ID of the original response message (follow-up messages only).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub original_response_message_id: Option<Snowflake>,
+    pub original_response_message_id: Option<GenericId>,
     /// User targeted by a user context-menu command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user: Option<User>,
     /// Message targeted by a message context-menu command.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_message_id: Option<Snowflake>,
+    pub target_message_id: Option<GenericId>,
     /// Message containing the component that was interacted with.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interacted_message_id: Option<Snowflake>,
+    pub interacted_message_id: Option<GenericId>,
     /// Metadata of the interaction that spawned the modal, for modal
     /// submit interactions.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,10 +199,9 @@ pub struct MessageInteractionMetadata {
 /// Deprecated Discord `MessageInteraction` object still delivered on some
 /// payloads (`Message::interaction`). Prefer
 /// [`Message::interaction_metadata`].
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageInteraction {
-    #[serde(default)]
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(rename = "type", default)]
     pub kind: u8,
     #[serde(default)]
@@ -214,7 +212,7 @@ pub struct MessageInteraction {
     pub member: Option<Member>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MessagePin`.
 pub struct MessagePin {
     pub pinned_at: String,
@@ -243,9 +241,9 @@ pub struct AllowedMentions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parse: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub roles: Vec<Snowflake>,
+    pub roles: Vec<GenericId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub users: Vec<Snowflake>,
+    pub users: Vec<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replied_user: Option<bool>,
 }
@@ -278,18 +276,18 @@ pub struct SearchGuildMessagesResponse {
 pub struct SearchGuildMessagesQuery {
     pub limit: Option<u64>,
     pub offset: Option<u64>,
-    pub max_id: Option<Snowflake>,
-    pub min_id: Option<Snowflake>,
+    pub max_id: Option<GenericId>,
+    pub min_id: Option<GenericId>,
     pub slop: Option<u64>,
     pub content: Option<String>,
-    pub channel_ids: Vec<Snowflake>,
+    pub channel_ids: Vec<GenericId>,
     pub author_types: Vec<String>,
-    pub author_ids: Vec<Snowflake>,
-    pub mentions: Vec<Snowflake>,
-    pub mentions_role_ids: Vec<Snowflake>,
+    pub author_ids: Vec<GenericId>,
+    pub mentions: Vec<GenericId>,
+    pub mentions_role_ids: Vec<GenericId>,
     pub mention_everyone: Option<bool>,
-    pub replied_to_user_ids: Vec<Snowflake>,
-    pub replied_to_message_ids: Vec<Snowflake>,
+    pub replied_to_user_ids: Vec<GenericId>,
+    pub replied_to_message_ids: Vec<GenericId>,
     pub pinned: Option<bool>,
     pub has: Vec<String>,
     pub embed_types: Vec<String>,
@@ -302,11 +300,11 @@ pub struct SearchGuildMessagesQuery {
     pub include_nsfw: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ChannelMention`.
 pub struct ChannelMention {
-    pub id: Snowflake,
-    pub guild_id: Snowflake,
+    pub id: GenericId,
+    pub guild_id: GenericId,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,32 +329,32 @@ pub struct MessageReference {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_id: Option<Snowflake>,
+    pub message_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_if_not_exists: Option<bool>,
 }
 
 impl MessageReference {
     /// Builds a reply reference to a message in the same channel.
-    pub fn reply(message_id: impl Into<Snowflake>) -> Self {
+    pub fn reply(message_id: GenericId) -> Self {
         Self {
             kind: Some(MessageReferenceType::DEFAULT.0),
-            message_id: Some(message_id.into()),
+            message_id: Some(message_id),
             ..Self::default()
         }
     }
 
     /// Builds a forward reference; Discord attaches the referenced message
     /// to the new message as a `message_snapshots` entry.
-    pub fn forward(channel_id: impl Into<Snowflake>, message_id: impl Into<Snowflake>) -> Self {
+    pub fn forward(channel_id: GenericId, message_id: GenericId) -> Self {
         Self {
             kind: Some(MessageReferenceType::FORWARD.0),
-            channel_id: Some(channel_id.into()),
-            message_id: Some(message_id.into()),
+            channel_id: Some(channel_id),
+            message_id: Some(message_id),
             ..Self::default()
         }
     }
@@ -387,7 +385,7 @@ pub struct CreateMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_reference: Option<MessageReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sticker_ids: Option<Vec<Snowflake>>,
+    pub sticker_ids: Option<Vec<GenericId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

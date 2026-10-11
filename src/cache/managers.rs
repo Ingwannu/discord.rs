@@ -4,7 +4,7 @@ use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 #[cfg(feature = "gateway")]
 use crate::manager::CachedManager;
-use crate::model::{Channel, Guild, Member, Message, Role, Snowflake, User};
+use crate::model::{Channel, GenericId, Guild, Member, Message, Role, User};
 
 use super::CacheHandle;
 
@@ -21,20 +21,19 @@ impl UserManager {
         Self { http, cache }
     }
 
-    pub async fn get(&self, user_id: impl Into<Snowflake>) -> Result<User, DiscordError> {
-        let user_id = user_id.into();
-        if let Some(user) = self.cache.user(&user_id).await {
+    pub async fn get(&self, user_id: GenericId) -> Result<User, DiscordError> {
+        if let Some(user) = self.cache.user(user_id).await {
             return Ok(user);
         }
         self.http.get_user(user_id).await
     }
 
-    pub async fn cached(&self, user_id: impl Into<Snowflake>) -> Option<User> {
-        self.cache.user(&user_id.into()).await
+    pub async fn cached(&self, user_id: GenericId) -> Option<User> {
+        self.cache.user(user_id).await
     }
 
-    pub async fn contains(&self, user_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_user(&user_id.into()).await
+    pub async fn contains(&self, user_id: GenericId) -> bool {
+        self.cache.contains_user(user_id).await
     }
 
     pub async fn list_cached(&self) -> Vec<User> {
@@ -55,20 +54,19 @@ impl GuildManager {
         Self { http, cache }
     }
 
-    pub async fn get(&self, guild_id: impl Into<Snowflake>) -> Result<Guild, DiscordError> {
-        let guild_id = guild_id.into();
-        if let Some(guild) = self.cache.guild(&guild_id).await {
+    pub async fn get(&self, guild_id: GenericId) -> Result<Guild, DiscordError> {
+        if let Some(guild) = self.cache.guild(guild_id).await {
             return Ok(guild);
         }
         self.http.get_guild(guild_id).await
     }
 
-    pub async fn cached(&self, guild_id: impl Into<Snowflake>) -> Option<Guild> {
-        self.cache.guild(&guild_id.into()).await
+    pub async fn cached(&self, guild_id: GenericId) -> Option<Guild> {
+        self.cache.guild(guild_id).await
     }
 
-    pub async fn contains(&self, guild_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_guild(&guild_id.into()).await
+    pub async fn contains(&self, guild_id: GenericId) -> bool {
+        self.cache.contains_guild(guild_id).await
     }
 
     pub async fn list_cached(&self) -> Vec<Guild> {
@@ -89,20 +87,19 @@ impl ChannelManager {
         Self { http, cache }
     }
 
-    pub async fn get(&self, channel_id: impl Into<Snowflake>) -> Result<Channel, DiscordError> {
-        let channel_id = channel_id.into();
-        if let Some(channel) = self.cache.channel(&channel_id).await {
+    pub async fn get(&self, channel_id: GenericId) -> Result<Channel, DiscordError> {
+        if let Some(channel) = self.cache.channel(channel_id).await {
             return Ok(channel);
         }
         self.http.get_channel(channel_id).await
     }
 
-    pub async fn cached(&self, channel_id: impl Into<Snowflake>) -> Option<Channel> {
-        self.cache.channel(&channel_id.into()).await
+    pub async fn cached(&self, channel_id: GenericId) -> Option<Channel> {
+        self.cache.channel(channel_id).await
     }
 
-    pub async fn contains(&self, channel_id: impl Into<Snowflake>) -> bool {
-        self.cache.contains_channel(&channel_id.into()).await
+    pub async fn contains(&self, channel_id: GenericId) -> bool {
+        self.cache.contains_channel(channel_id).await
     }
 
     pub async fn list_cached(&self) -> Vec<Channel> {
@@ -125,51 +122,33 @@ impl MemberManager {
 
     pub async fn get(
         &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
+        guild_id: GenericId,
+        user_id: GenericId,
     ) -> Result<Member, DiscordError> {
-        let guild_id = guild_id.into();
-        let user_id = user_id.into();
-        if let Some(member) = self.cache.member(&guild_id, &user_id).await {
+        if let Some(member) = self.cache.member(guild_id, user_id).await {
             return Ok(member);
         }
         self.http.get_member(guild_id, user_id).await
     }
 
-    pub async fn cached(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> Option<Member> {
-        self.cache.member(&guild_id.into(), &user_id.into()).await
+    pub async fn cached(&self, guild_id: GenericId, user_id: GenericId) -> Option<Member> {
+        self.cache.member(guild_id, user_id).await
     }
 
-    pub async fn cached_arc(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> Option<Arc<Member>> {
-        self.cache
-            .member_arc(&guild_id.into(), &user_id.into())
-            .await
+    pub async fn cached_arc(&self, guild_id: GenericId, user_id: GenericId) -> Option<Arc<Member>> {
+        self.cache.member_arc(guild_id, user_id).await
     }
 
-    pub async fn contains(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        user_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_member(&guild_id.into(), &user_id.into())
-            .await
+    pub async fn contains(&self, guild_id: GenericId, user_id: GenericId) -> bool {
+        self.cache.contains_member(guild_id, user_id).await
     }
 
-    pub async fn list_cached(&self, guild_id: impl Into<Snowflake>) -> Vec<Member> {
-        self.cache.members(&guild_id.into()).await
+    pub async fn list_cached(&self, guild_id: GenericId) -> Vec<Member> {
+        self.cache.members(guild_id).await
     }
 
-    pub async fn list_cached_arc(&self, guild_id: impl Into<Snowflake>) -> Vec<Arc<Member>> {
-        self.cache.members_arc(&guild_id.into()).await
+    pub async fn list_cached_arc(&self, guild_id: GenericId) -> Vec<Arc<Member>> {
+        self.cache.members_arc(guild_id).await
     }
 }
 
@@ -188,53 +167,37 @@ impl MessageManager {
 
     pub async fn get(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Result<Message, DiscordError> {
-        let channel_id = channel_id.into();
-        let message_id = message_id.into();
-        if let Some(message) = self.cache.message(&channel_id, &message_id).await {
+        if let Some(message) = self.cache.message(channel_id, message_id).await {
             return Ok(message);
         }
         self.http.get_message(channel_id, message_id).await
     }
 
-    pub async fn cached(
-        &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> Option<Message> {
-        self.cache
-            .message(&channel_id.into(), &message_id.into())
-            .await
+    pub async fn cached(&self, channel_id: GenericId, message_id: GenericId) -> Option<Message> {
+        self.cache.message(channel_id, message_id).await
     }
 
     pub async fn cached_arc(
         &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
+        channel_id: GenericId,
+        message_id: GenericId,
     ) -> Option<Arc<Message>> {
-        self.cache
-            .message_arc(&channel_id.into(), &message_id.into())
-            .await
+        self.cache.message_arc(channel_id, message_id).await
     }
 
-    pub async fn contains(
-        &self,
-        channel_id: impl Into<Snowflake>,
-        message_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_message(&channel_id.into(), &message_id.into())
-            .await
+    pub async fn contains(&self, channel_id: GenericId, message_id: GenericId) -> bool {
+        self.cache.contains_message(channel_id, message_id).await
     }
 
-    pub async fn list_cached(&self, channel_id: impl Into<Snowflake>) -> Vec<Message> {
-        self.cache.messages(&channel_id.into()).await
+    pub async fn list_cached(&self, channel_id: GenericId) -> Vec<Message> {
+        self.cache.messages(channel_id).await
     }
 
-    pub async fn list_cached_arc(&self, channel_id: impl Into<Snowflake>) -> Vec<Arc<Message>> {
-        self.cache.messages_arc(&channel_id.into()).await
+    pub async fn list_cached_arc(&self, channel_id: GenericId) -> Vec<Arc<Message>> {
+        self.cache.messages_arc(channel_id).await
     }
 }
 
@@ -251,54 +214,42 @@ impl RoleManager {
         Self { http, cache }
     }
 
-    pub async fn list(&self, guild_id: impl Into<Snowflake>) -> Result<Vec<Role>, DiscordError> {
-        let guild_id = guild_id.into();
-        let cached = self.cache.roles(&guild_id).await;
+    pub async fn list(&self, guild_id: GenericId) -> Result<Vec<Role>, DiscordError> {
+        let cached = self.cache.roles(guild_id).await;
         if !cached.is_empty() {
             return Ok(cached);
         }
         self.http.list_roles(guild_id).await
     }
 
-    pub async fn cached(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
-    ) -> Option<Role> {
-        self.cache.role(&guild_id.into(), &role_id.into()).await
+    pub async fn cached(&self, guild_id: GenericId, role_id: GenericId) -> Option<Role> {
+        self.cache.role(guild_id, role_id).await
     }
 
-    pub async fn contains(
-        &self,
-        guild_id: impl Into<Snowflake>,
-        role_id: impl Into<Snowflake>,
-    ) -> bool {
-        self.cache
-            .contains_role(&guild_id.into(), &role_id.into())
-            .await
+    pub async fn contains(&self, guild_id: GenericId, role_id: GenericId) -> bool {
+        self.cache.contains_role(guild_id, role_id).await
     }
 
-    pub async fn list_cached(&self, guild_id: impl Into<Snowflake>) -> Vec<Role> {
-        self.cache.roles(&guild_id.into()).await
+    pub async fn list_cached(&self, guild_id: GenericId) -> Vec<Role> {
+        self.cache.roles(guild_id).await
     }
 }
 
 #[cfg(feature = "gateway")]
 impl CachedManager<Guild> for GuildManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Guild, DiscordError> {
-        let id = id.into();
-        if let Some(guild) = self.cache.guild(&id).await {
+    async fn get(&self, id: GenericId) -> Result<Guild, DiscordError> {
+        if let Some(guild) = self.cache.guild(id).await {
             return Ok(guild);
         }
         self.http.get_guild(id).await
     }
 
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<Guild> {
-        self.cache.guild(&id.into()).await
+    async fn cached(&self, id: GenericId) -> Option<Guild> {
+        self.cache.guild(id).await
     }
 
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_guild(&id.into()).await
+    async fn contains(&self, id: GenericId) -> bool {
+        self.cache.contains_guild(id).await
     }
 
     async fn list_cached(&self) -> Vec<Guild> {
@@ -308,20 +259,19 @@ impl CachedManager<Guild> for GuildManager {
 
 #[cfg(feature = "gateway")]
 impl CachedManager<Channel> for ChannelManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<Channel, DiscordError> {
-        let id = id.into();
-        if let Some(channel) = self.cache.channel(&id).await {
+    async fn get(&self, id: GenericId) -> Result<Channel, DiscordError> {
+        if let Some(channel) = self.cache.channel(id).await {
             return Ok(channel);
         }
         self.http.get_channel(id).await
     }
 
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<Channel> {
-        self.cache.channel(&id.into()).await
+    async fn cached(&self, id: GenericId) -> Option<Channel> {
+        self.cache.channel(id).await
     }
 
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_channel(&id.into()).await
+    async fn contains(&self, id: GenericId) -> bool {
+        self.cache.contains_channel(id).await
     }
 
     async fn list_cached(&self) -> Vec<Channel> {
@@ -331,20 +281,19 @@ impl CachedManager<Channel> for ChannelManager {
 
 #[cfg(feature = "gateway")]
 impl CachedManager<User> for UserManager {
-    async fn get(&self, id: impl Into<Snowflake> + Send) -> Result<User, DiscordError> {
-        let id = id.into();
-        if let Some(user) = self.cache.user(&id).await {
+    async fn get(&self, id: GenericId) -> Result<User, DiscordError> {
+        if let Some(user) = self.cache.user(id).await {
             return Ok(user);
         }
         self.http.get_user(id).await
     }
 
-    async fn cached(&self, id: impl Into<Snowflake> + Send) -> Option<User> {
-        self.cache.user(&id.into()).await
+    async fn cached(&self, id: GenericId) -> Option<User> {
+        self.cache.user(id).await
     }
 
-    async fn contains(&self, id: impl Into<Snowflake> + Send) -> bool {
-        self.cache.contains_user(&id.into()).await
+    async fn contains(&self, id: GenericId) -> bool {
+        self.cache.contains_user(id).await
     }
 
     async fn list_cached(&self) -> Vec<User> {

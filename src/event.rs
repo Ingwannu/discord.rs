@@ -3,9 +3,9 @@ use serde_json::Value;
 
 use crate::model::{
     Activity, ApplicationCommandPermission, AuditLogEntry, AutoModerationAction,
-    AutoModerationTriggerMetadata, Channel, ClientStatus, Entitlement, Guild,
-    GuildScheduledEventEntityMetadata, Integration, Interaction, Member, Message, Presence, Role,
-    Snowflake, SoundboardSound, StageInstance, Sticker, Subscription, ThreadMember, User,
+    AutoModerationTriggerMetadata, Channel, ClientStatus, Entitlement, GenericId, Guild,
+    GuildScheduledEventEntityMetadata, Integration, Interaction, Member, Message, PollAnswerId,
+    Presence, Role, SoundboardSound, StageInstance, Sticker, Subscription, ThreadMember, User,
     VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
@@ -13,7 +13,7 @@ use crate::types::Emoji;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ReadyApplication`.
 pub struct ReadyApplication {
-    pub id: Snowflake,
+    pub id: GenericId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ pub struct GuildEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildDeletePayload`.
 pub struct GuildDeletePayload {
-    pub id: Snowflake,
+    pub id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
 }
@@ -66,7 +66,7 @@ pub struct ChannelEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `MemberEvent`.
 pub struct MemberEvent {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub member: Member,
     pub raw: Value,
 }
@@ -74,7 +74,7 @@ pub struct MemberEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MemberRemovePayload`.
 pub struct MemberRemovePayload {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub user: User,
 }
 
@@ -88,13 +88,13 @@ pub struct MemberRemoveEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildMembersChunkPayload`.
 pub struct GuildMembersChunkPayload {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     #[serde(default)]
     pub members: Vec<Member>,
     pub chunk_index: u64,
     pub chunk_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub not_found: Vec<Snowflake>,
+    pub not_found: Vec<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presences: Option<Vec<Presence>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,7 +111,7 @@ pub struct GuildMembersChunkEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `RoleEvent`.
 pub struct RoleEvent {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub role: Role,
     pub raw: Value,
 }
@@ -119,8 +119,8 @@ pub struct RoleEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `RoleDeletePayload`.
 pub struct RoleDeletePayload {
-    pub guild_id: Snowflake,
-    pub role_id: Snowflake,
+    pub guild_id: GenericId,
+    pub role_id: GenericId,
 }
 
 #[derive(Clone, Debug)]
@@ -140,10 +140,10 @@ pub struct MessageEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MessageDeletePayload`.
 pub struct MessageDeletePayload {
-    pub id: Snowflake,
-    pub channel_id: Snowflake,
+    pub id: GenericId,
+    pub channel_id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
 }
 
 #[derive(Clone, Debug)]
@@ -183,17 +183,17 @@ pub struct ResumedEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `BulkMessageDeleteEvent`.
 pub struct BulkMessageDeleteEvent {
-    pub ids: Vec<Snowflake>,
-    pub channel_id: Snowflake,
-    pub guild_id: Option<Snowflake>,
+    pub ids: Vec<GenericId>,
+    pub channel_id: GenericId,
+    pub guild_id: Option<GenericId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ChannelPinsUpdateEvent`.
 pub struct ChannelPinsUpdateEvent {
-    pub channel_id: Snowflake,
-    pub guild_id: Option<Snowflake>,
+    pub channel_id: GenericId,
+    pub guild_id: Option<GenericId>,
     pub last_pin_timestamp: Option<String>,
     pub raw: Value,
 }
@@ -201,7 +201,7 @@ pub struct ChannelPinsUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildBanEvent`.
 pub struct GuildBanEvent {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub user: User,
     pub raw: Value,
 }
@@ -209,7 +209,7 @@ pub struct GuildBanEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildEmojisUpdateEvent`.
 pub struct GuildEmojisUpdateEvent {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub emojis: Vec<Emoji>,
     pub raw: Value,
 }
@@ -232,27 +232,27 @@ pub struct SubscriptionEvent {
 /// Typed Discord API object for `IntegrationEvent`.
 pub struct IntegrationEvent {
     pub integration: Integration,
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `IntegrationDeleteEvent`.
 pub struct IntegrationDeleteEvent {
-    pub id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub application_id: Option<Snowflake>,
+    pub id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
+    pub application_id: Option<GenericId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `PollVoteEvent`.
 pub struct PollVoteEvent {
-    pub user_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub answer_id: Option<u64>,
+    pub user_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
+    pub message_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
+    pub answer_id: Option<PollAnswerId>,
     pub raw: Value,
 }
 
@@ -266,15 +266,15 @@ pub struct SoundboardSoundEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `SoundboardSoundDeleteEvent`.
 pub struct SoundboardSoundDeleteEvent {
-    pub sound_id: Snowflake,
-    pub guild_id: Snowflake,
+    pub sound_id: GenericId,
+    pub guild_id: GenericId,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `SoundboardSoundsEvent`.
 pub struct SoundboardSoundsEvent {
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     pub soundboard_sounds: Vec<SoundboardSound>,
     pub raw: Value,
 }
@@ -282,8 +282,8 @@ pub struct SoundboardSoundsEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `InviteEvent`.
 pub struct InviteEvent {
-    pub guild_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
     pub code: Option<String>,
     /// User who created the invite (INVITE_CREATE only).
     pub inviter: Option<User>,
@@ -304,12 +304,12 @@ pub struct InviteEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `ReactionEvent`.
 pub struct ReactionEvent {
-    pub user_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
+    pub message_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub member: Option<Member>,
-    pub message_author_id: Option<Snowflake>,
+    pub message_author_id: Option<GenericId>,
     pub emoji: Option<Emoji>,
     pub burst: Option<bool>,
     pub burst_colors: Vec<String>,
@@ -320,18 +320,18 @@ pub struct ReactionEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ReactionRemoveAllEvent`.
 pub struct ReactionRemoveAllEvent {
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub message_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `TypingStartEvent`.
 pub struct TypingStartEvent {
-    pub channel_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub user_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
+    pub user_id: Option<GenericId>,
     pub timestamp: Option<u64>,
     pub raw: Value,
 }
@@ -340,8 +340,8 @@ pub struct TypingStartEvent {
 /// Typed Discord API object for `PresenceUpdateEvent`.
 pub struct PresenceUpdateEvent {
     pub user: Option<PresenceUpdateUser>,
-    pub user_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub status: Option<String>,
     pub activities: Vec<Activity>,
     pub client_status: Option<ClientStatus>,
@@ -351,7 +351,7 @@ pub struct PresenceUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `PresenceUpdateUser`.
 pub struct PresenceUpdateUser {
-    pub id: Snowflake,
+    pub id: GenericId,
     pub username: Option<String>,
     pub raw: Value,
 }
@@ -366,15 +366,15 @@ pub struct UserUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhooksUpdateEvent`.
 pub struct WebhooksUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildIntegrationsUpdateEvent`.
 pub struct GuildIntegrationsUpdateEvent {
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     pub raw: Value,
 }
 
@@ -391,9 +391,9 @@ pub struct ThreadEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadMemberUpdateEvent`.
 pub struct ThreadMemberUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub thread_id: Option<Snowflake>,
-    pub user_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
+    pub thread_id: Option<GenericId>,
+    pub user_id: Option<GenericId>,
     pub join_timestamp: Option<String>,
     pub flags: Option<u64>,
     pub raw: Value,
@@ -402,10 +402,10 @@ pub struct ThreadMemberUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadMembersUpdateEvent`.
 pub struct ThreadMembersUpdateEvent {
-    pub guild_id: Option<Snowflake>,
-    pub thread_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
+    pub thread_id: Option<GenericId>,
     pub added_members: Option<Vec<ThreadMember>>,
-    pub removed_member_ids: Option<Vec<Snowflake>>,
+    pub removed_member_ids: Option<Vec<GenericId>>,
     pub member_count: Option<u64>,
     pub raw: Value,
 }
@@ -413,10 +413,10 @@ pub struct ThreadMembersUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadListSyncEvent`.
 pub struct ThreadListSyncEvent {
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     /// Parent channel ids whose threads are being synced; empty means the
     /// entire guild was synced.
-    pub channel_ids: Vec<Snowflake>,
+    pub channel_ids: Vec<GenericId>,
     pub threads: Vec<Channel>,
     /// Thread member objects for the threads the current user has joined.
     pub members: Vec<ThreadMember>,
@@ -426,9 +426,9 @@ pub struct ThreadListSyncEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ReactionRemoveEmojiEvent`.
 pub struct ReactionRemoveEmojiEvent {
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub message_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub emoji: Option<Emoji>,
     pub raw: Value,
 }
@@ -436,7 +436,7 @@ pub struct ReactionRemoveEmojiEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildStickersUpdateEvent`.
 pub struct GuildStickersUpdateEvent {
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     pub stickers: Vec<Sticker>,
     pub raw: Value,
 }
@@ -444,10 +444,10 @@ pub struct GuildStickersUpdateEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `ScheduledEvent`.
 pub struct ScheduledEvent {
-    pub id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub creator_id: Option<Snowflake>,
+    pub id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
+    pub creator_id: Option<GenericId>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub scheduled_start_time: Option<String>,
@@ -455,7 +455,7 @@ pub struct ScheduledEvent {
     pub privacy_level: Option<u64>,
     pub status: Option<u64>,
     pub entity_type: Option<u64>,
-    pub entity_id: Option<Snowflake>,
+    pub entity_id: Option<GenericId>,
     pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     pub user_count: Option<u64>,
     pub image: Option<String>,
@@ -465,9 +465,9 @@ pub struct ScheduledEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEventUserEvent`.
 pub struct GuildScheduledEventUserEvent {
-    pub guild_scheduled_event_id: Snowflake,
-    pub user_id: Snowflake,
-    pub guild_id: Snowflake,
+    pub guild_scheduled_event_id: GenericId,
+    pub user_id: GenericId,
+    pub guild_id: GenericId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -486,9 +486,9 @@ pub struct StageInstanceEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ApplicationCommandPermissionsUpdateEvent`.
 pub struct ApplicationCommandPermissionsUpdateEvent {
-    pub id: Option<Snowflake>,
-    pub application_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub id: Option<GenericId>,
+    pub application_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub permissions: Vec<ApplicationCommandPermission>,
     pub raw: Value,
 }
@@ -496,13 +496,13 @@ pub struct ApplicationCommandPermissionsUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelEffectEvent`.
 pub struct VoiceChannelEffectEvent {
-    pub channel_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
-    pub user_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
+    pub user_id: Option<GenericId>,
     pub emoji: Option<Emoji>,
     pub animation_type: Option<u64>,
     pub animation_id: Option<u64>,
-    pub sound_id: Option<Snowflake>,
+    pub sound_id: Option<GenericId>,
     pub sound_volume: Option<f64>,
     pub raw: Value,
 }
@@ -510,8 +510,8 @@ pub struct VoiceChannelEffectEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelStartTimeUpdateEvent`.
 pub struct VoiceChannelStartTimeUpdateEvent {
-    pub channel_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub voice_channel_start_time: Option<String>,
     pub raw: Value,
 }
@@ -519,8 +519,8 @@ pub struct VoiceChannelStartTimeUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelStatusUpdateEvent`.
 pub struct VoiceChannelStatusUpdateEvent {
-    pub channel_id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub status: Option<String>,
     pub raw: Value,
 }
@@ -529,7 +529,7 @@ pub struct VoiceChannelStatusUpdateEvent {
 /// Typed Discord API object for `ChannelInfoChannel`.
 pub struct ChannelInfoChannel {
     /// Channel ID whose metadata was returned.
-    pub id: Snowflake,
+    pub id: GenericId,
     /// Optional channel status value.
     pub status: Option<String>,
     /// Optional voice-channel start time value.
@@ -542,7 +542,7 @@ pub struct ChannelInfoChannel {
 /// Typed Discord API object for `ChannelInfoEvent`.
 pub struct ChannelInfoEvent {
     /// Guild ID for the channel-info dispatch.
-    pub guild_id: Snowflake,
+    pub guild_id: GenericId,
     /// Channel metadata objects included by Discord.
     pub channels: Vec<ChannelInfoChannel>,
     /// Raw event payload for forward-compatible access.
@@ -561,25 +561,25 @@ pub struct RateLimitedEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `AutoModerationEvent`.
 pub struct AutoModerationEvent {
-    pub id: Option<Snowflake>,
-    pub guild_id: Option<Snowflake>,
+    pub id: Option<GenericId>,
+    pub guild_id: Option<GenericId>,
     pub name: Option<String>,
-    pub creator_id: Option<Snowflake>,
+    pub creator_id: Option<GenericId>,
     pub event_type: Option<u64>,
     pub trigger_type: Option<u64>,
     pub trigger_metadata: Option<AutoModerationTriggerMetadata>,
     pub actions: Vec<AutoModerationAction>,
     pub enabled: Option<bool>,
-    pub exempt_roles: Vec<Snowflake>,
-    pub exempt_channels: Vec<Snowflake>,
+    pub exempt_roles: Vec<GenericId>,
+    pub exempt_channels: Vec<GenericId>,
     /// The action that was executed (AUTO_MODERATION_ACTION_EXECUTION only).
     pub action: Option<AutoModerationAction>,
-    pub rule_id: Option<Snowflake>,
+    pub rule_id: Option<GenericId>,
     pub rule_trigger_type: Option<u64>,
-    pub user_id: Option<Snowflake>,
-    pub channel_id: Option<Snowflake>,
-    pub message_id: Option<Snowflake>,
-    pub alert_system_message_id: Option<Snowflake>,
+    pub user_id: Option<GenericId>,
+    pub channel_id: Option<GenericId>,
+    pub message_id: Option<GenericId>,
+    pub alert_system_message_id: Option<GenericId>,
     pub content: Option<String>,
     pub matched_keyword: Option<String>,
     pub matched_content: Option<String>,
@@ -589,11 +589,11 @@ pub struct AutoModerationEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `AuditLogEntryEvent`.
 pub struct AuditLogEntryEvent {
-    pub guild_id: Option<Snowflake>,
+    pub guild_id: Option<GenericId>,
     pub entry: Option<AuditLogEntry>,
-    pub id: Option<Snowflake>,
-    pub user_id: Option<Snowflake>,
-    pub target_id: Option<Snowflake>,
+    pub id: Option<GenericId>,
+    pub user_id: Option<GenericId>,
+    pub target_id: Option<GenericId>,
     pub action_type: Option<u64>,
     pub changes: Option<Vec<Value>>,
     pub options: Option<Value>,
