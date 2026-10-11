@@ -1,0 +1,29 @@
+error[E0277]: the trait bound `ChannelType: Default` is not satisfied
+ --> tests/ui/discriminant_default.rs:7:5
+  |
+5 | #[derive(Default)]
+  |          ------- in this derive macro expansion
+6 | struct StoredChannel {
+7 |     kind: ChannelType,
+  |     ^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `ChannelType`
+
+error[E0599]: no associated function or constant named `default` found for struct `ChannelType` in the current scope
+  --> tests/ui/discriminant_default.rs:11:30
+   |
+11 |     let _kind = ChannelType::default();
+   |                              ^^^^^^^ associated function or constant not found in `ChannelType`
+   |
+note: if you're trying to build a new `ChannelType`, consider using `ChannelType::new` which returns `ChannelType`
+  --> src/model/discriminant.rs
+   |
+   |               pub const fn new(raw: $repr) -> Self {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+   | / open_discriminant! {
+   | |     /// Channel `type` (Discord docs: Channel Object › Channel Types).
+   | |     pub struct ChannelType(u8) {
+   | |         /// Text channel within a server.
+...  |
+   | | }
+   | |_- in this macro invocation
+   = note: this error originates in the macro `open_discriminant` (in Nightly builds, run with -Z macro-backtrace for more info)

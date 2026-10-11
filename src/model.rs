@@ -14,6 +14,8 @@ mod channel;
 mod command;
 mod component;
 pub mod discriminant;
+#[cfg(test)]
+mod doc_examples;
 mod embed;
 mod entity;
 #[cfg(test)]

@@ -1,8 +1,10 @@
 //! Compile-fail contract tests (trybuild) for the phase 3 primitives: typed
-//! IDs and patch fields must turn misuse into compile errors
-//! (docs/design/3.0-types-events-requests.md §5 "필수 테스트"), including
-//! the endpoint and polymorphic-target cases of series 2 step B
-//! (`channel_id_for_get_guild.rs`, `user_id_as_role_overwrite.rs`). The public
+//! IDs, open discriminants, and patch fields must turn misuse into compile
+//! errors (docs/design/3.0-types-events-requests.md §5 "필수 테스트"),
+//! including the endpoint and polymorphic-target cases of series 2 step B
+//! (`channel_id_for_get_guild.rs`, `user_id_as_role_overwrite.rs`) and the
+//! discriminant cases of series 3 (`u8_for_channel_type.rs`,
+//! `discriminant_default.rs`, `discriminant_storage_is_private.rs`). The public
 //! async traits' `Send` contract is pinned the same way: an `async fn` impl
 //! whose future is not `Send` must fail at the impl
 //! (`cache_backend_future_not_send.rs`; `CacheBackend` is the async trait
