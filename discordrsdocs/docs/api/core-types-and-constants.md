@@ -197,7 +197,7 @@ One field keeps a raw integer on purpose: `MessageComponent::style` (`Option<u8>
 | `ButtonBuilder::style(u8)`, `ButtonConfig::style(u8)`, `TextInputBuilder::new(.., u8)`, `SeparatorBuilder::spacing(u8)`, `channel_types(Vec<u8>)` | the newtype (`channel_types` takes any `IntoIterator<Item = ChannelType>`) |
 | `CommandOptionBuilder::new(u8, ..)`, `ApplicationCommandOption { kind: u8 }` | `CommandOptionType`; `ApplicationCommandOption::new(kind, name, description)` |
 | `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>` (Discord's default is `CHAT_INPUT`; `ApplicationCommand::command_type()` applies it) |
-| `Interaction::Unknown { kind: u8 }` held the command type for unknown command types | `kind: InteractionType` is always the interaction type; an unknown command type is `raw_data["type"]` |
+| `Interaction::Unknown { kind: u8 }` held the command type for unknown command types | `kind: InteractionType` is always the interaction type; an unknown command type is the `type` key of `raw_data` (JSON text since phase 4, see below) |
 | `PermissionsBitField(bits)`, `.0`, `insert`, `remove` | `Permissions::from_bits(bits)`, `.bits()`, `set \|= flag`, `set = set.remove(flag)` (returns the new set; `#[must_use]`) |
 | `GuildMfaLevel { level: u64 }`, `modify_guild_mfa_level(.., u64)` | `GuildMfaLevel::new(MfaLevel::ELEVATED)`, `MfaLevel` parameter |
 | `AuditLogQuery::action_type: Option<u64>` | `Option<AuditLogActionType>` |
@@ -213,6 +213,29 @@ Also changed:
 - **Wire shapes of other bitfields.** `MessageFlags`, `ChannelFlags`, `Intents`, `GatewayCapabilities`, and custom `BitFieldFlags` sets serialize as numbers (2.x: strings); negative input is rejected.
 - **New query.** `get_reactions_with_query(.., &GetReactionsQuery { kind: Some(ReactionType::BURST), .. })` lists burst reactions.
 - Permission errors (`PermissionDataError::{NotGuildChannel, InvalidParentChannel}`) carry a `ChannelType` and print its name; command validation errors print the option type name (`of type BOOLEAN`).
+
+### Interaction decoding and typed JSON values (3.0, phase 4)
+
+Interactions decode straight from JSON text (`decode_interaction`, or `Interaction`'s wire-format `Deserialize`), and model fields that held a `serde_json::Value` are typed or kept as JSON text (`Box<serde_json::value::RawValue>`). See the [Parsers API](parsers.md) for the decoder.
+
+| 2.x / early 3.0 | 3.0 |
+|---|---|
+| `parse_interaction(&value)` on a parsed `Value` | `decode_interaction(text)` (or `serde_json::from_slice::<Interaction>(body)`); `parse_interaction(&Value)` still works |
+| `Interaction` serialized as `{"ChatInputCommand": {"context": .., "data": ..}}` | Discord's wire format (`{"id", "type", "data", "token", ..}`); the same for `V2ModalSubmission` / `V2ModalComponent` (`{"type": 4, "custom_id", "value"}`) |
+| `Interaction::Unknown { raw_data: Value }` (`Value::Null` without `data`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())` to read it |
+| `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |
+| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)` (strings, `i8`-`i64`, `u8`-`u32`, floats, `bool`), `::try_new` / `CommandOptionBuilder::try_choice` for other `Serialize` values such as `u64`; no `Default` |
+| `ModalSubmitInteraction { context, submission }` (no resolved data) | `+ resolved: Option<ResolvedData>`, with `get_attachments` / `get_users` / `get_members` / `get_roles` / `get_channels` |
+| `CommandInteractionData { .. }` literals | `+ guild_id: Option<GuildId>` (use `..Default::default()`) |
+| `AuthorizingIntegrationOwners::other: Map<String, Value>`, derived `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq` compares unknown entries by JSON text |
+| `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>` (`{ id }`) |
+| `MessageComponentValue::Other(Box<Value>)` | `Other(Box<RawValue>)` (compared by JSON text) |
+
+Also changed:
+
+- A malformed interaction is a `DiscordError::Json` from `decode_interaction` and a `DiscordError::Model` from `parse_interaction`; messages name the field (`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). Duplicate keys are rejected. The interaction `type` must be a JSON number (the `Value` parser accepted `"2"`).
+- The typed interactions endpoint decodes the request body directly and still answers a PING it cannot fully decode with PONG.
+- `InteractionCallbackResponse::data` stays a `Value` until the request models of step 5 replace that outgoing body.
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 

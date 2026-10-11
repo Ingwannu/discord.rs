@@ -78,6 +78,8 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 Modal-only components follow Discord's rules: `RadioGroupBuilder`, `CheckboxGroupBuilder`, and `CheckboxBuilder` have no `disabled` setter (a disabled component in a modal is an error), and a checkbox cannot be required, so `CheckboxBuilder` has no `required` either; for a box the user must tick, use a one-option `CheckboxGroupBuilder` with `required(true)`. `CheckboxBuilder::default_checked(bool)` sets the initial state (sent as `default`; the deprecated `checked(bool)` does the same).
 
+Since 3.0 these three builders also have `validate()` / `try_build()` like the others, checking Discord's documented limits: `custom_id` 1-100 characters, radio groups 2-10 options, checkbox groups 1-10 options, option label/value/description at most 100 characters, checkbox group `min_values` 0-10 (0 only with `required(false)`), `max_values` 1-10, and `min_values` not above `max_values`. `build()` stays unchecked, and `LabelBuilder` / `ModalBuilder` do not re-check a component they wrap, so call `validate()` (or use `try_build()`) before handing one to them.
+
 ## Runtime Validation (2.2.0)
 
 Every command, button, select-menu, action-row, embed, modal, container, and media builder exposes `validate()` (check without consuming) and `try_build()` (validate, then build). They enforce Discord's documented limits — codepoint-counted lengths, option/choice/field counts, action-row composition, the 6000-character embed total, and Components V2 caps — with errors that name the field, the limit, and the actual value. Plain `build()` remains non-validating:

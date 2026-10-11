@@ -22,6 +22,8 @@ let button = ButtonBuilder::new()
 
 `RadioGroupBuilder`, `CheckboxGroupBuilder`, `CheckboxBuilder`에는 `disabled` setter가 없습니다(모달에 비활성 컴포넌트가 있으면 Discord가 오류를 냅니다). 체크박스는 필수로 만들 수 없어 `CheckboxBuilder`에는 `required`도 없습니다. 반드시 체크해야 하는 항목은 옵션 하나짜리 `CheckboxGroupBuilder`에 `required(true)`를 씁니다. `CheckboxBuilder::default_checked(bool)`가 초기 상태를 정합니다(`default`로 전송, deprecated `checked(bool)`도 같은 동작).
 
+3.0부터 이 세 빌더에도 다른 빌더처럼 `validate()` / `try_build()`가 있어 Discord 문서의 한도를 검사합니다: `custom_id` 1-100자, 라디오 그룹 옵션 2-10개, 체크박스 그룹 옵션 1-10개, 옵션 label/value/description 100자 이하, 체크박스 그룹 `min_values` 0-10(0은 `required(false)`일 때만), `max_values` 1-10, `min_values` ≤ `max_values`. `build()`는 검사하지 않고, `LabelBuilder`와 `ModalBuilder`는 감싼 컴포넌트를 다시 검사하지 않으므로 넘기기 전에 `validate()`를 호출하세요(또는 `try_build()` 사용).
+
 ## 파일 형식 필터 (3.0)
 
 `FileUploadBuilder::file_types(...)`와 `CommandOptionBuilder::file_types(...)`(`ATTACHMENT` 옵션)는 업로드를 미리 정의된 그룹(`"image"`, `"video"`, `"audio"`)이나 점으로 시작하는 확장자(`".pdf"`)로 제한합니다. 최대 10개입니다. `validate()` / `try_build()`는 개수와 각 항목의 모양만 검사합니다. Discord가 그룹 목록이 바뀔 수 있다고 밝혀서 그룹 이름은 고정 목록과 대조하지 않습니다. Discord는 파일 이름만 확인하므로 파일 내용은 직접 검증해야 합니다.

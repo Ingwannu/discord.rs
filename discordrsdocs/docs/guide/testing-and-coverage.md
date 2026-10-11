@@ -109,6 +109,12 @@ cargo test --release --all-features --locked --test id_footprint -- --ignored --
 
 The payloads only use fields that exist before and after a model change, so checking out the previous commit and running the same command gives the comparison. Allocation counts and bytes are deterministic; timings are indicative only. The phase 3 series 2 step A numbers are in `docs/design/3.0-types-events-requests.md` §1 (step B left them unchanged: markers add no bytes); the series 3 numbers (discriminants as `u8` newtypes, the interned presence status) are in §2 "시리즈 3 결과".
 
+`tests/interaction_decode_footprint.rs` is a gate, not a report: it counts the allocations of `decode_interaction` on the perf report's 3.9 KB chat-input `INTERACTION_CREATE` (`tests/fixtures/perf/interaction_create_chat_input.json`), in Discord's key order and with `data` first, and fails above a third of the pre-phase-4 baseline (652 allocations in `decode_event`). It has one test function because the counting allocator is process-wide. `--nocapture` prints the other decode paths, timings, and the interaction model sizes:
+
+```text
+cargo test --release --all-features --locked --test interaction_decode_footprint -- --nocapture
+```
+
 ## Performance Report
 
 `tests/perf_report/` measures the paths that decide RAM and speed: the gateway inbound pipeline from frame text to the `Event` a handler receives, the in-memory cache, collector fan-out, and outbound request bodies. For every scenario it reports allocations, bytes allocated, bytes retained, peak live heap, and the median time, and it records the RSS of a bot process around a storm of large `GUILD_CREATE`s. Like the footprint report it is `#[ignore]`d and needs a release build (about 26 s):
@@ -133,7 +139,7 @@ In unit tests, models without `Default` are built with `T::fixture()` (`src/mode
 
 ## Documented Example Payloads
 
-`src/model/doc_examples.rs` round-trips Discord's documented example payloads (channels, guild, messages, invite, webhooks, stickers, monetization objects, user, application, commands, auto moderation, presences, activities, interactions, and every component example) through the typed models: everything the model writes must have been in the example (or be an empty default), no discriminant key may be dropped, and a second round trip must write the same JSON. It also checks, per converted discriminant field, that an unknown value fitting the storage survives and one past it fails to decode.
+`src/model/doc_examples.rs` round-trips Discord's documented example payloads (channels, guild, messages, invite, webhooks, stickers, monetization objects, user, application, commands, auto moderation, presences, activities, interactions, and every component example) through the typed models: everything the model writes must have been in the example (or be an empty default), no discriminant key may be dropped, and a second round trip must write the same JSON. Whole interactions (the documented command interactions, message component interactions, and modal submits) also go through `decode_interaction` in Discord's key order, with `data` moved first, and from a `Value`, and must agree. It also checks, per converted discriminant field, that an unknown value fitting the storage survives and one past it fails to decode.
 
 The payloads live in `src/model/doc_examples/payloads.rs`, generated from a discord-api-docs checkout at the revision the crate targets (`3714862`). Regenerate after bumping that revision and review the diff:
 

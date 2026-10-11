@@ -6,9 +6,14 @@ Parsers now serve two roles: migration-friendly raw helpers and typed interactio
 
 Functions:
 
-- `parse_interaction(&Value) -> Result<Interaction, Error>`
+- `decode_interaction(&str) -> Result<Interaction, Error>` (3.0): decodes the interaction object straight from its JSON text, the gateway `INTERACTION_CREATE` `d` or an interactions-endpoint body. This is the path the gateway and the typed endpoint use.
+- `parse_interaction(&Value) -> Result<Interaction, Error>`: the same decoder on a `serde_json::Value` you already hold.
 - `parse_raw_interaction(&Value) -> Result<RawInteraction, Error>`
 - `parse_interaction_context(&Value) -> Result<InteractionContext, Error>`
+
+`Interaction` implements `Serialize`/`Deserialize` in Discord's wire format (3.0; 2.x derived an externally tagged `{"ChatInputCommand": {...}}` form), so `serde_json::from_slice::<Interaction>(bytes)` and `Interaction::deserialize(&*raw_value)` work too. The decoder reads the payload once: no `Value` tree and no copy of `data`, `resolved`, or `member`. On a 3.9 KB chat-input payload with resolved users, members, channels, roles, and attachments it makes 49 allocations, where 2.x's `decode_event` made 652.
+
+How it handles key order: JSON objects are unordered and `data`'s shape depends on `type`. When `type` comes first (as Discord's gateway sends it) `data` is decoded in place; otherwise `data` is kept as JSON text and decoded when the object ends, which costs one copy of `data`. Either way the result is the same.
 
 Typed `Interaction` variants include:
 
@@ -22,6 +27,22 @@ Typed `Interaction` variants include:
 - `Unknown`
 
 `RawInteraction` stays available for compatibility and low-level routing.
+
+`Interaction::Unknown { context, kind, raw_data }` covers an interaction `type` this version does not know and an application command whose command `type` it does not know (for example `PRIMARY_ENTRY_POINT`). `raw_data` is the `data` object as JSON text (`Option<Box<RawValue>>`, `None` without `data`); read it with `serde_json::from_str(raw.get())`.
+
+Command option values (`CommandInteractionOption::value`) are a `CommandOptionValue`: `String`, `Integer(i64)`, `Number(f64)`, or `Boolean`, as Discord sent them. Read them with `as_str()`, `as_i64()`, `as_f64()` (also accepts an integer, since a `NUMBER` option can arrive as `5`), `as_bool()`, or `as_id()` for user, channel, role, mentionable, and attachment options:
+
+```rust
+use discordrs::{Interaction, UserId};
+
+if let Interaction::ChatInputCommand(command) = decode_interaction(body)? {
+    for option in &command.data.options {
+        let player: Option<UserId> = option.value.as_ref().and_then(|value| value.as_id());
+        let slots = option.value.as_ref().and_then(|value| value.as_i64());
+        println!("{}: {player:?} {slots:?}", option.name);
+    }
+}
+```
 
 Since `2.2.0` the parsed variants also carry a shared response state, so the `discordrs::response::InteractionResponder` methods (`reply`, `defer`, `edit_reply`, `follow_up`, ...) work directly on parsed interactions, and double acknowledgements fail locally.
 
@@ -49,6 +70,24 @@ Function:
 
 - `parse_modal_submission(&Value) -> Result<V2ModalSubmission, Error>`
 
+`V2ModalSubmission` and `V2ModalComponent` also implement `Deserialize`/`Serialize` in Discord's wire format (3.0), so `serde_json::from_str::<V2ModalSubmission>(data)` reads a modal submit `data` object without a `Value` tree. A submission is written back as its inputs without their label wrappers, which reads back to the same value.
+
+### Resolved data of a modal submit (3.0)
+
+A File Upload submits attachment IDs, and user, role, mentionable, and channel selects submit IDs; Discord sends the objects behind them in `data.resolved`. `ModalSubmitInteraction` keeps it (`resolved: Option<ResolvedData>`) and resolves a component's values for you:
+
+```rust
+if let Interaction::ModalSubmit(modal) = decode_interaction(body)? {
+    for file in modal.get_attachments("screenshot") {
+        println!("{} ({} bytes): {:?}", file.filename, file.size, file.url);
+    }
+    let reviewers: Vec<_> = modal.get_users("reviewers").collect();
+    let teams: Vec<_> = modal.get_roles("reviewers").collect(); // a mentionable select
+}
+```
+
+`get_attachments`, `get_users`, `get_members`, `get_roles`, and `get_channels` return the resolved objects in submission order and skip an ID Discord did not resolve. `parse_modal_submission` returns the submitted values only.
+
 `V2ModalSubmission` preserves V2 component fidelity, including:
 
 - `Label` (its child component is read; action rows still work for older modals)
@@ -59,7 +98,7 @@ Function:
 
 Lookup helpers: `get_text`, `get_select_values` (selects and checkbox groups), `get_file_values`, `get_radio_value` (`None` also when nothing was selected), and `get_checkbox`.
 
-The same submitted values are typed on `MessageComponent` when you decode a component tree yourself: `value` is a `MessageComponentValue` (`String`, `Bool`, or `Other` for a JSON type this version does not know; read it with `value_str()` / `value_bool()`), `values` holds the lists, and `default` is a checkbox's initial state in create payloads.
+The same submitted values are typed on `MessageComponent` when you decode a component tree yourself: `value` is a `MessageComponentValue` (`String`, `Bool`, or `Other` for a JSON type this version does not know, kept as its JSON text in a `Box<RawValue>`; read it with `value_str()` / `value_bool()`), `values` holds the lists, and `default` is a checkbox's initial state in create payloads. `"value": null` and an absent `value` both read as `None`: Discord sends `null` only for a radio group submitted with nothing selected, which means the same as no value.
 
 ## Example
 

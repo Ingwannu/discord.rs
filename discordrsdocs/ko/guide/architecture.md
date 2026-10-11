@@ -49,7 +49,7 @@ flowchart LR
 - `src/gateway/`: WebSocket 런타임, heartbeat/resume/reconnect. 읽기 루프(`client.rs`)는 얕은 봉투만 읽고 `d`를 `Box<RawValue>`로 큐에 넣으며, 샤드별 처리기(`bot/pipeline.rs`)가 디코딩하고 캐시·외부 백엔드(`bot/backend.rs`)를 갱신한 뒤 `Arc<Event>` 하나를 컬렉터 저널과 핸들러 호출이 공유합니다
 - `src/model/gateway_payload.rs`: 게이트웨이 전용 payload. 캐시 저장 단위로 나눈 `GuildCreate`(사용 불가 길드와 구분하는 `GuildCreatePayload`)와 `Patch` 필드를 쓰는 부분 갱신 `MessageUpdate` / `PartialUser`
 - `src/http.rs`: REST 클라이언트 및 429 재시도
-- `src/parsers/`: 인터랙션/모달 파싱
+- `src/parsers/`: 인터랙션 디코딩. `interaction/wire.rs`가 `Interaction`의 와이어 형식 `Deserialize`/`Serialize`(JSON 텍스트에서 한 번에, `Value` 없이; 게이트웨이와 타입 엔드포인트의 진입점은 `decode_interaction`), `modal.rs`가 제출된 모달 값의 같은 구현, `mod.rs`의 `Value` 헬퍼는 원시 핸들러 API(`RawInteraction`, `InteractionContext`)용
 - `src/helpers.rs`: 응답 헬퍼
 - `src/interactions.rs`: HTTP 엔드포인트 모드
 - `src/hex.rs`: 엔드포인트의 Ed25519 공개 키·서명용 비공개 16진수 코덱(`hex` 크레이트 대체)

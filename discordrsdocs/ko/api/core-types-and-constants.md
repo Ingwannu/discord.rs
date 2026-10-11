@@ -193,7 +193,7 @@ fn describe(channel: &Channel) -> &'static str {
 | `ButtonBuilder::style(u8)`, `ButtonConfig::style(u8)`, `TextInputBuilder::new(.., u8)`, `SeparatorBuilder::spacing(u8)`, `channel_types(Vec<u8>)` | 해당 newtype (`channel_types`는 `IntoIterator<Item = ChannelType>`) |
 | `CommandOptionBuilder::new(u8, ..)`, `ApplicationCommandOption { kind: u8 }` | `CommandOptionType`; `ApplicationCommandOption::new(kind, name, description)` |
 | `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>`(Discord 기본값은 `CHAT_INPUT`; `ApplicationCommand::command_type()`이 적용) |
-| 모르는 커맨드 타입이면 `Interaction::Unknown { kind: u8 }`에 커맨드 타입이 들어감 | `kind: InteractionType`은 항상 인터랙션 타입; 모르는 커맨드 타입은 `raw_data["type"]` |
+| 모르는 커맨드 타입이면 `Interaction::Unknown { kind: u8 }`에 커맨드 타입이 들어감 | `kind: InteractionType`은 항상 인터랙션 타입; 모르는 커맨드 타입은 `raw_data`의 `type` 키(4단계부터 JSON 텍스트, 아래 참고) |
 | `PermissionsBitField(bits)`, `.0`, `insert`, `remove` | `Permissions::from_bits(bits)`, `.bits()`, `set \|= flag`, `set = set.remove(flag)`(새 집합을 반환, `#[must_use]`) |
 | `GuildMfaLevel { level: u64 }`, `modify_guild_mfa_level(.., u64)` | `GuildMfaLevel::new(MfaLevel::ELEVATED)`, `MfaLevel` 인자 |
 | `AuditLogQuery::action_type: Option<u64>` | `Option<AuditLogActionType>` |
@@ -209,6 +209,29 @@ fn describe(channel: &Channel) -> &'static str {
 - **다른 비트필드의 와이어 모양.** `MessageFlags`, `ChannelFlags`, `Intents`, `GatewayCapabilities`, 사용자 정의 `BitFieldFlags` 집합은 숫자로 직렬화합니다(2.x는 문자열). 음수 입력은 거부합니다.
 - **새 쿼리.** `get_reactions_with_query(.., &GetReactionsQuery { kind: Some(ReactionType::BURST), .. })`로 burst 리액션을 조회합니다.
 - 권한 오류(`PermissionDataError::{NotGuildChannel, InvalidParentChannel}`)는 `ChannelType`을 담고 이름을 출력합니다. 커맨드 검증 오류는 옵션 타입 이름을 출력합니다(`of type BOOLEAN`).
+
+### 인터랙션 디코딩과 타입 있는 JSON 값 (3.0, 4단계)
+
+인터랙션은 JSON 텍스트에서 바로 디코딩합니다(`decode_interaction`, 또는 `Interaction`의 와이어 형식 `Deserialize`). `serde_json::Value`였던 모델 필드는 타입을 갖거나 JSON 텍스트(`Box<serde_json::value::RawValue>`)로 보관합니다. 디코더는 [파서 API](parsers.md)를 보세요.
+
+| 2.x / 초기 3.0 | 3.0 |
+|---|---|
+| 파싱한 `Value`에 `parse_interaction(&value)` | `decode_interaction(text)`(또는 `serde_json::from_slice::<Interaction>(body)`); `parse_interaction(&Value)`도 그대로 동작 |
+| `Interaction`이 `{"ChatInputCommand": {"context": .., "data": ..}}`로 직렬화 | Discord 와이어 형식(`{"id", "type", "data", "token", ..}`); `V2ModalSubmission` / `V2ModalComponent`도 같음(`{"type": 4, "custom_id", "value"}`) |
+| `Interaction::Unknown { raw_data: Value }`(`data`가 없으면 `Value::Null`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())`로 읽음 |
+| `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |
+| `ApplicationCommandOptionChoice { value: Value }`, `::new(name, impl Serialize)`, `Default` | `value: CommandOptionValue`; `::new(name, impl Into<CommandOptionValue>)`(문자열, `i8`-`i64`, `u8`-`u32`, 실수, `bool`), `u64` 같은 다른 `Serialize` 값은 `::try_new` / `CommandOptionBuilder::try_choice`; `Default` 없음 |
+| `ModalSubmitInteraction { context, submission }`(resolved 없음) | `+ resolved: Option<ResolvedData>`, `get_attachments` / `get_users` / `get_members` / `get_roles` / `get_channels` |
+| `CommandInteractionData { .. }` 리터럴 | `+ guild_id: Option<GuildId>`(`..Default::default()` 사용) |
+| `AuthorizingIntegrationOwners::other: Map<String, Value>`, 파생 `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq`는 모르는 항목을 JSON 텍스트로 비교 |
+| `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>`(`{ id }`) |
+| `MessageComponentValue::Other(Box<Value>)` | `Other(Box<RawValue>)`(JSON 텍스트로 비교) |
+
+그 밖의 변경:
+
+- 잘못된 인터랙션은 `decode_interaction`에서 `DiscordError::Json`, `parse_interaction`에서 `DiscordError::Model`입니다. 메시지에 필드 이름이 들어갑니다(`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). 중복 키는 거부합니다. 인터랙션 `type`은 JSON 숫자여야 합니다(`Value` 파서는 `"2"`도 받았음).
+- 타입 인터랙션 엔드포인트는 요청 본문을 바로 디코딩하고, 완전히 디코딩하지 못한 PING에도 PONG으로 답합니다.
+- `InteractionCallbackResponse::data`는 5단계 요청 모델이 이 송신 본문을 바꿀 때까지 `Value`로 둡니다.
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 

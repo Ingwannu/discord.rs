@@ -77,7 +77,7 @@ flowchart LR
 - `src/task.rs` (`voice`, `sharding`): `spawn_erased`, which spawns long-lived `()` tasks behind `Box<dyn Future>` so they share one copy of tokio's task harness
 - `src/cache.rs`: cache handle and manager types; in-memory storage is enabled by default and can be disabled with `default-features = false`
 - `src/collector.rs`: opt-in async collectors over a journal of shared `Arc<Event>`s; filters read payloads by reference and only collected items are copied
-- `src/parsers/`: raw + typed interaction parsing helpers
+- `src/parsers/`: interaction decoding. `interaction/wire.rs` is the wire-format `Deserialize`/`Serialize` of `Interaction` (one pass from JSON text, no `Value`; `decode_interaction` is the entry point for the gateway and the typed endpoint), `modal.rs` the same for submitted modal values; the `Value` helpers in `mod.rs` serve the raw-handler API (`RawInteraction`, `InteractionContext`)
 - `src/helpers.rs`: high-level reply helpers for interaction flows
 - `src/interactions.rs`: HTTP endpoint mode with signature verification
 - `src/hex.rs`: private hex codec for the endpoint's Ed25519 public key and signatures (replaces the `hex` crate)
@@ -85,7 +85,7 @@ flowchart LR
 ## Runtime Patterns
 
 - Gateway mode: maintain websocket session, handle typed `Event`, call `RestClient` or managers when needed
-- Endpoint mode: receive signed interaction payloads, parse with `parse_interaction(...)`, respond with helpers
+- Endpoint mode: receive signed interaction payloads, decode the body with `decode_interaction(...)` (or `parse_interaction(&Value)` on a parsed value), respond with helpers
 - Hybrid mode: use both for richer operational workflows
 - Public async traits (`EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, `CachedManager`) declare `fn ... -> impl Future + Send`, so users implement them with plain `async fn` and no proc-macro dependency. Such traits are not object safe, so the gateway runtime shares the handler and the cache backend through private object-safe traits (`ErasedEventHandler` in `src/gateway/bot.rs`, `ErasedCacheBackend` in `src/gateway/bot/backend.rs`) with a blanket impl that boxes each call once. The interactions endpoint is generic over the handler and needs no erasure.
 - Sharding and voice are dedicated feature-gated layers above the base `Client`.
