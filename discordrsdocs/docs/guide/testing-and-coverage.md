@@ -55,7 +55,7 @@ runtime handshake logic without using Discord.
 
 ### Validation-First Helper Tests
 
-`src/helpers.rs` and parts of `src/http.rs` often validate tokens, application ids, and message ids
+`src/helpers.rs` and the `src/http/` endpoint modules often validate tokens, application ids, and message ids
 before making a request. These are cheap coverage wins and should be preferred over external mocks.
 
 ### Event Decode Tables

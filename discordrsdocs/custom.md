@@ -187,7 +187,7 @@ Re-exports parsers and provides JSON helpers:
 
 ## 4. HTTP & Helpers
 
-### 4.1 DiscordHttpClient (`src/http.rs`)
+### 4.1 DiscordHttpClient (`src/http.rs`, endpoints in `src/http/`)
 
 - **Purpose:** REST client targeting Discord API v10.
 - **Features:**
