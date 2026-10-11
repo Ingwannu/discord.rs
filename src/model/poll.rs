@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::{PollAnswerId, User};
+use super::{PollAnswerId, PollLayoutType, User};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `PollMedia`.
@@ -41,8 +41,10 @@ pub struct PollResults {
     pub answer_counts: Vec<PollAnswerCount>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `Poll`.
+/// A poll on a received message. No `Default`: `question` and
+/// `layout_type` are required (2.x filled a missing `layout_type` with `0`,
+/// which is not a layout).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Poll {
     pub question: PollMedia,
     #[serde(default)]
@@ -51,8 +53,7 @@ pub struct Poll {
     pub expiry: Option<String>,
     #[serde(default)]
     pub allow_multiselect: bool,
-    #[serde(default)]
-    pub layout_type: u8,
+    pub layout_type: PollLayoutType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub results: Option<PollResults>,
 }
@@ -75,5 +76,5 @@ pub struct CreatePoll {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_multiselect: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub layout_type: Option<u8>,
+    pub layout_type: Option<PollLayoutType>,
 }

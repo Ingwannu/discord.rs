@@ -109,10 +109,11 @@ pub use member::{
     SearchGuildMembersQuery,
 };
 pub use message::{
-    AllowedMentions, ChannelMention, ChannelPins, ChannelPinsQuery, CreateMessage, Message,
-    MessageActivity, MessageCall, MessageInteraction, MessageInteractionMetadata, MessagePin,
-    MessageReference, MessageSnapshot, MessageSnapshotMessage, Reaction, ReactionCountDetails,
-    RoleSubscriptionData, SearchGuildMessagesQuery, SearchGuildMessagesResponse, SharedClientTheme,
+    AllowedMentions, ChannelMention, ChannelPins, ChannelPinsQuery, CreateMessage,
+    GetReactionsQuery, Message, MessageActivity, MessageCall, MessageInteraction,
+    MessageInteractionMetadata, MessagePin, MessageReference, MessageSnapshot,
+    MessageSnapshotMessage, Reaction, ReactionCountDetails, RoleSubscriptionData,
+    SearchGuildMessagesQuery, SearchGuildMessagesResponse, SharedClientTheme,
 };
 pub use moderation::{
     AutoModerationAction, AutoModerationActionMetadata, AutoModerationRule,

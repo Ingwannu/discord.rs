@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::constants::button_style;
 use crate::error::DiscordError;
-use crate::model::EmojiId;
+use crate::model::{ButtonStyle, EmojiId};
 
 /// Backward-compatible error type alias. Prefer `DiscordError` directly.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
@@ -129,12 +128,14 @@ impl SelectOption {
     }
 }
 
-#[derive(Clone, Default)]
-/// Typed Discord API object for `ButtonConfig`.
+/// A button for [`create_container`](crate::builders::create_container).
+/// No `Default`: an empty `custom_id` and a missing style are not a button;
+/// use [`ButtonConfig::new`].
+#[derive(Clone)]
 pub struct ButtonConfig {
     pub custom_id: String,
     pub label: String,
-    pub style: u8,
+    pub style: ButtonStyle,
     pub emoji: Option<String>,
 }
 
@@ -144,12 +145,12 @@ impl ButtonConfig {
         Self {
             custom_id: custom_id.to_string(),
             label: label.to_string(),
-            style: button_style::PRIMARY,
+            style: ButtonStyle::PRIMARY,
             emoji: None,
         }
     }
 
-    pub fn style(mut self, style: u8) -> Self {
+    pub fn style(mut self, style: ButtonStyle) -> Self {
         self.style = style;
         self
     }
@@ -168,8 +169,8 @@ mod tests {
     use super::{
         invalid_data_error, to_json_value, ButtonConfig, Emoji, MediaGalleryItem, SelectOption,
     };
-    use crate::constants::button_style;
     use crate::error::DiscordError;
+    use crate::model::ButtonStyle;
 
     #[test]
     fn helpers_preserve_model_error_shape() {
@@ -304,22 +305,16 @@ mod tests {
         assert!(option.emoji.is_none());
         assert_eq!(option.default, None);
 
-        let button_default = ButtonConfig::default();
-        assert_eq!(button_default.custom_id, "");
-        assert_eq!(button_default.label, "");
-        assert_eq!(button_default.style, 0);
-        assert_eq!(button_default.emoji, None);
-
         let button = ButtonConfig::new("open-ticket", "Open")
-            .style(button_style::DANGER)
+            .style(ButtonStyle::DANGER)
             .emoji("?썱");
         assert_eq!(button.custom_id, "open-ticket");
         assert_eq!(button.label, "Open");
-        assert_eq!(button.style, button_style::DANGER);
+        assert_eq!(button.style, ButtonStyle::DANGER);
         assert_eq!(button.emoji.as_deref(), Some("?썱"));
 
         let primary_button = ButtonConfig::new("primary", "Primary");
-        assert_eq!(primary_button.style, button_style::PRIMARY);
+        assert_eq!(primary_button.style, ButtonStyle::PRIMARY);
     }
 
     #[test]

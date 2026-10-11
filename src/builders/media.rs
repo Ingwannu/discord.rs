@@ -2,20 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::command::validation;
-use crate::constants::component_type;
 use crate::error::DiscordError;
-use crate::model::ComponentId;
+use crate::model::{ComponentId, ComponentType};
 use crate::types::{to_json_value, MediaGalleryItem, MediaInfo};
 
 use super::components::ButtonBuilder;
 use super::container::TextDisplayBuilder;
 use super::limits;
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `MediaGalleryBuilder`.
 pub struct MediaGalleryBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     items: Vec<MediaGalleryItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
@@ -25,7 +24,7 @@ impl MediaGalleryBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::MEDIA_GALLERY,
+            component_type: ComponentType::MEDIA_GALLERY,
             items: Vec::new(),
             id: None,
         }
@@ -79,11 +78,19 @@ impl MediaGalleryBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// Same as [`MediaGalleryBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for MediaGalleryBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `ThumbnailBuilder`.
 pub struct ThumbnailBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     media: MediaInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -97,7 +104,7 @@ impl ThumbnailBuilder {
     /// Creates a `new` value.
     pub fn new(url: &str) -> Self {
         Self {
-            component_type: component_type::THUMBNAIL,
+            component_type: ComponentType::THUMBNAIL,
             media: MediaInfo {
                 url: url.to_string(),
             },
@@ -147,11 +154,11 @@ impl ThumbnailBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `FileBuilder`.
 pub struct FileBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     file: MediaInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     spoiler: Option<bool>,
@@ -163,7 +170,7 @@ impl FileBuilder {
     /// Creates a `new` value.
     pub fn new(url: &str) -> Self {
         Self {
-            component_type: component_type::FILE,
+            component_type: ComponentType::FILE,
             file: MediaInfo {
                 url: url.to_string(),
             },
@@ -187,11 +194,11 @@ impl FileBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `SectionBuilder`.
 pub struct SectionBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     components: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     accessory: Option<Value>,
@@ -203,7 +210,7 @@ impl SectionBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::SECTION,
+            component_type: ComponentType::SECTION,
             components: Vec::new(),
             accessory: None,
             id: None,
@@ -259,14 +266,21 @@ impl SectionBuilder {
     }
 }
 
+/// Same as [`SectionBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for SectionBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::model::ComponentId;
+    use crate::model::{ButtonStyle, ComponentId, ComponentType};
     use serde_json::json;
 
     use super::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
     use crate::builders::{ButtonBuilder, TextDisplayBuilder};
-    use crate::constants::{button_style, component_type};
     use crate::types::MediaGalleryItem;
 
     #[test]
@@ -287,7 +301,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::MEDIA_GALLERY as u64)
+            Some(u64::from(ComponentType::MEDIA_GALLERY.get()))
         );
         assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(7));
         assert_eq!(items.len(), 3);
@@ -307,7 +321,7 @@ mod tests {
         assert_eq!(
             default_payload,
             json!({
-                "type": component_type::THUMBNAIL,
+                "type": ComponentType::THUMBNAIL,
                 "media": {"url": "https://example.com/thumb.png"},
             })
         );
@@ -321,7 +335,7 @@ mod tests {
         assert_eq!(
             payload,
             json!({
-                "type": component_type::THUMBNAIL,
+                "type": ComponentType::THUMBNAIL,
                 "media": {"url": "https://example.com/thumb.png"},
                 "description": "preview",
                 "spoiler": true,
@@ -336,7 +350,7 @@ mod tests {
         assert_eq!(
             default_payload,
             json!({
-                "type": component_type::FILE,
+                "type": ComponentType::FILE,
                 "file": {"url": "https://example.com/file.txt"},
             })
         );
@@ -349,7 +363,7 @@ mod tests {
         assert_eq!(
             payload,
             json!({
-                "type": component_type::FILE,
+                "type": ComponentType::FILE,
                 "file": {"url": "https://example.com/file.txt"},
                 "spoiler": true,
                 "id": 11,
@@ -460,7 +474,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::SECTION as u64)
+            Some(u64::from(ComponentType::SECTION.get()))
         );
         assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(4));
         assert_eq!(
@@ -475,7 +489,7 @@ mod tests {
                 .get("accessory")
                 .and_then(|value| value.get("type"))
                 .and_then(|value| value.as_u64()),
-            Some(component_type::THUMBNAIL as u64)
+            Some(u64::from(ComponentType::THUMBNAIL.get()))
         );
     }
 
@@ -486,7 +500,7 @@ mod tests {
             .set_button_accessory(
                 ButtonBuilder::new()
                     .label("Open")
-                    .style(button_style::SECONDARY)
+                    .style(ButtonStyle::SECONDARY)
                     .custom_id("open"),
             )
             .build();
@@ -496,7 +510,7 @@ mod tests {
                 .get("accessory")
                 .and_then(|value| value.get("type"))
                 .and_then(|value| value.as_u64()),
-            Some(component_type::BUTTON as u64)
+            Some(u64::from(ComponentType::BUTTON.get()))
         );
         assert_eq!(
             payload

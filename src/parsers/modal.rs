@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::constants::component_type;
 use crate::error::DiscordError;
+use crate::model::ComponentType;
 use crate::types::invalid_data_error;
 
 use super::{
@@ -20,48 +20,52 @@ fn parse_select_component_data(
 }
 
 fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalComponent>, DiscordError> {
-    let Some(component_type) = component.get("type").and_then(value_to_u8) else {
+    let Some(component_type) = component
+        .get("type")
+        .and_then(value_to_u8)
+        .map(ComponentType::new)
+    else {
         return Ok(None);
     };
 
     let parsed = match component_type {
-        component_type::TEXT_INPUT => V2ModalComponent::TextInput {
+        ComponentType::TEXT_INPUT => V2ModalComponent::TextInput {
             custom_id: required_string_field(component, "custom_id", "text_input")?,
             value: required_string_field(component, "value", "text_input")?,
         },
-        component_type::STRING_SELECT => {
+        ComponentType::STRING_SELECT => {
             let (custom_id, values) = parse_select_component_data(component, "string_select")?;
             V2ModalComponent::StringSelect { custom_id, values }
         }
-        component_type::USER_SELECT => {
+        ComponentType::USER_SELECT => {
             let (custom_id, values) = parse_select_component_data(component, "user_select")?;
             V2ModalComponent::UserSelect { custom_id, values }
         }
-        component_type::ROLE_SELECT => {
+        ComponentType::ROLE_SELECT => {
             let (custom_id, values) = parse_select_component_data(component, "role_select")?;
             V2ModalComponent::RoleSelect { custom_id, values }
         }
-        component_type::CHANNEL_SELECT => {
+        ComponentType::CHANNEL_SELECT => {
             let (custom_id, values) = parse_select_component_data(component, "channel_select")?;
             V2ModalComponent::ChannelSelect { custom_id, values }
         }
-        component_type::MENTIONABLE_SELECT => {
+        ComponentType::MENTIONABLE_SELECT => {
             let (custom_id, values) = parse_select_component_data(component, "mentionable_select")?;
             V2ModalComponent::MentionableSelect { custom_id, values }
         }
-        component_type::RADIO_GROUP => V2ModalComponent::RadioGroup {
+        ComponentType::RADIO_GROUP => V2ModalComponent::RadioGroup {
             custom_id: required_string_field(component, "custom_id", "radio_group")?,
             value: required_string_field(component, "value", "radio_group")?,
         },
-        component_type::CHECKBOX_GROUP => {
+        ComponentType::CHECKBOX_GROUP => {
             let (custom_id, values) = parse_select_component_data(component, "checkbox_group")?;
             V2ModalComponent::CheckboxGroup { custom_id, values }
         }
-        component_type::FILE_UPLOAD => {
+        ComponentType::FILE_UPLOAD => {
             let (custom_id, values) = parse_select_component_data(component, "file_upload")?;
             V2ModalComponent::FileUpload { custom_id, values }
         }
-        component_type::CHECKBOX => V2ModalComponent::Checkbox {
+        ComponentType::CHECKBOX => V2ModalComponent::Checkbox {
             custom_id: required_string_field(component, "custom_id", "checkbox")?,
             checked: required_bool_field(component, "checked", "checkbox")?,
         },
@@ -75,14 +79,18 @@ fn parse_modal_component_tree(
     component: &Value,
     parsed_components: &mut Vec<V2ModalComponent>,
 ) -> Result<(), DiscordError> {
-    match component.get("type").and_then(value_to_u8) {
-        Some(component_type::ACTION_ROW) => {
+    match component
+        .get("type")
+        .and_then(value_to_u8)
+        .map(ComponentType::new)
+    {
+        Some(ComponentType::ACTION_ROW) => {
             let nested_components = required_array_field(component, "components", "action_row")?;
             for nested_component in nested_components {
                 parse_modal_component_tree(nested_component, parsed_components)?;
             }
         }
-        Some(component_type::LABEL) => {
+        Some(ComponentType::LABEL) => {
             let nested_component = component
                 .get("component")
                 .ok_or_else(|| invalid_data_error("missing label.component"))?;

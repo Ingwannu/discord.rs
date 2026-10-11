@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    Application, ApplicationId, Channel, ChannelId, Entitlement, Guild, Id, IdMarker, LobbyId,
-    MessageId, User, UserId,
+    Application, ApplicationId, ApplicationIntegrationType, Channel, ChannelId, Entitlement, Guild,
+    Id, IdMarker, LobbyId, MessageId, MessageType, User, UserId,
 };
 use crate::types::invalid_data_error;
 
@@ -70,7 +70,7 @@ pub enum WebhookEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ApplicationAuthorizedWebhookEvent`.
 pub struct ApplicationAuthorizedWebhookEvent {
-    pub integration_type: Option<u8>,
+    pub integration_type: Option<ApplicationIntegrationType>,
     pub user: User,
     pub scopes: Vec<String>,
     pub guild: Option<Guild>,
@@ -88,7 +88,7 @@ pub struct ApplicationDeauthorizedWebhookEvent {
 /// Typed Discord API object for `WebhookSocialMessage`.
 pub struct WebhookSocialMessage {
     pub id: MessageId,
-    pub kind: Option<u8>,
+    pub kind: Option<MessageType>,
     pub content: Option<String>,
     pub lobby_id: Option<LobbyId>,
     pub channel_id: ChannelId,
@@ -196,7 +196,8 @@ fn parse_webhook_event(kind: &str, data: Option<Value>) -> Result<WebhookEvent, 
 fn parse_application_authorized(
     data: Value,
 ) -> Result<ApplicationAuthorizedWebhookEvent, DiscordError> {
-    let integration_type = optional_u8(&data, "integration_type")?;
+    let integration_type =
+        optional_u8(&data, "integration_type")?.map(ApplicationIntegrationType::new);
     let user = from_field(&data, "user")?;
     let scopes = data
         .get("scopes")
@@ -237,7 +238,7 @@ fn parse_application_deauthorized(
 fn parse_social_message(data: Value) -> Result<WebhookSocialMessage, DiscordError> {
     Ok(WebhookSocialMessage {
         id: required_snowflake(&data, "id")?,
-        kind: optional_u8(&data, "type")?,
+        kind: optional_u8(&data, "type")?.map(MessageType::new),
         content: optional_string(&data, "content")?,
         lobby_id: optional_snowflake(&data, "lobby_id")?,
         channel_id: required_snowflake(&data, "channel_id")?,
@@ -412,7 +413,10 @@ mod tests {
         assert_eq!(event.kind, "APPLICATION_AUTHORIZED");
         match event.event {
             WebhookEvent::ApplicationAuthorized(data) => {
-                assert_eq!(data.integration_type, Some(1));
+                assert_eq!(
+                    data.integration_type,
+                    Some(ApplicationIntegrationType::USER_INSTALL)
+                );
                 assert_eq!(data.user.username, "installer");
                 assert_eq!(data.scopes, vec!["applications.commands".to_string()]);
             }

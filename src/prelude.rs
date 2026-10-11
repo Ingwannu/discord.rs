@@ -12,7 +12,9 @@ pub use crate::command::{
     command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
     PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
-pub use crate::constants::{button_style, gateway_intents, text_input_style};
+pub use crate::constants::gateway_intents;
+// The open discriminants builders take; they replace the 2.x `button_style`
+// and `text_input_style` constant modules this prelude used to export.
 pub use crate::error::DiscordError;
 pub use crate::event::Event;
 pub use crate::formatters::{MentionResolver, TimestampStyle};
@@ -23,6 +25,7 @@ pub use crate::gateway::{Client, Context, EventDispatchMode, EventHandler, Shard
 pub use crate::helpers::{
     launch_activity, respond_to_interaction, respond_with_message, send_message,
 };
+pub use crate::model::{ButtonStyle, ChannelType, ComponentType, SeparatorSpacing, TextInputStyle};
 // Deprecated in 3.0 in favour of `InteractionResponder`; kept so existing
 // prelude users keep compiling (with a deprecation warning at the call site).
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
@@ -107,16 +110,17 @@ pub use crate::webhook_events::{
 #[cfg(test)]
 mod tests {
     use crate::prelude::{
-        button_style, gateway_intents, AllowedMentions, ApplicationInstallParams,
-        ApplicationIntegrationTypeConfig, AuthorizationInformation, ButtonBuilder, CreateWebhook,
-        Gateway, MessageBuilder, ModifyCurrentApplication, ModifyWebhook, ModifyWebhookWithToken,
-        ReactionCountDetails, SlashCommandBuilder, WebhookExecuteQuery, WebhookMessageQuery,
+        gateway_intents, AllowedMentions, ApplicationInstallParams,
+        ApplicationIntegrationTypeConfig, AuthorizationInformation, ButtonBuilder, ButtonStyle,
+        CreateWebhook, Gateway, MessageBuilder, ModifyCurrentApplication, ModifyWebhook,
+        ModifyWebhookWithToken, ReactionCountDetails, SlashCommandBuilder, WebhookExecuteQuery,
+        WebhookMessageQuery,
     };
 
     #[test]
     fn prelude_surfaces_common_gateway_and_command_types() {
         let _intents = gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES;
-        let _button = ButtonBuilder::new().style(button_style::PRIMARY);
+        let _button = ButtonBuilder::new().style(ButtonStyle::PRIMARY);
         let _command =
             SlashCommandBuilder::new("ping", "Ping").string_option("target", "Target", false);
         let _message = MessageBuilder::new().content("hello");

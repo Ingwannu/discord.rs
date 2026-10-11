@@ -6,9 +6,9 @@ use crate::model::{
     AutoModerationAction, AutoModerationRuleId, AutoModerationTriggerMetadata, Channel, ChannelId,
     ClientStatus, CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
     GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, Member, Message,
-    MessageId, PollAnswerId, Presence, Role, RoleId, ScheduledEventId, SoundboardSound,
-    SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User, UserId,
-    VoiceServerUpdate, VoiceState,
+    MessageId, PollAnswerId, Presence, ReactionType, Role, RoleId, ScheduledEventId,
+    SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User,
+    UserId, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -315,7 +315,9 @@ pub struct ReactionEvent {
     pub emoji: Option<Emoji>,
     pub burst: Option<bool>,
     pub burst_colors: Vec<String>,
-    pub reaction_type: Option<u64>,
+    /// Normal or burst reaction. `None` when absent or not a valid reaction
+    /// type (the value stays in `raw`).
+    pub reaction_type: Option<ReactionType>,
     pub raw: Value,
 }
 

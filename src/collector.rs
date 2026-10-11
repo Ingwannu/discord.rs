@@ -15,7 +15,7 @@ use crate::event::{Event, ReactionEvent};
 #[cfg(feature = "collectors")]
 use crate::model::{
     Channel, ChannelId, ComponentInteraction, EmojiId, GuildId, Interaction, Message, MessageId,
-    ModalSubmitInteraction, UserId,
+    ModalSubmitInteraction, ReactionType, UserId,
 };
 #[cfg(feature = "collectors")]
 use crate::types::Emoji;
@@ -1255,8 +1255,8 @@ impl ReactionLogic {
 fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, UserId, bool)> {
     let key = EmojiKey::from_emoji(reaction.emoji.as_ref()?)?;
     let user_id = reaction.user_id?;
-    // `type` 1 is a burst reaction; older payloads only carry `burst`.
-    let burst = reaction.burst == Some(true) || reaction.reaction_type == Some(1);
+    // Older payloads only carry `burst`, newer ones also the reaction `type`.
+    let burst = reaction.burst == Some(true) || reaction.reaction_type == Some(ReactionType::BURST);
     Some((key, user_id, burst))
 }
 

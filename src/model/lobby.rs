@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ApplicationId, Channel, ChannelId, LobbyId, MessageId, User, UserId};
+use super::{ApplicationId, Channel, ChannelId, LobbyId, MessageId, MessageType, User, UserId};
 
 /// Lobby member object used by Discord's Lobby resource.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,9 +132,9 @@ pub struct LobbyMessageMember {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LobbyMessage {
     pub id: MessageId,
-    /// Message type.
-    #[serde(rename = "type", default)]
-    pub kind: u8,
+    /// Message type (required; 2.x read a missing `type` as `0`).
+    #[serde(rename = "type")]
+    pub kind: MessageType,
     #[serde(default)]
     pub content: String,
     pub lobby_id: LobbyId,

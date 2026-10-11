@@ -2,10 +2,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::command::validation;
-use crate::constants::{button_style, component_type};
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, ChannelType, ComponentId, MentionableId, RoleId, SelectDefaultValue, UserId,
+    ButtonStyle, ChannelId, ChannelType, ComponentId, ComponentType, MentionableId, RoleId,
+    SelectDefaultValue, UserId,
 };
 use crate::types::{to_json_value, Emoji, SelectOption};
 
@@ -14,12 +14,12 @@ use super::limits;
 use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 use super::modal::TextInputBuilder;
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `ButtonBuilder`.
 pub struct ButtonBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
-    style: u8,
+    component_type: ComponentType,
+    style: ButtonStyle,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -36,8 +36,8 @@ impl ButtonBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::BUTTON,
-            style: button_style::PRIMARY,
+            component_type: ComponentType::BUTTON,
+            style: ButtonStyle::PRIMARY,
             label: None,
             emoji: None,
             custom_id: None,
@@ -46,7 +46,7 @@ impl ButtonBuilder {
         }
     }
 
-    pub fn style(mut self, style: u8) -> Self {
+    pub fn style(mut self, style: ButtonStyle) -> Self {
         self.style = style;
         self
     }
@@ -69,8 +69,8 @@ impl ButtonBuilder {
     pub fn custom_id(mut self, custom_id: &str) -> Self {
         self.custom_id = Some(custom_id.to_string());
         self.url = None;
-        if self.style == button_style::LINK {
-            self.style = button_style::PRIMARY;
+        if self.style == ButtonStyle::LINK {
+            self.style = ButtonStyle::PRIMARY;
         }
         self
     }
@@ -78,7 +78,7 @@ impl ButtonBuilder {
     pub fn url(mut self, url: &str) -> Self {
         self.url = Some(url.to_string());
         self.custom_id = None;
-        self.style = button_style::LINK;
+        self.style = ButtonStyle::LINK;
         self
     }
 
@@ -90,9 +90,9 @@ impl ButtonBuilder {
     fn normalize(mut self) -> Self {
         if self.url.is_some() {
             self.custom_id = None;
-            self.style = button_style::LINK;
-        } else if self.style == button_style::LINK {
-            self.style = button_style::PRIMARY;
+            self.style = ButtonStyle::LINK;
+        } else if self.style == ButtonStyle::LINK {
+            self.style = ButtonStyle::PRIMARY;
         }
         self
     }
@@ -127,10 +127,16 @@ impl ButtonBuilder {
         if let Some(label) = &normalized.label {
             validation::ensure_max_len("button label", label, limits::MAX_BUTTON_LABEL_LENGTH)?;
         }
-        let is_known_style =
-            (button_style::PRIMARY..=button_style::LINK).contains(&normalized.style);
+        let is_known_style = matches!(
+            normalized.style,
+            ButtonStyle::PRIMARY
+                | ButtonStyle::SECONDARY
+                | ButtonStyle::SUCCESS
+                | ButtonStyle::DANGER
+                | ButtonStyle::LINK
+        );
         if is_known_style {
-            if normalized.style == button_style::LINK {
+            if normalized.style == ButtonStyle::LINK {
                 if normalized.url.is_none() {
                     return Err(DiscordError::model("button with link style requires a url"));
                 }
@@ -156,11 +162,19 @@ impl ButtonBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// Same as [`ButtonBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for ButtonBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `ActionRowBuilder`.
 pub struct ActionRowBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     components: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
@@ -170,7 +184,7 @@ impl ActionRowBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::ACTION_ROW,
+            component_type: ComponentType::ACTION_ROW,
             components: Vec::new(),
             id: None,
         }
@@ -223,24 +237,26 @@ impl ActionRowBuilder {
             1,
             limits::MAX_ACTION_ROW_COMPONENTS,
         )?;
-        const SOLO_TYPES: [u8; 6] = [
-            component_type::STRING_SELECT,
-            component_type::TEXT_INPUT,
-            component_type::USER_SELECT,
-            component_type::ROLE_SELECT,
-            component_type::MENTIONABLE_SELECT,
-            component_type::CHANNEL_SELECT,
+        const SOLO_TYPES: [ComponentType; 6] = [
+            ComponentType::STRING_SELECT,
+            ComponentType::TEXT_INPUT,
+            ComponentType::USER_SELECT,
+            ComponentType::ROLE_SELECT,
+            ComponentType::MENTIONABLE_SELECT,
+            ComponentType::CHANNEL_SELECT,
         ];
         if self.components.len() > 1 {
             for component in &self.components {
-                if let Some(kind) = component.get("type").and_then(Value::as_u64) {
-                    if u8::try_from(kind).is_ok_and(|kind| SOLO_TYPES.contains(&kind)) {
-                        return Err(DiscordError::model(format!(
-                            "action row component of type {kind} must be the only \
-                             component in its row, got {} components",
-                            self.components.len()
-                        )));
-                    }
+                let kind = component
+                    .get("type")
+                    .and_then(|kind| ComponentType::deserialize(kind).ok());
+                if let Some(kind) = kind.filter(|kind| SOLO_TYPES.contains(kind)) {
+                    return Err(DiscordError::model(format!(
+                        "action row component of type {} must be the only \
+                         component in its row, got {} components",
+                        kind.get(),
+                        self.components.len()
+                    )));
                 }
             }
         }
@@ -255,11 +271,19 @@ impl ActionRowBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// Same as [`ActionRowBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for ActionRowBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `SelectMenuBuilder`.
 pub struct SelectMenuBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
     custom_id: String,
@@ -285,7 +309,7 @@ impl SelectMenuBuilder {
     /// Creates a `string` value.
     pub fn string(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::STRING_SELECT,
+            component_type: ComponentType::STRING_SELECT,
             id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
@@ -302,7 +326,7 @@ impl SelectMenuBuilder {
     /// Creates a `role` value.
     pub fn role(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::ROLE_SELECT,
+            component_type: ComponentType::ROLE_SELECT,
             id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
@@ -319,7 +343,7 @@ impl SelectMenuBuilder {
     /// Creates a `channel` value.
     pub fn channel(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::CHANNEL_SELECT,
+            component_type: ComponentType::CHANNEL_SELECT,
             id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
@@ -336,7 +360,7 @@ impl SelectMenuBuilder {
     /// Creates a `user` value.
     pub fn user(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::USER_SELECT,
+            component_type: ComponentType::USER_SELECT,
             id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
@@ -353,7 +377,7 @@ impl SelectMenuBuilder {
     /// Creates a `mentionable` value.
     pub fn mentionable(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::MENTIONABLE_SELECT,
+            component_type: ComponentType::MENTIONABLE_SELECT,
             id: None,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
@@ -442,11 +466,11 @@ impl SelectMenuBuilder {
 
     fn normalize(mut self) -> Self {
         match self.component_type {
-            component_type::STRING_SELECT => {
+            ComponentType::STRING_SELECT => {
                 self.channel_types = None;
                 self.default_values.clear();
             }
-            component_type::CHANNEL_SELECT => {
+            ComponentType::CHANNEL_SELECT => {
                 self.options.clear();
             }
             _ => {
@@ -487,7 +511,7 @@ impl SelectMenuBuilder {
                 limits::MAX_SELECT_PLACEHOLDER_LENGTH,
             )?;
         }
-        if normalized.component_type == component_type::STRING_SELECT {
+        if normalized.component_type == ComponentType::STRING_SELECT {
             validation::ensure_count(
                 "select menu options",
                 normalized.options.len(),
@@ -643,9 +667,9 @@ mod tests {
     use crate::builders::{
         ContainerBuilder, FileBuilder, MediaGalleryBuilder, SectionBuilder, SeparatorBuilder,
     };
-    use crate::constants::{button_style, component_type, text_input_style};
-    use crate::model::test_id;
-    use crate::model::{ChannelType, ComponentId};
+    use crate::model::{
+        test_id, ButtonStyle, ChannelType, ComponentId, ComponentType, TextInputStyle,
+    };
     use crate::types::{Emoji, MediaGalleryItem, SelectOption};
     use serde_json::json;
 
@@ -658,7 +682,7 @@ mod tests {
 
         assert_eq!(
             payload.get("style").and_then(|value| value.as_u64()),
-            Some(button_style::LINK as u64)
+            Some(u64::from(ButtonStyle::LINK.get()))
         );
         assert!(payload.get("custom_id").is_none());
         assert_eq!(
@@ -676,7 +700,7 @@ mod tests {
 
         assert_eq!(
             payload.get("style").and_then(|value| value.as_u64()),
-            Some(button_style::PRIMARY as u64)
+            Some(u64::from(ButtonStyle::PRIMARY.get()))
         );
         assert_eq!(
             payload.get("custom_id").and_then(|value| value.as_str()),
@@ -687,11 +711,11 @@ mod tests {
 
     #[test]
     fn button_link_style_without_url_falls_back_to_primary() {
-        let payload = ButtonBuilder::new().style(button_style::LINK).build();
+        let payload = ButtonBuilder::new().style(ButtonStyle::LINK).build();
 
         assert_eq!(
             payload.get("style").and_then(|value| value.as_u64()),
-            Some(button_style::PRIMARY as u64)
+            Some(u64::from(ButtonStyle::PRIMARY.get()))
         );
         assert!(payload.get("url").is_none());
     }
@@ -704,7 +728,7 @@ mod tests {
             .build_typed();
         assert_eq!(button.custom_id.as_deref(), Some("next"));
         assert_eq!(button.url, None);
-        assert_eq!(button.style, button_style::PRIMARY);
+        assert_eq!(button.style, ButtonStyle::PRIMARY);
 
         let select = SelectMenuBuilder::channel("channels")
             .add_option(SelectOption::new("Ignored", "ignored"))
@@ -733,7 +757,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::STRING_SELECT as u64)
+            Some(u64::from(ComponentType::STRING_SELECT.get()))
         );
         assert!(payload.get("options").is_some());
         assert!(payload.get("channel_types").is_none());
@@ -748,7 +772,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::CHANNEL_SELECT as u64)
+            Some(u64::from(ComponentType::CHANNEL_SELECT.get()))
         );
         assert!(payload.get("options").is_none());
         assert_eq!(
@@ -769,7 +793,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::ROLE_SELECT as u64)
+            Some(u64::from(ComponentType::ROLE_SELECT.get()))
         );
         assert!(payload.get("options").is_none());
         assert!(payload.get("channel_types").is_none());
@@ -778,7 +802,7 @@ mod tests {
     #[test]
     fn button_serializes_optional_fields() {
         let payload = ButtonBuilder::new()
-            .style(button_style::SUCCESS)
+            .style(ButtonStyle::SUCCESS)
             .label("Ship")
             .emoji(Emoji::custom("party", test_id(123), true))
             .disabled(true)
@@ -786,11 +810,11 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::BUTTON as u64)
+            Some(u64::from(ComponentType::BUTTON.get()))
         );
         assert_eq!(
             payload.get("style").and_then(|value| value.as_u64()),
-            Some(button_style::SUCCESS as u64)
+            Some(u64::from(ButtonStyle::SUCCESS.get()))
         );
         assert_eq!(
             payload.get("label").and_then(|value| value.as_str()),
@@ -871,7 +895,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::ACTION_ROW as u64)
+            Some(u64::from(ComponentType::ACTION_ROW.get()))
         );
         assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(7));
         assert_eq!(components.len(), 4);
@@ -881,7 +905,7 @@ mod tests {
         );
         assert_eq!(
             components[1].get("type").and_then(|value| value.as_u64()),
-            Some(component_type::STRING_SELECT as u64)
+            Some(u64::from(ComponentType::STRING_SELECT.get()))
         );
         assert_eq!(
             components[1]
@@ -916,11 +940,11 @@ mod tests {
         );
         assert_eq!(
             components[2].get("type").and_then(|value| value.as_u64()),
-            Some(component_type::TEXT_INPUT as u64)
+            Some(u64::from(ComponentType::TEXT_INPUT.get()))
         );
         assert_eq!(
             components[2].get("style").and_then(|value| value.as_u64()),
-            Some(text_input_style::SHORT as u64)
+            Some(u64::from(TextInputStyle::SHORT.get()))
         );
         assert_eq!(
             components[3].get("custom").and_then(|value| value.as_str()),
@@ -944,7 +968,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::MENTIONABLE_SELECT as u64)
+            Some(u64::from(ComponentType::MENTIONABLE_SELECT.get()))
         );
         assert_eq!(
             payload.get("placeholder").and_then(|value| value.as_str()),
@@ -986,7 +1010,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::USER_SELECT as u64)
+            Some(u64::from(ComponentType::USER_SELECT.get()))
         );
         assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(22));
         assert_eq!(
@@ -1201,7 +1225,7 @@ mod tests {
         assert_eq!(payload.len(), 3);
         assert_eq!(
             payload[0].get("type").and_then(|value| value.as_u64()),
-            Some(component_type::TEXT_DISPLAY as u64)
+            Some(u64::from(ComponentType::TEXT_DISPLAY.get()))
         );
         assert_eq!(
             payload[0].get("content").and_then(|value| value.as_str()),
@@ -1209,7 +1233,7 @@ mod tests {
         );
         assert_eq!(
             payload[1].get("type").and_then(|value| value.as_u64()),
-            Some(component_type::ACTION_ROW as u64)
+            Some(u64::from(ComponentType::ACTION_ROW.get()))
         );
         assert_eq!(
             payload[2].get("marker").and_then(|value| value.as_str()),
@@ -1238,11 +1262,11 @@ mod tests {
                 .map(|component| component.get("type").and_then(|value| value.as_u64()))
                 .collect::<Vec<_>>(),
             vec![
-                Some(component_type::CONTAINER as u64),
-                Some(component_type::MEDIA_GALLERY as u64),
-                Some(component_type::SEPARATOR as u64),
-                Some(component_type::SECTION as u64),
-                Some(component_type::FILE as u64),
+                Some(u64::from(ComponentType::CONTAINER.get())),
+                Some(u64::from(ComponentType::MEDIA_GALLERY.get())),
+                Some(u64::from(ComponentType::SEPARATOR.get())),
+                Some(u64::from(ComponentType::SECTION.get())),
+                Some(u64::from(ComponentType::FILE.get())),
             ]
         );
     }

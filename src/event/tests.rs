@@ -782,7 +782,7 @@ fn decode_event_covers_voice_ban_reaction_and_interaction_variants() {
             assert_eq!(event.message_author_id, Some(snowflake("99")));
             assert_eq!(event.burst, Some(true));
             assert_eq!(event.burst_colors, vec!["#ff0000", "#00ff00"]);
-            assert_eq!(event.reaction_type, Some(1));
+            assert_eq!(event.reaction_type, Some(ReactionType::BURST));
             assert_eq!(
                 event.emoji.and_then(|emoji| emoji.name),
                 Some("?뵦".to_string())

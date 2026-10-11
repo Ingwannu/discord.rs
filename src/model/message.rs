@@ -6,10 +6,10 @@ use crate::types::Emoji;
 
 use super::{
     is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, Channel, ChannelId,
-    ChannelType, CreatePoll, Embed, GuildId, InteractionId, Member, MessageComponent, MessageId,
-    MessageReferenceType, PartialApplication, Poll, ResolvedData, RoleId,
-    RoleSubscriptionListingId, Sticker, StickerId, StickerItem, ThreadMember, User, UserId,
-    WebhookId,
+    ChannelType, CreatePoll, Embed, GuildId, InteractionId, Member, MessageActivityType,
+    MessageComponent, MessageId, MessageReferenceType, MessageType, PartialApplication, Poll,
+    ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId, Sticker, StickerId, StickerItem,
+    ThreadMember, User, UserId, WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,7 +36,7 @@ pub struct Message {
     #[serde(default)]
     pub attachments: Vec<Attachment>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<MessageType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,11 +89,12 @@ pub struct Message {
     pub shared_client_theme: Option<SharedClientTheme>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `MessageActivity`.
+/// Rich Presence activity of a message (`Message::activity`). No `Default`:
+/// Discord always sends `type`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageActivity {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: MessageActivityType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub party_id: Option<String>,
 }
@@ -117,7 +118,7 @@ pub struct MessageSnapshot {
 /// Typed Discord API object for `MessageSnapshotMessage`.
 pub struct MessageSnapshotMessage {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<MessageType>,
     #[serde(default)]
     pub content: String,
     #[serde(default)]
@@ -234,6 +235,19 @@ pub struct ChannelPins {
 /// Typed Discord API object for `ChannelPinsQuery`.
 pub struct ChannelPinsQuery {
     pub before: Option<String>,
+    pub limit: Option<u64>,
+}
+
+/// Query options for `GET /channels/{id}/messages/{id}/reactions/{emoji}`
+/// ([`RestClient::get_reactions_with_query`](crate::http::RestClient::get_reactions_with_query)).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GetReactionsQuery {
+    /// Normal or burst (super) reactions; Discord defaults to
+    /// [`ReactionType::NORMAL`] when omitted.
+    pub kind: Option<ReactionType>,
+    /// Return users after this user ID.
+    pub after: Option<UserId>,
+    /// Max number of users to return (1-100, Discord's default 25).
     pub limit: Option<u64>,
 }
 

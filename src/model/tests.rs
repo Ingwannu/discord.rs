@@ -8,21 +8,22 @@ use super::{
     ApplicationIntegrationTypeConfig, Attachment, AuthorizingIntegrationOwners,
     AutocompleteInteraction, BeginGuildPruneRequest, Channel, ChannelType,
     ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption, ComponentId,
-    ComponentInteraction, ComponentInteractionData, CreateChannelInvite, CreateDmChannel,
-    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateMessage,
-    CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel, Embed,
-    EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId, GuildInstallOwner,
-    GuildScheduledEvent, GuildWidget, Integration, Interaction, InteractionCallbackResponse,
-    InteractionContextData, Invite, InviteTargetUsersJobStatus, Member, Message, MessageComponent,
-    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
-    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
-    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteType,
-    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
-    PollAnswerId, PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData, Role,
-    RoleColors, SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse,
-    ThreadMember, ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
+    ComponentInteraction, ComponentInteractionData, ComponentType, CreateChannelInvite,
+    CreateDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker,
+    CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
+    Embed, EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId,
+    GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
+    InteractionCallbackResponse, InteractionContextData, Invite, InviteTargetUsersJobStatus,
+    Member, Message, MessageComponent, MessageContextMenuInteraction, MessageReferenceType,
+    ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
+    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
+    ModifyWebhookWithToken, OverwriteType, PermissionOverwrite, PermissionsBitField,
+    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollLayoutType,
+    PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SeparatorSpacing,
+    SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse, ThreadMember,
+    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
@@ -281,7 +282,7 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
         Some("yes")
     );
     assert!(poll.allow_multiselect);
-    assert_eq!(poll.layout_type, 1);
+    assert_eq!(poll.layout_type, PollLayoutType::DEFAULT);
     let results = poll.results.expect("poll results should decode");
     assert!(!results.is_finalized);
     assert_eq!(results.answer_counts[0].count, 3);
@@ -310,7 +311,7 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
             }],
             duration: Some(24),
             allow_multiselect: Some(false),
-            layout_type: Some(1),
+            layout_type: Some(PollLayoutType::DEFAULT),
         }),
         ..CreateMessage::default()
     };
@@ -1540,19 +1541,19 @@ fn message_components_v2_tree_decodes_typed() {
 
     let components = message.components.as_deref().unwrap();
     let container = &components[0];
-    assert_eq!(container.kind, MessageComponent::CONTAINER);
+    assert_eq!(container.kind, ComponentType::CONTAINER);
     assert_eq!(container.id, Some(ComponentId::new(1)));
     assert_eq!(container.accent_color, Some(5_793_266));
     assert_eq!(container.spoiler, Some(false));
 
     let section = &container.components[0];
-    assert_eq!(section.kind, MessageComponent::SECTION);
+    assert_eq!(section.kind, ComponentType::SECTION);
     assert_eq!(
         section.components[0].content.as_deref(),
         Some("# Release 2.2.0")
     );
     let accessory = section.accessory.as_deref().unwrap();
-    assert_eq!(accessory.kind, MessageComponent::THUMBNAIL);
+    assert_eq!(accessory.kind, ComponentType::THUMBNAIL);
     let media = accessory.media.as_ref().unwrap();
     assert_eq!(media.url, "https://cdn.example/thumb.png");
     assert_eq!(
@@ -1563,23 +1564,23 @@ fn message_components_v2_tree_decodes_typed() {
     assert_eq!(accessory.description.as_deref(), Some("cover art"));
 
     let separator = &container.components[1];
-    assert_eq!(separator.kind, MessageComponent::SEPARATOR);
+    assert_eq!(separator.kind, ComponentType::SEPARATOR);
     assert_eq!(separator.divider, Some(true));
-    assert_eq!(separator.spacing, Some(1));
+    assert_eq!(separator.spacing, Some(SeparatorSpacing::SMALL));
 
     let gallery = &container.components[2];
-    assert_eq!(gallery.kind, MessageComponent::MEDIA_GALLERY);
+    assert_eq!(gallery.kind, ComponentType::MEDIA_GALLERY);
     assert_eq!(gallery.items[0].media.url, "https://cdn.example/shot.png");
     assert_eq!(gallery.items[0].spoiler, Some(true));
 
     let file = &container.components[3];
-    assert_eq!(file.kind, MessageComponent::FILE);
+    assert_eq!(file.kind, ComponentType::FILE);
     assert_eq!(file.file.as_ref().unwrap().url, "attachment://notes.txt");
     assert_eq!(file.name.as_deref(), Some("notes.txt"));
     assert_eq!(file.size, Some(512));
 
     let button_row = &container.components[4];
-    assert_eq!(button_row.kind, MessageComponent::ACTION_ROW);
+    assert_eq!(button_row.kind, ComponentType::ACTION_ROW);
     assert_eq!(
         button_row.components[0].custom_id.as_deref(),
         Some("deploy")
@@ -1598,7 +1599,7 @@ fn message_components_v2_tree_decodes_typed() {
     );
 
     let select = &container.components[5].components[0];
-    assert_eq!(select.kind, MessageComponent::STRING_SELECT);
+    assert_eq!(select.kind, ComponentType::STRING_SELECT);
     assert_eq!(select.placeholder.as_deref(), Some("Pick an environment"));
     assert_eq!(select.min_values, Some(1));
     assert_eq!(select.options.len(), 2);
@@ -1607,7 +1608,7 @@ fn message_components_v2_tree_decodes_typed() {
     assert_eq!(select.options[1].label, "Staging");
 
     let channel_select = &container.components[6].components[0];
-    assert_eq!(channel_select.kind, MessageComponent::CHANNEL_SELECT);
+    assert_eq!(channel_select.kind, ComponentType::CHANNEL_SELECT);
     assert_eq!(
         channel_select.channel_types,
         vec![ChannelType::GUILD_TEXT, ChannelType::GUILD_ANNOUNCEMENT]
@@ -1623,13 +1624,13 @@ fn message_components_v2_tree_decodes_typed() {
     assert_eq!(all.len(), 15);
     assert_eq!(
         all.iter()
-            .filter(|component| component.kind == MessageComponent::BUTTON)
+            .filter(|component| component.kind == ComponentType::BUTTON)
             .count(),
         2
     );
     assert!(all
         .iter()
-        .any(|component| component.kind == MessageComponent::THUMBNAIL));
+        .any(|component| component.kind == ComponentType::THUMBNAIL));
 }
 
 #[test]
@@ -1640,13 +1641,15 @@ fn message_component_tolerates_unknown_kinds_and_round_trips() {
         "brand_new_field": { "nested": true }
     }))
     .unwrap();
-    assert_eq!(tolerant.kind, 99);
+    assert_eq!(tolerant.kind, ComponentType::new(99));
     assert!(tolerant.custom_id.is_none());
     assert!(tolerant.components.is_empty());
 
-    // Even an empty object decodes (kind defaults to 0).
-    let empty: MessageComponent = serde_json::from_value(json!({})).unwrap();
-    assert_eq!(empty.kind, 0);
+    // A missing `type` is a decode error since 3.0: 2.x read it as `0`,
+    // which is not a component type, and hid malformed payloads.
+    assert!(serde_json::from_value::<MessageComponent>(json!({})).is_err());
+    // Values past the u8 storage fail instead of wrapping.
+    assert!(serde_json::from_value::<MessageComponent>(json!({ "type": 256 })).is_err());
 
     // Known fields round-trip byte-for-byte through serialization.
     let fixture = json!({
@@ -1671,6 +1674,17 @@ fn message_component_tolerates_unknown_kinds_and_round_trips() {
     let component: MessageComponent = serde_json::from_value(fixture.clone()).unwrap();
     assert_eq!(serde_json::to_value(&component).unwrap(), fixture);
 
+    // The shared raw `style` reads as the type that matches `kind` only.
+    let (button, input) = (&component.components[0], &component.components[1]);
+    assert_eq!(button.button_style(), Some(super::ButtonStyle::SUCCESS));
+    assert_eq!(button.text_input_style(), None);
+    assert_eq!(
+        input.text_input_style(),
+        Some(super::TextInputStyle::PARAGRAPH)
+    );
+    assert_eq!(input.button_style(), None);
+    assert_eq!(component.button_style(), None);
+
     // A label wrapping a text input exposes the child via `component`.
     let label: MessageComponent = serde_json::from_value(json!({
         "type": 18,
@@ -1679,10 +1693,10 @@ fn message_component_tolerates_unknown_kinds_and_round_trips() {
         "component": { "type": 4, "custom_id": "feedback", "style": 2 }
     }))
     .unwrap();
-    assert_eq!(label.kind, MessageComponent::LABEL);
+    assert_eq!(label.kind, ComponentType::LABEL);
     assert_eq!(
         label.component.as_deref().map(|child| child.kind),
-        Some(MessageComponent::TEXT_INPUT)
+        Some(ComponentType::TEXT_INPUT)
     );
     assert_eq!(label.iter().count(), 2);
 }
@@ -1844,7 +1858,7 @@ fn component_embed_link_previews_deserialize_with_their_container() {
     .expect("component embed");
     assert!(embed.is_component_embed());
     assert_eq!(embed.components.len(), 1);
-    assert_eq!(embed.components[0].kind, super::MessageComponent::CONTAINER);
+    assert_eq!(embed.components[0].kind, ComponentType::CONTAINER);
     assert_eq!(embed.flags, Some(0));
 
     let rich: Embed =

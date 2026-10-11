@@ -2,27 +2,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::command::validation;
-use crate::constants::{component_type, separator_spacing};
 use crate::error::DiscordError;
-use crate::model::ComponentId;
+use crate::model::{ButtonStyle, ComponentId, ComponentType, SeparatorSpacing};
 use crate::types::{to_json_value, ButtonConfig, MediaGalleryItem};
 
 use super::components::{ActionRowBuilder, ButtonBuilder};
 use super::limits;
 use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `TextDisplayBuilder`.
 pub struct TextDisplayBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
 }
 #[cfg(test)]
 mod tests {
-    use crate::model::ComponentId;
+    use crate::model::{ButtonStyle, ComponentId, ComponentType, SeparatorSpacing};
     use serde_json::json;
 
     use super::{
@@ -32,7 +31,6 @@ mod tests {
     use crate::builders::{
         ActionRowBuilder, ButtonBuilder, FileBuilder, MediaGalleryBuilder, SectionBuilder,
     };
-    use crate::constants::{button_style, component_type, separator_spacing};
     use crate::types::{ButtonConfig, MediaGalleryItem};
 
     #[test]
@@ -41,7 +39,7 @@ mod tests {
         assert_eq!(
             default_payload,
             json!({
-                "type": component_type::TEXT_DISPLAY,
+                "type": ComponentType::TEXT_DISPLAY,
                 "content": "hello",
             })
         );
@@ -54,7 +52,7 @@ mod tests {
         assert_eq!(
             payload,
             json!({
-                "type": component_type::TEXT_DISPLAY,
+                "type": ComponentType::TEXT_DISPLAY,
                 "content": "updated",
                 "id": 42,
             })
@@ -67,24 +65,24 @@ mod tests {
         assert_eq!(
             default_payload,
             json!({
-                "type": component_type::SEPARATOR,
+                "type": ComponentType::SEPARATOR,
                 "divider": true,
-                "spacing": separator_spacing::SMALL,
+                "spacing": SeparatorSpacing::SMALL,
             })
         );
 
         let payload = SeparatorBuilder::new()
             .divider(false)
-            .spacing(separator_spacing::LARGE)
+            .spacing(SeparatorSpacing::LARGE)
             .id(ComponentId::new(7))
             .build();
 
         assert_eq!(
             payload,
             json!({
-                "type": component_type::SEPARATOR,
+                "type": ComponentType::SEPARATOR,
                 "divider": false,
-                "spacing": separator_spacing::LARGE,
+                "spacing": SeparatorSpacing::LARGE,
                 "id": 7,
             })
         );
@@ -124,7 +122,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::CONTAINER as u64)
+            Some(u64::from(ComponentType::CONTAINER.get()))
         );
         assert_eq!(
             payload.get("accent_color").and_then(|value| value.as_u64()),
@@ -147,12 +145,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
             vec![
-                component_type::MEDIA_GALLERY as u64,
-                component_type::TEXT_DISPLAY as u64,
-                component_type::SEPARATOR as u64,
-                component_type::ACTION_ROW as u64,
-                component_type::SECTION as u64,
-                component_type::FILE as u64,
+                u64::from(ComponentType::MEDIA_GALLERY.get()),
+                u64::from(ComponentType::TEXT_DISPLAY.get()),
+                u64::from(ComponentType::SEPARATOR.get()),
+                u64::from(ComponentType::ACTION_ROW.get()),
+                u64::from(ComponentType::SECTION.get()),
+                u64::from(ComponentType::FILE.get()),
                 255,
             ]
         );
@@ -215,13 +213,13 @@ mod tests {
     fn create_container_assembles_image_description_and_chunked_buttons() {
         let buttons = vec![
             ButtonConfig::new("first", "First")
-                .style(button_style::PRIMARY)
+                .style(ButtonStyle::PRIMARY)
                 .emoji("A"),
-            ButtonConfig::new("second", "Second").style(button_style::SECONDARY),
-            ButtonConfig::new("third", "Third").style(button_style::SUCCESS),
-            ButtonConfig::new("fourth", "Fourth").style(button_style::DANGER),
-            ButtonConfig::new("fifth", "Fifth").style(button_style::PRIMARY),
-            ButtonConfig::new("sixth", "Sixth").style(button_style::SECONDARY),
+            ButtonConfig::new("second", "Second").style(ButtonStyle::SECONDARY),
+            ButtonConfig::new("third", "Third").style(ButtonStyle::SUCCESS),
+            ButtonConfig::new("fourth", "Fourth").style(ButtonStyle::DANGER),
+            ButtonConfig::new("fifth", "Fifth").style(ButtonStyle::PRIMARY),
+            ButtonConfig::new("sixth", "Sixth").style(ButtonStyle::SECONDARY),
         ];
 
         let payload = create_container(
@@ -244,14 +242,14 @@ mod tests {
                 .map(|component| component.get("type").and_then(|value| value.as_u64()))
                 .collect::<Vec<_>>(),
             vec![
-                Some(component_type::MEDIA_GALLERY as u64),
-                Some(component_type::SEPARATOR as u64),
-                Some(component_type::TEXT_DISPLAY as u64),
-                Some(component_type::SEPARATOR as u64),
-                Some(component_type::TEXT_DISPLAY as u64),
-                Some(component_type::SEPARATOR as u64),
-                Some(component_type::ACTION_ROW as u64),
-                Some(component_type::ACTION_ROW as u64),
+                Some(u64::from(ComponentType::MEDIA_GALLERY.get())),
+                Some(u64::from(ComponentType::SEPARATOR.get())),
+                Some(u64::from(ComponentType::TEXT_DISPLAY.get())),
+                Some(u64::from(ComponentType::SEPARATOR.get())),
+                Some(u64::from(ComponentType::TEXT_DISPLAY.get())),
+                Some(u64::from(ComponentType::SEPARATOR.get())),
+                Some(u64::from(ComponentType::ACTION_ROW.get())),
+                Some(u64::from(ComponentType::ACTION_ROW.get())),
             ]
         );
         assert_eq!(
@@ -314,21 +312,21 @@ mod tests {
         assert_eq!(general.len(), 1);
         assert_eq!(general[0].custom_id, "help_menu");
         assert_eq!(general[0].label, "Help");
-        assert_eq!(general[0].style, button_style::SECONDARY);
+        assert_eq!(general[0].style, ButtonStyle::SECONDARY);
         assert!(general[0].emoji.is_some());
 
         let status = create_default_buttons("status");
         assert_eq!(status.len(), 2);
         assert_eq!(status[0].custom_id, "view_work_status");
-        assert_eq!(status[0].style, button_style::PRIMARY);
+        assert_eq!(status[0].style, ButtonStyle::PRIMARY);
         assert!(status[0].emoji.is_some());
         assert_eq!(status[1].custom_id, "help_menu");
-        assert_eq!(status[1].style, button_style::SECONDARY);
+        assert_eq!(status[1].style, ButtonStyle::SECONDARY);
 
         let fallback = create_default_buttons("unknown");
         assert_eq!(fallback.len(), 1);
         assert_eq!(fallback[0].custom_id, "help_menu");
-        assert_eq!(fallback[0].style, button_style::SECONDARY);
+        assert_eq!(fallback[0].style, ButtonStyle::SECONDARY);
         assert!(fallback[0].emoji.is_some());
     }
 }
@@ -337,7 +335,7 @@ impl TextDisplayBuilder {
     /// Creates a `new` value.
     pub fn new(content: &str) -> Self {
         Self {
-            component_type: component_type::TEXT_DISPLAY,
+            component_type: ComponentType::TEXT_DISPLAY,
             content: content.to_string(),
             id: None,
         }
@@ -376,15 +374,15 @@ impl TextDisplayBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `SeparatorBuilder`.
 pub struct SeparatorBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     #[serde(skip_serializing_if = "Option::is_none")]
     divider: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    spacing: Option<u8>,
+    spacing: Option<SeparatorSpacing>,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<ComponentId>,
 }
@@ -393,9 +391,9 @@ impl SeparatorBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::SEPARATOR,
+            component_type: ComponentType::SEPARATOR,
             divider: Some(true),
-            spacing: Some(separator_spacing::SMALL),
+            spacing: Some(SeparatorSpacing::SMALL),
             id: None,
         }
     }
@@ -405,7 +403,7 @@ impl SeparatorBuilder {
         self
     }
 
-    pub fn spacing(mut self, spacing: u8) -> Self {
+    pub fn spacing(mut self, spacing: SeparatorSpacing) -> Self {
         self.spacing = Some(spacing);
         self
     }
@@ -420,11 +418,19 @@ impl SeparatorBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+/// Same as [`SeparatorBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for SeparatorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `ContainerBuilder`.
 pub struct ContainerBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     components: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     accent_color: Option<u32>,
@@ -438,7 +444,7 @@ impl ContainerBuilder {
     /// Creates a `new` value.
     pub fn new() -> Self {
         Self {
-            component_type: component_type::CONTAINER,
+            component_type: ComponentType::CONTAINER,
             components: Vec::new(),
             accent_color: None,
             spoiler: None,
@@ -520,6 +526,14 @@ impl ContainerBuilder {
     }
 }
 
+/// Same as [`ContainerBuilder::new`]: an empty builder that already carries its
+/// component `type`.
+impl Default for ContainerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Provides the `create_container` helper.
 pub fn create_container(
     title: &str,
@@ -536,7 +550,7 @@ pub fn create_container(
         container = container.add_separator(
             SeparatorBuilder::new()
                 .divider(true)
-                .spacing(separator_spacing::LARGE),
+                .spacing(SeparatorSpacing::LARGE),
         );
     }
 
@@ -546,7 +560,7 @@ pub fn create_container(
         container = container.add_separator(
             SeparatorBuilder::new()
                 .divider(true)
-                .spacing(separator_spacing::SMALL),
+                .spacing(SeparatorSpacing::SMALL),
         );
         container = container.add_text_display(TextDisplayBuilder::new(description));
     }
@@ -555,7 +569,7 @@ pub fn create_container(
         container = container.add_separator(
             SeparatorBuilder::new()
                 .divider(false)
-                .spacing(separator_spacing::SMALL),
+                .spacing(SeparatorSpacing::SMALL),
         );
 
         for chunk in buttons.chunks(limits::MAX_ACTION_ROW_COMPONENTS) {
@@ -583,18 +597,18 @@ pub fn create_container(
 pub fn create_default_buttons(button_type: &str) -> Vec<ButtonConfig> {
     match button_type {
         "general" => vec![ButtonConfig::new("help_menu", "Help")
-            .style(crate::constants::button_style::SECONDARY)
+            .style(ButtonStyle::SECONDARY)
             .emoji("❓")],
         "status" => vec![
             ButtonConfig::new("view_work_status", "Work Status")
-                .style(crate::constants::button_style::PRIMARY)
+                .style(ButtonStyle::PRIMARY)
                 .emoji("📊"),
             ButtonConfig::new("help_menu", "Help")
-                .style(crate::constants::button_style::SECONDARY)
+                .style(ButtonStyle::SECONDARY)
                 .emoji("❓"),
         ],
         _ => vec![ButtonConfig::new("help_menu", "Help")
-            .style(crate::constants::button_style::SECONDARY)
+            .style(ButtonStyle::SECONDARY)
             .emoji("❓")],
     }
 }

@@ -1,4 +1,4 @@
-use crate::model::{test_id, ChannelType};
+use crate::model::{test_id, ChannelType, MessageType};
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -2299,7 +2299,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
             filename: "old.txt".to_string(),
             ..Attachment::fixture()
         }],
-        kind: Some(1),
+        kind: Some(MessageType::RECIPIENT_ADD),
         pinned: Some(true),
         tts: Some(true),
         flags: Some(64),
@@ -2340,7 +2340,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
             filename: "new.txt".to_string(),
             ..Attachment::fixture()
         }],
-        kind: Some(19),
+        kind: Some(MessageType::REPLY),
         pinned: Some(false),
         tts: Some(false),
         flags: Some(0),
@@ -2382,7 +2382,7 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
     assert_eq!(merged.edited_timestamp.as_deref(), Some("before-edit"));
     assert_eq!(merged.mentions[0].username, "mallory");
     assert_eq!(merged.attachments[0].filename, "new.txt");
-    assert_eq!(merged.kind, Some(19));
+    assert_eq!(merged.kind, Some(MessageType::REPLY));
     assert_eq!(merged.pinned, Some(true));
     assert_eq!(merged.tts, Some(false));
     assert_eq!(merged.flags, Some(0));

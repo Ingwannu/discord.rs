@@ -4,26 +4,29 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::types::Emoji;
 
-use super::{AttachmentId, ChannelId, ChannelType, ComponentId, GenericId, RoleId, SkuId, UserId};
+use super::{
+    AttachmentId, ButtonStyle, ChannelId, ChannelType, ComponentId, ComponentType, GenericId,
+    RoleId, SeparatorSpacing, SkuId, TextInputStyle, UserId,
+};
 
 /// A single component attached to a received message, modal, or snapshot.
 ///
 /// Discord components form a tree (action rows, sections, containers, and
 /// labels nest child components). Rather than one struct per component
 /// type, this is deliberately a *wide* struct: [`Self::kind`] carries the
-/// raw component `type` and every known field across all component kinds
+/// component `type` and every known field across all component kinds
 /// is optional (or defaults to empty). The tradeoff: the compiler cannot
 /// guarantee which fields are populated for a given `kind`, but decoding
 /// never fails when Discord ships new component types or fields, and one
 /// type covers the whole tree recursively.
 ///
-/// Component `type` values are exposed as associated constants, e.g.
-/// [`MessageComponent::BUTTON`].
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+/// No `Default`: `type` is required and has no default. Build one with
+/// [`MessageComponent::new`] and struct update syntax.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageComponent {
-    /// Raw Discord component type (see the associated constants).
-    #[serde(rename = "type", default)]
-    pub kind: u8,
+    /// Component type, such as [`ComponentType::BUTTON`].
+    #[serde(rename = "type")]
+    pub kind: ComponentType,
     /// Numeric component ID (32-bit, unique within the message). Not a
     /// snowflake; see [`ComponentId`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,9 +34,12 @@ pub struct MessageComponent {
     /// Developer-defined identifier (buttons, selects, text inputs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_id: Option<String>,
-    /// Button or text-input style value.
+    /// Raw `style`: a [`ButtonStyle`] on buttons and a [`TextInputStyle`] on
+    /// text inputs. The meaning depends on [`Self::kind`], so this shared
+    /// field keeps the wire number; [`Self::button_style`] and
+    /// [`Self::text_input_style`] return the typed value.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub style: Option<u64>,
+    pub style: Option<u8>,
     /// Button label or label-component text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -117,45 +123,86 @@ pub struct MessageComponent {
     pub divider: Option<bool>,
     /// Separator spacing size.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub spacing: Option<u64>,
+    pub spacing: Option<SeparatorSpacing>,
     /// Container accent color (RGB integer).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<u64>,
 }
 
+// [Decision Log]
+// - 목적과 의도: 넓은 구조체의 `type`·`spacing`을 열린 판별값으로 바꾸고, 종류마다 뜻이 다른
+//   `style`도 타입으로 읽을 수 있게 한다(설계 §2, 시리즈 3).
+// - 기존 구현 및 제약 조건: 2.x는 `kind: u8`(+ `#[serde(default)]`, 누락 시 0), `style:
+//   Option<u64>`, 연관 상수 `MessageComponent::BUTTON: u8` 등을 두었다. `style`은 버튼이면
+//   ButtonStyle, 텍스트 입력이면 TextInputStyle이다. 5단계에서 나가는 컴포넌트는 데이터 enum이
+//   된다(설계 §4).
+// - 검토한 주요 대안: `style`을 (1) Option<ButtonStyle>로 두기, (2) `kind`를 보고 직렬화하는
+//   enum, (3) 와이어 숫자(u8) + 종류별 타입 접근자.
+// - 선택한 방식: (3). `kind`는 ComponentType(필수, Default 없음), `spacing`은
+//   SeparatorSpacing, 연관 상수는 지웠다(ComponentType 상수가 원본).
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 텍스트 입력의 값을 버튼 이름으로 출력한다.
+//   (2)는 감싸는 객체 문맥이 필요한 직렬화를 넓은 수신 구조체에 들여오고, 5단계에서 다시
+//   바뀐다. (3)은 시리즈 2 B의 다형 ID(`CommandInteractionData::target_id`)와 같은 규칙이다.
+// - 장점, 단점 및 영향: `style`만 숫자로 남는다(접근자로 보완). 256 이상의 `style`은 디코딩
+//   오류가 된다(두 스타일 타입 모두 u8). `type` 누락도 이제 디코딩 오류다.
 impl MessageComponent {
-    /// Component type for action rows.
-    pub const ACTION_ROW: u8 = 1;
-    /// Component type for buttons.
-    pub const BUTTON: u8 = 2;
-    /// Component type for string select menus.
-    pub const STRING_SELECT: u8 = 3;
-    /// Component type for text inputs.
-    pub const TEXT_INPUT: u8 = 4;
-    /// Component type for user select menus.
-    pub const USER_SELECT: u8 = 5;
-    /// Component type for role select menus.
-    pub const ROLE_SELECT: u8 = 6;
-    /// Component type for mentionable select menus.
-    pub const MENTIONABLE_SELECT: u8 = 7;
-    /// Component type for channel select menus.
-    pub const CHANNEL_SELECT: u8 = 8;
-    /// Component type for sections.
-    pub const SECTION: u8 = 9;
-    /// Component type for text displays.
-    pub const TEXT_DISPLAY: u8 = 10;
-    /// Component type for thumbnails.
-    pub const THUMBNAIL: u8 = 11;
-    /// Component type for media galleries.
-    pub const MEDIA_GALLERY: u8 = 12;
-    /// Component type for file attachments.
-    pub const FILE: u8 = 13;
-    /// Component type for separators.
-    pub const SEPARATOR: u8 = 14;
-    /// Component type for containers.
-    pub const CONTAINER: u8 = 17;
-    /// Component type for labels.
-    pub const LABEL: u8 = 18;
+    /// A component of `kind` with every other field empty, for struct
+    /// update syntax: `MessageComponent { custom_id: .., ..MessageComponent::new(kind) }`.
+    pub fn new(kind: ComponentType) -> Self {
+        Self {
+            kind,
+            id: None,
+            custom_id: None,
+            style: None,
+            label: None,
+            description: None,
+            emoji: None,
+            url: None,
+            sku_id: None,
+            disabled: None,
+            required: None,
+            options: Vec::new(),
+            channel_types: Vec::new(),
+            placeholder: None,
+            default_values: Vec::new(),
+            min_values: None,
+            max_values: None,
+            min_length: None,
+            max_length: None,
+            value: None,
+            components: Vec::new(),
+            component: None,
+            accessory: None,
+            content: None,
+            media: None,
+            file: None,
+            name: None,
+            size: None,
+            items: Vec::new(),
+            spoiler: None,
+            divider: None,
+            spacing: None,
+            accent_color: None,
+        }
+    }
+
+    /// The button style, if this is a [`ComponentType::BUTTON`] that has
+    /// one.
+    pub fn button_style(&self) -> Option<ButtonStyle> {
+        match (self.kind, self.style) {
+            (ComponentType::BUTTON, Some(style)) => Some(ButtonStyle::new(style)),
+            _ => None,
+        }
+    }
+
+    /// The text input style, if this is a [`ComponentType::TEXT_INPUT`] that
+    /// has one.
+    pub fn text_input_style(&self) -> Option<TextInputStyle> {
+        match (self.kind, self.style) {
+            (ComponentType::TEXT_INPUT, Some(style)) => Some(TextInputStyle::new(style)),
+            _ => None,
+        }
+    }
 
     /// Depth-first iterator over this component and every nested child
     /// (child `components`, label `component`, and section `accessory`).

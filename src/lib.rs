@@ -280,10 +280,7 @@ pub use parsers::{
     InteractionContext, RawInteraction, V2ModalComponent, V2ModalSubmission,
 };
 
-pub use constants::{
-    button_style, component_type, gateway_intents, separator_spacing, text_input_style,
-    MESSAGE_FLAG_IS_COMPONENTS_V2,
-};
+pub use constants::{gateway_intents, MESSAGE_FLAG_IS_COMPONENTS_V2};
 
 pub use http::{DiscordHttpClient, FileAttachment, FileUpload, RestClient};
 

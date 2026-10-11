@@ -3,8 +3,9 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, ChannelPins, ChannelPinsQuery, CreateMessage, GuildId, Id, IdMarker, Message,
-    MessageId, SearchGuildMessagesQuery, SearchGuildMessagesResponse, User, UserId,
+    ChannelId, ChannelPins, ChannelPinsQuery, CreateMessage, GetReactionsQuery, GuildId, Id,
+    IdMarker, Message, MessageId, SearchGuildMessagesQuery, SearchGuildMessagesResponse, User,
+    UserId,
 };
 
 use super::paths::query_string;
@@ -244,6 +245,8 @@ impl RestClient {
             .await
     }
 
+    /// Users who reacted with `emoji` (normal reactions; see
+    /// [`Self::get_reactions_with_query`] for burst reactions).
     pub async fn get_reactions(
         &self,
         channel_id: ChannelId,
@@ -252,18 +255,39 @@ impl RestClient {
         limit: Option<u64>,
         after: Option<UserId>,
     ) -> Result<Vec<User>, DiscordError> {
+        self.get_reactions_with_query(
+            channel_id,
+            message_id,
+            emoji,
+            &GetReactionsQuery {
+                kind: None,
+                after,
+                limit,
+            },
+        )
+        .await
+    }
+
+    /// Users who reacted with `emoji`, with every documented query option
+    /// including the reaction `type` (normal or burst).
+    pub async fn get_reactions_with_query(
+        &self,
+        channel_id: ChannelId,
+        message_id: MessageId,
+        emoji: &str,
+        query: &GetReactionsQuery,
+    ) -> Result<Vec<User>, DiscordError> {
         let mut params = Vec::new();
-        if let Some(limit) = limit {
+        if let Some(kind) = query.kind {
+            params.push(format!("type={}", kind.get()));
+        }
+        if let Some(limit) = query.limit {
             params.push(format!("limit={limit}"));
         }
-        if let Some(after) = after {
+        if let Some(after) = query.after {
             params.push(format!("after={after}"));
         }
-        let query = if params.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", params.join("&"))
-        };
+        let query = query_string(params);
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}{}",
             channel_id, message_id, emoji, query

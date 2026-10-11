@@ -2,21 +2,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::command::validation;
-use crate::constants::{component_type, text_input_style};
 use crate::error::DiscordError;
-use crate::model::ComponentId;
+use crate::model::{ComponentId, ComponentType, TextInputStyle};
 use crate::types::{to_json_value, SelectOption};
 
 use super::components::{ActionRowBuilder, SelectMenuBuilder};
 use super::limits;
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `TextInputBuilder`.
 pub struct TextInputBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     custom_id: String,
-    style: u8,
+    style: TextInputStyle,
     label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     placeholder: Option<String>,
@@ -32,9 +31,9 @@ pub struct TextInputBuilder {
 
 impl TextInputBuilder {
     /// Creates a `new` value.
-    pub fn new(custom_id: &str, label: &str, style: u8) -> Self {
+    pub fn new(custom_id: &str, label: &str, style: TextInputStyle) -> Self {
         Self {
-            component_type: component_type::TEXT_INPUT,
+            component_type: ComponentType::TEXT_INPUT,
             custom_id: custom_id.to_string(),
             style,
             label: label.to_string(),
@@ -48,12 +47,12 @@ impl TextInputBuilder {
 
     /// Creates a `short` value.
     pub fn short(custom_id: &str, label: &str) -> Self {
-        Self::new(custom_id, label, text_input_style::SHORT)
+        Self::new(custom_id, label, TextInputStyle::SHORT)
     }
 
     /// Creates a `paragraph` value.
     pub fn paragraph(custom_id: &str, label: &str) -> Self {
-        Self::new(custom_id, label, text_input_style::PARAGRAPH)
+        Self::new(custom_id, label, TextInputStyle::PARAGRAPH)
     }
 
     pub fn placeholder(mut self, placeholder: &str) -> Self {
@@ -148,11 +147,11 @@ impl TextInputBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `RadioGroupBuilder`.
 pub struct RadioGroupBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     custom_id: String,
     options: Vec<SelectOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,7 +166,7 @@ impl RadioGroupBuilder {
     /// Creates a `new` value.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::RADIO_GROUP,
+            component_type: ComponentType::RADIO_GROUP,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
             required: None,
@@ -206,11 +205,11 @@ impl RadioGroupBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `CheckboxGroupBuilder`.
 pub struct CheckboxGroupBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     custom_id: String,
     options: Vec<SelectOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -229,7 +228,7 @@ impl CheckboxGroupBuilder {
     /// Creates a `new` value.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::CHECKBOX_GROUP,
+            component_type: ComponentType::CHECKBOX_GROUP,
             custom_id: custom_id.to_string(),
             options: Vec::new(),
             min_values: None,
@@ -280,11 +279,11 @@ impl CheckboxGroupBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `CheckboxBuilder`.
 pub struct CheckboxBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     custom_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     checked: Option<bool>,
@@ -300,7 +299,7 @@ impl CheckboxBuilder {
     /// Creates a `new` value.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::CHECKBOX,
+            component_type: ComponentType::CHECKBOX,
             custom_id: custom_id.to_string(),
             checked: None,
             required: None,
@@ -334,11 +333,11 @@ impl CheckboxBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `FileUploadBuilder`.
 pub struct FileUploadBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     custom_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     min_values: Option<u8>,
@@ -356,7 +355,7 @@ impl FileUploadBuilder {
     /// Creates a `new` value.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: component_type::FILE_UPLOAD,
+            component_type: ComponentType::FILE_UPLOAD,
             custom_id: custom_id.to_string(),
             min_values: None,
             max_values: None,
@@ -417,11 +416,11 @@ impl FileUploadBuilder {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `LabelBuilder`.
 pub struct LabelBuilder {
     #[serde(rename = "type")]
-    component_type: u8,
+    component_type: ComponentType,
     label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -434,7 +433,7 @@ impl LabelBuilder {
     /// Creates a `with_select_menu` value.
     pub fn with_select_menu(label: &str, select: SelectMenuBuilder) -> Self {
         Self {
-            component_type: component_type::LABEL,
+            component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
             component: select.build(),
@@ -445,7 +444,7 @@ impl LabelBuilder {
     /// Creates a `with_file_upload` value.
     pub fn with_file_upload(label: &str, file_upload: FileUploadBuilder) -> Self {
         Self {
-            component_type: component_type::LABEL,
+            component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
             component: file_upload.build(),
@@ -456,7 +455,7 @@ impl LabelBuilder {
     /// Creates a `with_radio_group` value.
     pub fn with_radio_group(label: &str, radio_group: RadioGroupBuilder) -> Self {
         Self {
-            component_type: component_type::LABEL,
+            component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
             component: radio_group.build(),
@@ -467,7 +466,7 @@ impl LabelBuilder {
     /// Creates a `with_checkbox_group` value.
     pub fn with_checkbox_group(label: &str, checkbox_group: CheckboxGroupBuilder) -> Self {
         Self {
-            component_type: component_type::LABEL,
+            component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
             component: checkbox_group.build(),
@@ -478,7 +477,7 @@ impl LabelBuilder {
     /// Creates a `with_checkbox` value.
     pub fn with_checkbox(label: &str, checkbox: CheckboxBuilder) -> Self {
         Self {
-            component_type: component_type::LABEL,
+            component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
             component: checkbox.build(),
@@ -666,7 +665,7 @@ impl ModalBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::ComponentId;
+    use crate::model::{ComponentId, ComponentType, TextInputStyle};
     use serde_json::json;
 
     use super::{
@@ -674,7 +673,6 @@ mod tests {
         RadioGroupBuilder, TextInputBuilder,
     };
     use crate::builders::{ActionRowBuilder, ButtonBuilder, SelectMenuBuilder};
-    use crate::constants::{component_type, text_input_style};
     use crate::types::SelectOption;
 
     #[test]
@@ -682,7 +680,7 @@ mod tests {
         let short = TextInputBuilder::short("short-id", "Short").build();
         assert_eq!(
             short.get("style").and_then(|value| value.as_u64()),
-            Some(text_input_style::SHORT as u64)
+            Some(u64::from(TextInputStyle::SHORT.get()))
         );
 
         let paragraph = TextInputBuilder::paragraph("paragraph-id", "Paragraph")
@@ -696,9 +694,9 @@ mod tests {
         assert_eq!(
             paragraph,
             json!({
-                "type": component_type::TEXT_INPUT,
+                "type": ComponentType::TEXT_INPUT,
                 "custom_id": "paragraph-id",
-                "style": text_input_style::PARAGRAPH,
+                "style": TextInputStyle::PARAGRAPH,
                 "label": "Paragraph",
                 "placeholder": "type here",
                 "value": "seed",
@@ -721,7 +719,7 @@ mod tests {
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
-            Some(component_type::RADIO_GROUP as u64)
+            Some(u64::from(ComponentType::RADIO_GROUP.get()))
         );
         assert_eq!(
             payload
@@ -756,7 +754,7 @@ mod tests {
         assert_eq!(
             payload,
             json!({
-                "type": component_type::CHECKBOX_GROUP,
+                "type": ComponentType::CHECKBOX_GROUP,
                 "custom_id": "checks",
                 "options": [
                     {"label": "One", "value": "1"},
@@ -783,7 +781,7 @@ mod tests {
         assert_eq!(
             checkbox,
             json!({
-                "type": component_type::CHECKBOX,
+                "type": ComponentType::CHECKBOX,
                 "custom_id": "terms",
                 "checked": true,
                 "required": true,
@@ -802,7 +800,7 @@ mod tests {
         assert_eq!(
             upload,
             json!({
-                "type": component_type::FILE_UPLOAD,
+                "type": ComponentType::FILE_UPLOAD,
                 "custom_id": "attachment",
                 "min_values": 1,
                 "max_values": 3,
@@ -823,11 +821,11 @@ mod tests {
                 .description("pick one")
                 .id(ComponentId::new(1))
                 .build(),
-                component_type::STRING_SELECT,
+                ComponentType::STRING_SELECT,
             ),
             (
                 LabelBuilder::with_file_upload("Upload", FileUploadBuilder::new("upload")).build(),
-                component_type::FILE_UPLOAD,
+                ComponentType::FILE_UPLOAD,
             ),
             (
                 LabelBuilder::with_radio_group(
@@ -835,7 +833,7 @@ mod tests {
                     RadioGroupBuilder::new("radio").add_option(SelectOption::new("One", "1")),
                 )
                 .build(),
-                component_type::RADIO_GROUP,
+                ComponentType::RADIO_GROUP,
             ),
             (
                 LabelBuilder::with_checkbox_group(
@@ -843,25 +841,25 @@ mod tests {
                     CheckboxGroupBuilder::new("checks").add_option(SelectOption::new("One", "1")),
                 )
                 .build(),
-                component_type::CHECKBOX_GROUP,
+                ComponentType::CHECKBOX_GROUP,
             ),
             (
                 LabelBuilder::with_checkbox("Accept", CheckboxBuilder::new("accept")).build(),
-                component_type::CHECKBOX,
+                ComponentType::CHECKBOX,
             ),
         ];
 
         for (index, (payload, expected_type)) in cases.into_iter().enumerate() {
             assert_eq!(
                 payload.get("type").and_then(|value| value.as_u64()),
-                Some(component_type::LABEL as u64)
+                Some(u64::from(ComponentType::LABEL.get()))
             );
             assert_eq!(
                 payload
                     .get("component")
                     .and_then(|value| value.get("type"))
                     .and_then(|value| value.as_u64()),
-                Some(expected_type as u64)
+                Some(u64::from(expected_type.get()))
             );
             if index == 0 {
                 assert_eq!(
@@ -1038,7 +1036,7 @@ mod tests {
         assert_eq!(components.len(), 9);
         assert_eq!(
             components[0].get("type").and_then(|value| value.as_u64()),
-            Some(component_type::ACTION_ROW as u64)
+            Some(u64::from(ComponentType::ACTION_ROW.get()))
         );
         assert_eq!(
             components[1]

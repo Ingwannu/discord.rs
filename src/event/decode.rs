@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -422,6 +423,14 @@ fn read_optional_u64(value: &Value, field: &str) -> Option<u64> {
     value.get(field).and_then(Value::as_u64)
 }
 
+/// Reads an open discriminant (`model::discriminant`) as leniently as the
+/// other optional readers here: a missing, non-integer, or out-of-width value
+/// is `None` and stays visible in the event's `raw` payload. Unknown values
+/// that fit the type are kept.
+fn read_optional_discriminant<T: DeserializeOwned>(value: &Value, field: &str) -> Option<T> {
+    value.get(field).and_then(|raw| T::deserialize(raw).ok())
+}
+
 fn decode_scheduled_event(data: Value) -> Result<ScheduledEvent, DiscordError> {
     Ok(ScheduledEvent {
         id: read_optional_snowflake(&data, "id"),
@@ -487,7 +496,7 @@ fn decode_reaction_event(data: Value) -> ReactionEvent {
             .get("burst_colors")
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default(),
-        reaction_type: read_optional_u64(&data, "type"),
+        reaction_type: read_optional_discriminant(&data, "type"),
         raw: data,
     }
 }
