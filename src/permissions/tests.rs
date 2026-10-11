@@ -1383,13 +1383,13 @@ async fn cached_permissions_report_missing_owner_and_accept_userless_members() {
 async fn cached_permissions_need_the_cache_feature() {
     let cache = CacheHandle::new();
     assert_eq!(
-        cached_permissions_for(&cache, &sf(GUILD), &sf(MEMBER), &sf(500), now())
+        cached_permissions_for(&cache, sf(GUILD), sf(MEMBER), sf(500), now())
             .await
             .unwrap_err(),
         PermissionDataError::CacheDisabled
     );
     assert_eq!(
-        cached_guild_permissions(&cache, &sf(GUILD), &sf(MEMBER), now())
+        cached_guild_permissions(&cache, sf(GUILD), sf(MEMBER), now())
             .await
             .unwrap_err(),
         PermissionDataError::CacheDisabled
