@@ -193,12 +193,29 @@ struct GatewayEnvelope<'a> {
 
 /// The READY fields the read loop needs to resume the session; the event
 /// processor decodes the full READY payload.
+///
+/// Each field is read on its own and a value that is not a string reads as
+/// `None`, as the 2.x `data["session_id"].as_str()` reads did: a malformed
+/// `resume_gateway_url` must not cost a valid `session_id`, which still
+/// lets the next connection RESUME against the default gateway URL.
 #[derive(Deserialize)]
 struct ReadySession<'a> {
-    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    #[serde(default, borrow, deserialize_with = "lenient_borrowed_str")]
     session_id: Option<Cow<'a, str>>,
-    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    #[serde(default, borrow, deserialize_with = "lenient_borrowed_str")]
     resume_gateway_url: Option<Cow<'a, str>>,
+}
+
+/// [`borrowed_str`], with any value that is not a string read as `None`.
+fn lenient_borrowed_str<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Cow<'de, str>>, D::Error> {
+    let raw = <&'de RawValue>::deserialize(deserializer)?;
+    Ok(
+        borrowed_str(&mut serde_json::Deserializer::from_str(raw.get()))
+            .ok()
+            .flatten(),
+    )
 }
 
 /// Reads an optional string borrowed from the frame when it has no escapes.
@@ -1907,7 +1924,22 @@ mod tests {
             serde_json::from_str(r#"{"session_id":"abc","guilds":[{"id":"1"}]}"#).unwrap();
         assert!(matches!(ready.session_id, Some(Cow::Borrowed("abc"))));
         assert!(ready.resume_gateway_url.is_none());
-        assert!(serde_json::from_str::<super::ReadySession<'_>>(r#"{"session_id":1}"#).is_err());
+
+        // Each field is read on its own: a malformed URL keeps the session.
+        let ready: super::ReadySession<'_> =
+            serde_json::from_str(r#"{"session_id":"abc","resume_gateway_url":{"host":"x"}}"#)
+                .unwrap();
+        assert!(matches!(ready.session_id, Some(Cow::Borrowed("abc"))));
+        assert!(ready.resume_gateway_url.is_none());
+        let ready: super::ReadySession<'_> =
+            serde_json::from_str(r#"{"session_id":1,"resume_gateway_url":"wss://resume.example"}"#)
+                .unwrap();
+        assert!(ready.session_id.is_none());
+        assert!(matches!(
+            ready.resume_gateway_url,
+            Some(Cow::Borrowed("wss://resume.example"))
+        ));
+        assert!(serde_json::from_str::<super::ReadySession<'_>>("1").is_err());
     }
 
     #[tokio::test]
