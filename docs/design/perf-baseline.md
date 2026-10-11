@@ -290,8 +290,12 @@ interaction_reply = build 309(내부 `to_value` 포함) / `serialize_body` 92 / 
 - 기준선을 다시 기록할 때는 새 절(커밋·환경·표)을 더하고 `docs/design/perf/<커밋>.json`을 커밋하며,
   `.github/workflows/perf-report.yml`의 `PERF_BASELINE`을 바꾼다. 이전 절은 역사 기록으로 둔다.
 - `ci/perf-gates.json`의 상한은 지표 이름에 묶인다(`steps.cache_apply.allocs` 등). replica 단계
-  이름을 바꾸면 상한 파일도 같이 고친다. `EventKind`가 생기면 `main.rs`의 layout 시나리오에
-  `event_kind`(=`size_of::<EventKind>()`)를 더한다. 그 전까지 그 상한은 `MISSING`이다.
+  이름을 바꾸면 상한 파일도 같이 고친다. layout 시나리오는 4단계 B부터 `event_kind`
+  (=`size_of::<EventKind>()`)를 보고한다.
+- +2% 회귀 규칙의 명시적 예외는 `ci/perf-gates.json` 체크포인트 B에 상한(측정값 + 2%)으로 두고, `note`에
+  기준선 값과 이유를 적으며, 이유는 `3.0-types-events-requests.md`에 기록한다(4단계 B 예외는 "4단계 B 후속").
+  부호 있는 단계 증감(해제가 사라진 `drop_frame`·`handler_drop`의 `retained_bytes`)은 상한 대신 그 기록으로
+  설명한다.
 
 ## 8. 기준선 main `23775d1` (시리즈 3 이후, 4단계 비교 기준)
 
@@ -392,7 +396,7 @@ MESSAGE_CREATE·INTERACTION_CREATE·업데이트 이벤트의 할당 수, `Event
 | `collectors.payload_copies` | k64_minus_k1 | 63 | 0.25 | 0.25 |
 | `storm.guild_create_25` | retained_bytes | 385,960,728 | 190,000,000 | 120,000,000 |
 
-`23775d1`에서 B를 만족하는 것은 길드 `cache_apply`(상한이 기준선 자체)뿐이다. `event_kind`는 `EventKind`가 생기면 보고된다.
+`23775d1`에서 B를 만족하는 것은 길드 `cache_apply`(상한이 기준선 자체)뿐이다. `event_kind`는 4단계 B부터 보고된다(48).
 
 ## 9. 게이트와 판정
 
@@ -405,7 +409,7 @@ MB·KB는 십진(1 MB = 1,000,000 B), KiB는 1,024 B다.
 | GUILD_CREATE allocs / alloc B / peak B | `inbound.guild_create.large` `allocs` / `alloc_bytes` / `peak_bytes` | 정상 상태 한 번 |
 | MESSAGE_CREATE allocs / alloc B | `inbound.message_create.plain` `allocs` / `alloc_bytes` | |
 | 길드 `cache_apply` allocs | `inbound.guild_create.large` `steps.cache_apply.allocs` | B의 "기준선 이하"는 `23775d1`의 31,291 |
-| `size_of::<Event>()` / `size_of::<EventKind>()` | `layout.size_of` `event` / `event_kind` | `event_kind`는 `EventKind`가 생기면 보고(§7) |
+| `size_of::<Event>()` / `size_of::<EventKind>()` | `layout.size_of` `event` / `event_kind` | `event_kind`는 4단계 B부터 보고(48) |
 | 256칸 빈 저널 저장공간 | `layout.size_of` `empty_collector_hub_bytes` | `CollectorHub::new()`의 힙을 잰 값이라 허브 고정 비용 136 B도 들어간다 |
 | 컬렉터 `k64 − k1` 추가 복사 | `collectors.payload_copies` `k64_minus_k1` | 상한 0.25: 복사 0회에 e2e 계수 잡음 여유(복사 1회는 할당 수십 개) |
 | 25길드 폭주 뒤 live 힙 | `storm.guild_create_25` `retained_bytes` | replica, 핸들러 이벤트를 매번 놓은 뒤 |
