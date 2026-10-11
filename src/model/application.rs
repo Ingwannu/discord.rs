@@ -10,11 +10,8 @@ use super::{
     TeamMembershipState, User, UserId,
 };
 
-/// Partial application object: the `application` of a Rich Presence
-/// message, the `target_application` of an embedded-activity invite, and
-/// the `application` of the current OAuth2 authorization. Only `id` is
-/// guaranteed; Discord sends a different subset of the [`Application`]
-/// fields in each place.
+/// Partial application object attached to messages sent by an app
+/// (e.g. Rich Presence or activity invites).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialApplication {
     pub id: ApplicationId,
@@ -32,15 +29,6 @@ pub struct PartialApplication {
     pub flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_sku_id: Option<SkuId>,
-    /// Whether users other than the owner can add the app's bot.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_public: Option<bool>,
-    /// Whether adding the bot requires the full OAuth2 code grant.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_require_code_grant: Option<bool>,
-    /// Hex-encoded key for verifying interactions and the GameSDK.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verify_key: Option<String>,
 }
 
 /// A running application Activity instance.
@@ -261,8 +249,13 @@ impl ApplicationRoleConnectionMetadata {
 /// No `Default`: `application` and `expires` are required.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AuthorizationInformation {
-    /// Partial Discord application object for the current authorization.
-    pub application: PartialApplication,
+    /// The authorized application. Discord documents a partial application
+    /// object; its example carries `id`, `name`, `description`, and the
+    /// bot settings, which [`Application`] models with only `id`, `name`,
+    /// and `description` required. [`PartialApplication`] would drop the bot
+    /// settings and `verify_key`, and widening it would grow every
+    /// [`Message`](super::Message) that embeds one.
+    pub application: Application,
     /// OAuth2 scopes granted to the authorization.
     #[serde(default)]
     pub scopes: Vec<String>,
@@ -447,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn documented_authorization_information_decodes_a_partial_application() {
+    fn documented_authorization_information_decodes_its_application() {
         for info in [
             serde_json::from_str::<AuthorizationInformation>(AUTHORIZATION).unwrap(),
             serde_json::from_value::<AuthorizationInformation>(
@@ -457,10 +450,10 @@ mod tests {
         ] {
             let application = &info.application;
             assert_eq!(application.id, test_id(159799960412356608));
-            assert_eq!(application.name.as_deref(), Some("AIRHORN SOLUTIONS"));
-            assert_eq!(application.description.as_deref(), Some(""));
-            assert_eq!(application.bot_public, Some(true));
-            assert_eq!(application.bot_require_code_grant, Some(false));
+            assert_eq!(application.name, "AIRHORN SOLUTIONS");
+            assert_eq!(application.description, "");
+            assert!(application.bot_public);
+            assert!(!application.bot_require_code_grant);
             assert!(application
                 .verify_key
                 .as_deref()
@@ -468,12 +461,14 @@ mod tests {
             assert_eq!(info.scopes, ["guilds.join", "identify"]);
             assert_eq!(info.user.as_ref().unwrap().username, "discord");
 
-            // Every documented application key comes back; `hook` is a
-            // legacy key the Application table does not list.
+            // Every documented application key comes back, plus the empty
+            // `rpc_origins` default; `hook` is a legacy key the Application
+            // table does not list.
             let wire: Value = serde_json::from_str(AUTHORIZATION).unwrap();
             let mut application = wire["application"].clone();
             if let Some(object) = application.as_object_mut() {
                 object.remove("hook");
+                object.insert("rpc_origins".to_string(), json!([]));
             }
             let written = serde_json::to_value(&info).unwrap();
             assert_eq!(written["application"], application);
