@@ -6,9 +6,9 @@ use crate::types::Emoji;
 
 use super::{
     ApplicationId, Channel, ChannelId, ChannelType, DefaultMessageNotificationLevel,
-    ExplicitContentFilterLevel, GuildId, GuildNsfwLevel, Member, MfaLevel, OverwriteType,
-    Permissions, PremiumTier, Presence, Role, SoundboardSound, StageInstance, Sticker, UserId,
-    VerificationLevel, VoiceState,
+    ExplicitContentFilterLevel, GuildId, GuildNsfwLevel, GuildScheduledEvent, Member, MfaLevel,
+    OverwriteType, Permissions, PremiumTier, Presence, Role, SoundboardSound, StageInstance,
+    Sticker, UserId, VerificationLevel, VoiceState,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -292,10 +292,9 @@ pub struct Guild {
     pub stage_instances: Vec<StageInstance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub soundboard_sounds: Vec<SoundboardSound>,
-    /// Scheduled events active in the guild, as raw objects; the typed
-    /// [`crate::event::ScheduledEvent`] shape lives in the event layer.
+    /// Scheduled events in the guild (GUILD_CREATE only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub guild_scheduled_events: Vec<serde_json::Value>,
+    pub guild_scheduled_events: Vec<GuildScheduledEvent>,
 }
 
 impl Guild {
@@ -405,4 +404,154 @@ pub struct GuildPreview {
     pub description: Option<String>,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::Guild;
+    use crate::model::{
+        test_id, RecurrenceRuleFrequency, RecurrenceRuleWeekday, ScheduledEventEntityType,
+        ScheduledEventPrivacyLevel, ScheduledEventStatus,
+    };
+
+    /// Two scheduled events shaped per Guild Scheduled Event Structure: a
+    /// voice event with every nullable field null (and `creator_id` null, as
+    /// for events created before October 2021), and a recurring external
+    /// event ("Every Wednesday" from the recurrence rule examples).
+    fn scheduled_events() -> Value {
+        json!([
+            {
+                "id": "1000000000000000001",
+                "guild_id": "197038439483310086",
+                "channel_id": "1000000000000000010",
+                "creator_id": null,
+                "name": "Game night",
+                "description": null,
+                "scheduled_start_time": "2026-10-20T19:00:00+00:00",
+                "scheduled_end_time": null,
+                "privacy_level": 2,
+                "status": 1,
+                "entity_type": 2,
+                "entity_id": null,
+                "entity_metadata": null,
+                "image": null,
+                "recurrence_rule": null
+            },
+            {
+                "id": "1000000000000000002",
+                "guild_id": "197038439483310086",
+                "channel_id": null,
+                "creator_id": "80351110224678912",
+                "name": "Office hours",
+                "description": "Ask us anything",
+                "scheduled_start_time": "2026-10-21T17:00:00+00:00",
+                "scheduled_end_time": "2026-10-21T18:00:00+00:00",
+                "privacy_level": 2,
+                "status": 1,
+                "entity_type": 3,
+                "entity_id": null,
+                "entity_metadata": { "location": "https://example.com/hall" },
+                "creator": { "id": "80351110224678912", "username": "Nelly" },
+                "user_count": 12,
+                "image": "a_cover",
+                "recurrence_rule": {
+                    "start": "2026-10-21T17:00:00+00:00",
+                    "end": null,
+                    "frequency": 2,
+                    "interval": 1,
+                    "by_weekday": [2],
+                    "by_n_weekday": null,
+                    "by_month": null,
+                    "by_month_day": null,
+                    "by_year_day": null,
+                    "count": null
+                }
+            }
+        ])
+    }
+
+    fn guild_create() -> Value {
+        json!({
+            "id": "197038439483310086",
+            "name": "Discord Testers",
+            "guild_scheduled_events": scheduled_events()
+        })
+    }
+
+    fn check(guild: &Guild) {
+        let [voice, external] = &guild.guild_scheduled_events[..] else {
+            panic!("two scheduled events");
+        };
+        assert_eq!(voice.id, test_id(1000000000000000001));
+        assert_eq!(voice.channel_id, Some(test_id(1000000000000000010)));
+        assert_eq!(voice.creator_id, None);
+        assert_eq!(voice.entity_type, ScheduledEventEntityType::VOICE);
+        assert_eq!(voice.privacy_level, ScheduledEventPrivacyLevel::GUILD_ONLY);
+        assert!(voice.entity_metadata.is_none() && voice.recurrence_rule.is_none());
+
+        assert_eq!(external.entity_type, ScheduledEventEntityType::EXTERNAL);
+        assert_eq!(external.status, ScheduledEventStatus::SCHEDULED);
+        assert_eq!(
+            external
+                .entity_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.location.as_deref()),
+            Some("https://example.com/hall")
+        );
+        assert_eq!(external.user_count, Some(12));
+        let rule = external.recurrence_rule.as_ref().unwrap();
+        assert_eq!(rule.frequency, RecurrenceRuleFrequency::WEEKLY);
+        assert_eq!(
+            rule.by_weekday.as_deref(),
+            Some(&[RecurrenceRuleWeekday::WEDNESDAY][..])
+        );
+    }
+
+    /// The written events: every key that had a value comes back, and the
+    /// nulls are left out.
+    fn without_nulls(value: Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .filter(|(_, value)| !value.is_null())
+                    .map(|(key, value)| (key, without_nulls(value)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.into_iter().map(without_nulls).collect()),
+            other => other,
+        }
+    }
+
+    #[test]
+    fn scheduled_events_decode_typed_from_text_and_value() {
+        let text = guild_create().to_string();
+        let from_text: Guild = serde_json::from_str(&text).unwrap();
+        check(&from_text);
+        let from_value: Guild = serde_json::from_value(guild_create()).unwrap();
+        check(&from_value);
+
+        let written = serde_json::to_value(&from_value).unwrap();
+        assert_eq!(
+            written["guild_scheduled_events"],
+            without_nulls(scheduled_events())
+        );
+        // The cached copy drops them like the other GUILD_CREATE lists.
+        assert!(from_value
+            .without_create_collections()
+            .guild_scheduled_events
+            .is_empty());
+    }
+
+    #[test]
+    fn guild_create_carries_typed_scheduled_events() {
+        // The gateway decodes `d` from its text once the phase 4 envelope
+        // lands and from a cloned `Value` before that; both must type it.
+        let payload = guild_create();
+        let from_text: Guild = serde_json::from_str(&payload.to_string()).unwrap();
+        check(&from_text);
+        let from_value: Guild = serde_json::from_value(payload).unwrap();
+        check(&from_value);
+    }
 }

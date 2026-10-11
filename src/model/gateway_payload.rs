@@ -50,12 +50,12 @@ use crate::types::Emoji;
 
 use super::{
     ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention, Embed,
-    Guild, GuildId, Member, Message, MessageActivity, MessageCall, MessageComponent, MessageId,
-    MessageInteraction, MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType,
-    Nullable, NullablePatch, PartialApplication, Patch, Poll, Presence, Reaction, ResolvedData,
-    RoleId, RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker,
-    StickerItem, User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState,
-    WebhookId,
+    Guild, GuildId, GuildScheduledEvent, Member, Message, MessageActivity, MessageCall,
+    MessageComponent, MessageId, MessageInteraction, MessageInteractionMetadata, MessageReference,
+    MessageSnapshot, MessageType, Nullable, NullablePatch, PartialApplication, Patch, Poll,
+    Presence, Reaction, ResolvedData, RoleId, RoleSubscriptionData, SharedClientTheme,
+    SoundboardSound, StageInstance, Sticker, StickerItem, User, UserCollectibles, UserId,
+    UserPremiumType, UserPrimaryGuild, VoiceState, WebhookId,
 };
 
 /// A GUILD_CREATE payload, split into the units the cache stores.
@@ -98,7 +98,7 @@ pub struct GuildCreate {
     /// Soundboard sounds.
     pub soundboard_sounds: Vec<SoundboardSound>,
     /// Scheduled events, as [`Guild::guild_scheduled_events`] holds them.
-    pub guild_scheduled_events: Vec<serde_json::Value>,
+    pub guild_scheduled_events: Vec<GuildScheduledEvent>,
 }
 
 /// A GUILD_CREATE payload: a guild the bot can read, or one that is

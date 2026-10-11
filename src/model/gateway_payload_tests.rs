@@ -28,7 +28,18 @@ fn guild_create_payload() -> serde_json::Value {
         "voice_states": [{ "user_id": "30", "channel_id": "21", "session_id": "s" }],
         "emojis": [{ "id": "40", "name": "emoji" }],
         "stickers": [],
-        "guild_scheduled_events": [{ "id": "50" }]
+        // A complete scheduled event: `Guild::guild_scheduled_events` is
+        // typed, so a partial one would fail the dispatch.
+        "guild_scheduled_events": [{
+            "id": "50",
+            "guild_id": "10",
+            "name": "raid night",
+            "scheduled_start_time": "2026-10-11T20:00:00+00:00",
+            "privacy_level": 2,
+            "status": 1,
+            "entity_type": 2,
+            "channel_id": "21"
+        }]
     })
 }
 
