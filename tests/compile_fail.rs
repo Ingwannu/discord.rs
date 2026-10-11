@@ -8,7 +8,10 @@
 //! async traits' `Send` contract is pinned the same way: an `async fn` impl
 //! whose future is not `Send` must fail at the impl
 //! (`cache_backend_future_not_send.rs`; `CacheBackend` is the async trait
-//! available with default features, which this test runs with).
+//! available with default features, which this test runs with). The phase 5
+//! Component Embed model is pinned too: a preview action row takes only link
+//! buttons, so a custom-ID button cannot be put in it
+//! (`preview_row_custom_id_button.rs`).
 //!
 //! The expected `.stderr` files in `tests/ui/` are rustc diagnostics, which
 //! change wording between Rust releases. They are therefore kept for one

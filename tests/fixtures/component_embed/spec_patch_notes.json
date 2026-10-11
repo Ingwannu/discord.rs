@@ -1,0 +1,11 @@
+{
+  "component": {
+    "type": 17,
+    "components": [
+      {
+        "type": 10,
+        "content": "# Patch Notes\n- Fixed a bug where certain treasure chests wouldn't open properly\n- Improved server stability during peak hours\n- Added a new type of gravity that will randomly apply when the moon is full\n- Every third thursday the furniture will scream its darkest secrets to nearby npcs"
+      }
+    ]
+  }
+}
