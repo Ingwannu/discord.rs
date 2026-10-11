@@ -2,7 +2,7 @@
 use axum::Router;
 #[cfg(feature = "interactions")]
 use discordrs::{
-    create_container, try_interactions_endpoint, CreateMessage, InteractionContext,
+    create_container, try_interactions_endpoint, CreateMessage, DiscordError, InteractionContext,
     InteractionHandler, InteractionResponse, RawInteraction,
 };
 
@@ -35,14 +35,15 @@ impl InteractionHandler for Handler {
 }
 
 #[cfg(feature = "interactions")]
-fn build_router(public_key: &str) -> Router {
-    try_interactions_endpoint(public_key, Handler).expect("invalid Discord public key")
+fn build_router(public_key: &str) -> Result<Router, DiscordError> {
+    try_interactions_endpoint(public_key, Handler)
 }
 
 #[cfg(feature = "interactions")]
-fn main() {
+fn main() -> Result<(), DiscordError> {
     let public_key = std::env::var("DISCORD_PUBLIC_KEY").unwrap_or_default();
-    let _router = build_router(&public_key);
+    let _router = build_router(&public_key)?;
+    Ok(())
 }
 
 #[cfg(not(feature = "interactions"))]

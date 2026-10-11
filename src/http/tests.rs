@@ -2396,7 +2396,10 @@ async fn raw_auto_moderation_wrappers_hit_expected_paths() {
 }
 
 #[tokio::test]
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "covers the deprecated wrappers until they are removed"
+)]
 async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     let responses = vec![
         PlannedResponse::json(
@@ -3446,7 +3449,10 @@ async fn legacy_pin_template_and_nick_wrappers_hit_expected_paths() {
 }
 
 #[tokio::test]
-#[allow(deprecated)]
+#[allow(
+    deprecated,
+    reason = "covers the deprecated wrappers until they are removed"
+)]
 async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     let thread_list_payload = || {
         json!({
@@ -7476,7 +7482,10 @@ async fn rate_limit_retry_uses_retry_after_header_for_non_json_bodies() {
 }
 
 #[tokio::test]
-#[allow(deprecated)] // Routes Discord removed in 2025; the wrappers stay deprecated for 3.0.
+#[allow(
+    deprecated,
+    reason = "routes Discord removed in 2025 stay deprecated in 3.0"
+)]
 async fn new_guild_lifecycle_routes_have_expected_shapes() {
     let (base_url, captured, task) = spawn_test_server(vec![
         PlannedResponse::json(StatusCode::CREATED, guild_payload("1", "created")),

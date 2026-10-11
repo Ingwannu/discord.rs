@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    reason = "an example stops with a message when its setup or input is wrong"
+)]
+
 #[cfg(feature = "interactions")]
 use axum::Router;
 #[cfg(feature = "interactions")]

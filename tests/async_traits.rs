@@ -9,6 +9,12 @@
 //! future is rejected at the impl) is in `tests/ui/`
 //! (`tests/compile_fail.rs`).
 
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a failed expectation fails the test"
+)]
+
 #[cfg(any(feature = "gateway", feature = "cache", feature = "interactions"))]
 use std::future::Future;
 

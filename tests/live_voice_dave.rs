@@ -1,4 +1,11 @@
 #![cfg(all(feature = "voice", feature = "dave", feature = "voice-encode"))]
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::as_conversions,
+    reason = "a manual live test: a failed expectation fails the test"
+)]
 
 use std::env;
 use std::num::NonZeroU16;

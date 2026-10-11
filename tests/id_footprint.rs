@@ -32,6 +32,12 @@
 //!   라이브러리 코드 아님). 시간 값은 기계와 부하에 따라 흔들리므로 참고용이다.
 //! ```
 
+#![allow(
+    unsafe_code,
+    reason = "the counting GlobalAlloc must implement an unsafe trait; it only forwards to System"
+)]
+#![allow(clippy::unwrap_used, reason = "a failed expectation fails the report")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::mem::size_of;

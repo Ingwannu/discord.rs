@@ -63,12 +63,13 @@ impl EventHandler for Handler {
             Event::GuildDelete(_) => {
                 // Rust 1.99 renamed `fetch_update` to `try_update`; keep the
                 // old name until the crate's MSRV reaches 1.99.
+                // `Err` only means the count was already zero.
                 #[allow(deprecated, reason = "fires only on Rust 1.99+, so not expect")]
-                let _ =
-                    self.guild_count
-                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
-                            count.checked_sub(1)
-                        });
+                self.guild_count
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                        count.checked_sub(1)
+                    })
+                    .ok();
             }
             _ => {}
         }

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::expect_used,
+    reason = "an example stops with a message when its setup or input is wrong"
+)]
+
 #[cfg(all(feature = "gateway", feature = "voice"))]
 use std::sync::Mutex;
 
@@ -70,7 +75,9 @@ impl Handler {
         println!();
 
         state.printed = true;
-        let _ = std::io::stdout().flush();
+        if let Err(error) = std::io::stdout().flush() {
+            eprintln!("failed to flush the printed variables: {error}");
+        }
         if matches!(
             std::env::var("DISCORDRS_CAPTURE_EXIT_AFTER_PRINT").as_deref(),
             Ok("1" | "true" | "TRUE" | "yes" | "YES")

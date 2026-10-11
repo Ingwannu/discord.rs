@@ -4,6 +4,23 @@
 //! - `gateway` - Gateway WebSocket client, BotClient, EventHandler
 //! - `interactions` - HTTP Interactions Endpoint with Ed25519 verification
 
+// The code rules in Cargo.toml's `[lints]` table hold for library code
+// without exception; unit tests may unwrap, panic, cast, and discard, where
+// a failure fails the test rather than a user's bot.
+#![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::as_conversions,
+        clippy::let_underscore_must_use,
+        clippy::clone_on_ref_ptr,
+        reason = "unit tests: a failed expectation fails the test"
+    )
+)]
+
 /// Bit flag helpers for Discord gateway intents, permissions, and message flags.
 pub mod bitfield;
 pub mod builders;

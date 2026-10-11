@@ -21,7 +21,7 @@ impl EventHandler for Handler {
                 }) = event.interaction
                 {
                     if data.name.as_deref() == Some("hello") {
-                        let _ = respond_with_message(
+                        if let Err(error) = respond_with_message(
                             ctx.rest().as_ref(),
                             &context,
                             CreateMessage {
@@ -30,7 +30,10 @@ impl EventHandler for Handler {
                             },
                             true,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("failed to answer /hello: {error}");
+                        }
                     }
                 }
             }

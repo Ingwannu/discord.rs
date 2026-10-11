@@ -18,6 +18,11 @@
 //! `AudioPlayer::shutdown` then waits until the connection got its silence
 //! tail and every player task has finished.
 
+#![allow(
+    clippy::expect_used,
+    reason = "an example stops with a message when its setup or input is wrong"
+)]
+
 #[cfg(all(feature = "gateway", feature = "voice", feature = "voice-encode"))]
 mod bot {
     use std::sync::{Arc, Mutex};
