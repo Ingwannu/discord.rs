@@ -98,6 +98,73 @@ For `gateway/bot`, `cache`, `collector`, `sharding`, `voice`, and `voice_runtime
 - Use harness tests only after direct unit tests stop being enough.
 - Treat `gateway/bot.rs`, `http.rs`, and `interactions.rs` as the final expensive coverage tiers.
 
+## Build Time
+
+Measured 2026-10-11 on `main` at `a4fc664` (x86_64, `CARGO_BUILD_JOBS=8`, clean target, debug
+profile, two runs each):
+
+| Build | `discordrs` unit | frontend / codegen | wall |
+| --- | --- | --- | --- |
+| `cargo build` (default features) | 16.1–16.9 s | ~14 s / ~2.4 s | 28 s |
+| `cargo build --all-features` | 26.9–28.1 s | ~21 s / ~6.2 s | 48–50 s |
+| `cargo test --no-run --lib --all-features` | 57–59 s | | 80–84 s |
+
+The crate's own time is mostly the compiler frontend: type checking and borrow checking of about
+10,000 function bodies. A per-item profile of the all-features lib puts serde derive output first
+(about 5.8 s of single-thread frontend time), then the gateway runtime (1.6 s) and the REST
+transport plus endpoints (1.4 s). Codegen is the smaller part, so changes that only remove LLVM IR
+move the lib build by little; they matter more for the test build and for downstream crates, which
+instantiate the generic REST helpers for every endpoint they call.
+
+Rules for new code:
+
+- **REST: thin shims around one transport core.** `RestClient::execute` (`src/http.rs`) is the
+  only request loop (route gate, rate limits, replay policy, token scrubbing) and is not generic,
+  so it is compiled once. The typed helpers (`request_typed`, `request_no_content`,
+  `request_optional_typed_no_content`, `request_typed_with_authorization`, the multipart variants)
+  are generic shims: encode the body into a `Result` before the single await, pass the awaited
+  `Result` to `decode_response` after it, and use no `?`. New endpoints call these helpers, or
+  build a `RequestBody` and call `request_with_headers` plus `decode_response`; they do not add
+  another generic `async fn` around the loop. A shim costs about 160 LLVM IR lines per
+  `(response, body)` type pair, down from about 275. For a crate that calls 150 endpoints this
+  was 2.6% less IR and a 2.6% smaller stripped release binary; its debug compile time did not
+  change measurably.
+- **One deserializer for models.** Typed responses decode through `body::decode_json_body`, which
+  goes through `serde_json::Value`, the same deserializer the gateway's `decode_event` uses. Each
+  model's `Deserialize` impl is compiled once per deserializer type, so reading REST responses with
+  `from_slice::<T>` while the gateway reads `Value` compiled every shared model twice (measured
+  +300k IR lines, +5.4%, in the all-features lib test build). Move REST and gateway decoding to a
+  new deserializer in the same change (planned with step 4's `RawValue` envelopes).
+- **Erase long-lived task types.** `tokio::spawn::<F>` compiles its task harness four times per
+  future type, about 9,000 IR lines. Spawn long-lived `()` tasks (one per player, track,
+  connection, or child process) through `crate::task::spawn_erased`, which shares one instance.
+
+Known hotspots, all-features lib (`cargo llvm-lines --lib --all-features`, 950k lines in total):
+
+| Hotspot | Size | Note |
+| --- | --- | --- |
+| serde `Deserialize` through `Value` | ~138k lines, one set per model | inherent while models decode from `Value`; `visit_seq` (struct-from-array, never used for Discord JSON) is ~32k of it, and serde derive always emits it |
+| gateway runtime spawns (`gateway/bot/pipeline.rs` ×5, `gateway/bot/backend.rs` ×1) | ~55k lines | can switch to `spawn_erased` (widen the `task` module's `cfg` to `gateway`); all but one ~9k instance would go |
+| `voice_runtime::connect` task (returns `Result`) | ~9k lines | the only spawn with that output type, so erasing it alone saves nothing |
+| REST endpoint `async fn` bodies | ~230 lines each with drop glue, per endpoint and argument type | public `async fn` API; instantiated downstream only for the endpoints a crate calls |
+| `gateway::bot::spawn_shard_supervisor` | 0.38 s of type checking | the largest single item in the frontend profile |
+
+How to measure:
+
+```bash
+cargo build --locked --all-features --timings   # target/cargo-timings/: unit time, frontend/codegen split
+cargo install cargo-llvm-lines --locked
+cargo llvm-lines --lib --all-features --locked | head -40
+cargo llvm-lines --lib --profile test --all-features --locked | head -40   # where the REST shims are instantiated
+# Local analysis only (nightly flags on a stable toolchain): per-query frontend time.
+cargo install --git https://github.com/rust-lang/measureme --locked summarize
+RUSTC_BOOTSTRAP=1 CARGO_INCREMENTAL=0 cargo rustc --lib --all-features --locked -- -Z self-profile=/tmp/prof
+summarize summarize /tmp/prof/*.mm_profdata | head -40
+```
+
+Other builds share the machine in CI and locally, so compare at least two runs per side and report
+the spread; differences under about 1 s on the lib unit are noise.
+
 ## Minimum Supported Rust Version (MSRV)
 
 `Cargo.toml` declares `rust-version = "1.88"`. The value covers **every feature**
