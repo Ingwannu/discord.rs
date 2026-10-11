@@ -1,6 +1,7 @@
 //! SKUs, entitlements, and subscriptions.
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 
 use super::{
     ApplicationId, EntitlementId, EntitlementOwnerType, EntitlementType, GenericId, GuildId,
@@ -19,12 +20,18 @@ pub struct Sku {
     pub flags: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependent_sku_id: Option<SkuId>,
+    /// Raw JSON text as received. Undocumented: the SKU table does not
+    /// list it and Discord's SKU examples only ever send `null`, so there
+    /// is no shape to type.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub manifest_labels: Option<serde_json::Value>,
+    pub manifest_labels: Option<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_type: Option<SkuAccessType>,
+    /// Entries as raw JSON text. Undocumented: the SKU table does not list
+    /// it and Discord's SKU examples only ever send `[]`, so there is no
+    /// element shape to type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub features: Vec<serde_json::Value>,
+    pub features: Vec<Box<RawValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -212,4 +219,74 @@ pub struct SubscriptionQuery {
     pub after: Option<SubscriptionId>,
     pub limit: Option<u64>,
     pub user_id: Option<UserId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::Sku;
+    use crate::model::SkuType;
+
+    /// resources/sku.mdx — SKU Example.
+    const SKU: &str = r#"{
+      "id": "1088510058284990888",
+      "type": 5,
+      "dependent_sku_id": null,
+      "application_id": "788708323867885999",
+      "manifest_labels": null,
+      "access_type": 1,
+      "name": "Test Premium",
+      "features": [],
+      "release_date": null,
+      "premium": false,
+      "slug": "test-premium",
+      "flags": 128,
+      "show_age_gate": false
+    }"#;
+
+    #[test]
+    fn documented_sku_decodes_with_empty_undocumented_fields() {
+        let from_text: Sku = serde_json::from_str(SKU).unwrap();
+        let from_value: Sku = serde_json::from_value(serde_json::from_str(SKU).unwrap()).unwrap();
+        for sku in [&from_text, &from_value] {
+            assert_eq!(sku.kind, SkuType::SUBSCRIPTION);
+            assert!(sku.manifest_labels.is_none());
+            assert!(sku.features.is_empty());
+        }
+    }
+
+    #[test]
+    fn undocumented_sku_fields_round_trip_verbatim() {
+        let text = r#"{
+          "id": "1088510058284990888",
+          "type": 5,
+          "application_id": "788708323867885999",
+          "name": "Test Premium",
+          "slug": "test-premium",
+          "flags": 128,
+          "manifest_labels": {"en-US": "Premium"},
+          "features": ["FEATURE_A", {"id": 7}]
+        }"#;
+        let from_text: Sku = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            from_text.manifest_labels.as_deref().map(|raw| raw.get()),
+            Some(r#"{"en-US": "Premium"}"#)
+        );
+        assert_eq!(
+            from_text
+                .features
+                .iter()
+                .map(|raw| raw.get())
+                .collect::<Vec<_>>(),
+            [r#""FEATURE_A""#, r#"{"id": 7}"#]
+        );
+        let wire: Value = serde_json::from_str(text).unwrap();
+        let from_value: Sku = serde_json::from_value(wire.clone()).unwrap();
+        for sku in [&from_text, &from_value] {
+            let written = serde_json::to_value(sku).unwrap();
+            assert_eq!(written["manifest_labels"], json!({ "en-US": "Premium" }));
+            assert_eq!(written["features"], wire["features"]);
+        }
+    }
 }
