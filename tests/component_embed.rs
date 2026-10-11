@@ -1200,20 +1200,60 @@ fn null_on_a_non_nullable_field_fails_with_its_path() {
 
 #[test]
 fn link_tag_escapes_the_href_and_requires_an_absolute_http_url() {
+    let href_of = |href: &str| {
+        let tag = ComponentEmbed::link_tag(href).expect("absolute http(s) URL");
+        assert_well_formed_empty_element(&tag, "link");
+        assert!(tag.is_ascii(), "{tag:?}");
+        tag.strip_prefix(r#"<link rel="discord:component-embed" type="application/json" href=""#)
+            .and_then(|rest| rest.strip_suffix(r#"" />"#))
+            .expect("link element")
+            .to_owned()
+    };
+    // An already-normal URL comes out unchanged.
+    assert_eq!(
+        href_of("https://watchanimeattheoffice.com/embeds/article.json"),
+        "https://watchanimeattheoffice.com/embeds/article.json"
+    );
+    // The parser's serialization, attribute-escaped: `&` becomes `&amp;`;
+    // `"`, `<`, and `>` in a query are percent-encoded by the parser.
     assert_eq!(
         ComponentEmbed::link_tag("https://cdn.example.com/embed.json?a=1&b=\"2\"<>")
             .expect("absolute"),
         "<link rel=\"discord:component-embed\" type=\"application/json\" \
-         href=\"https://cdn.example.com/embed.json?a=1&amp;b=&quot;2&quot;&lt;&gt;\" />"
+         href=\"https://cdn.example.com/embed.json?a=1&amp;b=%222%22%3C%3E\" />"
     );
-    let tag = ComponentEmbed::link_tag("https://e.co/a.json?x=1&y=2").expect("absolute");
-    assert_well_formed_empty_element(&tag, "link");
-    for rejected in ["/embeds/article.json", "javascript:alert(1)", "embed.json"] {
+    // Non-ASCII, including XML-forbidden U+FFFF, is percent-encoded; hosts
+    // become punycode and lowercase.
+    assert_eq!(
+        href_of("https://example.com/a\u{ffff}b.json"),
+        "https://example.com/a%EF%BF%BFb.json"
+    );
+    assert_eq!(
+        href_of("HTTPS://B\u{fc}cher.Example/\u{e9}.json"),
+        "https://xn--bcher-kva.example/%C3%A9.json"
+    );
+    assert_eq!(href_of("https://example.com"), "https://example.com/");
+
+    for rejected in [
+        "/embeds/article.json",
+        "javascript:alert(1)",
+        "embed.json",
+        "ftp://example.com/embed.json",
+        // Characters the parser would silently strip or remove.
+        "\0https://example.com/embed.json",
+        "https://example.com/embed.json\u{1f}",
+        "https://exam\tple.com/embed.json",
+        "https://example.com/em\nbed.json",
+        "https://example.com/embed\u{7f}.json",
+        " https://example.com/embed.json",
+        "https://example.com/embed.json ",
+    ] {
         assert_eq!(
             expect_error(ComponentEmbed::link_tag(rejected)),
             ComponentEmbedError::InvalidLinkHref {
                 href: rejected.to_owned()
-            }
+            },
+            "{rejected:?}"
         );
     }
 }

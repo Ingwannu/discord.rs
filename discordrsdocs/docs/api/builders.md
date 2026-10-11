@@ -151,6 +151,8 @@ let link = ComponentEmbed::link_tag("https://example.com/embeds/v2.json")?;
 // <link rel="discord:component-embed" type="application/json" href="…" />
 ```
 
+`link_tag(href)` writes the URL as the URL parser serializes it (ASCII only: non-ASCII percent-encoded, hosts in punycode), so the element stays valid in XHTML, and it rejects an href with control characters or surrounding spaces, which the parser would silently drop.
+
 Keep the page's Open Graph tags: Discord falls back to them whenever it cannot show the component embed.
 
 `build()` never validates. `try_build()`, `validate()`, `to_json()`, and `to_script_tag()` check the limits below and fail with a `ComponentEmbedError` variant that names the rule and the location (for example `component.components[2].accessory.media.url`). The limits are associated constants on `ComponentEmbed` (`MAX_PAYLOAD_BYTES`, `MAX_COMPONENTS`, ...):

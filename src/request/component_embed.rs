@@ -202,18 +202,34 @@ impl ComponentEmbed {
     ///
     /// Discord requires an absolute URL on the page's host, a subdomain of it,
     /// or its parent domain. Only "absolute `http`/`https` URL" can be checked
-    /// here; the host relation is up to the caller. The href is
-    /// attribute-escaped.
+    /// here; the host relation is up to the caller.
+    ///
+    /// The element carries the URL as the parser serializes it, not the
+    /// input text: ASCII only (non-ASCII percent-encoded, hosts in punycode),
+    /// lowercase scheme and host, `/` for an empty path, then
+    /// attribute-escaped. So no character that XML forbids can reach the page.
+    /// An href with an ASCII control character (U+0000-U+001F, U+007F) or a
+    /// leading or trailing space is rejected: the parser would silently drop
+    /// those, and the element would point somewhere other than what was
+    /// written.
     pub fn link_tag(href: &str) -> Result<String, ComponentEmbedError> {
-        if !is_absolute_http_url(href) {
-            return Err(ComponentEmbedError::InvalidLinkHref {
-                href: href.to_owned(),
-            });
+        let invalid = || ComponentEmbedError::InvalidLinkHref {
+            href: href.to_owned(),
+        };
+        if href.starts_with(' ')
+            || href.ends_with(' ')
+            || href.chars().any(|c| c.is_ascii_control())
+        {
+            return Err(invalid());
+        }
+        let url = url::Url::parse(href).map_err(|_parse_error| invalid())?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(invalid());
         }
         Ok(format!(
             "<link rel=\"{}\" type=\"application/json\" href=\"{}\" />",
             Self::ELEMENT_NAME,
-            escape_attribute(href)
+            escape_attribute(url.as_str())
         ))
     }
 
@@ -1132,7 +1148,9 @@ pub enum ComponentEmbedError {
         reason: String,
     },
     /// [`ComponentEmbed::link_tag`] was given something other than an
-    /// absolute `http` or `https` URL.
+    /// absolute `http` or `https` URL, or an href with an ASCII control
+    /// character or a leading or trailing space, which the URL parser would
+    /// silently drop.
     InvalidLinkHref {
         /// The href given.
         href: String,
@@ -1222,7 +1240,8 @@ impl fmt::Display for ComponentEmbedError {
             Self::InvalidPayload { path, reason } => write!(f, "{path}: {reason}"),
             Self::InvalidLinkHref { href } => write!(
                 f,
-                "component embed link href must be an absolute http or https URL, got {href:?}"
+                "component embed link href must be an absolute http or https URL without \
+                 control characters or surrounding spaces, got {href:?}"
             ),
             Self::Encode(message) => write!(f, "failed to encode the component embed: {message}"),
         }

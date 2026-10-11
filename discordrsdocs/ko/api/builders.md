@@ -63,6 +63,8 @@ let link = ComponentEmbed::link_tag("https://example.com/embeds/v2.json")?;
 // <link rel="discord:component-embed" type="application/json" href="…" />
 ```
 
+`link_tag(href)`는 URL 파서가 직렬화한 형태(ASCII만: 비ASCII는 퍼센트 인코딩, 호스트는 punycode)로 URL을 쓰므로 XHTML에서도 요소가 깨지지 않습니다. 파서가 조용히 지우는 제어 문자나 앞뒤 공백이 있는 href는 거부합니다.
+
 Open Graph 태그는 그대로 두세요. Component Embed를 보여 줄 수 없을 때 Discord가 그 태그로 돌아갑니다.
 
 `build()`는 검사하지 않습니다. `try_build()`, `validate()`, `to_json()`, `to_script_tag()`는 아래 한도를 검사하고, 규칙과 위치(예: `component.components[2].accessory.media.url`)를 담은 `ComponentEmbedError` variant로 실패합니다. 한도는 `ComponentEmbed`의 연관 상수(`MAX_PAYLOAD_BYTES`, `MAX_COMPONENTS` 등)입니다.
