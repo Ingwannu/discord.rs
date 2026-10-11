@@ -671,7 +671,25 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
     );
 
     let onboarding = ModifyGuildOnboarding {
-        prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
+        prompts: Some(vec![super::OnboardingPrompt {
+            id: test_id(1),
+            kind: super::OnboardingPromptType::DROPDOWN,
+            options: vec![super::OnboardingPromptOption {
+                id: test_id(2),
+                channel_ids: vec![test_id(202)],
+                role_ids: Vec::new(),
+                emoji: None,
+                emoji_id: None,
+                emoji_name: Some("📚".to_string()),
+                emoji_animated: None,
+                title: "Reading".to_string(),
+                description: None,
+            }],
+            title: "Pick a topic".to_string(),
+            single_select: true,
+            required: false,
+            in_onboarding: true,
+        }]),
         default_channel_ids: Some(vec![test_id(202)]),
         enabled: Some(true),
         mode: Some(OnboardingMode::ONBOARDING_DEFAULT),
@@ -679,7 +697,22 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
     assert_eq!(
         serde_json::to_value(&onboarding).unwrap(),
         json!({
-            "prompts": [{ "id": "1", "title": "Pick a topic" }],
+            "prompts": [{
+                "id": "1",
+                "type": 1,
+                "options": [{
+                    "id": "2",
+                    "channel_ids": ["202"],
+                    "role_ids": [],
+                    "emoji_name": "📚",
+                    "title": "Reading",
+                    "description": null
+                }],
+                "title": "Pick a topic",
+                "single_select": true,
+                "required": false,
+                "in_onboarding": true
+            }],
             "default_channel_ids": ["202"],
             "enabled": true,
             "mode": 0

@@ -96,8 +96,8 @@ pub use guild_aux::{
     BeginGuildPruneRequest, GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate,
     GuildWidget, GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings,
     Integration, IntegrationAccount, IntegrationApplication, ModifyGuildOnboarding,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, VanityUrl, WelcomeScreen,
-    WelcomeScreenChannel,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, OnboardingPrompt, OnboardingPromptOption,
+    VanityUrl, WelcomeScreen, WelcomeScreenChannel,
 };
 pub use interaction::{
     AuthorizingIntegrationOwners, AutocompleteInteraction, ChatInputCommandInteraction,
@@ -189,12 +189,13 @@ pub use discriminant::{
     IntegrationExpireBehavior, InteractionContextType, InteractionResponseType, InteractionType,
     InviteTargetType, InviteTargetUsersJobStatusType, InviteType, KeywordPresetType,
     MessageActivityType, MessageReferenceType, MessageType, MfaLevel, OnboardingMode,
-    OverwriteType, PollLayoutType, PremiumTier, ReactionType, RecurrenceRuleFrequency,
-    RecurrenceRuleMonth, RecurrenceRuleWeekday, RoleConnectionMetadataType,
-    ScheduledEventEntityType, ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing,
-    SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerType,
-    SubscriptionStatus, TeamMembershipState, TextInputStyle, UserPremiumType, VerificationLevel,
-    VideoQualityMode, VoiceChannelEffectAnimationType, WebhookPayloadType, WebhookType,
+    OnboardingPromptType, OverwriteType, PollLayoutType, PremiumTier, ReactionType,
+    RecurrenceRuleFrequency, RecurrenceRuleMonth, RecurrenceRuleWeekday,
+    RoleConnectionMetadataType, ScheduledEventEntityType, ScheduledEventPrivacyLevel,
+    ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuType, StageInstancePrivacyLevel,
+    StickerFormatType, StickerType, SubscriptionStatus, TeamMembershipState, TextInputStyle,
+    UserPremiumType, VerificationLevel, VideoQualityMode, VoiceChannelEffectAnimationType,
+    WebhookPayloadType, WebhookType,
 };
 pub use id::{
     marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,

@@ -772,6 +772,17 @@ open_discriminant! {
 }
 
 open_discriminant! {
+    /// Guild onboarding prompt `type` (Discord docs: Guild Onboarding
+    /// Object › Prompt Types). Added with the typed onboarding prompts.
+    pub struct OnboardingPromptType(u8) {
+        /// Options shown as a list of choices.
+        MULTIPLE_CHOICE = 0,
+        /// Options shown in a dropdown.
+        DROPDOWN = 1,
+    }
+}
+
+open_discriminant! {
     /// Integration `expire_behavior` (Discord docs: Integration Expire
     /// Behaviors). Discord gives the names as prose ("Remove role",
     /// "Kick"); the constant spelling is discord.rs's. Added in series 3;
@@ -1404,6 +1415,7 @@ mod tests {
             IntegrationExpireBehavior: u8, RecurrenceRuleFrequency: u8,
             RecurrenceRuleWeekday: u8, RecurrenceRuleMonth: u8,
             VoiceChannelEffectAnimationType: u8, TeamMembershipState: u8,
+            OnboardingPromptType: u8,
         }
     }
 

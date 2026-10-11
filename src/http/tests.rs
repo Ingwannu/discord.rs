@@ -6145,7 +6145,15 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
             StatusCode::OK,
             json!({
                 "guild_id": "200",
-                "prompts": [{ "id": "1", "title": "Pick a topic" }],
+                "prompts": [{
+                    "id": "1",
+                    "type": 0,
+                    "options": [],
+                    "title": "Pick a topic",
+                    "single_select": false,
+                    "required": false,
+                    "in_onboarding": true
+                }],
                 "default_channel_ids": ["202"],
                 "enabled": true,
                 "mode": 0
@@ -6297,7 +6305,15 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
         .modify_guild_onboarding_config(
             test_id(200),
             &ModifyGuildOnboarding {
-                prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
+                prompts: Some(vec![crate::model::OnboardingPrompt {
+                    id: test_id(1),
+                    kind: crate::model::OnboardingPromptType::MULTIPLE_CHOICE,
+                    options: Vec::new(),
+                    title: "Pick a topic".to_string(),
+                    single_select: false,
+                    required: false,
+                    in_onboarding: true,
+                }]),
                 default_channel_ids: Some(vec![test_id(202)]),
                 enabled: Some(true),
                 mode: Some(OnboardingMode::ONBOARDING_DEFAULT),
@@ -6402,7 +6418,15 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&requests[9].body).unwrap(),
         json!({
-            "prompts": [{ "id": "1", "title": "Pick a topic" }],
+            "prompts": [{
+                "id": "1",
+                "type": 0,
+                "options": [],
+                "title": "Pick a topic",
+                "single_select": false,
+                "required": false,
+                "in_onboarding": true
+            }],
             "default_channel_ids": ["202"],
             "enabled": true,
             "mode": 0
