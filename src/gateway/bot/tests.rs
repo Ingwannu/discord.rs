@@ -1,7 +1,4 @@
-use crate::model::{
-    test_id, ChannelType, ComponentType, MessageType, PresenceStatus, StageInstancePrivacyLevel,
-    StickerFormatType, StickerType,
-};
+use crate::model::{test_id, ChannelType, MessageType, PresenceStatus};
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -55,8 +52,9 @@ use crate::model::{
 // Only the cache-update tests build these models.
 #[cfg(feature = "cache")]
 use crate::model::{
-    Activity, ActivityType, ComponentInteraction, ComponentInteractionData, InteractionContextData,
-    SoundboardSound, StageInstance, Sticker, UserId,
+    Activity, ActivityType, ComponentInteraction, ComponentInteractionData, ComponentType,
+    InteractionContextData, SoundboardSound, StageInstance, StageInstancePrivacyLevel, Sticker,
+    StickerFormatType, StickerType, UserId,
 };
 #[cfg(feature = "sharding")]
 use crate::model::{GatewayBot, SessionStartLimit};
