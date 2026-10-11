@@ -18,7 +18,17 @@ categories = ["api-bindings"]
 # Repository tooling and the docs site are not needed to build or use the
 # crate; shipping them only grows every download (the docs site alone holds
 # a PDF manual).
-exclude = ["ci/", ".github/", "discordrsdocs/", "docs/", "index.html"]
+exclude = [
+    "ci/",
+    ".github/",
+    "discordrsdocs/",
+    "docs/",
+    "index.html",
+    # Generators and the test-only golden corpus for the formatters; the
+    # generated Rust table they produce stays in the package.
+    "src/formatters/*.js",
+    "src/formatters/escape_golden.json",
+]
 
 [features]
 default = ["cache"]
