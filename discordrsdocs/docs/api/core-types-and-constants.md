@@ -94,7 +94,10 @@ Seven names are still taken by their 2.x versions. Until series 3 swaps them in,
 
 - `Patch<T>` is `Missing` (field omitted) or `Value(T)`. `Nullable<T>` is `Null` or `Value(T)`. `NullablePatch<T>` = `Patch<Nullable<T>>` covers fields that can be omitted, cleared with `null`, or set.
 - Constructors: `Patch::missing()`, `Patch::value(v)`, and, for nullable patches only, `Patch::null()`. Writing `Patch::<bool>::null()` is a compile error. `Default` is `Missing` and does not require `T: Default`.
-- Declare struct fields as `#[serde(default, skip_serializing_if = "Patch::is_missing")]`. Both parts matter. Serializing a `Missing` that reaches the serializer is an error, never a silent `null`. Without `default`, serde reads an absent `NullablePatch` field as `null`, which would clear data.
+- Declare patch fields as `#[serde(default, skip_serializing_if = "Patch::is_missing")]`. Forgetting either part fails loudly instead of changing data:
+  - Without `default`, an absent key is a `missing field` error. It never becomes `null`, so a `NullablePatch` cannot silently turn "omitted" into "clear it".
+  - Without `skip_serializing_if`, serializing a `Missing` is an error, never a silent `null`.
+- A required field that may be `null` is a plain `Nullable<T>` with no attribute. `null` reads as `Null`, and an absent key is a `missing field` error (unlike `Option<T>`, which reads absence as `None`).
 - Values are written untagged. A present key is read through `T`, so `null` on a `Patch<bool>` field fails to decode, while `false`, `0`, `""`, and `[]` are ordinary values.
 - Option conversions: `Patch::from(Option<T>)` maps `None` to `Missing`. `Nullable::from(Option<T>)` maps `None` to `Null`, and `Option::from(Nullable<T>)` goes back.
 

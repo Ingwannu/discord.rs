@@ -305,6 +305,15 @@ impl fmt::Display for InvalidId {
 
 impl std::error::Error for InvalidId {}
 
+/// Lets application code validate IDs with `?` in functions returning
+/// [`DiscordError`](crate::DiscordError). Maps to `DiscordError::Model` with
+/// the reason only, so the rejected input is not copied into the error.
+impl From<InvalidId> for crate::error::DiscordError {
+    fn from(error: InvalidId) -> Self {
+        Self::model(error.to_string())
+    }
+}
+
 /// Parses a decimal string the way Discord writes snowflakes: one or more
 /// ASCII digits and nothing else. Zero is allowed here because some wire
 /// types (such as [`GuildInstallOwner`]) give it a meaning; [`Id`] rejects it

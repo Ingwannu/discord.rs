@@ -310,6 +310,22 @@ fn invalid_id_messages_explain_without_echoing_input() {
 }
 
 #[test]
+fn invalid_id_converts_into_a_model_error_with_question_mark() {
+    fn parse_config_guild(raw: &str) -> Result<GuildId, crate::DiscordError> {
+        Ok(raw.parse::<GuildId>()?)
+    }
+
+    assert_eq!(parse_config_guild("42").ok(), Some(guild(42)));
+    match parse_config_guild("Bot secret") {
+        Err(crate::DiscordError::Model { message }) => {
+            assert!(message.contains("ASCII digits"));
+            assert!(!message.contains("secret"));
+        }
+        other => panic!("expected a model error, got {other:?}"),
+    }
+}
+
+#[test]
 fn widget_user_id_keeps_zero_and_opaque_text() {
     let zero: WidgetUserId = match serde_json::from_value(json!("0")) {
         Ok(id) => id,

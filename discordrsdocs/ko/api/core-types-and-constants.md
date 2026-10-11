@@ -94,7 +94,10 @@ fn takes_guild(guild_id: GuildId) {
 
 - `Patch<T>`는 `Missing`(필드 생략) 또는 `Value(T)`이고, `Nullable<T>`는 `Null` 또는 `Value(T)`입니다. 생략·`null`로 지우기·값 지정이 모두 가능한 필드는 `NullablePatch<T>` = `Patch<Nullable<T>>`로 표현합니다.
 - 생성자는 `Patch::missing()`, `Patch::value(v)`, 그리고 null 가능 패치에만 있는 `Patch::null()`입니다. `Patch::<bool>::null()`은 컴파일 오류입니다. `Default`는 `Missing`이며 `T: Default`를 요구하지 않습니다.
-- 구조체 필드는 `#[serde(default, skip_serializing_if = "Patch::is_missing")]`로 선언합니다. 두 속성 모두 필요합니다. 직렬화기까지 간 `Missing`은 조용히 `null`이 되지 않고 오류가 납니다. `default`를 빠뜨리면 serde가 생략된 `NullablePatch` 필드를 `null`로 읽어 데이터를 지우게 됩니다.
+- 패치 필드는 `#[serde(default, skip_serializing_if = "Patch::is_missing")]`로 선언합니다. 어느 쪽을 빠뜨려도 데이터가 바뀌지 않고 오류가 납니다.
+  - `default`가 없으면 생략된 키는 `missing field` 오류입니다. `null`로 바뀌지 않으므로 `NullablePatch`의 "생략"이 조용히 "지우기"가 되는 일은 없습니다.
+  - `skip_serializing_if`가 없으면 `Missing` 직렬화가 오류가 납니다. 조용히 `null`이 되지 않습니다.
+- `null`일 수 있는 필수 필드는 속성 없이 `Nullable<T>`로 씁니다. `null`은 `Null`로 읽고, 키가 없으면 `missing field` 오류입니다(생략을 `None`으로 읽는 `Option<T>`와 다릅니다).
 - 값은 태그 없이 기록합니다. 키가 있으면 `T`로 읽으므로 `Patch<bool>` 필드의 `null`은 디코딩 오류이고, `false`·`0`·`""`·`[]`는 평범한 값입니다.
 - Option 변환: `Patch::from(Option<T>)`는 `None`을 `Missing`으로 바꿉니다. `Nullable::from(Option<T>)`는 `None`을 `Null`로 바꾸고, `Option::from(Nullable<T>)`로 되돌릴 수 있습니다.
 
