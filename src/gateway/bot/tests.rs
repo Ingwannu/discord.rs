@@ -34,30 +34,38 @@ use crate::cache::CacheConfig;
 use crate::event::{
     decode_event, BulkMessageDeleteEvent, ChannelEvent, ChannelPinsUpdateEvent, Event,
     GuildBanEvent, GuildDeleteEvent, GuildDeletePayload, GuildEmojisUpdateEvent, GuildEvent,
-    GuildIntegrationsUpdateEvent, GuildStickersUpdateEvent, InviteEvent, MemberEvent,
-    MemberRemoveEvent, MemberRemovePayload, MessageDeleteEvent, MessageDeletePayload, MessageEvent,
-    PresenceUpdateEvent, RateLimitedEvent, ReactionEvent, ReactionRemoveAllEvent, ReadyEvent,
-    ReadyPayload, RoleDeleteEvent, RoleDeletePayload, RoleEvent, ScheduledEvent,
-    StageInstanceEvent, TypingStartEvent, UserUpdateEvent, VoiceServerEvent, VoiceStateEvent,
+    GuildIntegrationsUpdateEvent, InviteEvent, MemberEvent, MemberRemoveEvent, MemberRemovePayload,
+    MessageDeleteEvent, MessageDeletePayload, MessageEvent, PresenceUpdateEvent, RateLimitedEvent,
+    ReactionEvent, ReactionRemoveAllEvent, ReadyEvent, ReadyPayload, RoleDeleteEvent,
+    RoleDeletePayload, RoleEvent, TypingStartEvent, VoiceServerEvent, VoiceStateEvent,
     WebhooksUpdateEvent,
 };
+// Only the cache-update tests decode these events.
+#[cfg(feature = "cache")]
+use crate::event::{GuildStickersUpdateEvent, ScheduledEvent, StageInstanceEvent, UserUpdateEvent};
 use crate::gateway::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    Activity, Attachment, ChannelId, ComponentInteraction, ComponentInteractionData, Embed,
-    GuildId, Id, IdMarker, Interaction, InteractionContextData, Member, Message, MessageId,
-    Reaction, RequestChannelInfo, Role, RoleId, SoundboardSound, StageInstance, Sticker, User,
-    UserId, VoiceServerUpdate, VoiceState,
+    Attachment, ChannelId, Embed, GuildId, Id, IdMarker, Interaction, Member, Message, MessageId,
+    Reaction, RequestChannelInfo, Role, RoleId, User, VoiceServerUpdate, VoiceState,
+};
+// Only the cache-update tests build these models.
+#[cfg(feature = "cache")]
+use crate::model::{
+    Activity, ComponentInteraction, ComponentInteractionData, InteractionContextData,
+    SoundboardSound, StageInstance, Sticker, UserId,
 };
 #[cfg(feature = "sharding")]
 use crate::model::{GatewayBot, SessionStartLimit};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardConfig, ShardingManager};
+#[cfg(any(feature = "cache", feature = "collectors"))]
 use crate::types::Emoji;
 #[cfg(feature = "voice")]
 use crate::voice::{AudioTrack, VoiceConnectionConfig};
 
 /// Shard pair for cache tests that model a single-shard bot.
+#[cfg(feature = "cache")]
 const SINGLE_SHARD: (u32, u32) = (0, 1);
 
 #[test]
@@ -3725,6 +3733,7 @@ async fn wait_for_cached_message(cache: &crate::cache::CacheHandle, id: &str) {
     .unwrap_or_else(|_| panic!("message {id} never reached the cache"));
 }
 
+#[cfg(feature = "cache")]
 fn ready_dispatch_event() -> Event {
     Event::Ready(ReadyEvent {
         data: ReadyPayload {
@@ -4733,14 +4742,17 @@ fn overflow_log_reports_the_first_drop_then_rate_limits() {
 
 /// Sets a flag when dropped, so tests can tell an aborted task from a
 /// detached one.
+#[cfg(feature = "sharding")]
 struct TaskDropFlag(Arc<std::sync::atomic::AtomicBool>);
 
+#[cfg(feature = "sharding")]
 impl Drop for TaskDropFlag {
     fn drop(&mut self) {
         self.0.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
+#[cfg(feature = "sharding")]
 async fn wait_for_flag(flag: &std::sync::atomic::AtomicBool, what: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !flag.load(std::sync::atomic::Ordering::SeqCst) {
@@ -4751,10 +4763,13 @@ async fn wait_for_flag(flag: &std::sync::atomic::AtomicBool, what: &str) {
     .unwrap_or_else(|_| panic!("{what}"));
 }
 
+// The fake-gateway helpers below serve the cache and sharding tests.
+#[cfg(any(feature = "cache", feature = "sharding"))]
 type FakeGatewaySocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
 /// A local gateway that sends HELLO, waits for IDENTIFY, and hands each
 /// connection plus its IDENTIFY payload to `script`.
+#[cfg(any(feature = "cache", feature = "sharding"))]
 async fn spawn_fake_gateway<F, Fut>(script: F) -> (String, JoinHandleUnit)
 where
     F: Fn(FakeGatewaySocket, Value) -> Fut + Send + Sync + 'static,
@@ -4801,8 +4816,10 @@ where
     (url, server)
 }
 
+#[cfg(any(feature = "cache", feature = "sharding"))]
 type JoinHandleUnit = tokio::task::JoinHandle<()>;
 
+#[cfg(any(feature = "cache", feature = "sharding"))]
 async fn send_dispatch(socket: &mut FakeGatewaySocket, sequence: u64, name: &str, data: Value) {
     use futures_util::SinkExt;
     let payload = json!({ "op": 0, "s": sequence, "t": name, "d": data });
@@ -4814,6 +4831,7 @@ async fn send_dispatch(socket: &mut FakeGatewaySocket, sequence: u64, name: &str
         .unwrap();
 }
 
+#[cfg(any(feature = "cache", feature = "sharding"))]
 async fn send_close(socket: &mut FakeGatewaySocket, code: u16) {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::protocol::{frame::coding::CloseCode, CloseFrame};
@@ -4827,6 +4845,7 @@ async fn send_close(socket: &mut FakeGatewaySocket, code: u16) {
         .await;
 }
 
+#[cfg(any(feature = "cache", feature = "sharding"))]
 fn fake_ready_payload() -> Value {
     json!({
         "v": 10,
@@ -6008,6 +6027,7 @@ async fn wait_for_shutdown_never_exceeds_its_deadline_after_a_shard_error() {
 
 /// Records which shards identified, keeps healthy shards connected, and
 /// rejects the shards in `reject` with 4004.
+#[cfg(feature = "sharding")]
 async fn spawn_recording_gateway(
     reject: Vec<u64>,
 ) -> (
