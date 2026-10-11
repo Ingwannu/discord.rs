@@ -352,8 +352,14 @@ pub(super) struct EventPipeline {
     processor: AbortOnDrop<()>,
     events: AbortOnDrop<()>,
     interactions: AbortOnDrop<()>,
+    /// The thread running the overload hook; it exits once the processor
+    /// and interaction dispatcher dropped their queue handles.
+    overload_worker: Option<OverloadHookWorker>,
     #[cfg(test)]
     pub(super) handler_drops: Arc<OverflowLog>,
+    /// Largest number of handler tasks a lane held at once.
+    #[cfg(test)]
+    pub(super) handler_high_water: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl EventPipeline {
@@ -384,6 +390,7 @@ impl EventPipeline {
             mut processor,
             mut events,
             mut interactions,
+            overload_worker,
             ..
         } = self;
         fault.disarm();
@@ -433,6 +440,20 @@ impl EventPipeline {
                 }
             }
         }
+        // The hook thread cannot be aborted (it runs application code); it
+        // ends once the queue it drains is closed, which happened when the
+        // tasks above finished.
+        if let Some(overload_worker) = overload_worker {
+            if tokio::time::timeout(ABORT_CONFIRM_GRACE, overload_worker.finished)
+                .await
+                .is_err()
+            {
+                return Err(format!(
+                    "the interaction overload hook did not return within \
+                     {ABORT_CONFIRM_GRACE:?} after the pipeline stopped"
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -442,7 +463,7 @@ impl EventPipeline {
 struct InteractionLane {
     max_concurrent: usize,
     admission_timeout: Duration,
-    overload: Option<InteractionOverloadHook>,
+    overload: Option<OverloadHookQueue>,
 }
 
 pub(super) fn spawn_event_pipeline(
@@ -459,11 +480,15 @@ pub(super) fn spawn_event_pipeline(
     let (interactions_tx, interactions_rx) =
         mpsc::channel(dispatch.interaction_queue_capacity.max(1));
     let handler_drops = Arc::new(OverflowLog::default());
+    let (overload, overload_worker) =
+        spawn_overload_hook(dispatch.interaction_overload.clone(), ctx.shard_id);
     let lane = InteractionLane {
         max_concurrent: dispatch.max_concurrent_interactions.max(1),
         admission_timeout: dispatch.interaction_admission_timeout,
-        overload: dispatch.interaction_overload.clone(),
+        overload,
     };
+    #[cfg(test)]
+    let handler_high_water = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ingress = Arc::new(EventIngress {
         shard_id: ctx.shard_id,
         events: ingress_tx,
@@ -491,6 +516,8 @@ pub(super) fn spawn_event_pipeline(
         dispatch.handler_permits(),
         stop.subscribe(),
         fault.clone(),
+        #[cfg(test)]
+        Arc::clone(&handler_high_water),
     ));
     let interactions = tokio::spawn(run_interaction_dispatcher(
         handler,
@@ -499,6 +526,8 @@ pub(super) fn spawn_event_pipeline(
         lane,
         stop.subscribe(),
         fault.clone(),
+        #[cfg(test)]
+        Arc::clone(&handler_high_water),
     ));
     #[cfg(not(test))]
     drop(handler_drops);
@@ -509,8 +538,11 @@ pub(super) fn spawn_event_pipeline(
         processor: AbortOnDrop::new(processor),
         events: AbortOnDrop::new(events),
         interactions: AbortOnDrop::new(interactions),
+        overload_worker,
         #[cfg(test)]
         handler_drops,
+        #[cfg(test)]
+        handler_high_water,
     }
 }
 
@@ -518,7 +550,7 @@ struct ProcessorOutputs {
     events: mpsc::Sender<HandlerDelivery>,
     interactions: mpsc::Sender<HandlerDelivery>,
     handler_drops: Arc<OverflowLog>,
-    overload: Option<InteractionOverloadHook>,
+    overload: Option<OverloadHookQueue>,
 }
 
 /// Internal stage: applies every event to runtime state in gateway order
@@ -654,6 +686,7 @@ async fn run_handler_dispatcher(
     permits: usize,
     mut stop: watch::Receiver<bool>,
     fault: PipelineFault,
+    #[cfg(test)] high_water: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let mut exit = FaultOnExit::new(
         fault,
@@ -665,6 +698,11 @@ async fn run_handler_dispatcher(
     let permits = Arc::new(Semaphore::new(permits.max(1)));
     let mut running = JoinSet::new();
     loop {
+        // Reap finished calls before every admission. A permit is released
+        // when a call finishes, so with a permanently backlogged queue the
+        // receive below is always ready; reaping only inside that select
+        // would never run and finished tasks would pile up in the JoinSet.
+        reap_finished(ctx.shard_id, &mut running);
         // Take the permit before dequeuing, so an event waiting for a slot
         // stays in (and is bounded by) the queue.
         let permit = tokio::select! {
@@ -679,10 +717,10 @@ async fn run_handler_dispatcher(
             tokio::select! {
                 biased;
                 _ = stop_requested(&mut stop) => break None,
-                next = deliveries.recv() => break next,
                 Some(outcome) = running.join_next(), if !running.is_empty() => {
                     report_handler_outcome(ctx.shard_id, outcome);
                 }
+                next = deliveries.recv() => break next,
             }
         };
         let Some(delivery) = next else {
@@ -694,9 +732,18 @@ async fn run_handler_dispatcher(
             let _permit = permit;
             handler.handle_event(handler_ctx, delivery.event).await;
         });
+        #[cfg(test)]
+        high_water.fetch_max(running.len(), Ordering::Relaxed);
     }
     finish_running(ctx.shard_id, &mut running, &mut stop).await;
     exit.complete();
+}
+
+/// Joins every handler task that already finished, without waiting.
+fn reap_finished(shard_id: u32, running: &mut JoinSet<()>) {
+    while let Some(outcome) = running.try_join_next() {
+        report_handler_outcome(shard_id, outcome);
+    }
 }
 
 /// Interaction lane: INTERACTION_CREATE events bypass the regular lane and
@@ -716,6 +763,7 @@ async fn run_interaction_dispatcher(
     lane: InteractionLane,
     mut stop: watch::Receiver<bool>,
     fault: PipelineFault,
+    #[cfg(test)] high_water: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let mut exit = FaultOnExit::new(
         fault,
@@ -727,35 +775,44 @@ async fn run_interaction_dispatcher(
     let permits = Arc::new(Semaphore::new(lane.max_concurrent));
     let mut running = JoinSet::new();
     'deliveries: loop {
+        reap_finished(ctx.shard_id, &mut running);
         let next = loop {
             tokio::select! {
                 biased;
                 _ = stop_requested(&mut stop) => break None,
-                next = deliveries.recv() => break next,
                 Some(outcome) = running.join_next(), if !running.is_empty() => {
                     report_handler_outcome(ctx.shard_id, outcome);
                 }
+                next = deliveries.recv() => break next,
             }
         };
         let Some(delivery) = next else {
             break;
         };
         let deadline = delivery.received_at.checked_add(lane.admission_timeout);
-        let permit = if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            None
-        } else {
-            loop {
+        let expired = |now: Instant| deadline.is_some_and(|deadline| now >= deadline);
+        let mut permit = None;
+        if !expired(Instant::now()) {
+            // Expiry outranks a free slot: when both become ready in the same
+            // poll (the dispatcher was not polled at the deadline), the
+            // interaction is already late and goes to the overload hook.
+            permit = loop {
                 tokio::select! {
                     biased;
                     _ = stop_requested(&mut stop) => break 'deliveries,
-                    permit = Arc::clone(&permits).acquire_owned() => break permit.ok(),
+                    _ = sleep_until_opt(deadline) => break None,
                     Some(outcome) = running.join_next(), if !running.is_empty() => {
                         report_handler_outcome(ctx.shard_id, outcome);
                     }
-                    _ = sleep_until_opt(deadline) => break None,
+                    permit = Arc::clone(&permits).acquire_owned() => break permit.ok(),
                 }
-            }
-        };
+            };
+        }
+        // Re-check right before dispatch: never start a handler for an
+        // interaction whose admission deadline has passed.
+        if expired(Instant::now()) {
+            permit = None;
+        }
         match permit {
             Some(permit) => {
                 let handler = Arc::clone(&handler);
@@ -764,6 +821,8 @@ async fn run_interaction_dispatcher(
                     let _permit = permit;
                     handler.handle_event(handler_ctx, delivery.event).await;
                 });
+                #[cfg(test)]
+                high_water.fetch_max(running.len(), Ordering::Relaxed);
             }
             None => report_overloaded_interaction(
                 lane.overload.as_ref(),
@@ -784,12 +843,92 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
     }
 }
 
-/// Hands an interaction that could not be admitted to the application's
-/// overload hook, or logs it when none is configured. The hook runs
-/// synchronously on the pipeline and must return quickly; a panicking hook
-/// is contained so it cannot take the shard down.
+/// Capacity of the queue in front of the overload hook worker.
+const OVERLOAD_HOOK_QUEUE_CAPACITY: usize = 64;
+
+/// The bounded queue in front of the thread that runs the application's
+/// overload hook.
+///
+/// The hook is application code; running it on the event processor (or the
+/// interaction dispatcher) would let a slow or blocking hook stall cache
+/// updates, member-chunk correlation, collectors, and deliveries — and
+/// eventually overflow the shard's ingress. A dedicated OS thread (with the
+/// runtime entered, so the hook can `tokio::spawn` its reply) isolates it
+/// even from the runtime's worker threads; a blocking-pool task was not used
+/// because a permanently running one stops paused-time test clocks from
+/// advancing. When the hook falls more than [`OVERLOAD_HOOK_QUEUE_CAPACITY`]
+/// interactions behind, further overloaded interactions are dropped and
+/// counted in a rate-limited warning.
+#[derive(Clone)]
+struct OverloadHookQueue {
+    jobs: mpsc::Sender<OverloadedInteraction>,
+    dropped: Arc<OverflowLog>,
+}
+
+/// Completion signal of the overload hook thread, so shutdown can await it
+/// with a bound (an OS thread cannot be aborted).
+pub(super) struct OverloadHookWorker {
+    finished: tokio::sync::oneshot::Receiver<()>,
+}
+
+/// Sends the completion signal when the hook thread exits, however it exits.
+struct SignalOnExit(Option<tokio::sync::oneshot::Sender<()>>);
+
+impl Drop for SignalOnExit {
+    fn drop(&mut self) {
+        if let Some(finished) = self.0.take() {
+            let _ = finished.send(());
+        }
+    }
+}
+
+/// Starts the overload hook thread, if a hook is configured. If the thread
+/// cannot be spawned, overloaded interactions are only logged.
+fn spawn_overload_hook(
+    hook: Option<InteractionOverloadHook>,
+    shard_id: u32,
+) -> (Option<OverloadHookQueue>, Option<OverloadHookWorker>) {
+    let Some(hook) = hook else {
+        return (None, None);
+    };
+    let (jobs, mut queued) = mpsc::channel::<OverloadedInteraction>(OVERLOAD_HOOK_QUEUE_CAPACITY);
+    let (finished_tx, finished) = tokio::sync::oneshot::channel();
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        error!("shard {shard_id}: the interaction overload hook needs a Tokio runtime");
+        return (None, None);
+    };
+    let spawned = std::thread::Builder::new()
+        .name(format!("discordrs-overload-hook-{shard_id}"))
+        .spawn(move || {
+            let _finished = SignalOnExit(Some(finished_tx));
+            let _runtime = runtime.enter();
+            while let Some(overloaded) = queued.blocking_recv() {
+                if std::panic::catch_unwind(AssertUnwindSafe(|| hook(overloaded))).is_err() {
+                    error!("shard {shard_id}: the interaction overload hook panicked");
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => (
+            Some(OverloadHookQueue {
+                jobs,
+                dropped: Arc::new(OverflowLog::default()),
+            }),
+            Some(OverloadHookWorker { finished }),
+        ),
+        Err(error) => {
+            error!(
+                "shard {shard_id}: could not start the interaction overload hook thread: {error}"
+            );
+            (None, None)
+        }
+    }
+}
+
+/// Hands an interaction that could not be admitted to the overload hook
+/// worker, or logs it when no hook is configured. Never waits.
 fn report_overloaded_interaction(
-    hook: Option<&InteractionOverloadHook>,
+    hook: Option<&OverloadHookQueue>,
     base: &Context,
     delivery: HandlerDelivery,
     reason: InteractionOverloadReason,
@@ -799,24 +938,34 @@ fn report_overloaded_interaction(
     let Event::InteractionCreate(event) = delivery.event else {
         return;
     };
-    match hook {
-        Some(hook) => {
-            let overloaded = OverloadedInteraction {
-                ctx,
-                interaction: event.interaction,
-                reason,
-                waited,
-            };
-            if std::panic::catch_unwind(AssertUnwindSafe(|| hook(overloaded))).is_err() {
-                error!(
-                    "shard {}: the interaction overload hook panicked",
+    let Some(hook) = hook else {
+        warn!(
+            "shard {}: an interaction was not handed to the event handler ({reason:?} after \
+             {waited:?}); set ClientBuilder::on_interaction_overload to respond to it",
+            base.shard_id
+        );
+        return;
+    };
+    let overloaded = OverloadedInteraction {
+        ctx,
+        interaction: event.interaction,
+        reason,
+        waited,
+    };
+    match hook.jobs.try_send(overloaded) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            if let Some(total) = hook.dropped.record() {
+                warn!(
+                    "shard {}: the interaction overload hook is {OVERLOAD_HOOK_QUEUE_CAPACITY} \
+                     interactions behind; dropped {total} overloaded interaction(s) so far",
                     base.shard_id
                 );
             }
         }
-        None => warn!(
-            "shard {}: an interaction was not handed to the event handler ({reason:?} after \
-             {waited:?}); set ClientBuilder::on_interaction_overload to respond to it",
+        Err(mpsc::error::TrySendError::Closed(_)) => warn!(
+            "shard {}: the interaction overload hook worker stopped; an overloaded \
+             interaction was dropped",
             base.shard_id
         ),
     }

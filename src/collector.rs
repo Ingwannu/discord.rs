@@ -179,7 +179,12 @@ struct HubPublisher(Arc<HubShared>);
 #[cfg(feature = "collectors")]
 impl Drop for HubPublisher {
     fn drop(&mut self) {
-        self.0.closed.store(true, Ordering::SeqCst);
+        // Closed under the journal lock: a reader that sees `closed` while
+        // holding the lock has also seen every event published before.
+        {
+            let _journal = self.0.journal();
+            self.0.closed.store(true, Ordering::SeqCst);
+        }
         self.0.published.notify_waiters();
     }
 }
@@ -393,9 +398,13 @@ impl EventSubscription {
                     self.next += 1;
                     return Ok(event);
                 }
-            }
-            if self.shared.closed.load(Ordering::SeqCst) {
-                return Err(broadcast::error::RecvError::Closed);
+                // Checked under the same lock as emptiness: the last
+                // publisher may publish and close right after the lock is
+                // released, and a close observed separately could hide that
+                // final event.
+                if self.shared.closed.load(Ordering::SeqCst) {
+                    return Err(broadcast::error::RecvError::Closed);
+                }
             }
             published.await;
         }

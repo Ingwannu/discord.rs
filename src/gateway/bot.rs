@@ -46,7 +46,7 @@ use super::client::SupervisorCallback;
 use super::client::{EventCallback, GatewayClient, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use super::messenger::ShardMessenger;
 #[cfg(feature = "sharding")]
-use super::supervisor::{lock_sharding_manager, ShardSupervisor};
+use super::supervisor::{failure_raised, lock_sharding_manager, FleetFailure, ShardSupervisor};
 
 #[cfg(feature = "cache")]
 #[path = "bot/backend.rs"]
@@ -1372,9 +1372,17 @@ impl ClientBuilder {
     ///
     /// The runtime never acknowledges interactions on its own: autocomplete,
     /// modal, and component interactions need different responses, so the
-    /// hook decides. It runs synchronously on the shard's event pipeline and
-    /// must return quickly; spawn a task for the REST call. Panics in the
-    /// hook are caught and logged.
+    /// hook decides. The [`Interaction`] it receives owns its shared response
+    /// state, so replying or deferring through
+    /// [`InteractionResponder`](crate::response::InteractionResponder) goes
+    /// through the same acknowledgement state machine as a handler reply.
+    ///
+    /// The hook runs on a dedicated thread per shard (with the Tokio runtime
+    /// entered, so it can `tokio::spawn` the REST call), never on the event
+    /// pipeline: a slow or blocking hook cannot stall cache updates or other
+    /// deliveries. Up to 64 overloaded interactions wait for it; beyond that
+    /// they are dropped with a rate-limited warning. Panics in the hook are
+    /// caught and logged.
     pub fn on_interaction_overload<F>(mut self, hook: F) -> Self
     where
         F: Fn(OverloadedInteraction) + Send + Sync + 'static,
@@ -1483,6 +1491,7 @@ impl ClientBuilder {
             ShardStartControl {
                 supervisor_channels: None,
                 boot_gate: None,
+                failure: None,
             },
         )
         .await;
@@ -1784,6 +1793,8 @@ impl SharedRuntime {
 struct ShardStartControl {
     supervisor_channels: Option<ShardRuntimeChannels>,
     boot_gate: Option<watch::Receiver<bool>>,
+    /// Raised before this shard drains its handlers after a fatal error.
+    failure: Option<FleetFailure>,
 }
 
 #[cfg(feature = "sharding")]
@@ -1867,6 +1878,7 @@ async fn spawn_shard_supervisor(
     // From here on nothing awaits until the supervisor is returned: the
     // supervisor owns the shard tasks immediately and supervises failures
     // while the boot scheduler releases later identify waves.
+    let failures = FleetFailure::new();
     let mut tasks = Vec::with_capacity(prepared.len());
     let mut boot_gates = Vec::with_capacity(prepared.len());
     for (shard_id, supervisor_channels) in prepared {
@@ -1888,6 +1900,7 @@ async fn spawn_shard_supervisor(
                 ShardStartControl {
                     supervisor_channels: Some(supervisor_channels),
                     boot_gate: Some(boot_rx),
+                    failure: Some(failures.clone()),
                 },
             )),
         ));
@@ -1899,6 +1912,7 @@ async fn spawn_shard_supervisor(
         boot_gates,
         boot_window_size.max(1) as usize,
         boot_delay,
+        failures.subscribe(),
     ));
 
     Ok(ShardSupervisor {
@@ -1909,6 +1923,7 @@ async fn spawn_shard_supervisor(
             .saturating_add(SHARD_STOP_ALLOWANCE),
         boot_scheduler: Some(boot_scheduler),
         background,
+        failures: Some(failures),
     })
 }
 
@@ -1916,22 +1931,36 @@ async fn spawn_shard_supervisor(
 /// `max_concurrency` shards IDENTIFY at once.
 ///
 /// Owned by the [`ShardSupervisor`]: aborting this task drops the remaining
-/// gates, and every shard still queued then stops without connecting. A
-/// shard that fails in an early wave therefore keeps later waves from
+/// gates, and every shard still queued then stops without connecting. It
+/// also stops by itself as soon as any shard raises a fleet failure — even
+/// while that shard is still draining and nobody is awaiting the supervisor
+/// — so a shard that fails in an early wave keeps later waves from
 /// launching at all.
 #[cfg(feature = "sharding")]
 async fn release_boot_waves(
     boot_gates: Vec<watch::Sender<bool>>,
     wave_size: usize,
     boot_delay: Duration,
+    failures: watch::Receiver<Option<(u32, String)>>,
 ) {
+    let mut failures = Some(failures);
     let wave_count = boot_gates.len().div_ceil(wave_size);
     for (wave_index, wave) in boot_gates.chunks(wave_size).enumerate() {
+        if failures
+            .as_ref()
+            .is_some_and(|failures| failures.borrow().is_some())
+        {
+            return;
+        }
         for boot_gate in wave {
             let _ = boot_gate.send(true);
         }
         if wave_index + 1 < wave_count {
-            sleep(boot_delay).await;
+            tokio::select! {
+                biased;
+                _ = failure_raised(&mut failures) => return,
+                _ = sleep(boot_delay) => {}
+            }
         }
     }
 }
@@ -2029,6 +2058,8 @@ async fn start_gateway_shard(
     } = launch;
 
     #[cfg(feature = "sharding")]
+    let fleet_failure = shard_control.failure.clone();
+    #[cfg(feature = "sharding")]
     if let Some(mut boot_gate) = shard_control.boot_gate {
         if let Some(supervisor_channels) = shard_control.supervisor_channels.as_ref() {
             let _ = supervisor_channels.publish(ShardSupervisorEvent::StateChanged {
@@ -2117,11 +2148,18 @@ async fn start_gateway_shard(
     drop(gateway);
     drop(registration);
 
-    let pipeline_result = pipeline.shutdown(shutdown_timeout).await;
     let result = match (result, fault.reason()) {
         (Ok(()), Some(reason)) => Err(DiscordError::gateway(reason)),
         (result, _) => result,
     };
+    // Tell the supervisor and the boot scheduler now: draining handlers can
+    // take up to the shutdown timeout, and later identify waves must not be
+    // released meanwhile.
+    #[cfg(feature = "sharding")]
+    if let (Err(error), Some(failure)) = (&result, fleet_failure.as_ref()) {
+        failure.raise(shard.0, error.to_string());
+    }
+    let pipeline_result = pipeline.shutdown(shutdown_timeout).await;
     if fault.is_raised() {
         // The shard's cached state no longer matches Discord: drop it (and
         // the backend mirror's copy) rather than serve it as current. The

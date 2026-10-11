@@ -20,7 +20,7 @@ pub use config::CacheConfig;
 #[path = "cache/backend.rs"]
 mod backend;
 #[cfg(feature = "cache")]
-pub use backend::CacheBackend;
+pub use backend::{CacheBackend, CacheFence};
 
 #[cfg(feature = "cache")]
 #[path = "cache/store.rs"]
@@ -43,6 +43,44 @@ use store::{
 pub(crate) fn shard_for_guild_id(guild_id: &Snowflake, shard_count: u32) -> Option<u32> {
     let raw_id = guild_id.as_u64()?;
     Some(((raw_id >> 22) % u64::from(shard_count.max(1))) as u32)
+}
+
+/// Empties every cached entity. Fencing epochs (`shard_epochs`) are kept on
+/// purpose: they must only grow, or a stale write could pass a fence again.
+#[cfg(feature = "cache")]
+fn clear_store(store: &mut CacheStore) {
+    store.guilds.clear();
+    store.channels.clear();
+    store.users.clear();
+    store.members.clear();
+    store.messages.clear();
+    store.roles.clear();
+    store.presences.clear();
+    store.voice_states.clear();
+    store.soundboard_sounds.clear();
+    store.emojis.clear();
+    store.stickers.clear();
+    store.scheduled_events.clear();
+    store.stage_instances.clear();
+    store.guild_order.clear();
+    store.channel_order.clear();
+    store.user_order.clear();
+    store.member_order.clear();
+    store.message_order.clear();
+    store.role_order.clear();
+    store.presence_order.clear();
+    store.voice_state_order.clear();
+    store.soundboard_sound_order.clear();
+    store.emoji_order.clear();
+    store.sticker_order.clear();
+    store.scheduled_event_order.clear();
+    store.stage_instance_order.clear();
+    store.member_seen.clear();
+    store.message_seen.clear();
+    store.presence_seen.clear();
+    store.member_counts.clear();
+    store.message_counts.clear();
+    store.last_prune = None;
 }
 
 #[derive(Clone, Default)]
@@ -79,38 +117,7 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn clear(&self) {
         let mut store = self.store.write().await;
-        store.guilds.clear();
-        store.channels.clear();
-        store.users.clear();
-        store.members.clear();
-        store.messages.clear();
-        store.roles.clear();
-        store.presences.clear();
-        store.voice_states.clear();
-        store.soundboard_sounds.clear();
-        store.emojis.clear();
-        store.stickers.clear();
-        store.scheduled_events.clear();
-        store.stage_instances.clear();
-        store.guild_order.clear();
-        store.channel_order.clear();
-        store.user_order.clear();
-        store.member_order.clear();
-        store.message_order.clear();
-        store.role_order.clear();
-        store.presence_order.clear();
-        store.voice_state_order.clear();
-        store.soundboard_sound_order.clear();
-        store.emoji_order.clear();
-        store.sticker_order.clear();
-        store.scheduled_event_order.clear();
-        store.stage_instance_order.clear();
-        store.member_seen.clear();
-        store.message_seen.clear();
-        store.presence_seen.clear();
-        store.member_counts.clear();
-        store.message_counts.clear();
-        store.last_prune = None;
+        clear_store(&mut store);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -149,6 +156,109 @@ impl CacheHandle {
 
     #[cfg(not(feature = "cache"))]
     pub async fn clear_shard(&self, _shard_id: u32, _shard_count: u32) {}
+
+    /// [`CacheHandle::clear_shard`] that also starts a new fencing
+    /// generation for the shard and returns its epoch, under the same lock,
+    /// so no fenced write can interleave between the clear and the epoch
+    /// change. Used by the [`CacheBackend`] implementation.
+    #[cfg(feature = "cache")]
+    pub(crate) async fn clear_shard_generation(&self, shard_id: u32, shard_count: u32) -> u64 {
+        let mut store = self.store.write().await;
+        if shard_count <= 1 {
+            clear_store(&mut store);
+        } else {
+            evict_shard_entries(&mut store, shard_id, shard_count);
+        }
+        let epoch = store
+            .shard_epochs
+            .entry((shard_id, shard_count))
+            .or_insert(0);
+        *epoch += 1;
+        *epoch
+    }
+
+    #[cfg(feature = "cache")]
+    fn fence_is_current(store: &CacheStore, fence: CacheFence) -> bool {
+        store
+            .shard_epochs
+            .get(&(fence.shard_id, fence.shard_count))
+            .is_none_or(|current| fence.epoch >= *current)
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_upsert_member(
+        &self,
+        fence: CacheFence,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        member: Member,
+    ) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            self.upsert_member_locked(&mut store, guild_id, user_id, member);
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_remove_member(
+        &self,
+        fence: CacheFence,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            remove_member_key(&mut store, &(guild_id.clone(), user_id.clone()));
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_upsert_message(&self, fence: CacheFence, message: Message) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            self.upsert_message_locked(&mut store, message);
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_remove_message(
+        &self,
+        fence: CacheFence,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
+    ) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            remove_message_key(&mut store, &(channel_id.clone(), message_id.clone()));
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_upsert_presence(
+        &self,
+        fence: CacheFence,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: Presence,
+    ) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            self.upsert_presence_locked(&mut store, guild_id, user_id, presence);
+        }
+    }
+
+    #[cfg(feature = "cache")]
+    pub(crate) async fn fenced_remove_presence(
+        &self,
+        fence: CacheFence,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) {
+        let mut store = self.store.write().await;
+        if Self::fence_is_current(&store, fence) {
+            remove_presence_key(&mut store, &(guild_id.clone(), user_id.clone()));
+        }
+    }
 
     #[cfg(feature = "cache")]
     pub async fn purge_expired(&self) {
@@ -525,11 +635,22 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn upsert_member(&self, guild_id: Snowflake, user_id: Snowflake, member: Member) {
         let mut store = self.store.write().await;
+        self.upsert_member_locked(&mut store, guild_id, user_id, member);
+    }
+
+    #[cfg(feature = "cache")]
+    fn upsert_member_locked(
+        &self,
+        store: &mut CacheStore,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        member: Member,
+    ) {
         let now = Instant::now();
         let key = (guild_id.clone(), user_id);
-        insert_member_entry(&mut store, key, Arc::new(member), now);
-        maybe_prune_expired(&mut store, &self.config, now);
-        enforce_member_limit(&mut store, &self.config, &guild_id);
+        insert_member_entry(store, key, Arc::new(member), now);
+        maybe_prune_expired(store, &self.config, now);
+        enforce_member_limit(store, &self.config, &guild_id);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -625,14 +746,18 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn upsert_message(&self, message: Message) {
-        let channel_id = message.channel_id.clone();
-        let message_id = message.id.clone();
         let mut store = self.store.write().await;
+        self.upsert_message_locked(&mut store, message);
+    }
+
+    #[cfg(feature = "cache")]
+    fn upsert_message_locked(&self, store: &mut CacheStore, message: Message) {
+        let channel_id = message.channel_id.clone();
         let now = Instant::now();
-        let key = (channel_id.clone(), message_id);
-        insert_message_entry(&mut store, key, Arc::new(message), now);
-        maybe_prune_expired(&mut store, &self.config, now);
-        enforce_message_limits(&mut store, &self.config, &channel_id);
+        let key = (channel_id.clone(), message.id.clone());
+        insert_message_entry(store, key, Arc::new(message), now);
+        maybe_prune_expired(store, &self.config, now);
+        enforce_message_limits(store, &self.config, &channel_id);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -812,12 +937,23 @@ impl CacheHandle {
         presence: Presence,
     ) {
         let mut store = self.store.write().await;
+        self.upsert_presence_locked(&mut store, guild_id, user_id, presence);
+    }
+
+    #[cfg(feature = "cache")]
+    fn upsert_presence_locked(
+        &self,
+        store: &mut CacheStore,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: Presence,
+    ) {
         let now = Instant::now();
         let key = (guild_id, user_id);
         store.presences.insert(key.clone(), Arc::new(presence));
         store.presence_seen.insert(key.clone(), now);
         remember_key(&mut store.presence_order, key);
-        maybe_prune_expired(&mut store, &self.config, now);
+        maybe_prune_expired(store, &self.config, now);
         if let Some(max) = self.config.max_presences {
             while store.presences.len() > max {
                 let Some(key) = store.presence_order.pop_front() else {
@@ -1418,7 +1554,7 @@ mod tests {
     };
     use crate::types::Emoji;
 
-    use super::{CacheBackend, CacheConfig, CacheHandle};
+    use super::{CacheBackend, CacheConfig, CacheFence, CacheHandle};
     #[cfg(feature = "gateway")]
     use super::{
         ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager, UserManager,
@@ -1688,6 +1824,78 @@ mod tests {
         cache.clear_shard_cache(0, 2).await.unwrap();
         assert_guild_entries(&cache, &shard0_guild, 100, false).await;
         assert_guild_entries(&cache, &shard1_guild, 200, true).await;
+    }
+
+    #[tokio::test]
+    async fn cache_handle_backend_ignores_writes_from_an_older_generation() {
+        let cache = CacheHandle::new();
+        let channel = Snowflake::from("10");
+        let message = |id: &str| Message {
+            id: Snowflake::from(id),
+            channel_id: channel.clone(),
+            ..Message::default()
+        };
+
+        let first = cache.clear_shard_cache(0, 1).await.unwrap();
+        let old = CacheFence::new(0, 1, first);
+        cache.put_message(old, message("1")).await.unwrap();
+        assert!(cache
+            .message(&channel, &Snowflake::from("1"))
+            .await
+            .is_some());
+
+        let second = cache.clear_shard_cache(0, 1).await.unwrap();
+        assert!(second > first);
+        // A late write of the old generation is ignored, not an error.
+        cache.put_message(old, message("2")).await.unwrap();
+        assert!(cache
+            .message(&channel, &Snowflake::from("2"))
+            .await
+            .is_none());
+        let current = CacheFence::new(0, 1, second);
+        cache.put_message(current, message("3")).await.unwrap();
+        cache
+            .delete_message(old, &channel, &Snowflake::from("3"))
+            .await
+            .unwrap();
+        assert!(
+            cache
+                .message(&channel, &Snowflake::from("3"))
+                .await
+                .is_some(),
+            "an old-generation delete cannot remove newer data"
+        );
+        let member = crate::model::Member::default();
+        let user = Snowflake::from("5");
+        let guild = Snowflake::from("6");
+        cache
+            .put_member(old, guild.clone(), user.clone(), member.clone())
+            .await
+            .unwrap();
+        cache
+            .put_presence(old, guild.clone(), user.clone(), Presence::default())
+            .await
+            .unwrap();
+        assert!(cache.member(&guild, &user).await.is_none());
+        assert!(cache.presence(&guild, &user).await.is_none());
+        cache
+            .put_member(current, guild.clone(), user.clone(), member)
+            .await
+            .unwrap();
+        cache
+            .put_presence(current, guild.clone(), user.clone(), Presence::default())
+            .await
+            .unwrap();
+        cache.delete_member(old, &guild, &user).await.unwrap();
+        cache.delete_presence(old, &guild, &user).await.unwrap();
+        assert!(cache.member(&guild, &user).await.is_some());
+        assert!(cache.presence(&guild, &user).await.is_some());
+
+        // A full clear keeps epochs growing.
+        cache.clear_cache().await.unwrap();
+        assert!(cache.clear_shard_cache(0, 1).await.unwrap() > second);
+        // Other shards keep their own generations.
+        assert_eq!(cache.clear_shard_cache(1, 2).await.unwrap(), 1);
     }
 
     #[test]
@@ -2421,6 +2629,7 @@ mod tests {
     async fn cache_backend_trait_delegates_hot_paths_to_cache_handle() {
         async fn exercise_backend<B: CacheBackend + ?Sized>(
             backend: &B,
+            fence: CacheFence,
             guild_id: Snowflake,
             channel_id: Snowflake,
             user_id: Snowflake,
@@ -2428,6 +2637,7 @@ mod tests {
         ) {
             backend
                 .put_member(
+                    fence,
                     guild_id.clone(),
                     user_id.clone(),
                     crate::model::Member {
@@ -2442,16 +2652,20 @@ mod tests {
                 .await
                 .unwrap();
             backend
-                .put_message(Message {
-                    id: message_id.clone(),
-                    channel_id: channel_id.clone(),
-                    content: "backend message".to_string(),
-                    ..Message::default()
-                })
+                .put_message(
+                    fence,
+                    Message {
+                        id: message_id.clone(),
+                        channel_id: channel_id.clone(),
+                        content: "backend message".to_string(),
+                        ..Message::default()
+                    },
+                )
                 .await
                 .unwrap();
             backend
                 .put_presence(
+                    fence,
                     guild_id.clone(),
                     user_id.clone(),
                     Presence {
@@ -2499,11 +2713,17 @@ mod tests {
             assert_eq!(backend.list_presences(&guild_id).await.unwrap().len(), 1);
 
             backend
-                .delete_message(&channel_id, &message_id)
+                .delete_message(fence, &channel_id, &message_id)
                 .await
                 .unwrap();
-            backend.delete_presence(&guild_id, &user_id).await.unwrap();
-            backend.delete_member(&guild_id, &user_id).await.unwrap();
+            backend
+                .delete_presence(fence, &guild_id, &user_id)
+                .await
+                .unwrap();
+            backend
+                .delete_member(fence, &guild_id, &user_id)
+                .await
+                .unwrap();
             assert!(backend
                 .get_message(&channel_id, &message_id)
                 .await
@@ -2524,6 +2744,7 @@ mod tests {
         let cache = CacheHandle::new();
         exercise_backend(
             &cache,
+            CacheFence::new(0, 1, 0),
             Snowflake::from("1"),
             Snowflake::from("10"),
             Snowflake::from("20"),
@@ -2533,6 +2754,7 @@ mod tests {
 
         CacheBackend::put_message(
             &cache,
+            CacheFence::new(0, 1, 0),
             Message {
                 id: Snowflake::from("31"),
                 channel_id: Snowflake::from("10"),

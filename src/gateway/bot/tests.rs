@@ -2658,6 +2658,7 @@ async fn shard_supervisor_wait_for_shutdown_times_out() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let error = supervisor
@@ -2687,6 +2688,7 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let task_error = task_error_supervisor
@@ -2701,6 +2703,7 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let join_error = join_error_supervisor
@@ -2725,6 +2728,7 @@ async fn shard_supervisor_shutdown_and_wait_broadcasts_shutdown() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     supervisor.shutdown_and_wait().await.unwrap();
@@ -2901,6 +2905,7 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         super::ShardStartControl {
             supervisor_channels: Some(supervisor_channels),
             boot_gate: Some(boot_rx),
+            failure: None,
         },
     )
     .await
@@ -2936,6 +2941,7 @@ async fn shard_supervisor_manager_send_drain_and_wait_success_paths_work() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     assert!(Arc::ptr_eq(&supervisor.manager(), &manager));
@@ -2973,6 +2979,7 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     supervisor.update_presence(1, "dnd").unwrap();
@@ -3203,6 +3210,14 @@ struct RecordingBackend {
     fail_put_message: bool,
     /// While set, `clear_shard_cache` fails.
     fail_clear_shard_cache: std::sync::atomic::AtomicBool,
+    /// While set, `clear_shard_cache` panics.
+    panic_on_clear: std::sync::atomic::AtomicBool,
+    /// While set, `put_member` panics.
+    panic_on_put_member: std::sync::atomic::AtomicBool,
+    /// Epochs handed out by `clear_shard_cache`.
+    epoch: std::sync::atomic::AtomicU64,
+    /// Fence epoch of every applied write, in order.
+    fences: std::sync::Mutex<Vec<u64>>,
 }
 
 #[cfg(feature = "cache")]
@@ -3236,7 +3251,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
         &self,
         shard_id: u32,
         shard_count: u32,
-    ) -> Result<(), crate::error::DiscordError> {
+    ) -> Result<u64, crate::error::DiscordError> {
         self.record(format!("clear_shard_cache:{shard_id}:{shard_count}"));
         if self
             .fail_clear_shard_cache
@@ -3244,7 +3259,13 @@ impl crate::cache::CacheBackend for RecordingBackend {
         {
             return Err(crate::error::DiscordError::model("clear refused"));
         }
-        Ok(())
+        if self
+            .panic_on_clear
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("backend clear failure under test");
+        }
+        Ok(self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1)
     }
 
     async fn purge_expired_entries(&self) -> Result<(), crate::error::DiscordError> {
@@ -3254,10 +3275,18 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn put_member(
         &self,
+        fence: crate::cache::CacheFence,
         guild_id: Snowflake,
         user_id: Snowflake,
         _member: Member,
     ) -> Result<(), crate::error::DiscordError> {
+        if self
+            .panic_on_put_member
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            panic!("backend put failure under test");
+        }
+        self.fences.lock().unwrap().push(fence.epoch);
         self.record(format!("put_member:{guild_id}:{user_id}"));
         Ok(())
     }
@@ -3279,14 +3308,21 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn delete_member(
         &self,
+        fence: crate::cache::CacheFence,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), crate::error::DiscordError> {
+        self.fences.lock().unwrap().push(fence.epoch);
         self.record(format!("delete_member:{guild_id}:{user_id}"));
         Ok(())
     }
 
-    async fn put_message(&self, message: Message) -> Result<(), crate::error::DiscordError> {
+    async fn put_message(
+        &self,
+        fence: crate::cache::CacheFence,
+        message: Message,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.fences.lock().unwrap().push(fence.epoch);
         if let Some(gate) = &self.put_message_gate {
             gate.acquire().await.expect("gate open").forget();
         }
@@ -3327,9 +3363,11 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn delete_message(
         &self,
+        fence: crate::cache::CacheFence,
         channel_id: &Snowflake,
         message_id: &Snowflake,
     ) -> Result<(), crate::error::DiscordError> {
+        self.fences.lock().unwrap().push(fence.epoch);
         self.record(format!("delete_message:{channel_id}:{message_id}"));
         self.messages
             .lock()
@@ -3340,10 +3378,12 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn put_presence(
         &self,
+        fence: crate::cache::CacheFence,
         guild_id: Snowflake,
         user_id: Snowflake,
         presence: crate::model::Presence,
     ) -> Result<(), crate::error::DiscordError> {
+        self.fences.lock().unwrap().push(fence.epoch);
         self.record(format!(
             "put_presence:{guild_id}:{user_id}:{}",
             presence.status.as_deref().unwrap_or("none")
@@ -3368,9 +3408,11 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn delete_presence(
         &self,
+        fence: crate::cache::CacheFence,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), crate::error::DiscordError> {
+        self.fences.lock().unwrap().push(fence.epoch);
         self.record(format!("delete_presence:{guild_id}:{user_id}"));
         Ok(())
     }
@@ -3459,6 +3501,9 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     assert_eq!(
         recorder.calls(),
         vec![
+            // No READY was forwarded, so the first write starts a fenced
+            // generation for the shard.
+            "clear_shard_cache:0:1".to_string(),
             "put_member:1:2".to_string(),
             "put_message:10:11".to_string(),
             "put_presence:1:2:online".to_string(),
@@ -3466,6 +3511,8 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
             "delete_member:1:2".to_string(),
         ]
     );
+    // Every write carried the epoch of that clear.
+    assert_eq!(*recorder.fences.lock().unwrap(), vec![1, 1, 1, 1, 1]);
 }
 
 #[cfg(feature = "cache")]
@@ -4381,10 +4428,10 @@ async fn cache_backend_writes_keep_gateway_order_when_a_put_is_slow() {
     }
     // With a task per write, the delete ran here and the stalled put later
     // resurrected the message.
-    assert!(
-        recorder.calls().is_empty(),
-        "the delete overtook the stalled put: {:?}",
-        recorder.calls()
+    assert_eq!(
+        recorder.calls(),
+        vec!["clear_shard_cache:0:1".to_string()],
+        "the delete overtook the stalled put"
     );
 
     gate.add_permits(1);
@@ -4392,6 +4439,7 @@ async fn cache_backend_writes_keep_gateway_order_when_a_put_is_slow() {
     assert_eq!(
         recorder.calls(),
         vec![
+            "clear_shard_cache:0:1".to_string(),
             "put_message:10:11".to_string(),
             "delete_message:10:11".to_string()
         ]
@@ -4428,18 +4476,24 @@ async fn full_cache_backend_queue_schedules_an_ordered_shard_resync() {
         },
     );
     forwarder.forward((0, 2), message("3"));
+    // Shard 1/2 is waiting for its resync: its new writes are quarantined
+    // instead of moving the recovery barrier.
+    forwarder.forward((1, 2), message("4"));
     let unhealthy = health.health();
     assert!(!unhealthy.healthy);
     assert_eq!(unhealthy.dropped_writes, 2);
+    assert_eq!(unhealthy.quarantined_writes, 1);
     assert_eq!(unhealthy.pending_resync_shards, vec![(0, 2), (1, 2)]);
 
     gate.add_permits(1);
     forwarder.flush().await;
-    // The put that was queued before the loss lands first, then both
-    // shards are cleared: message 1 cannot survive its dropped delete.
+    // The put that was queued before the loss lands first (after the clear
+    // that starts its shard's generation), then both shards are resynced:
+    // message 1 cannot survive its dropped delete.
     assert_eq!(
         recorder.calls(),
         vec![
+            "clear_shard_cache:1:2".to_string(),
             "put_message:10:1".to_string(),
             "clear_shard_cache:0:2".to_string(),
             "clear_shard_cache:1:2".to_string(),
@@ -4495,6 +4549,7 @@ async fn cache_backend_message_update_merges_instead_of_overwriting_with_a_parti
     assert_eq!(
         recorder.calls(),
         vec![
+            "clear_shard_cache:0:1".to_string(),
             "put_message:10:11".to_string(),
             "put_message:10:11".to_string()
         ]
@@ -4863,6 +4918,7 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
         super::ShardStartControl {
             supervisor_channels: None,
             boot_gate: None,
+            failure: None,
         },
     );
     let error = tokio::time::timeout(Duration::from_secs(10), shard)
@@ -4987,6 +5043,7 @@ async fn shard_supervisor_wait_surfaces_a_later_failure_and_aborts_unresponsive_
         stop_timeout: Duration::from_millis(20),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let error = tokio::time::timeout(Duration::from_secs(5), supervisor.wait())
@@ -5022,6 +5079,7 @@ async fn cancelling_shard_supervisor_wait_aborts_the_running_shards() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     assert!(
@@ -5330,6 +5388,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
         super::ShardStartControl {
             supervisor_channels: None,
             boot_gate: None,
+            failure: None,
         },
     ));
 
@@ -5621,7 +5680,6 @@ async fn interaction_without_a_slot_goes_to_the_overload_hook_at_its_admission_d
         },
     );
     let ingress = pipeline.ingress();
-    let started_at = tokio::time::Instant::now();
     ingress.push(interaction_dispatch("slow"));
     assert_eq!(next_started(&mut started_rx).await, "slow");
     ingress.push(interaction_dispatch("waiting"));
@@ -5639,11 +5697,14 @@ async fn interaction_without_a_slot_goes_to_the_overload_hook_at_its_admission_d
     let overloads = overloads.lock().unwrap().clone();
     assert_eq!(overloads[0].0, "waiting");
     assert_eq!(overloads[1].0, "also-waiting");
+    // `waited` is measured on the (paused) runtime clock when the dispatcher
+    // gives up, i.e. exactly at the deadline. (The test's own elapsed time is
+    // not: the clock keeps auto-advancing while the hook thread runs.)
     for (_, reason, waited) in &overloads {
         assert_eq!(*reason, super::InteractionOverloadReason::AdmissionTimeout);
         assert!(*waited >= Duration::from_secs(2), "{waited:?}");
+        assert!(*waited < Duration::from_secs(3), "{waited:?}");
     }
-    assert!(started_at.elapsed() < Duration::from_secs(3));
     assert!(started_rx.try_recv().is_err(), "no handler ran for them");
 
     gate.add_permits(1);
@@ -5689,6 +5750,14 @@ async fn full_interaction_queue_goes_to_the_overload_hook_and_hook_panics_are_co
     ingress.push(interaction_dispatch("i5"));
     assert_eq!(next_started(&mut started_rx).await, "i5");
 
+    // The hook runs on its own thread, after the pipeline moved on.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while overloads.lock().unwrap().len() < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the hook thread received every overloaded interaction");
     let overloads = overloads.lock().unwrap().clone();
     let ids: Vec<_> = overloads.iter().map(|(id, _, _)| id.as_str()).collect();
     assert_eq!(ids, vec!["i2", "i3", "i4"]);
@@ -5729,22 +5798,27 @@ async fn interactions_start_in_arrival_order() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
-async fn failed_backend_writes_schedule_a_resync_that_is_retried_until_it_succeeds() {
+async fn failed_backend_writes_quarantine_the_shard_and_retry_the_resync_on_a_timer() {
     let recorder = Arc::new(RecordingBackend {
         fail_put_message: true,
-        fail_clear_shard_cache: std::sync::atomic::AtomicBool::new(true),
         ..RecordingBackend::default()
     });
     let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
     let health = forwarder.health_handle();
-    forwarder.forward(
-        (0, 1),
+    let message = |id: &str| {
         super::BackendWrite::PutMessage(Box::new(Message {
-            id: Snowflake::from("1"),
+            id: Snowflake::from(id),
             channel_id: Snowflake::from("10"),
             ..Message::default()
-        })),
-    );
+        }))
+    };
+    forwarder.forward((0, 1), super::BackendWrite::ClearShard);
+    forwarder.flush().await;
+    // The resync after the failed put fails too.
+    recorder
+        .fail_clear_shard_cache
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    forwarder.forward((0, 1), message("1"));
     forwarder.flush().await;
     let failing = health.health();
     assert!(!failing.healthy);
@@ -5754,26 +5828,28 @@ async fn failed_backend_writes_schedule_a_resync_that_is_retried_until_it_succee
         .last_error
         .as_deref()
         .is_some_and(|error| error.contains("clear_shard_cache")));
+    // Writes for the shard stay quarantined until the resync lands.
+    forwarder.forward((0, 1), message("2"));
+    assert_eq!(health.health().quarantined_writes, 1);
 
+    // No further write arrives: the retry timer alone recovers the shard.
     recorder
         .fail_clear_shard_cache
         .store(false, std::sync::atomic::Ordering::SeqCst);
-    forwarder.forward(
-        (0, 1),
-        super::BackendWrite::DeleteMember {
-            guild_id: Snowflake::from("1"),
-            user_id: Snowflake::from("2"),
-        },
-    );
-    forwarder.flush().await;
-    assert!(health.health().healthy);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !health.health().healthy {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the resync was retried without waiting for another write");
     assert_eq!(health.health().resyncs, 1);
     assert_eq!(
         recorder.calls(),
         vec![
+            "clear_shard_cache:0:1".to_string(),
             "put_message:10:1".to_string(),
             "clear_shard_cache:0:1".to_string(),
-            "delete_member:1:2".to_string(),
             "clear_shard_cache:0:1".to_string(),
         ]
     );
@@ -5801,7 +5877,13 @@ async fn unmergeable_message_update_after_a_backend_read_error_resyncs_the_shard
     )
     .await;
     forwarder.flush().await;
-    assert_eq!(recorder.calls(), vec!["clear_shard_cache:1:2".to_string()]);
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "clear_shard_cache:1:2".to_string(),
+            "clear_shard_cache:1:2".to_string()
+        ]
+    );
     assert_eq!(forwarder.health_handle().health().failed_writes, 1);
 }
 
@@ -5834,7 +5916,7 @@ async fn backend_worker_shutdown_aborts_a_hung_call_so_no_write_lands_afterwards
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
-    assert!(recorder.calls().is_empty());
+    assert_eq!(recorder.calls(), vec!["clear_shard_cache:0:1".to_string()]);
 }
 
 #[cfg(feature = "cache")]
@@ -5897,6 +5979,7 @@ async fn shutdown_and_wait_cleans_up_even_when_sending_shutdown_fails() {
         stop_timeout: Duration::from_secs(1),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let error = supervisor
@@ -5936,6 +6019,7 @@ async fn wait_for_shutdown_never_exceeds_its_deadline_after_a_shard_error() {
         stop_timeout: Duration::from_secs(600),
         boot_scheduler: None,
         background: None,
+        failures: None,
     };
 
     let started = tokio::time::Instant::now();
@@ -6130,6 +6214,7 @@ fn supervisor_with(
         stop_timeout: Duration::from_secs(1),
         boot_scheduler,
         background,
+        failures: None,
     }
 }
 
@@ -6216,4 +6301,594 @@ async fn shard_supervisor_shutdown_cancels_pending_boot_waves() {
     supervisor.shutdown().unwrap();
     wait_for_flag(&boot_stopped, "shutdown aborts the boot scheduler").await;
     supervisor.wait().await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Review round 3: reaping, backend worker death, frozen resync barriers,
+// epoch fencing, fleet failure, isolated overload hooks, expiry-first
+// admission, journal closure, and eager wait guards.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn backlogged_lanes_reap_finished_handlers_before_admitting_more() {
+    struct QuickHandler;
+
+    #[async_trait]
+    impl super::EventHandler for QuickHandler {}
+
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(QuickHandler),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            max_concurrent_interactions: 1,
+            interaction_queue_capacity: 1_000,
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    // Both queues stay backlogged for the whole run: with receives
+    // prioritized over reaping, every finished task stayed in the JoinSet.
+    for id in 0..2_000 {
+        ingress.push(message_create_dispatch(&id.to_string(), "quick"));
+    }
+    for id in 0..500 {
+        ingress.push(interaction_dispatch(&format!("i{id}")));
+    }
+    let high_water = Arc::clone(&pipeline.handler_high_water);
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(30)).await.unwrap();
+    let high_water = high_water.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        high_water <= 2,
+        "one permit per lane, yet {high_water} handler tasks were held at once"
+    );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn backend_panics_are_contained_and_resynced_and_a_stopped_worker_is_reported() {
+    let recorder = Arc::new(RecordingBackend::default());
+    recorder
+        .panic_on_put_member
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (forwarder, worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let health = forwarder.health_handle();
+    let member = super::BackendWrite::PutMember {
+        guild_id: Snowflake::from("1"),
+        user_id: Snowflake::from("2"),
+        member: Box::new(Member::default()),
+    };
+    forwarder.forward((0, 1), member);
+    forwarder.flush().await;
+    let after_panic = health.health();
+    assert!(
+        after_panic.worker_running,
+        "the panic did not kill the worker"
+    );
+    assert_eq!(after_panic.failed_writes, 1);
+    assert!(after_panic
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("panicked")));
+    assert!(after_panic.healthy, "the shard was resynced right away");
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "clear_shard_cache:0:1".to_string(),
+            "clear_shard_cache:0:1".to_string()
+        ]
+    );
+
+    // A worker that stops while the client runs is reported, and later
+    // writes are counted instead of vanishing.
+    drop(worker);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while health.health().worker_running {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the worker's exit is reported");
+    forwarder.forward(
+        (0, 1),
+        super::BackendWrite::DeleteMember {
+            guild_id: Snowflake::from("1"),
+            user_id: Snowflake::from("2"),
+        },
+    );
+    let stopped = health.health();
+    assert!(!stopped.healthy);
+    assert!(!stopped.worker_running);
+    assert_eq!(stopped.dropped_writes, 1);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn further_losses_cannot_postpone_a_pending_resync() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let recorder = Arc::new(RecordingBackend {
+        put_message_gate: Some(Arc::clone(&gate)),
+        ..RecordingBackend::default()
+    });
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 1);
+    let put = |id: &str| {
+        super::BackendWrite::PutMessage(Box::new(Message {
+            id: Snowflake::from(id),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        }))
+    };
+    let delete = || super::BackendWrite::DeleteMember {
+        guild_id: Snowflake::from("1"),
+        user_id: Snowflake::from("2"),
+    };
+    // Establish shard 0/2's generation first.
+    gate.add_permits(0);
+    forwarder.forward((0, 2), super::BackendWrite::ClearShard);
+    forwarder.flush().await;
+
+    // Shard 0/2 keeps the queue busy; shard 1/2 loses a write.
+    forwarder.forward((0, 2), put("1"));
+    forwarder.forward((1, 2), delete());
+    tokio::task::yield_now().await;
+    // The worker now holds put 1 (blocked); put 2 takes the free slot and
+    // shard 1/2 loses again. A moving barrier would now wait for put 2.
+    forwarder.forward((0, 2), put("2"));
+    forwarder.forward((1, 2), delete());
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+
+    gate.add_permits(2);
+    forwarder.flush().await;
+    let calls = recorder.calls();
+    let first_put = calls
+        .iter()
+        .position(|call| call == "put_message:10:1")
+        .expect("put 1 applied");
+    assert_eq!(
+        calls[first_put + 1],
+        "clear_shard_cache:1:2",
+        "the resync runs right after the writes queued before the first loss: {calls:?}"
+    );
+    assert!(calls.contains(&"put_message:10:2".to_string()));
+    let health = forwarder.health_handle().health();
+    assert!(health.healthy);
+    assert_eq!(health.quarantined_writes, 1);
+}
+
+/// Delegates to a [`crate::cache::CacheHandle`] but holds `put_message`
+/// calls until released, modelling a write that is already on its way to a
+/// remote store when its client stops.
+#[cfg(feature = "cache")]
+struct DelayedStore {
+    store: crate::cache::CacheHandle,
+    put_gate: Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(feature = "cache")]
+#[async_trait]
+impl crate::cache::CacheBackend for DelayedStore {
+    async fn clear_cache(&self) -> Result<(), crate::error::DiscordError> {
+        self.store.clear_cache().await
+    }
+
+    async fn clear_shard_cache(
+        &self,
+        shard_id: u32,
+        shard_count: u32,
+    ) -> Result<u64, crate::error::DiscordError> {
+        self.store.clear_shard_cache(shard_id, shard_count).await
+    }
+
+    async fn purge_expired_entries(&self) -> Result<(), crate::error::DiscordError> {
+        self.store.purge_expired_entries().await
+    }
+
+    async fn put_member(
+        &self,
+        fence: crate::cache::CacheFence,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        member: Member,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.store
+            .put_member(fence, guild_id, user_id, member)
+            .await
+    }
+
+    async fn get_member(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
+        self.store.get_member(guild_id, user_id).await
+    }
+
+    async fn list_members(
+        &self,
+        guild_id: &Snowflake,
+    ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
+        self.store.list_members(guild_id).await
+    }
+
+    async fn delete_member(
+        &self,
+        fence: crate::cache::CacheFence,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.store.delete_member(fence, guild_id, user_id).await
+    }
+
+    async fn put_message(
+        &self,
+        fence: crate::cache::CacheFence,
+        message: Message,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.put_gate.acquire().await.expect("gate open").forget();
+        self.store.put_message(fence, message).await
+    }
+
+    async fn get_message(
+        &self,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
+    ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
+        self.store.get_message(channel_id, message_id).await
+    }
+
+    async fn list_messages(
+        &self,
+        channel_id: &Snowflake,
+    ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
+        self.store.list_messages(channel_id).await
+    }
+
+    async fn delete_message(
+        &self,
+        fence: crate::cache::CacheFence,
+        channel_id: &Snowflake,
+        message_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.store
+            .delete_message(fence, channel_id, message_id)
+            .await
+    }
+
+    async fn put_presence(
+        &self,
+        fence: crate::cache::CacheFence,
+        guild_id: Snowflake,
+        user_id: Snowflake,
+        presence: crate::model::Presence,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.store
+            .put_presence(fence, guild_id, user_id, presence)
+            .await
+    }
+
+    async fn get_presence(
+        &self,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
+        self.store.get_presence(guild_id, user_id).await
+    }
+
+    async fn list_presences(
+        &self,
+        guild_id: &Snowflake,
+    ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
+        self.store.list_presences(guild_id).await
+    }
+
+    async fn delete_presence(
+        &self,
+        fence: crate::cache::CacheFence,
+        guild_id: &Snowflake,
+        user_id: &Snowflake,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.store.delete_presence(fence, guild_id, user_id).await
+    }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn a_late_write_from_a_previous_client_is_fenced_out_by_the_store() {
+    let store = crate::cache::CacheHandle::new();
+    let old_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let old_backend = Arc::new(DelayedStore {
+        store: store.clone(),
+        put_gate: Arc::clone(&old_gate),
+    });
+    let message = |id: &str| {
+        super::BackendWrite::PutMessage(Box::new(Message {
+            id: Snowflake::from(id),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        }))
+    };
+
+    // The old client starts its generation and submits a write that is
+    // delayed on its way to the store.
+    let (old_client, old_worker) = super::CacheBackendForwarder::spawn(old_backend, 16);
+    old_client.forward((0, 1), super::BackendWrite::ClearShard);
+    old_client.forward((0, 1), message("1"));
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    // A replacement client against the same store starts a newer
+    // generation and writes.
+    let new_backend = Arc::new(DelayedStore {
+        store: store.clone(),
+        put_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+    });
+    let (new_client, _new_worker) = super::CacheBackendForwarder::spawn(new_backend, 16);
+    new_client.forward((0, 1), super::BackendWrite::ClearShard);
+    new_client.forward((0, 1), message("2"));
+    new_client.flush().await;
+
+    // The old write finally arrives, stamped with the old epoch.
+    old_gate.add_permits(1);
+    old_client.flush().await;
+    drop(old_client);
+    old_worker.shutdown(Duration::from_secs(5)).await.unwrap();
+
+    let channel = Snowflake::from("10");
+    assert!(
+        store
+            .message(&channel, &Snowflake::from("1"))
+            .await
+            .is_none(),
+        "the old generation's write was rejected by the store"
+    );
+    assert!(store
+        .message(&channel, &Snowflake::from("2"))
+        .await
+        .is_some());
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
+    struct StuckOnMessage {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for StuckOnMessage {
+        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+        }
+    }
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let handler_started = Arc::clone(&started);
+    let identified = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&identified);
+    let (url, server) = spawn_fake_gateway(move |mut socket, identify| {
+        let handler_started = Arc::clone(&handler_started);
+        let seen = Arc::clone(&seen);
+        async move {
+            use futures_util::StreamExt;
+            let shard = identify["d"]["shard"][0].as_u64().unwrap_or(0);
+            seen.lock().unwrap().push(shard);
+            send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+            if shard == 0 {
+                send_dispatch(
+                    &mut socket,
+                    2,
+                    "MESSAGE_CREATE",
+                    json!({ "id": "5", "channel_id": "6", "content": "hang" }),
+                )
+                .await;
+                handler_started.notified().await;
+                send_close(&mut socket, 4004).await;
+            }
+            while let Some(Ok(_)) = socket.next().await {}
+        }
+    })
+    .await;
+
+    let supervisor = super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(StuckOnMessage { started }),
+        runtime: super::SharedRuntime::new(
+            "token",
+            0,
+            super::TypeMap::new(),
+            CacheConfig::default(),
+            None,
+        ),
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards: 3,
+        boot_window_size: 1,
+        boot_delay: Duration::from_millis(300),
+        initial_delay: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            // Shard 0's drain outlasts several boot delays.
+            shutdown_timeout: Duration::from_secs(2),
+            ..super::DispatchConfig::default()
+        },
+        background: None,
+    })
+    .await
+    .unwrap();
+
+    // Nobody awaits the supervisor yet: the boot scheduler must stop on its
+    // own once shard 0 raised its failure.
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert_eq!(*identified.lock().unwrap(), vec![0]);
+
+    let error = tokio::time::timeout(Duration::from_secs(10), supervisor.wait())
+        .await
+        .expect("the wait finishes")
+        .unwrap_err();
+    assert!(error.to_string().contains("4004"), "{error}");
+    assert_eq!(*identified.lock().unwrap(), vec![0]);
+    server.abort();
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn a_blocking_overload_hook_does_not_stall_internal_processing() {
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    let (hooked_tx, mut hooked_rx) = mpsc::unbounded_channel();
+    let hook: super::InteractionOverloadHook = Arc::new(move |_overloaded| {
+        let _ = hooked_tx.send(());
+        // Blocks its thread until the test releases it.
+        let _ = release_rx.lock().unwrap().recv();
+    });
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let context = pipeline_test_context((0, 1));
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            gated: vec!["slow"],
+        }),
+        context.clone(),
+        None,
+        super::DispatchConfig {
+            interaction_queue_capacity: 1,
+            max_concurrent_interactions: 1,
+            interaction_overload: Some(hook),
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(interaction_dispatch("slow"));
+    assert_eq!(next_started(&mut started_rx).await, "slow");
+    // "waiting" takes the dispatcher's hand, "queued" the queue slot, and
+    // "overflow" goes to the hook, which then blocks.
+    for id in ["waiting", "queued", "overflow"] {
+        ingress.push(interaction_dispatch(id));
+    }
+    tokio::time::timeout(Duration::from_secs(5), hooked_rx.recv())
+        .await
+        .expect("the hook ran")
+        .unwrap();
+
+    // Internal processing continues while the hook is blocked.
+    ingress.push(message_create_dispatch("7", "after"));
+    wait_for_cached_message(&context.cache, "7").await;
+
+    for _ in 0..4 {
+        let _ = release_tx.send(());
+    }
+    drop(release_tx);
+    drop(ingress);
+    // The stuck "slow" handler is aborted by the shutdown timeout; the
+    // overload hook thread must still finish.
+    let _ = pipeline.shutdown(Duration::from_millis(50)).await;
+}
+
+#[tokio::test]
+async fn an_expired_interaction_is_not_admitted_even_when_a_slot_frees_up() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let overloads: OverloadLog = Arc::default();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: vec!["holder"],
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            max_concurrent_interactions: 1,
+            interaction_admission_timeout: Duration::from_millis(200),
+            interaction_overload: Some(recording_overload_hook(&overloads)),
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(interaction_dispatch("holder"));
+    assert_eq!(next_started(&mut started_rx).await, "holder");
+    ingress.push(interaction_dispatch("late"));
+    tokio::task::yield_now().await;
+
+    // Free the slot, then keep this current-thread runtime busy past the
+    // deadline so the dispatcher next runs with both the slot and the
+    // deadline ready.
+    gate.add_permits(1);
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while overloads.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the late interaction reached the hook");
+    let overloads = overloads.lock().unwrap().clone();
+    assert_eq!(overloads[0].0, "late");
+    assert_eq!(
+        overloads[0].1,
+        super::InteractionOverloadReason::AdmissionTimeout
+    );
+    assert!(
+        started_rx.try_recv().is_err(),
+        "the expired interaction must not reach the handler"
+    );
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[cfg(feature = "collectors")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_subscription_never_misses_the_last_event_published_before_the_hub_closes() {
+    for round in 0..500 {
+        let hub = crate::collector::CollectorHub::with_capacity(4);
+        let mut subscription = hub.subscribe();
+        let reader = tokio::spawn(async move {
+            let first = subscription.recv().await;
+            let second = subscription.recv().await;
+            (first.is_ok(), second.is_err())
+        });
+        let publisher = std::thread::spawn(move || {
+            hub.publish(Event::Unknown {
+                kind: "LAST".to_string(),
+                raw: json!({}),
+            });
+            drop(hub);
+        });
+        publisher.join().unwrap();
+        let (got_event, then_closed) = reader.await.unwrap();
+        assert!(
+            got_event && then_closed,
+            "round {round}: the final event was skipped when the hub closed"
+        );
+    }
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn dropping_an_unpolled_wait_future_aborts_the_shards() {
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&dropped));
+    let supervisor = supervisor_with(
+        vec![(
+            0,
+            tokio::spawn(async move {
+                let _flag = flag;
+                std::future::pending::<()>().await;
+                Ok(())
+            }),
+        )],
+        None,
+        None,
+    );
+    let wait = supervisor.wait();
+    drop(wait);
+    wait_for_flag(&dropped, "an unpolled wait future still owns its shards").await;
 }

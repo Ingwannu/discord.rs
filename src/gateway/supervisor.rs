@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinError, JoinHandle};
 use tokio::time::{timeout_at, Duration, Instant};
 use tracing::warn;
@@ -46,6 +47,58 @@ pub struct ShardSupervisor {
     /// Client-wide background work (the external cache backend worker),
     /// drained after every shard stopped.
     pub(super) background: Option<JoinHandle<()>>,
+    /// Raised by the first shard that fails, before it drains its handlers,
+    /// so the boot schedule and `wait*` react without waiting for the drain.
+    pub(super) failures: Option<FleetFailure>,
+}
+
+/// The first fatal failure of a supervised group of shards.
+///
+/// A failing shard can spend up to the handler shutdown timeout draining
+/// before its task completes. Raising the failure first lets the boot
+/// scheduler stop releasing identify waves, and the supervisor start
+/// stopping the other shards, immediately.
+#[derive(Clone)]
+pub(crate) struct FleetFailure(Arc<watch::Sender<Option<(u32, String)>>>);
+
+impl FleetFailure {
+    pub(crate) fn new() -> Self {
+        let (failure, _) = watch::channel(None);
+        Self(Arc::new(failure))
+    }
+
+    /// Records the failure of `shard_id`; the first one wins.
+    pub(crate) fn raise(&self, shard_id: u32, message: String) {
+        self.0.send_if_modified(|current| {
+            if current.is_none() {
+                *current = Some((shard_id, message));
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<Option<(u32, String)>> {
+        self.0.subscribe()
+    }
+}
+
+/// Resolves with the first raised failure; pends forever without a watch.
+pub(crate) async fn failure_raised(
+    failures: &mut Option<watch::Receiver<Option<(u32, String)>>>,
+) -> (u32, String) {
+    let Some(failures) = failures else {
+        return std::future::pending().await;
+    };
+    loop {
+        if let Some(failure) = failures.borrow_and_update().clone() {
+            return failure;
+        }
+        if failures.changed().await.is_err() {
+            return std::future::pending().await;
+        }
+    }
 }
 
 type ShardTaskResult = (u32, Result<Result<(), DiscordError>, JoinError>);
@@ -259,23 +312,32 @@ impl ShardSupervisor {
     /// [`ShardSupervisor::shutdown`], then waits up to 15 seconds for every
     /// shard to stop (aborting the rest). The wait runs even when sending
     /// `Shutdown` failed for some shard, so no shard is left unowned; the
-    /// send error is returned after cleanup.
-    pub async fn shutdown_and_wait(self) -> Result<(), DiscordError> {
-        let sent = self.shutdown();
-        let waited = self.wait_for_shutdown(Self::SHUTDOWN_TIMEOUT).await;
-        match (sent, waited) {
-            (Ok(()), waited) => waited,
-            (Err(send_error), Ok(())) => Err(send_error),
-            (Err(send_error), Err(wait_error)) => Err(invalid_data_error(format!(
-                "{wait_error} (sending shutdown also failed: {send_error})"
-            ))),
+    /// send error is returned after cleanup. Like the other `wait*`
+    /// methods, the returned future owns the shards from the moment it is
+    /// created: dropping it, even unpolled, aborts them.
+    pub fn shutdown_and_wait(self) -> impl Future<Output = Result<(), DiscordError>> + Send {
+        let supervised = SupervisedShards::new(self, Some(Self::SHUTDOWN_TIMEOUT));
+        async move {
+            let sent = supervised.shutdown();
+            let waited = supervised.run().await;
+            match (sent, waited) {
+                (Ok(()), waited) => waited,
+                (Err(send_error), Ok(())) => Err(send_error),
+                (Err(send_error), Err(wait_error)) => Err(invalid_data_error(format!(
+                    "{wait_error} (sending shutdown also failed: {send_error})"
+                ))),
+            }
         }
     }
 
-    /// [`ShardSupervisor::wait`] with an overall deadline; shards still
-    /// running when it passes are aborted and an error is returned.
-    pub async fn wait_for_shutdown(self, timeout_duration: Duration) -> Result<(), DiscordError> {
-        self.wait_with_timeout(Some(timeout_duration)).await
+    /// [`ShardSupervisor::wait`] with an overall deadline (counted from the
+    /// first poll); shards still running when it passes are aborted and an
+    /// error is returned.
+    pub fn wait_for_shutdown(
+        self,
+        timeout_duration: Duration,
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send {
+        SupervisedShards::new(self, Some(timeout_duration)).run()
     }
 
     /// Waits until every shard has stopped.
@@ -283,15 +345,70 @@ impl ShardSupervisor {
     /// All shards are watched concurrently, including while later identify
     /// waves are still queued. The first shard that fails — for example with
     /// [`DiscordError::Gateway`] for a non-reconnectable close code such as
-    /// 4004 — stops the boot schedule (queued shards never connect), sends
-    /// `Shutdown` to the running shards, gives them the handler shutdown
-    /// timeout plus two seconds (never past an overall deadline), then
-    /// aborts and joins whatever is still running and returns that first
-    /// error. A shard that stops cleanly does not affect the others. The
-    /// external cache backend worker is drained last. Cancelling this future
-    /// aborts every shard still running.
-    pub async fn wait(self) -> Result<(), DiscordError> {
-        self.wait_with_timeout(None).await
+    /// 4004 — raises the failure before draining its own handlers, which
+    /// stops the boot schedule (queued shards never connect) and makes the
+    /// supervisor send `Shutdown` to the running shards at once. They get
+    /// the handler shutdown timeout plus two seconds (never past an overall
+    /// deadline); whatever is still running is then aborted and joined, and
+    /// the first error is returned. A shard that stops cleanly does not
+    /// affect the others. The external cache backend worker is drained last.
+    ///
+    /// The returned future owns the shards from the moment it is created:
+    /// dropping it — polled or not — aborts every shard still running and
+    /// the boot schedule.
+    pub fn wait(self) -> impl Future<Output = Result<(), DiscordError>> + Send {
+        SupervisedShards::new(self, None).run()
+    }
+}
+
+/// The shards, boot schedule, and background work of one `wait*` call.
+///
+/// Built eagerly when the `wait*` future is created, so every task is under
+/// an abort-on-drop guard even if the future is dropped before its first
+/// poll (an `async fn` would only install guards inside its body).
+struct SupervisedShards {
+    manager: Arc<StdMutex<ShardingManager>>,
+    shards: ShardSet,
+    stop_timeout: Duration,
+    timeout: Option<Duration>,
+    boot_scheduler: Option<AbortOnDrop<()>>,
+    background: Option<AbortOnDrop<()>>,
+    failures: Option<watch::Receiver<Option<(u32, String)>>>,
+}
+
+/// The failure that ends a wait: a shard task that completed with an error,
+/// or one that raised a failure and is still draining.
+enum FirstFailure {
+    Completed(DiscordError),
+    Raised { shard_id: u32, message: String },
+}
+
+impl SupervisedShards {
+    fn new(supervisor: ShardSupervisor, timeout: Option<Duration>) -> Self {
+        let ShardSupervisor {
+            manager,
+            tasks,
+            stop_timeout,
+            boot_scheduler,
+            background,
+            failures,
+        } = supervisor;
+        Self {
+            manager,
+            shards: ShardSet::new(tasks),
+            stop_timeout,
+            timeout,
+            boot_scheduler: boot_scheduler.map(AbortOnDrop),
+            background: background.map(AbortOnDrop),
+            failures: failures.map(|failures| failures.subscribe()),
+        }
+    }
+
+    fn shutdown(&self) -> Result<(), DiscordError> {
+        if let Some(boot_scheduler) = &self.boot_scheduler {
+            boot_scheduler.0.abort();
+        }
+        lock_sharding_manager(&self.manager).broadcast(ShardIpcMessage::Shutdown)
     }
 
     /// Decision log:
@@ -300,105 +417,135 @@ impl ShardSupervisor {
     ///   or say which could not be confirmed.
     /// - Previous design: shard tasks were awaited in order, so a later
     ///   shard's failure (for example 4004) stayed hidden while an earlier
-    ///   shard ran, an early error dropped the other handles without stopping
-    ///   their tasks, and boot waves were released before the supervisor
-    ///   existed, so failures during boot were not acted on.
+    ///   shard ran; an early error dropped the other handles without stopping
+    ///   their tasks; boot waves kept launching while a failed shard drained;
+    ///   and guards were installed only once the wait was first polled.
     /// - Alternatives considered: (1) return immediately and abort the rest —
     ///   no close frame and in-flight handlers are cut off; (2) wait for the
     ///   rest to finish on their own — may never return; (3) stop the boot
     ///   schedule, broadcast `Shutdown`, wait a bounded time, then abort and
     ///   join.
-    /// - Chosen: (3), watching all shards with `FuturesUnordered`; the stop
-    ///   window is the earlier of `stop_timeout` and the caller's deadline.
+    /// - Chosen: (3), watching all shards with `FuturesUnordered` and the
+    ///   fleet failure signal; the stop window is the earlier of
+    ///   `stop_timeout` and the caller's deadline; guards are created with
+    ///   the future.
     /// - Why: nothing is left running when `wait` returns, while the
     ///   graceful path (close frame, handler drain) is still preferred.
-    /// - Trade-offs: the error surfaces within the stop window. Cancelling
-    ///   the wait or hitting its deadline aborts the remaining shards. A task
+    /// - Trade-offs: the error surfaces within the stop window. Dropping the
+    ///   wait or hitting its deadline aborts the remaining shards. A task
     ///   that does not confirm cancellation within a second is reported in
     ///   the returned error instead of being claimed stopped.
-    async fn wait_with_timeout(
-        self,
-        timeout_duration: Option<Duration>,
-    ) -> Result<(), DiscordError> {
-        let ShardSupervisor {
-            manager,
-            tasks,
-            stop_timeout,
-            boot_scheduler,
-            background,
-        } = self;
+    async fn run(mut self) -> Result<(), DiscordError> {
         // `checked_add` keeps an absurdly large timeout from panicking; it
         // then behaves like no timeout at all.
-        let deadline = timeout_duration.and_then(|duration| Instant::now().checked_add(duration));
-        let mut boot_scheduler = boot_scheduler.map(AbortOnDrop);
-        let background = background.map(AbortOnDrop);
-        let mut shards = ShardSet::new(tasks);
-
+        let deadline = self
+            .timeout
+            .and_then(|duration| Instant::now().checked_add(duration));
         loop {
-            match shards.next_until(deadline).await {
+            let next = tokio::select! {
+                biased;
+                (shard_id, message) = failure_raised(&mut self.failures) => {
+                    return self
+                        .stop_after_failure(FirstFailure::Raised { shard_id, message }, deadline)
+                        .await;
+                }
+                next = self.shards.next_until(deadline) => next,
+            };
+            match next {
                 ShardNext::Stopped(_, Ok(())) => continue,
                 ShardNext::AllStopped => {
-                    drop(boot_scheduler);
+                    self.boot_scheduler.take();
                     return finish_background(
-                        background,
-                        earliest_deadline(stop_timeout, deadline),
+                        self.background.take(),
+                        earliest_deadline(self.stop_timeout, deadline),
                     )
                     .await
                     .map_err(DiscordError::gateway);
                 }
                 ShardNext::TimedOut => {
-                    drop(boot_scheduler);
-                    let first_pending = shards.first_pending();
-                    let unconfirmed = shards.abort_and_confirm().await;
-                    let background = finish_background(background, Some(Instant::now())).await;
+                    self.boot_scheduler.take();
+                    let first_pending = self.shards.first_pending();
+                    let unconfirmed = self.shards.abort_and_confirm().await;
+                    let background =
+                        finish_background(self.background.take(), Some(Instant::now())).await;
                     let mut message = format!(
                         "timed out waiting for shard {first_pending} shutdown after {:?}",
-                        timeout_duration.unwrap_or_default()
+                        self.timeout.unwrap_or_default()
                     );
                     append_cleanup_notes(&mut message, unconfirmed, background);
                     return Err(invalid_data_error(message));
                 }
-                ShardNext::Stopped(shard_id, Err(error)) => {
-                    warn!(
-                        "shard {shard_id} stopped with an error, stopping the remaining shards: \
-                         {error}"
-                    );
-                    // Queued shards must never connect after a failure.
-                    boot_scheduler.take();
-                    if let Err(error) =
-                        lock_sharding_manager(&manager).broadcast(ShardIpcMessage::Shutdown)
-                    {
-                        warn!("failed to send shutdown to every remaining shard: {error}");
-                    }
-                    let stop_deadline = earliest_deadline(stop_timeout, deadline);
-                    loop {
-                        match shards.next_until(stop_deadline).await {
-                            ShardNext::Stopped(other, Err(other_error)) => {
-                                warn!("shard {other} failed while stopping: {other_error}");
-                            }
-                            ShardNext::Stopped(_, Ok(())) => {}
-                            ShardNext::AllStopped | ShardNext::TimedOut => break,
-                        }
-                    }
-                    let unconfirmed = if shards.running.is_empty() {
-                        0
-                    } else {
-                        warn!(
-                            "{} shard(s) did not stop within the stop window; aborting them",
-                            shards.running.len()
-                        );
-                        shards.abort_and_confirm().await
-                    };
-                    let background = finish_background(background, stop_deadline).await;
-                    if unconfirmed == 0 && background.is_ok() {
-                        return Err(error);
-                    }
-                    let mut message = error.to_string();
-                    append_cleanup_notes(&mut message, unconfirmed, background);
-                    return Err(DiscordError::gateway(message));
+                ShardNext::Stopped(_, Err(error)) => {
+                    return self
+                        .stop_after_failure(FirstFailure::Completed(error), deadline)
+                        .await;
                 }
             }
         }
+    }
+
+    async fn stop_after_failure(
+        mut self,
+        first: FirstFailure,
+        deadline: Option<Instant>,
+    ) -> Result<(), DiscordError> {
+        let (failing_shard, mut error) = match first {
+            FirstFailure::Completed(error) => (None, Some(error)),
+            FirstFailure::Raised { shard_id, message } => {
+                warn!("shard {shard_id} failed, stopping the remaining shards: {message}");
+                (Some((shard_id, message)), None)
+            }
+        };
+        if let Some(error) = &error {
+            warn!("a shard stopped with an error, stopping the remaining shards: {error}");
+        }
+        // Queued shards must never connect after a failure.
+        self.boot_scheduler.take();
+        if let Err(send_error) =
+            lock_sharding_manager(&self.manager).broadcast(ShardIpcMessage::Shutdown)
+        {
+            warn!("failed to send shutdown to every remaining shard: {send_error}");
+        }
+        let stop_deadline = earliest_deadline(self.stop_timeout, deadline);
+        loop {
+            match self.shards.next_until(stop_deadline).await {
+                ShardNext::Stopped(shard_id, Err(shard_error)) => {
+                    // The shard that raised the failure reports its real
+                    // error (with its variant) once it finished draining.
+                    if error.is_none()
+                        && failing_shard
+                            .as_ref()
+                            .is_some_and(|(failing, _)| *failing == shard_id)
+                    {
+                        error = Some(shard_error);
+                    } else {
+                        warn!("shard {shard_id} failed while stopping: {shard_error}");
+                    }
+                }
+                ShardNext::Stopped(_, Ok(())) => {}
+                ShardNext::AllStopped | ShardNext::TimedOut => break,
+            }
+        }
+        let unconfirmed = if self.shards.running.is_empty() {
+            0
+        } else {
+            warn!(
+                "{} shard(s) did not stop within the stop window; aborting them",
+                self.shards.running.len()
+            );
+            self.shards.abort_and_confirm().await
+        };
+        let background = finish_background(self.background.take(), stop_deadline).await;
+        let error = error.unwrap_or_else(|| {
+            let (shard_id, message) = failing_shard.unwrap_or_default();
+            DiscordError::gateway(format!("shard {shard_id} failed: {message}"))
+        });
+        if unconfirmed == 0 && background.is_ok() {
+            return Err(error);
+        }
+        let mut message = error.to_string();
+        append_cleanup_notes(&mut message, unconfirmed, background);
+        Err(DiscordError::gateway(message))
     }
 }
 
