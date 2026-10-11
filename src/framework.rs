@@ -324,7 +324,7 @@ fn route_key(interaction: &Interaction) -> RouteKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_id;
+    use crate::model::{test_id, ComponentType};
     use crate::model::{
         AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
         ComponentInteraction, ComponentInteractionData, MessageContextMenuInteraction,
@@ -525,7 +525,7 @@ mod tests {
                     context: context("12"),
                     data: ComponentInteractionData {
                         custom_id: "button:ok".to_string(),
-                        component_type: 2,
+                        component_type: ComponentType::BUTTON,
                         values: Vec::new(),
                     },
                 }),

@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::parsers::V2ModalSubmission;
 
 use super::{
-    ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, Entitlement, GenericId,
-    GuildId, GuildInstallOwner, InteractionContextType, InteractionId, InteractionResponseState,
-    Member, MentionableId, Message, MessageId, PermissionsBitField, Role, RoleId, User, UserId,
+    ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, CommandOptionType,
+    CommandType, ComponentType, Entitlement, GenericId, GuildId, GuildInstallOwner,
+    InteractionContextType, InteractionId, InteractionResponseState, InteractionResponseType,
+    InteractionType, Member, MentionableId, Message, MessageId, PermissionsBitField, Role, RoleId,
+    User, UserId,
 };
 
 /// `authorizing_integration_owners` of an interaction (or of a message's
@@ -232,11 +234,12 @@ impl InteractionContextData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `CommandInteractionOption`.
+/// An option of a received application command (or a nested
+/// subcommand/group). No `Default`: `type` and `name` are required.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CommandInteractionOption {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: CommandOptionType,
     pub name: String,
     #[serde(default)]
     pub options: Vec<CommandInteractionOption>,
@@ -259,8 +262,10 @@ pub struct CommandInteractionData {
     pub id: Option<CommandId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Command type. Discord treats an absent `type` as
+    /// [`CommandType::CHAT_INPUT`].
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<CommandType>,
     #[serde(default)]
     pub options: Vec<CommandInteractionOption>,
     #[serde(default)]
@@ -273,11 +278,12 @@ pub struct CommandInteractionData {
     pub target_id: Option<GenericId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `ComponentInteractionData`.
+/// `data` of a message component interaction. No `Default`: `custom_id`
+/// and `component_type` are required.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentInteractionData {
     pub custom_id: String,
-    pub component_type: u8,
+    pub component_type: ComponentType,
     #[serde(default)]
     pub values: Vec<String>,
 }
@@ -374,12 +380,17 @@ pub enum Interaction {
     Component(ComponentInteraction),
     /// Discord API enum variant `ModalSubmit`.
     ModalSubmit(ModalSubmitInteraction),
-    /// Discord API enum variant `Unknown`.
+    /// An interaction this version of discord.rs cannot type: an unknown
+    /// interaction `type`, or an application command whose command `type`
+    /// is unknown.
     Unknown {
         /// Parsed interaction context shared with known variants.
         context: InteractionContextData,
-        /// Raw Discord interaction type value.
-        kind: u8,
+        /// The interaction `type`. For an application command with an
+        /// unknown command type this is
+        /// [`InteractionType::APPLICATION_COMMAND`] and the command type is
+        /// `raw_data["type"]` (2.x stored the command type here instead).
+        kind: InteractionType,
         /// Raw interaction data object for unsupported variants.
         raw_data: serde_json::Value,
     },
@@ -429,11 +440,12 @@ impl Interaction {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `InteractionCallbackResponse`.
+/// An interaction callback (`POST /interactions/{id}/{token}/callback`).
+/// No `Default`: `type` is required and has no protocol default.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InteractionCallbackResponse {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: InteractionResponseType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<serde_json::Value>,
 }
@@ -444,7 +456,7 @@ pub struct InteractionCallbackResponse {
 pub struct InteractionCallbackInteraction {
     pub id: InteractionId,
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: InteractionType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_instance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -457,10 +469,11 @@ pub struct InteractionCallbackInteraction {
 
 /// Resource created by an interaction response, returned when
 /// `with_response=true` is passed to the callback endpoint.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InteractionCallbackResource {
+    /// The callback type that created this resource.
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: InteractionResponseType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_instance: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

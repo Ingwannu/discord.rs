@@ -1,4 +1,4 @@
-use crate::model::{test_id, ChannelType, MfaLevel, OverwriteType};
+use crate::model::{test_id, ChannelType, InteractionResponseType, MfaLevel, OverwriteType};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -649,7 +649,7 @@ fn sample_message() -> CreateMessage {
 
 fn sample_interaction_response() -> InteractionCallbackResponse {
     InteractionCallbackResponse {
-        kind: 4,
+        kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         data: Some(json!({ "content": "ack" })),
     }
 }
@@ -7556,7 +7556,7 @@ async fn interaction_response_with_result_requests_callback_resource() {
             test_id(10),
             "interactiontoken",
             &crate::model::InteractionCallbackResponse {
-                kind: 4,
+                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(json!({ "content": "hello" })),
             },
         )
@@ -7844,7 +7844,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
             test_id(10),
             "interactiontoken",
             &InteractionCallbackResponse {
-                kind: 4,
+                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(json!({ "content": "reply" })),
             },
         )
@@ -7855,7 +7855,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
             test_id(11),
             "interactiontoken",
             &InteractionCallbackResponse {
-                kind: 4,
+                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(json!({
                     "content": "explicit",
                     "allowed_mentions": { "parse": ["roles"] }
@@ -7869,7 +7869,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
             test_id(12),
             "interactiontoken",
             &InteractionCallbackResponse {
-                kind: 9,
+                kind: InteractionResponseType::MODAL,
                 data: Some(json!({ "custom_id": "modal", "title": "t", "components": [] })),
             },
         )

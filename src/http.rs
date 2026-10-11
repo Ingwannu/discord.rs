@@ -51,7 +51,10 @@ mod voice;
 mod webhook;
 
 use crate::error::DiscordError;
-use crate::model::{AllowedMentions, ApplicationId, CreateMessage, InteractionCallbackResponse};
+use crate::model::{
+    AllowedMentions, ApplicationId, CreateMessage, InteractionCallbackResponse,
+    InteractionResponseType,
+};
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
@@ -750,10 +753,12 @@ impl RestClient {
         &self,
         body: &'a InteractionCallbackResponse,
     ) -> Cow<'a, InteractionCallbackResponse> {
-        const CHANNEL_MESSAGE_WITH_SOURCE: u8 = 4;
-        const UPDATE_MESSAGE: u8 = 7;
         if self.default_allowed_mentions.is_none()
-            || !matches!(body.kind, CHANNEL_MESSAGE_WITH_SOURCE | UPDATE_MESSAGE)
+            || !matches!(
+                body.kind,
+                InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
+                    | InteractionResponseType::UPDATE_MESSAGE
+            )
         {
             return Cow::Borrowed(body);
         }

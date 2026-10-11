@@ -13,18 +13,19 @@ use super::{
     CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
     Embed, EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId,
     GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
-    InteractionCallbackResponse, InteractionContextData, Invite, InviteTargetUsersJobStatus,
-    Member, Message, MessageComponent, MessageContextMenuInteraction, MessageReferenceType,
-    ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
-    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
-    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
-    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
-    ModifyWebhookWithToken, OverwriteType, PermissionOverwrite, PermissionsBitField,
-    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollLayoutType,
-    PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SeparatorSpacing,
-    SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse, ThreadMember,
-    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreenChannel,
+    InteractionCallbackResponse, InteractionContextData, InteractionResponseType, InteractionType,
+    Invite, InviteTargetUsersJobStatus, Member, Message, MessageComponent,
+    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
+    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
+    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteType,
+    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
+    PollAnswerId, PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
+    ResolvedData, Role, RoleColors, SeparatorSpacing, SessionStartLimit, Sku, StickerItem,
+    Subscription, ThreadListResponse, ThreadMember, ThreadMetadata, User,
+    UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
@@ -765,7 +766,7 @@ fn message_resource_extended_fields_decode() {
             "content": "original"
         },
         "interaction_metadata": { "id": "9100", "type": 2 },
-        "interaction": { "id": "9100", "name": "old" },
+        "interaction": { "id": "9100", "type": 2, "name": "old" },
         "resolved": { "users": {} },
         "call": {
             "participants": ["42"],
@@ -794,7 +795,7 @@ fn message_resource_extended_fields_decode() {
             .interaction_metadata
             .as_ref()
             .map(|metadata| metadata.kind),
-        Some(2)
+        Some(InteractionType::APPLICATION_COMMAND)
     );
     assert_eq!(
         message
@@ -879,10 +880,10 @@ fn embed_field_and_focus_helpers_follow_default_and_true_branches() {
         inline: true,
         ..default_field.clone()
     };
-    let unfocused = CommandInteractionOption::default();
+    let unfocused = CommandInteractionOption::fixture();
     let focused = CommandInteractionOption {
         focused: Some(true),
-        ..CommandInteractionOption::default()
+        ..CommandInteractionOption::fixture()
     };
 
     let default_json = serde_json::to_value(&default_field).unwrap();
@@ -906,7 +907,7 @@ fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
         context: context.clone(),
         data: ComponentInteractionData {
             custom_id: "button".to_string(),
-            component_type: 2,
+            component_type: ComponentType::BUTTON,
             values: vec!["x".to_string()],
         },
     });
@@ -962,7 +963,7 @@ fn interaction_accessors_cover_all_variants() {
         }),
         Interaction::Component(ComponentInteraction {
             context: context(6, 60, "component-token"),
-            data: ComponentInteractionData::default(),
+            data: ComponentInteractionData::fixture(),
         }),
         Interaction::ModalSubmit(ModalSubmitInteraction {
             context: context(7, 70, "modal-token"),
@@ -973,7 +974,7 @@ fn interaction_accessors_cover_all_variants() {
         }),
         Interaction::Unknown {
             context: context(8, 80, "unknown-token"),
-            kind: 99,
+            kind: InteractionType::new(99),
             raw_data: json!({ "kind": "unknown" }),
         },
     ];
@@ -1066,8 +1067,8 @@ fn serde_defaults_fill_missing_fields_for_core_models() {
 #[test]
 fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
     let callback = InteractionCallbackResponse {
-        kind: 4,
-        ..InteractionCallbackResponse::default()
+        kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+        data: None,
     };
     let dm_channel = CreateDmChannel {
         recipient_id: test_id(321),
@@ -1780,7 +1781,7 @@ fn message_interaction_metadata_decodes_with_nested_trigger() {
 
     let metadata = message.interaction_metadata.unwrap();
     assert_eq!(metadata.id.get(), 900);
-    assert_eq!(metadata.kind, 5);
+    assert_eq!(metadata.kind, InteractionType::MODAL_SUBMIT);
     assert_eq!(metadata.user.as_ref().unwrap().username, "someone");
     assert_eq!(
         metadata
@@ -1807,14 +1808,14 @@ fn message_interaction_metadata_decodes_with_nested_trigger() {
 
     let trigger = metadata.triggering_interaction_metadata.unwrap();
     assert_eq!(trigger.id.get(), 890);
-    assert_eq!(trigger.kind, 3);
+    assert_eq!(trigger.kind, InteractionType::MESSAGE_COMPONENT);
     assert!(trigger.authorizing_integration_owners.is_empty());
     assert_eq!(trigger.interacted_message_id.map(u64::from), Some(880));
     assert!(trigger.triggering_interaction_metadata.is_none());
 
     let legacy = message.interaction.unwrap();
     assert_eq!(legacy.id.get(), 900);
-    assert_eq!(legacy.kind, 2);
+    assert_eq!(legacy.kind, InteractionType::APPLICATION_COMMAND);
     assert_eq!(legacy.name, "deploy");
     assert_eq!(legacy.user.as_ref().unwrap().id.get(), 42);
 }

@@ -16,7 +16,7 @@ use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommandOptionChoice, Interaction, InteractionContextData, InteractionId,
-    InteractionResponseState,
+    InteractionResponseState, InteractionResponseType, InteractionType,
 };
 use crate::parsers::{
     parse_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
@@ -71,6 +71,7 @@ impl InteractionResponse {
             Self::Raw(payload) => payload
                 .get("type")
                 .and_then(value_to_u8)
+                .map(InteractionResponseType::new)
                 .and_then(AckKind::for_callback_type),
         }
     }
@@ -271,40 +272,33 @@ pub fn verify_discord_signature(
 /// Builds the body of an inline answer; `None` for
 /// [`InteractionResponse::Accepted`], which has no body.
 fn interaction_response_payload(response: InteractionResponse) -> Option<Value> {
-    use crate::helpers::{
-        INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, INTERACTION_RESPONSE_CHANNEL_MESSAGE,
-        INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
-        INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
-        INTERACTION_RESPONSE_MODAL, INTERACTION_RESPONSE_PONG, INTERACTION_RESPONSE_UPDATE_MESSAGE,
-    };
-
     Some(match response {
         InteractionResponse::Accepted => return None,
-        InteractionResponse::Pong => serde_json::json!({ "type": INTERACTION_RESPONSE_PONG }),
+        InteractionResponse::Pong => serde_json::json!({ "type": InteractionResponseType::PONG }),
         InteractionResponse::ChannelMessage(data) => serde_json::json!({
-            "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+            "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
             "data": data,
         }),
         InteractionResponse::DeferredMessage => {
-            serde_json::json!({ "type": INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE })
+            serde_json::json!({ "type": InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE })
         }
         InteractionResponse::DeferredUpdate => {
-            serde_json::json!({ "type": INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE })
+            serde_json::json!({ "type": InteractionResponseType::DEFERRED_UPDATE_MESSAGE })
         }
         InteractionResponse::AutocompleteResult(choices) => serde_json::json!({
-            "type": INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+            "type": InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
             "data": { "choices": choices },
         }),
         InteractionResponse::Modal(modal) => serde_json::json!({
-            "type": INTERACTION_RESPONSE_MODAL,
+            "type": InteractionResponseType::MODAL,
             "data": modal.build(),
         }),
         InteractionResponse::UpdateMessage(data) => serde_json::json!({
-            "type": INTERACTION_RESPONSE_UPDATE_MESSAGE,
+            "type": InteractionResponseType::UPDATE_MESSAGE,
             "data": data,
         }),
         InteractionResponse::LaunchActivity => {
-            serde_json::json!({ "type": INTERACTION_RESPONSE_LAUNCH_ACTIVITY })
+            serde_json::json!({ "type": InteractionResponseType::LAUNCH_ACTIVITY })
         }
         InteractionResponse::Raw(data) => data,
     })
@@ -360,7 +354,11 @@ where
         }
     };
 
-    let interaction_type = match payload.get("type").and_then(value_to_u8) {
+    let interaction_type = match payload
+        .get("type")
+        .and_then(value_to_u8)
+        .map(InteractionType::new)
+    {
         Some(interaction_type) => interaction_type,
         None => {
             return (
@@ -371,10 +369,10 @@ where
         }
     };
 
-    if interaction_type == crate::model::InteractionType::PING.get() {
+    if interaction_type == InteractionType::PING {
         return (
             StatusCode::OK,
-            Json(serde_json::json!({ "type": crate::helpers::INTERACTION_RESPONSE_PONG })),
+            Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
         )
             .into_response();
     }
@@ -471,7 +469,11 @@ where
         }
     };
 
-    let interaction_type = match payload.get("type").and_then(value_to_u8) {
+    let interaction_type = match payload
+        .get("type")
+        .and_then(value_to_u8)
+        .map(InteractionType::new)
+    {
         Some(interaction_type) => interaction_type,
         None => {
             return (
@@ -482,10 +484,10 @@ where
         }
     };
 
-    if interaction_type == crate::model::InteractionType::PING.get() {
+    if interaction_type == InteractionType::PING {
         return (
             StatusCode::OK,
-            Json(serde_json::json!({ "type": crate::helpers::INTERACTION_RESPONSE_PONG })),
+            Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
         )
             .into_response();
     }
@@ -612,9 +614,10 @@ mod tests {
     use crate::builders::ModalBuilder;
     use crate::framework::{AppContext, AppFramework};
     use crate::http::RestClient;
-    use crate::model::test_id;
-    use crate::model::ApplicationCommandOptionChoice;
-    use crate::model::{Interaction, InteractionContextData, InteractionResponseState};
+    use crate::model::{
+        test_id, ApplicationCommandOptionChoice, Interaction, InteractionContextData,
+        InteractionResponseState,
+    };
     use crate::parsers::{InteractionContext, RawInteraction};
     use crate::response::{
         AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,

@@ -6,10 +6,10 @@ use crate::types::Emoji;
 
 use super::{
     is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, Channel, ChannelId,
-    ChannelType, CreatePoll, Embed, GuildId, InteractionId, Member, MessageActivityType,
-    MessageComponent, MessageId, MessageReferenceType, MessageType, PartialApplication, Poll,
-    ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId, Sticker, StickerId, StickerItem,
-    ThreadMember, User, UserId, WebhookId,
+    ChannelType, CreatePoll, Embed, GuildId, InteractionId, InteractionType, Member,
+    MessageActivityType, MessageComponent, MessageId, MessageReferenceType, MessageType,
+    PartialApplication, Poll, ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId,
+    Sticker, StickerId, StickerItem, ThreadMember, User, UserId, WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,9 +169,10 @@ pub struct SharedClientTheme {
 pub struct MessageInteractionMetadata {
     /// ID of the triggering interaction.
     pub id: InteractionId,
-    /// Raw Discord interaction type of the triggering interaction.
-    #[serde(rename = "type", default)]
-    pub kind: u8,
+    /// Interaction type of the triggering interaction (required; 2.x read a
+    /// missing `type` as `0`).
+    #[serde(rename = "type")]
+    pub kind: InteractionType,
     /// User who triggered the interaction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
@@ -205,8 +206,8 @@ pub struct MessageInteractionMetadata {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageInteraction {
     pub id: InteractionId,
-    #[serde(rename = "type", default)]
-    pub kind: u8,
+    #[serde(rename = "type")]
+    pub kind: InteractionType,
     #[serde(default)]
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -30,28 +30,10 @@ use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 use crate::model::{
     ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionCallbackResponse,
-    InteractionContextData, InteractionId, Message, MessageId,
+    InteractionContextData, InteractionId, InteractionResponseType, Message, MessageId,
 };
 use crate::response::InteractionReplyData;
 use crate::types::ButtonConfig;
-
-/// Interaction callback type `PONG` (1): the answer to Discord's endpoint
-/// ping. It never acknowledges an interaction.
-pub const INTERACTION_RESPONSE_PONG: u8 = 1;
-/// Public constant for `INTERACTION_RESPONSE_CHANNEL_MESSAGE`.
-pub const INTERACTION_RESPONSE_CHANNEL_MESSAGE: u8 = 4;
-/// Public constant for `INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE`.
-pub const INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE: u8 = 5;
-/// Public constant for `INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE`.
-pub const INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE: u8 = 6;
-/// Public constant for `INTERACTION_RESPONSE_UPDATE_MESSAGE`.
-pub const INTERACTION_RESPONSE_UPDATE_MESSAGE: u8 = 7;
-/// Public constant for `INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT`.
-pub const INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT: u8 = 8;
-/// Public constant for `INTERACTION_RESPONSE_MODAL`.
-pub const INTERACTION_RESPONSE_MODAL: u8 = 9;
-/// Public constant for `INTERACTION_RESPONSE_LAUNCH_ACTIVITY`.
-pub const INTERACTION_RESPONSE_LAUNCH_ACTIVITY: u8 = 12;
 
 fn components_v2_flags(ephemeral: bool) -> u64 {
     let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
@@ -135,7 +117,7 @@ pub async fn respond_with_container(
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         "data": data,
     });
 
@@ -197,7 +179,7 @@ pub async fn respond_component_with_container(
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         "data": data,
     });
 
@@ -221,7 +203,7 @@ pub async fn respond_modal_with_container(
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         "data": data,
     });
 
@@ -374,7 +356,7 @@ pub async fn update_component_with_container(
 ) -> Result<(), DiscordError> {
     let data = ComponentsV2Payload::new(vec![container.build()]).into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_UPDATE_MESSAGE,
+        "type": InteractionResponseType::UPDATE_MESSAGE,
         "data": data,
     });
 
@@ -394,7 +376,7 @@ pub async fn respond_with_modal(
     modal: ModalBuilder,
 ) -> Result<(), DiscordError> {
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_MODAL,
+        "type": InteractionResponseType::MODAL,
         "data": modal.build(),
     });
 
@@ -485,7 +467,7 @@ pub async fn respond_with_autocomplete_choices(
         .create_response(
             http,
             &InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+                kind: InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
                 data: Some(serde_json::json!({ "choices": choices })),
             },
         )
@@ -503,7 +485,7 @@ pub async fn launch_activity(
         .create_response(
             http,
             &InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+                kind: InteractionResponseType::LAUNCH_ACTIVITY,
                 data: None,
             },
         )
@@ -528,7 +510,7 @@ pub async fn defer_and_followup_container(
     }
 
     let defer_data = serde_json::json!({
-        "type": INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         "data": { "flags": flags },
     });
 
@@ -564,7 +546,7 @@ pub async fn respond_with_components_v2(
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         "data": data,
     });
 
@@ -589,7 +571,7 @@ pub async fn respond_component_with_components_v2(
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
-        "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
         "data": data,
     });
 
@@ -601,7 +583,10 @@ pub async fn respond_component_with_components_v2(
 #[cfg(test)]
 #[expect(deprecated, reason = "covers the deprecated helpers")]
 mod tests {
-    use crate::model::test_id;
+    use crate::model::{
+        test_id, ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
+        InteractionContextData, InteractionResponseType,
+    };
     use serde_json::json;
 
     use super::{
@@ -612,9 +597,7 @@ mod tests {
         respond_modal_with_container, respond_to_interaction, respond_with_autocomplete_choices,
         respond_with_components_v2, respond_with_container, respond_with_message,
         respond_with_modal, respond_with_modal_typed, update_component_with_container,
-        update_interaction_message, ComponentsV2Payload, INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
-        INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
-        INTERACTION_RESPONSE_UPDATE_MESSAGE,
+        update_interaction_message, ComponentsV2Payload,
     };
     use crate::builders::{
         ComponentsV2Message, ContainerBuilder, ModalBuilder, TextDisplayBuilder, TextInputBuilder,
@@ -622,10 +605,6 @@ mod tests {
     use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
     use crate::error::DiscordError;
     use crate::http::DiscordHttpClient;
-    use crate::model::{
-        ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
-        InteractionContextData,
-    };
     use crate::response::AckKind;
 
     fn sample_http(application_id: u64) -> DiscordHttpClient {
@@ -684,9 +663,12 @@ mod tests {
 
     #[test]
     fn helper_constants_cover_new_callback_types() {
-        assert_eq!(INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, 6);
-        assert_eq!(INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, 8);
-        assert_eq!(INTERACTION_RESPONSE_LAUNCH_ACTIVITY, 12);
+        assert_eq!(InteractionResponseType::DEFERRED_UPDATE_MESSAGE.get(), 6);
+        assert_eq!(
+            InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT.get(),
+            8
+        );
+        assert_eq!(InteractionResponseType::LAUNCH_ACTIVITY.get(), 12);
     }
 
     #[test]
@@ -817,7 +799,7 @@ mod tests {
                 &http,
                 &context,
                 InteractionCallbackResponse {
-                    kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
+                    kind: InteractionResponseType::UPDATE_MESSAGE,
                     data: Some(json!({ "content": "hello" })),
                 },
             )
@@ -945,7 +927,7 @@ mod tests {
                 &http,
                 &context,
                 InteractionCallbackResponse {
-                    kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
+                    kind: InteractionResponseType::UPDATE_MESSAGE,
                     data: None,
                 },
             )

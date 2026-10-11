@@ -17,10 +17,10 @@ use serde_json::{json, Value};
 
 use super::{
     Attachment, AutocompleteInteraction, Channel, ChannelType, ChatInputCommandInteraction,
-    CommandInteractionData, ComponentInteraction, ComponentInteractionData, Entitlement, ForumTag,
-    Guild, Id, IdMarker, Integration, InteractionContextData, InteractionResponseState, Message,
-    MessageContextMenuInteraction, Role, SoundboardSound, StageInstance, Sticker, Subscription,
-    User, UserContextMenuInteraction,
+    CommandInteractionData, CommandInteractionOption, ComponentInteraction,
+    ComponentInteractionData, Entitlement, ForumTag, Guild, Id, IdMarker, Integration,
+    InteractionContextData, InteractionResponseState, Message, MessageContextMenuInteraction, Role,
+    SoundboardSound, StageInstance, Sticker, Subscription, User, UserContextMenuInteraction,
 };
 
 /// Placeholder for required IDs a test did not set. Large and distinctive
@@ -196,11 +196,25 @@ impl MessageContextMenuInteraction {
     }
 }
 
+impl ComponentInteractionData {
+    /// A button press with an empty `custom_id`.
+    pub(crate) fn fixture() -> Self {
+        from_json(json!({ "custom_id": "", "component_type": 2 }))
+    }
+}
+
+impl CommandInteractionOption {
+    /// An unfocused `STRING` option with an empty name and no value.
+    pub(crate) fn fixture() -> Self {
+        from_json(json!({ "type": 3, "name": "" }))
+    }
+}
+
 impl ComponentInteraction {
     pub(crate) fn fixture() -> Self {
         Self {
             context: InteractionContextData::fixture(),
-            data: ComponentInteractionData::default(),
+            data: ComponentInteractionData::fixture(),
         }
     }
 }
@@ -222,4 +236,5 @@ fn every_fixture_builds() {
     assert_eq!(ForumTag::fixture().name, "");
     assert_eq!(ChatInputCommandInteraction::fixture().context.token, "");
     assert_eq!(ComponentInteraction::fixture().data.custom_id, "");
+    assert_eq!(CommandInteractionOption::fixture().name, "");
 }

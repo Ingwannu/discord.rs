@@ -1,4 +1,4 @@
-use crate::model::{test_id, ChannelType, MessageType};
+use crate::model::{test_id, ChannelType, ComponentType, MessageType};
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -1313,7 +1313,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
                 },
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
-                    component_type: 2,
+                    component_type: ComponentType::BUTTON,
                     values: vec![],
                 },
             }),
@@ -2068,7 +2068,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
                 },
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
-                    component_type: 2,
+                    component_type: ComponentType::BUTTON,
                     values: vec![],
                 },
             }),

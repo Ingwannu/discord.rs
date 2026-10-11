@@ -10,17 +10,12 @@ use tokio::sync::watch;
 use crate::builders::{ComponentsV2Message, ModalBuilder};
 use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 use crate::error::DiscordError;
-use crate::helpers::{
-    INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, INTERACTION_RESPONSE_CHANNEL_MESSAGE,
-    INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE, INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
-    INTERACTION_RESPONSE_MODAL, INTERACTION_RESPONSE_PONG, INTERACTION_RESPONSE_UPDATE_MESSAGE,
-};
 use crate::http::RestClient;
 use crate::model::{
     AllowedMentions, AutocompleteInteraction, ChatInputCommandInteraction, ComponentInteraction,
     CreateMessage, CreatePoll, InteractionCallbackResponse, InteractionCallbackResult,
-    InteractionContextData, Message, MessageContextMenuInteraction, MessageId,
-    ModalSubmitInteraction, UserContextMenuInteraction,
+    InteractionContextData, InteractionResponseType, Message, MessageContextMenuInteraction,
+    MessageId, ModalSubmitInteraction, UserContextMenuInteraction,
 };
 
 /// Discord message flag marking a response as ephemeral, as raw bits for
@@ -87,7 +82,7 @@ impl InteractionResponseBuilder {
     pub fn channel_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(serde_json::to_value(message.build())?),
             },
         })
@@ -102,7 +97,7 @@ impl InteractionResponseBuilder {
 
         Self {
             inner: InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
+                kind: InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
                 data: Some(serde_json::json!({ "flags": flags })),
             },
         }
@@ -112,7 +107,7 @@ impl InteractionResponseBuilder {
     pub fn update_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_UPDATE_MESSAGE,
+                kind: InteractionResponseType::UPDATE_MESSAGE,
                 data: Some(serde_json::to_value(message.build())?),
             },
         })
@@ -122,7 +117,7 @@ impl InteractionResponseBuilder {
     pub fn modal(modal: ModalBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
             inner: InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_MODAL,
+                kind: InteractionResponseType::MODAL,
                 data: Some(serde_json::to_value(modal.build())?),
             },
         })
@@ -358,9 +353,10 @@ impl AutocompleteChoice {
     }
 }
 
-/// Builds a type 4 (reply) or type 7 (update message) callback payload.
+/// Builds a `CHANNEL_MESSAGE_WITH_SOURCE` (reply) or `UPDATE_MESSAGE`
+/// callback payload.
 fn message_callback(
-    kind: u8,
+    kind: InteractionResponseType,
     data: InteractionReplyData,
 ) -> Result<InteractionCallbackResponse, DiscordError> {
     Ok(InteractionCallbackResponse {
@@ -373,7 +369,7 @@ fn message_callback(
 fn deferred_message_callback(ephemeral: bool) -> InteractionCallbackResponse {
     let flags = if ephemeral { EPHEMERAL_FLAG } else { 0 };
     InteractionCallbackResponse {
-        kind: INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
+        kind: InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
         data: Some(serde_json::json!({ "flags": flags })),
     }
 }
@@ -381,7 +377,7 @@ fn deferred_message_callback(ephemeral: bool) -> InteractionCallbackResponse {
 /// Builds a type 6 (deferred message update) callback payload.
 fn deferred_update_callback() -> InteractionCallbackResponse {
     InteractionCallbackResponse {
-        kind: INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
+        kind: InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
         data: None,
     }
 }
@@ -389,7 +385,7 @@ fn deferred_update_callback() -> InteractionCallbackResponse {
 /// Builds a type 9 (modal) callback payload.
 fn modal_callback(modal: ModalBuilder) -> InteractionCallbackResponse {
     InteractionCallbackResponse {
-        kind: INTERACTION_RESPONSE_MODAL,
+        kind: InteractionResponseType::MODAL,
         data: Some(modal.build()),
     }
 }
@@ -399,7 +395,7 @@ fn autocomplete_callback(
     choices: Vec<AutocompleteChoice>,
 ) -> Result<InteractionCallbackResponse, DiscordError> {
     Ok(InteractionCallbackResponse {
-        kind: INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
+        kind: InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
         data: Some(serde_json::json!({ "choices": serde_json::to_value(choices)? })),
     })
 }
@@ -491,11 +487,11 @@ impl AckKind {
     /// ping and never acknowledges an interaction. Unknown types count as
     /// [`AckKind::Replied`] so a new Discord callback type is still treated
     /// as "an initial response exists".
-    pub(crate) fn for_callback_type(kind: u8) -> Option<Self> {
+    pub(crate) fn for_callback_type(kind: InteractionResponseType) -> Option<Self> {
         match kind {
-            INTERACTION_RESPONSE_PONG => None,
-            INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE
-            | INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE => Some(Self::Deferred),
+            InteractionResponseType::PONG => None,
+            InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+            | InteractionResponseType::DEFERRED_UPDATE_MESSAGE => Some(Self::Deferred),
             _ => Some(Self::Replied),
         }
     }
@@ -937,7 +933,10 @@ impl InteractionContextData {
         http: &RestClient,
         data: impl Into<InteractionReplyData>,
     ) -> Result<(), DiscordError> {
-        let response = message_callback(INTERACTION_RESPONSE_CHANNEL_MESSAGE, data.into())?;
+        let response = message_callback(
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+            data.into(),
+        )?;
         self.send_initial_response(http, AckKind::Replied, &response)
             .await
     }
@@ -949,7 +948,7 @@ impl InteractionContextData {
         data: impl Into<InteractionReplyData>,
     ) -> Result<(), DiscordError> {
         let response = message_callback(
-            INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
             data.into().ephemeral(),
         )?;
         self.send_initial_response(http, AckKind::Replied, &response)
@@ -967,7 +966,10 @@ impl InteractionContextData {
         http: &RestClient,
         data: impl Into<InteractionReplyData>,
     ) -> Result<InteractionCallbackResult, DiscordError> {
-        let response = message_callback(INTERACTION_RESPONSE_CHANNEL_MESSAGE, data.into())?;
+        let response = message_callback(
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+            data.into(),
+        )?;
         let claim = self.response_state.begin(AckKind::Replied)?;
         let result = http
             .create_interaction_response_with_result(self.id, &self.token, &response)
@@ -1008,7 +1010,7 @@ impl InteractionContextData {
         http: &RestClient,
         data: impl Into<InteractionReplyData>,
     ) -> Result<(), DiscordError> {
-        let response = message_callback(INTERACTION_RESPONSE_UPDATE_MESSAGE, data.into())?;
+        let response = message_callback(InteractionResponseType::UPDATE_MESSAGE, data.into())?;
         self.send_initial_response(http, AckKind::Replied, &response)
             .await
     }
@@ -1433,7 +1435,11 @@ impl AutocompleteInteraction {
 
 #[cfg(test)]
 mod tests {
-    use crate::model::test_id;
+    use crate::model::{
+        test_id, AllowedMentions, ChatInputCommandInteraction, ComponentInteraction, CreateMessage,
+        CreatePoll, InteractionCallbackResponse, InteractionContextData, InteractionResponseType,
+        InteractionType, MessageReference, ModalSubmitInteraction, PollAnswer, PollMedia,
+    };
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1442,18 +1448,7 @@ mod tests {
     use crate::builders::{ComponentsV2Message, ModalBuilder};
     use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
     use crate::error::DiscordError;
-    use crate::helpers::{
-        INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, INTERACTION_RESPONSE_CHANNEL_MESSAGE,
-        INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
-        INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
-        INTERACTION_RESPONSE_MODAL, INTERACTION_RESPONSE_PONG, INTERACTION_RESPONSE_UPDATE_MESSAGE,
-    };
     use crate::http::RestClient;
-    use crate::model::{
-        AllowedMentions, ChatInputCommandInteraction, ComponentInteraction, CreateMessage,
-        CreatePoll, InteractionCallbackResponse, InteractionContextData, MessageReference,
-        ModalSubmitInteraction, PollAnswer, PollMedia,
-    };
 
     use super::{
         autocomplete_callback, deferred_message_callback, deferred_update_callback,
@@ -1688,7 +1683,10 @@ mod tests {
                 .unwrap()
                 .build();
 
-        assert_eq!(response.kind, 4);
+        assert_eq!(
+            response.kind,
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
+        );
         assert_eq!(response.data.unwrap()["content"], "hello");
     }
 
@@ -1699,12 +1697,12 @@ mod tests {
 
         assert_eq!(
             public_response.kind,
-            INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE
+            InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         );
         assert_eq!(public_response.data.unwrap()["flags"], json!(0));
         assert_eq!(
             ephemeral_response.kind,
-            INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE
+            InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         );
         assert_eq!(ephemeral_response.data.unwrap()["flags"], json!(1 << 6));
     }
@@ -1720,7 +1718,7 @@ mod tests {
         .build();
 
         let data = response.data.unwrap();
-        assert_eq!(response.kind, INTERACTION_RESPONSE_UPDATE_MESSAGE);
+        assert_eq!(response.kind, InteractionResponseType::UPDATE_MESSAGE);
         assert_eq!(data["content"], json!("updated"));
         assert_eq!(data["components"], json!([]));
         assert_eq!(data["flags"], json!(MESSAGE_FLAG_IS_COMPONENTS_V2));
@@ -1733,7 +1731,7 @@ mod tests {
             .build();
 
         let data = response.data.unwrap();
-        assert_eq!(response.kind, INTERACTION_RESPONSE_MODAL);
+        assert_eq!(response.kind, InteractionResponseType::MODAL);
         assert_eq!(data["custom_id"], json!("feedback"));
         assert_eq!(data["title"], json!("Feedback"));
         assert_eq!(data["components"], json!([]));
@@ -1808,8 +1806,11 @@ mod tests {
         assert!(data.poll.is_some());
         assert!(data.allowed_mentions.is_some());
 
-        let callback =
-            message_callback(INTERACTION_RESPONSE_CHANNEL_MESSAGE, data.clone()).unwrap();
+        let callback = message_callback(
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+            data.clone(),
+        )
+        .unwrap();
         assert_eq!(callback.data.unwrap(), expected);
         assert_eq!(
             serde_json::to_value(data.into_create_message()).unwrap(),
@@ -1898,39 +1899,48 @@ mod tests {
     #[test]
     fn message_callback_wraps_reply_and_update_payloads() {
         let reply = message_callback(
-            INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
             InteractionReplyData::from("hi").ephemeral(),
         )
         .unwrap();
-        assert_eq!(reply.kind, INTERACTION_RESPONSE_CHANNEL_MESSAGE);
+        assert_eq!(
+            reply.kind,
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
+        );
         let data = reply.data.unwrap();
         assert_eq!(data["content"], json!("hi"));
         assert_eq!(data["flags"], json!(1 << 6));
 
         let update = message_callback(
-            INTERACTION_RESPONSE_UPDATE_MESSAGE,
+            InteractionResponseType::UPDATE_MESSAGE,
             InteractionReplyData::new().components(vec![json!({"type": 1, "components": []})]),
         )
         .unwrap();
-        assert_eq!(update.kind, INTERACTION_RESPONSE_UPDATE_MESSAGE);
+        assert_eq!(update.kind, InteractionResponseType::UPDATE_MESSAGE);
         assert_eq!(update.data.unwrap()["components"][0]["type"], json!(1));
     }
 
     #[test]
     fn deferred_and_modal_callbacks_use_expected_kinds() {
         let public = deferred_message_callback(false);
-        assert_eq!(public.kind, INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE);
+        assert_eq!(
+            public.kind,
+            InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+        );
         assert_eq!(public.data.unwrap()["flags"], json!(0));
 
         let ephemeral = deferred_message_callback(true);
         assert_eq!(ephemeral.data.unwrap()["flags"], json!(1 << 6));
 
         let update = deferred_update_callback();
-        assert_eq!(update.kind, INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE);
+        assert_eq!(
+            update.kind,
+            InteractionResponseType::DEFERRED_UPDATE_MESSAGE
+        );
         assert!(update.data.is_none());
 
         let modal = modal_callback(ModalBuilder::new("feedback", "Feedback"));
-        assert_eq!(modal.kind, INTERACTION_RESPONSE_MODAL);
+        assert_eq!(modal.kind, InteractionResponseType::MODAL);
         assert_eq!(modal.data.unwrap()["custom_id"], json!("feedback"));
     }
 
@@ -1945,7 +1955,10 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(response.kind, INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT);
+        assert_eq!(
+            response.kind,
+            InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT
+        );
         let data = response.data.unwrap();
         let choices = data["choices"].as_array().unwrap();
         assert_eq!(choices.len(), 2);
@@ -1960,10 +1973,13 @@ mod tests {
 
     #[test]
     fn ack_kind_maps_callback_types() {
-        assert_eq!(AckKind::for_callback_type(INTERACTION_RESPONSE_PONG), None);
+        assert_eq!(
+            AckKind::for_callback_type(InteractionResponseType::PONG),
+            None
+        );
         for deferred in [
-            INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
-            INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
+            InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
+            InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
         ] {
             assert_eq!(
                 AckKind::for_callback_type(deferred),
@@ -1971,12 +1987,12 @@ mod tests {
             );
         }
         for replied in [
-            INTERACTION_RESPONSE_CHANNEL_MESSAGE,
-            INTERACTION_RESPONSE_UPDATE_MESSAGE,
-            INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
-            INTERACTION_RESPONSE_MODAL,
-            INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
-            200,
+            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
+            InteractionResponseType::UPDATE_MESSAGE,
+            InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
+            InteractionResponseType::MODAL,
+            InteractionResponseType::LAUNCH_ACTIVITY,
+            InteractionResponseType::new(200),
         ] {
             assert_eq!(AckKind::for_callback_type(replied), Some(AckKind::Replied));
         }
@@ -2679,7 +2695,10 @@ mod tests {
 
         let decoded = sample_context();
         let result = decoded.reply_with_result(&http, "hi").await.unwrap();
-        assert_eq!(result.interaction.kind, 2);
+        assert_eq!(
+            result.interaction.kind,
+            InteractionType::APPLICATION_COMMAND
+        );
         assert!(decoded.is_replied());
     }
 
@@ -2697,7 +2716,7 @@ mod tests {
         pong.create_response(
             &http,
             &InteractionCallbackResponse {
-                kind: INTERACTION_RESPONSE_PONG,
+                kind: InteractionResponseType::PONG,
                 data: None,
             },
         )
@@ -2713,7 +2732,7 @@ mod tests {
             .create_response(
                 &http,
                 &InteractionCallbackResponse {
-                    kind: INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE,
+                    kind: InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
                     data: None,
                 },
             )
@@ -2726,7 +2745,7 @@ mod tests {
             .create_response(
                 &http,
                 &InteractionCallbackResponse {
-                    kind: INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+                    kind: InteractionResponseType::LAUNCH_ACTIVITY,
                     data: None,
                 },
             )
@@ -2870,7 +2889,7 @@ mod tests {
                 .create_response(
                     &http,
                     &InteractionCallbackResponse {
-                        kind: INTERACTION_RESPONSE_PONG,
+                        kind: InteractionResponseType::PONG,
                         data: None,
                     },
                 )

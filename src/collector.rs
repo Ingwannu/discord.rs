@@ -1492,8 +1492,8 @@ impl_collector_controls!(ReactionCollector, ReactionEvent);
 
 #[cfg(all(test, feature = "collectors"))]
 mod tests {
-    use crate::model::test_id;
     use crate::model::UserId;
+    use crate::model::{test_id, ComponentType};
     use std::time::Duration;
 
     use serde_json::json;
@@ -1727,7 +1727,7 @@ mod tests {
         assert_eq!(component.context.application_id.get(), 4);
         assert_eq!(component.context.token, "token");
         assert_eq!(component.data.custom_id, "button");
-        assert_eq!(component.data.component_type, 2);
+        assert_eq!(component.data.component_type, ComponentType::BUTTON);
         assert_eq!(component.data.values, vec!["one".to_string()]);
 
         let modal = modal_collector.next().await.expect("modal interaction");

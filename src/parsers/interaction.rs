@@ -3,8 +3,9 @@ use serde_json::Value;
 use crate::error::DiscordError;
 use crate::model::{
     ApplicationId, AutocompleteInteraction, ChannelId, ChatInputCommandInteraction, CommandId,
-    CommandInteractionData, ComponentInteraction, ComponentInteractionData, GuildId, Interaction,
-    InteractionContextData, InteractionId, InteractionResponseState, MessageContextMenuInteraction,
+    CommandInteractionData, CommandType, ComponentInteraction, ComponentInteractionData,
+    ComponentType, GuildId, Interaction, InteractionContextData, InteractionId,
+    InteractionResponseState, InteractionType, MessageContextMenuInteraction,
     ModalSubmitInteraction, PingInteraction, UserContextMenuInteraction, UserId,
 };
 use crate::types::invalid_data_error;
@@ -26,8 +27,9 @@ pub enum RawInteraction {
         id: Option<CommandId>,
         /// Command name from the raw command payload.
         name: Option<String>,
-        /// Discord command type value.
-        command_type: Option<u8>,
+        /// Command type (`data.type`); `None` when absent, which Discord
+        /// treats as `CHAT_INPUT`.
+        command_type: Option<CommandType>,
         /// Raw interaction data object.
         data: Value,
     },
@@ -37,8 +39,9 @@ pub enum RawInteraction {
         id: Option<CommandId>,
         /// Command name from the raw autocomplete payload.
         name: Option<String>,
-        /// Discord command type value.
-        command_type: Option<u8>,
+        /// Command type (`data.type`); `None` when absent, which Discord
+        /// treats as `CHAT_INPUT`.
+        command_type: Option<CommandType>,
         /// Raw interaction data object.
         data: Value,
     },
@@ -46,8 +49,8 @@ pub enum RawInteraction {
     Component {
         /// Component custom ID.
         custom_id: Option<String>,
-        /// Discord component type value.
-        component_type: Option<u8>,
+        /// Component type (`data.component_type`).
+        component_type: Option<ComponentType>,
         /// Submitted select values.
         values: Vec<String>,
         /// Raw interaction data object.
@@ -158,78 +161,91 @@ pub fn parse_interaction_context(raw: &Value) -> Result<InteractionContext, Disc
 
 /// Provides the `parse_raw_interaction` helper.
 pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError> {
-    let interaction_type = required_u8_field(raw, "type", "interaction")?;
+    let interaction_type = InteractionType::new(required_u8_field(raw, "type", "interaction")?);
 
     match interaction_type {
-        1 => Ok(RawInteraction::Ping),
-        2 => {
+        InteractionType::PING => Ok(RawInteraction::Ping),
+        InteractionType::APPLICATION_COMMAND => {
             let data = required_object_field(raw, "data", "interaction")?.clone();
             Ok(RawInteraction::Command {
                 id: optional_id_field(&data, "id", "interaction.data")?,
                 name: optional_string_field(&data, "name"),
-                command_type: data.get("type").and_then(value_to_u8),
+                command_type: data.get("type").and_then(value_to_u8).map(CommandType::new),
                 data,
             })
         }
-        4 => {
+        InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => {
             let data = required_object_field(raw, "data", "interaction")?.clone();
             Ok(RawInteraction::Autocomplete {
                 id: optional_id_field(&data, "id", "interaction.data")?,
                 name: optional_string_field(&data, "name"),
-                command_type: data.get("type").and_then(value_to_u8),
+                command_type: data.get("type").and_then(value_to_u8).map(CommandType::new),
                 data,
             })
         }
-        3 => {
+        InteractionType::MESSAGE_COMPONENT => {
             let data = required_object_field(raw, "data", "interaction")?.clone();
             let values = optional_string_values_field(&data, "values", "component_data")?
                 .unwrap_or_default();
 
             Ok(RawInteraction::Component {
                 custom_id: optional_string_field(&data, "custom_id"),
-                component_type: data.get("component_type").and_then(value_to_u8),
+                component_type: data
+                    .get("component_type")
+                    .and_then(value_to_u8)
+                    .map(ComponentType::new),
                 values,
                 data,
             })
         }
-        5 => Ok(RawInteraction::ModalSubmit(parse_modal_submission(raw)?)),
+        InteractionType::MODAL_SUBMIT => {
+            Ok(RawInteraction::ModalSubmit(parse_modal_submission(raw)?))
+        }
         _ => Err(invalid_data_error(format!(
-            "unsupported interaction type: {interaction_type}"
+            "unsupported interaction type: {}",
+            interaction_type.get()
         ))),
     }
 }
 
 /// Provides the `parse_interaction` helper.
 pub fn parse_interaction(raw: &Value) -> Result<Interaction, DiscordError> {
-    let interaction_type = required_u8_field(raw, "type", "interaction")?;
+    let interaction_type = InteractionType::new(required_u8_field(raw, "type", "interaction")?);
     let context = parse_typed_interaction_context(raw)?;
 
     let interaction = match interaction_type {
-        1 => Interaction::Ping(PingInteraction { context }),
-        2 => {
+        InteractionType::PING => Interaction::Ping(PingInteraction { context }),
+        InteractionType::APPLICATION_COMMAND => {
             let data = parse_command_interaction_data(raw)?;
-            match data.kind.unwrap_or(1) {
-                1 => Interaction::ChatInputCommand(ChatInputCommandInteraction { context, data }),
-                2 => Interaction::UserContextMenu(UserContextMenuInteraction { context, data }),
-                3 => {
+            // Discord treats an absent command `type` as CHAT_INPUT.
+            match data.kind.unwrap_or(CommandType::CHAT_INPUT) {
+                CommandType::CHAT_INPUT => {
+                    Interaction::ChatInputCommand(ChatInputCommandInteraction { context, data })
+                }
+                CommandType::USER => {
+                    Interaction::UserContextMenu(UserContextMenuInteraction { context, data })
+                }
+                CommandType::MESSAGE => {
                     Interaction::MessageContextMenu(MessageContextMenuInteraction { context, data })
                 }
-                kind => Interaction::Unknown {
+                _ => Interaction::Unknown {
                     context,
-                    kind,
+                    kind: interaction_type,
                     raw_data: raw.get("data").cloned().unwrap_or(Value::Null),
                 },
             }
         }
-        3 => Interaction::Component(ComponentInteraction {
+        InteractionType::MESSAGE_COMPONENT => Interaction::Component(ComponentInteraction {
             context,
             data: parse_component_interaction_data(raw)?,
         }),
-        4 => Interaction::Autocomplete(AutocompleteInteraction {
-            context,
-            data: parse_command_interaction_data(raw)?,
-        }),
-        5 => Interaction::ModalSubmit(ModalSubmitInteraction {
+        InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => {
+            Interaction::Autocomplete(AutocompleteInteraction {
+                context,
+                data: parse_command_interaction_data(raw)?,
+            })
+        }
+        InteractionType::MODAL_SUBMIT => Interaction::ModalSubmit(ModalSubmitInteraction {
             context,
             submission: parse_modal_submission(raw)?,
         }),
@@ -305,7 +321,7 @@ fn parse_command_interaction_data(raw: &Value) -> Result<CommandInteractionData,
     Ok(CommandInteractionData {
         id: optional_id_field(&data, "id", "interaction.data")?,
         name: optional_string_field(&data, "name"),
-        kind: data.get("type").and_then(value_to_u8),
+        kind: data.get("type").and_then(value_to_u8).map(CommandType::new),
         options,
         resolved: data
             .get("resolved")
@@ -320,7 +336,11 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
     let data = required_object_field(raw, "data", "interaction")?.clone();
     Ok(ComponentInteractionData {
         custom_id: required_string_field(&data, "custom_id", "component_data")?,
-        component_type: required_u8_field(&data, "component_type", "component_data")?,
+        component_type: ComponentType::new(required_u8_field(
+            &data,
+            "component_type",
+            "component_data",
+        )?),
         values: optional_string_values_field(&data, "values", "component_data")?
             .unwrap_or_default(),
     })
@@ -328,7 +348,7 @@ fn parse_component_interaction_data(raw: &Value) -> Result<ComponentInteractionD
 
 #[cfg(test)]
 mod tests {
-    use crate::model::test_id;
+    use crate::model::{test_id, CommandType, ComponentType, InteractionType};
     use serde_json::{json, Value};
 
     use super::{
@@ -362,7 +382,7 @@ mod tests {
             } => {
                 assert_eq!(id, Some(test_id(3)));
                 assert_eq!(name.as_deref(), Some("ticket"));
-                assert_eq!(command_type, Some(1));
+                assert_eq!(command_type, Some(CommandType::CHAT_INPUT));
             }
             other => panic!("unexpected raw interaction: {other:?}"),
         }
@@ -469,7 +489,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(custom_id.as_deref(), Some("button"));
-                assert_eq!(component_type, Some(2));
+                assert_eq!(component_type, Some(ComponentType::BUTTON));
                 assert_eq!(values, vec!["first".to_string(), "second".to_string()]);
             }
             other => panic!("unexpected component interaction: {other:?}"),
@@ -521,7 +541,7 @@ mod tests {
         {
             Interaction::Component(component) => {
                 assert_eq!(component.data.custom_id, "button");
-                assert_eq!(component.data.component_type, 2);
+                assert_eq!(component.data.component_type, ComponentType::BUTTON);
                 assert_eq!(component.data.values, vec!["accepted".to_string()]);
             }
             other => panic!("unexpected typed component: {other:?}"),
@@ -540,7 +560,10 @@ mod tests {
         .unwrap()
         {
             Interaction::Unknown { kind, raw_data, .. } => {
-                assert_eq!(kind, 99);
+                // The interaction type stays APPLICATION_COMMAND; the unknown
+                // command type is only in the raw data.
+                assert_eq!(kind, InteractionType::APPLICATION_COMMAND);
+                assert_eq!(raw_data["type"], json!(99));
                 assert_eq!(raw_data["name"], json!("unknown-command"));
             }
             other => panic!("unexpected unknown interaction: {other:?}"),
@@ -725,7 +748,7 @@ mod tests {
             Interaction::ChatInputCommand(command) => {
                 assert_eq!(command.data.id.unwrap().get(), 5);
                 assert_eq!(command.data.name.as_deref(), Some("deploy"));
-                assert_eq!(command.data.kind, Some(1));
+                assert_eq!(command.data.kind, Some(CommandType::CHAT_INPUT));
                 assert!(command.data.options.is_empty());
                 assert_eq!(
                     command
@@ -807,7 +830,7 @@ mod tests {
                 raw_data,
                 context,
             } => {
-                assert_eq!(kind, 99);
+                assert_eq!(kind, InteractionType::new(99));
                 assert_eq!(raw_data, json!(null));
                 assert_eq!(context.id.get(), 1);
             }
