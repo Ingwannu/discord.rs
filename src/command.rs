@@ -43,6 +43,12 @@ pub mod limits {
     pub const MIN_NUMBER_OPTION_VALUE: f64 = -9_007_199_254_740_992.0;
     /// Largest `NUMBER` option value and choice (2^53).
     pub const MAX_NUMBER_OPTION_VALUE: f64 = 9_007_199_254_740_992.0;
+    /// [`MIN_NUMBER_OPTION_VALUE`] for a value written as a JSON integer.
+    /// Integers are checked against these before any conversion: past 2^53
+    /// an `f64` cannot tell 2^53+1 from 2^53.
+    pub const MIN_NUMBER_OPTION_INTEGER: i64 = -9_007_199_254_740_992;
+    /// [`MAX_NUMBER_OPTION_VALUE`] for a value written as a JSON integer.
+    pub const MAX_NUMBER_OPTION_INTEGER: i64 = 9_007_199_254_740_992;
     /// Upper bound of `min_length` (0-6000) and `max_length` (1-6000) on
     /// `STRING` options.
     pub const MAX_STRING_OPTION_LENGTH: u16 = 6000;
@@ -2070,6 +2076,54 @@ mod tests {
                 .ok(),
             Some(CommandOptionValue::Integer(9_007_199_254_740_992))
         );
+    }
+
+    #[test]
+    fn choice_bounds_hold_at_and_past_2_pow_53() {
+        use crate::model::ApplicationCommandOptionChoice;
+
+        const P53: i64 = 9_007_199_254_740_992; // 2^53
+        let integer = |value: i64| {
+            CommandOptionBuilder::integer("n", "d")
+                .choice("c", value)
+                .validate()
+                .is_ok()
+        };
+        let number = |value: i64| {
+            CommandOptionBuilder::number("n", "d")
+                .choice("c", value)
+                .validate()
+                .is_ok()
+        };
+        // INTEGER: -2^53+1..2^53-1.
+        assert!(integer(P53 - 1) && integer(-(P53 - 1)));
+        assert!(!integer(P53) && !integer(-P53));
+        assert!(!integer(P53 + 1) && !integer(-(P53 + 1)));
+        // NUMBER as a JSON integer: -2^53..2^53; ±(2^53+1) must not round
+        // into range.
+        assert!(number(P53) && number(-P53));
+        assert!(!number(P53 + 1) && !number(-(P53 + 1)));
+        // NUMBER as a double: ±2^53 in, the next double out.
+        let double = |value: f64| {
+            CommandOptionBuilder::number("n", "d")
+                .choice("c", value)
+                .validate()
+                .is_ok()
+        };
+        assert!(double(9_007_199_254_740_992.0) && double(-9_007_199_254_740_992.0));
+        assert!(!double(9_007_199_254_740_994.0) && !double(-9_007_199_254_740_994.0));
+        // An INTEGER choice written as a double: 2^53 is out.
+        assert!(!CommandOptionBuilder::integer("n", "d")
+            .choice("c", 9_007_199_254_740_992.0)
+            .validate()
+            .is_ok());
+
+        // `try_new` applies the NUMBER range to integers before converting.
+        let p53_plus_one = 9_007_199_254_740_993_u64;
+        assert!(ApplicationCommandOptionChoice::try_new("c", p53_plus_one).is_err());
+        assert!(ApplicationCommandOptionChoice::try_new("c", -9_007_199_254_740_993_i64).is_err());
+        assert!(ApplicationCommandOptionChoice::try_new("c", 9_007_199_254_740_992_u64).is_ok());
+        assert!(ApplicationCommandOptionChoice::try_new("c", -9_007_199_254_740_992_i64).is_ok());
     }
 
     #[test]

@@ -162,7 +162,9 @@ impl CommandOptionValue {
     pub(crate) fn check_choice(&self) -> Result<(), String> {
         match self {
             Self::String(_) => Ok(()),
-            Self::Integer(value) => check_number(integer_to_f64(*value)),
+            // Compared as integers: converting first would round
+            // ±(2^53+1) to ±2^53 and let it through.
+            Self::Integer(value) => check_integer(*value),
             Self::Number(value) => check_number(*value),
             Self::Boolean(_) => Err(String::from(
                 "a choice value cannot be a boolean (choices are strings, integers, or numbers)",
@@ -217,6 +219,20 @@ impl CommandOptionValue {
 )]
 fn integer_to_f64(value: i64) -> f64 {
     value as f64
+}
+
+/// An integer within the `NUMBER` option range, compared without
+/// converting to `f64`.
+fn check_integer(value: i64) -> Result<(), String> {
+    use crate::command::limits::{MAX_NUMBER_OPTION_INTEGER, MIN_NUMBER_OPTION_INTEGER};
+
+    if (MIN_NUMBER_OPTION_INTEGER..=MAX_NUMBER_OPTION_INTEGER).contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "a choice value must be within -2^53..2^53, got {value}"
+        ))
+    }
 }
 
 /// A finite number within the `NUMBER` option range.
