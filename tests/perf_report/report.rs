@@ -7,6 +7,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::alloc::Sample;
+use crate::fixtures::inbound_cases;
 
 pub(crate) const LINE_PREFIX: &str = "perf-report: ";
 const REPORT_SCHEMA: u64 = 1;
@@ -162,7 +163,29 @@ pub(crate) fn meta() -> Value {
         "rustc": command_output("rustc", &["--version"]),
         "features": "gateway,cache,collectors (+ whatever else the build enabled)",
         "deterministic_metrics": DETERMINISTIC,
+        "fixtures_digest": fixtures_digest(),
     })
+}
+
+/// FNV-1a (64-bit) over every inbound case's name, dispatch name, and
+/// payload (the cache and storm scenarios reuse these payloads). Two
+/// reports with different digests measured different inputs, even when
+/// the payload sizes happen to match; `ci/perf_diff.py --strict` fails on
+/// that.
+fn fixtures_digest() -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes.iter().chain(&[0xff]) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    for case in inbound_cases() {
+        feed(case.name.as_bytes());
+        feed(case.event.as_bytes());
+        feed(case.d.to_string().as_bytes());
+    }
+    format!("{hash:016x}")
 }
 
 /// (VmRSS, VmHWM) in KiB from /proc/self/status; `None` off Linux.

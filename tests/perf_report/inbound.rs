@@ -19,7 +19,7 @@ pub(crate) const HUB_JOURNAL_CAPACITY: usize = 256;
 
 /// The state the gateway pipeline keeps per shard: the cache and the
 /// collector hub journal.
-struct Pipeline {
+pub(crate) struct Pipeline {
     cache: CacheHandle,
     journal: VecDeque<Event>,
 }

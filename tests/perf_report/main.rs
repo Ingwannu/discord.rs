@@ -85,20 +85,23 @@
 
 mod alloc;
 mod cache;
+mod collectors;
 mod e2e;
 mod fanout;
 mod fixtures;
 mod inbound;
 mod outbound;
 mod report;
+mod storm;
 
 use std::sync::Mutex;
 use std::time::Instant;
 
 use discordrs::model::{Guild, Message, Presence};
-use discordrs::{decode_event, Context, Event, MessageBuilder};
+use discordrs::{decode_event, CollectorHub, Context, Event, MessageBuilder};
 use serde_json::{json, Value};
 
+use crate::alloc::Mark;
 use crate::cache::run_cache;
 use crate::e2e::run_e2e_in_child;
 use crate::fanout::run_fanout;
@@ -109,6 +112,7 @@ use crate::fixtures::{
 use crate::inbound::{run_inbound, run_typed_reference};
 use crate::outbound::{run_outbound, status_card};
 use crate::report::{current_thread_runtime, meta, Report, Scenario};
+use crate::storm::run_storm;
 
 /// Serializes the tests of this binary: they share the global counters.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -126,8 +130,19 @@ fn perf_report() {
     let started = Instant::now();
     let mut report = Report::default();
 
+    // Heap of an empty collector hub, whatever its journal stores: today
+    // 256 inline `Event`s of reserved ring, after phase 4 B 256 pointers.
+    // Measured instead of computed so it needs no knowledge of the private
+    // element type.
+    let mark = Mark::start();
+    let hub = CollectorHub::new();
+    let empty_hub = mark.finish();
+    drop(hub);
+
     // Inline sizes: queue slots, journal entries, and handler futures hold
-    // these by value.
+    // these by value. When phase 4 adds `EventKind`, report
+    // `size_of::<EventKind>()` here as `event_kind` (gated in
+    // ci/perf-gates.json).
     report.push(
         Scenario::new("layout.size_of", "layout")
             .set("event", std::mem::size_of::<Event>())
@@ -139,9 +154,18 @@ fn perf_report() {
             .set("presence", std::mem::size_of::<Presence>())
             .set("context", std::mem::size_of::<Context>())
             .set("value", std::mem::size_of::<Value>())
+            .set("empty_collector_hub_bytes", empty_hub.retained_bytes)
             .deterministic(&[
-                "event", "message", "guild", "member", "user", "channel", "presence", "context",
+                "event",
+                "message",
+                "guild",
+                "member",
+                "user",
+                "channel",
+                "presence",
+                "context",
                 "value",
+                "empty_collector_hub_bytes",
             ]),
     );
 
@@ -181,8 +205,9 @@ fn perf_report() {
         15,
         &mut report,
     );
-    // Last: it leaves the largest, most fragmented heap behind.
     run_cache(&rt, &mut report);
+    // Last: at about 400 MB live it leaves the largest heap behind.
+    run_storm(&rt, &mut report);
 
     let path = report.write(meta());
     println!(

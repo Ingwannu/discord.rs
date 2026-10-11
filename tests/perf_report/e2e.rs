@@ -9,16 +9,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use discordrs::{
-    decode_event, ApplicationId, Client, CollectorHub, Context, Event, EventHandler,
-    GatewayConnectionConfig, Intents, MessageId,
+    ApplicationId, Client, CollectorHub, Context, Event, EventHandler, GatewayConnectionConfig,
+    Intents,
 };
 use serde_json::{json, Value};
 
 use crate::alloc::{Mark, Sample, Uncounted};
-use crate::fixtures::{
-    fixture, frame, inbound_cases, synthesized_guild_create, LARGE_GUILD, MESSAGE_CREATE_PLAIN,
-    STORM_GUILDS,
-};
+use crate::collectors::run_collectors;
+use crate::fixtures::{frame, inbound_cases, synthesized_guild_create, LARGE_GUILD, STORM_GUILDS};
 use crate::inbound::HUB_JOURNAL_CAPACITY;
 use crate::report::{rss_kib, Report, Scenario, LINE_PREFIX};
 
@@ -166,7 +164,7 @@ async fn fake_gateway() {
 }
 
 /// The parent's handle on the child gateway.
-struct ChildGateway {
+pub(crate) struct ChildGateway {
     child: Child,
     stdin: ChildStdin,
     port: u16,
@@ -225,8 +223,8 @@ impl Drop for ChildGateway {
 
 /// Counts every event the handler receives and keeps the collector hub.
 #[derive(Clone)]
-struct ProbeHandler {
-    seen: Arc<AtomicUsize>,
+pub(crate) struct ProbeHandler {
+    pub(crate) seen: Arc<AtomicUsize>,
     notify: Arc<tokio::sync::Notify>,
     // Written once by the READY handler call, read by the report thread.
     hub: Arc<Mutex<Option<CollectorHub>>>,
@@ -246,7 +244,7 @@ impl EventHandler for ProbeHandler {
 
 /// Longest wait for one dispatch before the report fails instead of
 /// hanging (the pipeline drops handler deliveries when its queue is full).
-const E2E_WAIT: Duration = Duration::from_secs(30);
+pub(crate) const E2E_WAIT: Duration = Duration::from_secs(30);
 
 impl ProbeHandler {
     pub(crate) async fn wait_seen(&self, count: usize) {
@@ -262,7 +260,7 @@ impl ProbeHandler {
 }
 
 /// Waits until `f` holds, polling, up to 10 s.
-async fn wait_until(what: &str, f: impl Fn() -> bool) {
+pub(crate) async fn wait_until(what: &str, f: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !f() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -270,7 +268,7 @@ async fn wait_until(what: &str, f: impl Fn() -> bool) {
     }
 }
 
-async fn lockstep(
+pub(crate) async fn lockstep(
     gateway: &mut ChildGateway,
     handler: &ProbeHandler,
     commands: &[String],
@@ -287,7 +285,12 @@ async fn lockstep(
     (mark.finish(), timings)
 }
 
-fn e2e_scenario(name: &str, sample: Sample, ops: usize, timings: Vec<Duration>) -> Scenario {
+pub(crate) fn e2e_scenario(
+    name: &str,
+    sample: Sample,
+    ops: usize,
+    timings: Vec<Duration>,
+) -> Scenario {
     Scenario::new(name, "e2e")
         .batch(sample, u64::try_from(ops).unwrap())
         .timings(timings)
@@ -401,81 +404,9 @@ pub(crate) fn run_e2e(report: &mut Report) {
                 .note("256 tiny dispatches evict the storm from the collector hub journal; -retained_bytes is what the journal held"),
         );
 
-        // Collector fan-out on the real hub: K message collectors, one match.
+        // Collector fan-out on the real hub (collectors.rs).
         let hub = handler.hub.lock().unwrap().clone().unwrap();
-        let event = decode_event("MESSAGE_CREATE", fixture(MESSAGE_CREATE_PLAIN)).unwrap();
-        let Event::MessageCreate(created) = event else {
-            panic!("MESSAGE_CREATE fixture did not decode to MessageCreate");
-        };
-        let target = created.message.id;
-        let other = MessageId::try_from(1_u64).unwrap();
-        for k in [1_usize, 8, 64] {
-            let matched = Arc::new(AtomicUsize::new(0));
-            let matched_notify = Arc::new(tokio::sync::Notify::new());
-            let mut tasks = Vec::with_capacity(k);
-            for i in 0..k {
-                let wanted = if i == 0 { target } else { other };
-                let mut collector = hub.message_collector().filter(move |message| message.id == wanted);
-                let matched = Arc::clone(&matched);
-                let matched_notify = Arc::clone(&matched_notify);
-                tasks.push(tokio::spawn(async move {
-                    while let Some(message) = collector.next().await {
-                        drop(black_box(message));
-                        matched.fetch_add(1, Ordering::SeqCst);
-                        matched_notify.notify_one();
-                    }
-                }));
-            }
-            let warm = commands_for("message_create.plain", 20);
-            lockstep(&mut gateway, &handler, &warm).await;
-            let matched_now = || matched.load(Ordering::SeqCst);
-            wait_until("warm-up matches", || matched_now() >= 20).await;
-            // Let the non-matching collectors drain the warm-up.
-            tokio::time::sleep(Duration::from_millis(50)).await;
-
-            const FANOUT_FRAMES: usize = 200;
-            let fanout_pass = async |gateway: &mut ChildGateway| {
-                let mut timings = Vec::with_capacity(FANOUT_FRAMES);
-                let mark = Mark::start();
-                for _ in 0..FANOUT_FRAMES {
-                    let target_seen = handler.seen.load(Ordering::SeqCst) + 1;
-                    let target_matched = matched.load(Ordering::SeqCst) + 1;
-                    let start = Instant::now();
-                    gateway.send("message_create.plain");
-                    handler.wait_seen(target_seen).await;
-                    let collected = async {
-                        while matched.load(Ordering::SeqCst) < target_matched {
-                            matched_notify.notified().await;
-                        }
-                    };
-                    tokio::time::timeout(E2E_WAIT, collected)
-                        .await
-                        .expect("the matching collector did not yield the message");
-                    timings.push(start.elapsed());
-                }
-                // Non-matching collectors may still be filtering the last
-                // frames.
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                (mark.finish(), timings)
-            };
-            // A discarded pass first: the first run of the collector path under
-            // load makes a one-time ~1.9 MB allocation that would otherwise
-            // land in k=1 only (see docs/design/perf-baseline.md).
-            fanout_pass(&mut gateway).await;
-            let (sample, _) = fanout_pass(&mut gateway).await;
-            let timings = {
-                let _uncounted = Uncounted::new();
-                fanout_pass(&mut gateway).await.1
-            };
-            for task in tasks {
-                task.abort();
-            }
-            report.push(
-                e2e_scenario(&format!("e2e.fanout.message_collectors.k{k}"), sample, FANOUT_FRAMES, timings)
-                    .set("collectors", k)
-                    .note("MESSAGE_CREATE through the real pipeline with K hub collectors (one matches); time: until the handler and the matching collector have it"),
-            );
-        }
+        run_collectors(&mut gateway, &handler, &hub, report).await;
 
         client_task.abort();
         [rss_idle, rss_before, rss_after, rss_flushed]
