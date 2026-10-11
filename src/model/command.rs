@@ -26,7 +26,9 @@ pub struct ApplicationCommandOptionChoice {
 
 impl ApplicationCommandOptionChoice {
     /// A choice named `name` with `value` (`&str`/`String`, a signed or
-    /// small unsigned integer, `f64`, or `bool`).
+    /// small unsigned integer, or `f64`). Not checked here: the command
+    /// builders' `validate()` rejects a value that does not fit the option
+    /// type (a boolean, a fraction for `INTEGER`, a number out of range).
     pub fn new(name: impl Into<String>, value: impl Into<CommandOptionValue>) -> Self {
         Self {
             name: name.into(),
@@ -36,16 +38,25 @@ impl ApplicationCommandOptionChoice {
     }
 
     /// A choice whose value is any `Serialize` type that writes a JSON
-    /// string, number, or boolean (for example a `u64` or a string newtype);
-    /// fails for anything else.
+    /// string or number (for example a `u64` or a string newtype).
+    ///
+    /// Fails for anything Discord cannot accept as a choice whatever the
+    /// option type: a boolean, a non-finite number, a number outside the
+    /// `NUMBER` range (-2^53..2^53), or anything that is not a string or a
+    /// number. Whether the value fits its option's type (`INTEGER` values
+    /// are -2^53+1..2^53-1) is checked by the command builders' `validate()`.
     pub fn try_new(
         name: impl Into<String>,
         value: impl Serialize,
     ) -> Result<Self, serde_json::Error> {
+        let value = CommandOptionValue::from_serialize(&value)?;
+        value
+            .check_choice()
+            .map_err(<serde_json::Error as serde::de::Error>::custom)?;
         Ok(Self {
             name: name.into(),
             name_localizations: None,
-            value: CommandOptionValue::from_serialize(&value)?,
+            value,
         })
     }
 }
@@ -54,8 +65,8 @@ impl ApplicationCommandOptionChoice {
 // - 목적과 의도: 받은 커맨드 옵션 값(`options[].value`)과 선택지 값(`choices[].value`)을
 //   `serde_json::Value` 대신 Discord가 문서화한 네 가지 JSON 타입으로 표현한다.
 // - 기존 구현 및 제약 조건: 2.x는 둘 다 `Value`였다. Discord 문서: 옵션 값은 "string, integer,
-//   double, or boolean", 선택지 값은 "string, integer, or double". INTEGER는 -2^53..2^53,
-//   NUMBER는 double이다. 숫자 옵션도 JSON에 `5`처럼 소수점 없이 올 수 있고, 자동완성 중인 옵션은
+//   double, or boolean", 선택지 값은 "string, integer, or double". INTEGER는 -2^53+1..2^53-1,
+//   NUMBER는 -2^53..2^53의 double이다. 숫자 옵션도 JSON에 `5`처럼 소수점 없이 올 수 있고, 자동완성 중인 옵션은
 //   사용자가 친 문자열이 그대로 온다. 사용자·채널·역할·첨부 옵션은 ID를 문자열로 보낸다.
 // - 검토한 주요 대안: (1) `Value` 유지, (2) 옵션 타입별 enum(User(UserId), Channel(..) ..),
 //   (3) JSON 타입 enum + 타입별 접근자.
@@ -65,8 +76,10 @@ impl ApplicationCommandOptionChoice {
 //   보장 없음) 자동완성의 부분 입력 문자열을 표현하지 못한다. (3)은 와이어 그대로라 손실이
 //   없고 값 하나에 트리 할당이 없다(문자열만 한 번).
 // - 장점, 단점 및 영향: 공개 타입 변경(`Option<Value>` → `Option<CommandOptionValue>`,
-//   선택지 `Value` → `CommandOptionValue`). 정수는 i64에 들어가야 한다(Discord 한도 ±2^53).
-//   문자열·숫자·불 외의 JSON은 디코딩 오류다(전에는 그대로 담겼다).
+//   선택지 `Value` → `CommandOptionValue`). 정수는 i64에 들어가야 한다(Discord 한도 ±(2^53-1)).
+//   문자열·숫자·불 외의 JSON은 디코딩 오류다(전에는 그대로 담겼다). 보내는 선택지는
+//   `try_new`가 불·무한대·NUMBER 범위 밖 값을, 커맨드 `validate()`가 옵션 타입과 맞지 않는 값과
+//   타입별 범위를 거절한다(리뷰 2026-10-11). 받는 값은 범위를 검사하지 않는다.
 /// The value of a received command option, or of an option choice, with
 /// the JSON type Discord sent.
 ///
@@ -143,6 +156,50 @@ impl CommandOptionValue {
         self.as_str()?.parse().ok()
     }
 
+    /// Checks what a choice value must be for any option type: a string,
+    /// or a finite number within the `NUMBER` range. Booleans are option
+    /// values only; choices cannot be booleans.
+    pub(crate) fn check_choice(&self) -> Result<(), String> {
+        match self {
+            Self::String(_) => Ok(()),
+            Self::Integer(value) => check_number(integer_to_f64(*value)),
+            Self::Number(value) => check_number(*value),
+            Self::Boolean(_) => Err(String::from(
+                "a choice value cannot be a boolean (choices are strings, integers, or numbers)",
+            )),
+        }
+    }
+
+    /// Checks a choice value against its option's type: a string for
+    /// `STRING`, an integer within -2^53+1..2^53-1 for `INTEGER` (a number
+    /// without a fraction counts), and a finite number within -2^53..2^53
+    /// for `NUMBER`.
+    pub(crate) fn check_choice_for(&self, kind: super::CommandOptionType) -> Result<(), String> {
+        use super::CommandOptionType;
+        use crate::command::limits::{MAX_INTEGER_OPTION_VALUE, MIN_INTEGER_OPTION_VALUE};
+
+        self.check_choice()?;
+        let fits = match (kind, self) {
+            (CommandOptionType::STRING, Self::String(_)) => true,
+            (CommandOptionType::INTEGER, Self::Integer(value)) => {
+                (MIN_INTEGER_OPTION_VALUE..=MAX_INTEGER_OPTION_VALUE).contains(value)
+            }
+            (CommandOptionType::INTEGER, Self::Number(value)) => {
+                value.fract() == 0.0
+                    && (integer_to_f64(MIN_INTEGER_OPTION_VALUE)
+                        ..=integer_to_f64(MAX_INTEGER_OPTION_VALUE))
+                        .contains(value)
+            }
+            (CommandOptionType::NUMBER, Self::Integer(_) | Self::Number(_)) => true,
+            _ => false,
+        };
+        if fits {
+            Ok(())
+        } else {
+            Err(format!("{self:?} is not a valid {kind:?} choice value"))
+        }
+    }
+
     /// Converts any `Serialize` value that writes a JSON string, number, or
     /// boolean. Scalars build no JSON tree (`serde_json::Value` holds them
     /// inline).
@@ -151,14 +208,32 @@ impl CommandOptionValue {
     }
 }
 
-/// Discord bounds integer option values to -2^53..2^53, which `f64`
-/// represents exactly; outside that range the nearest `f64` is returned.
+/// Discord bounds integer option values to -2^53+1..2^53-1 (`INTEGER`) and
+/// numbers to -2^53..2^53 (`NUMBER`), which `f64` represents exactly;
+/// outside that range the nearest `f64` is returned.
 #[expect(
     clippy::as_conversions,
     reason = "i64 to f64 has no From impl; the documented range converts exactly"
 )]
 fn integer_to_f64(value: i64) -> f64 {
     value as f64
+}
+
+/// A finite number within the `NUMBER` option range.
+fn check_number(value: f64) -> Result<(), String> {
+    use crate::command::limits::{MAX_NUMBER_OPTION_VALUE, MIN_NUMBER_OPTION_VALUE};
+
+    if !value.is_finite() {
+        return Err(format!(
+            "a choice value must be a finite number, got {value}"
+        ));
+    }
+    if !(MIN_NUMBER_OPTION_VALUE..=MAX_NUMBER_OPTION_VALUE).contains(&value) {
+        return Err(format!(
+            "a choice value must be within -2^53..2^53, got {value}"
+        ));
+    }
+    Ok(())
 }
 
 impl Serialize for CommandOptionValue {

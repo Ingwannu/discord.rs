@@ -33,6 +33,16 @@ pub mod limits {
     pub const MAX_CHOICE_NAME_LENGTH: usize = 100;
     /// String choice values: up to 100 characters.
     pub const MAX_CHOICE_STRING_VALUE_LENGTH: usize = 100;
+    /// Smallest `INTEGER` option value and choice: "Any integer between
+    /// -2^53+1 and 2^53-1" (Application Command Option Type).
+    pub const MIN_INTEGER_OPTION_VALUE: i64 = -9_007_199_254_740_991;
+    /// Largest `INTEGER` option value and choice (2^53-1).
+    pub const MAX_INTEGER_OPTION_VALUE: i64 = 9_007_199_254_740_991;
+    /// Smallest `NUMBER` option value and choice: "Any double between -2^53
+    /// and 2^53" (Application Command Option Type).
+    pub const MIN_NUMBER_OPTION_VALUE: f64 = -9_007_199_254_740_992.0;
+    /// Largest `NUMBER` option value and choice (2^53).
+    pub const MAX_NUMBER_OPTION_VALUE: f64 = 9_007_199_254_740_992.0;
     /// Upper bound of `min_length` (0-6000) and `max_length` (1-6000) on
     /// `STRING` options.
     pub const MAX_STRING_OPTION_LENGTH: u16 = 6000;
@@ -562,6 +572,15 @@ fn validate_option_constraints(option: &ApplicationCommandOption) -> Result<(), 
                 limits::MAX_CHOICE_STRING_VALUE_LENGTH,
             )?;
         }
+        choice
+            .value
+            .check_choice_for(option.kind)
+            .map_err(|error| {
+                DiscordError::model(format!(
+                    "option \"{name}\" choice \"{}\": {error}",
+                    choice.name
+                ))
+            })?;
     }
 
     if let (Some(min), Some(max)) = (option.min_value, option.max_value) {
@@ -1974,6 +1993,82 @@ mod tests {
                 &[("target", Some(&target_de)), ("reason", Some(&reason_de))],
             ),
             "name_localizations[fr] \"cible\" collides",
+        );
+    }
+
+    #[test]
+    fn choice_values_match_their_option_type_and_range() {
+        use crate::model::{ApplicationCommandOptionChoice, CommandOptionValue};
+
+        // Discord: INTEGER is -2^53+1..2^53-1, NUMBER is -2^53..2^53 and
+        // a double, and a choice is a string, integer, or double.
+        let max_integer = limits::MAX_INTEGER_OPTION_VALUE;
+        CommandOptionBuilder::integer("count", "desc")
+            .choice("max", max_integer)
+            .choice("min", limits::MIN_INTEGER_OPTION_VALUE)
+            .choice("whole", 3.0_f64)
+            .validate()
+            .expect("integers at the documented bounds, and a whole double");
+        expect_model_error(
+            CommandOptionBuilder::integer("count", "desc")
+                .choice("past", max_integer + 1)
+                .try_build(),
+            "option \"count\" choice \"past\": Integer(9007199254740992) is not a valid INTEGER choice value",
+        );
+        expect_model_error(
+            CommandOptionBuilder::integer("count", "desc")
+                .choice("half", 0.5)
+                .try_build(),
+            "is not a valid INTEGER choice value",
+        );
+        expect_model_error(
+            CommandOptionBuilder::integer("count", "desc")
+                .choice("text", "1")
+                .try_build(),
+            "is not a valid INTEGER choice value",
+        );
+        CommandOptionBuilder::number("ratio", "desc")
+            .choice("top", limits::MAX_NUMBER_OPTION_VALUE)
+            .choice("int", 5)
+            .validate()
+            .expect("NUMBER takes doubles up to 2^53 and integers");
+        expect_model_error(
+            CommandOptionBuilder::number("ratio", "desc")
+                .choice("inf", f64::INFINITY)
+                .try_build(),
+            "a choice value must be a finite number, got inf",
+        );
+        expect_model_error(
+            CommandOptionBuilder::number("ratio", "desc")
+                .choice("huge", 1e300)
+                .try_build(),
+            "a choice value must be within -2^53..2^53",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("pick", "desc")
+                .choice("yes", true)
+                .try_build(),
+            "a choice value cannot be a boolean",
+        );
+        expect_model_error(
+            CommandOptionBuilder::string("pick", "desc")
+                .choice("num", 1)
+                .try_build(),
+            "is not a valid STRING choice value",
+        );
+
+        // `try_new` / `try_choice` reject what no option type accepts.
+        assert!(ApplicationCommandOptionChoice::try_new("u64", u64::MAX).is_err());
+        assert!(ApplicationCommandOptionChoice::try_new("nan", f64::NAN).is_err());
+        assert!(ApplicationCommandOptionChoice::try_new("flag", true).is_err());
+        assert!(CommandOptionBuilder::integer("n", "d")
+            .try_choice("b", false)
+            .is_err());
+        assert_eq!(
+            ApplicationCommandOptionChoice::try_new("max", 9_007_199_254_740_992_u64)
+                .map(|choice| choice.value)
+                .ok(),
+            Some(CommandOptionValue::Integer(9_007_199_254_740_992))
         );
     }
 
