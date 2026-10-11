@@ -219,10 +219,10 @@ impl CommandPermissionTarget {
     /// guild context (so never [`Everyone`](Self::Everyone) or
     /// [`AllChannels`](Self::AllChannels); see [`Self::in_guild`]).
     pub const fn from_wire(kind: CommandPermissionType, id: GenericId) -> Self {
-        match kind.get() {
-            1 => Self::Role(id.cast()),
-            2 => Self::User(id.cast()),
-            3 => Self::Channel(id.cast()),
+        match kind {
+            CommandPermissionType::ROLE => Self::Role(id.cast()),
+            CommandPermissionType::USER => Self::User(id.cast()),
+            CommandPermissionType::CHANNEL => Self::Channel(id.cast()),
             _ => Self::Unknown { kind, id },
         }
     }
