@@ -2,15 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, PermissionsBitField};
+use super::{IntegrationId, PermissionsBitField, RoleId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `RoleTags`.
 pub struct RoleTags {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bot_id: Option<GenericId>,
+    pub bot_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub integration_id: Option<GenericId>,
+    pub integration_id: Option<IntegrationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_subscriber: Option<bool>,
 }
@@ -26,7 +26,7 @@ pub struct RoleColors {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Role`.
 pub struct Role {
-    pub id: GenericId,
+    pub id: RoleId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<u64>,
@@ -55,14 +55,14 @@ pub struct Role {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `ModifyGuildRolePosition`.
 pub struct ModifyGuildRolePosition {
-    pub id: GenericId,
+    pub id: RoleId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Option<i64>>,
 }
 
 impl ModifyGuildRolePosition {
     /// Entry for role `id` that changes nothing until `position` is set.
-    pub fn new(id: GenericId) -> Self {
+    pub fn new(id: RoleId) -> Self {
         Self { id, position: None }
     }
 }

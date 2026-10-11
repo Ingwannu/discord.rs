@@ -65,7 +65,7 @@ use super::{merge_message_update, presence_from_update, MessageUpdateFields};
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::Event;
-use crate::model::{GenericId, Member, Message, Presence};
+use crate::model::{ChannelId, GuildId, Member, Message, MessageId, Presence, UserId};
 
 /// Boxed, `Send` future returned by [`ErasedCacheBackend`].
 type BackendFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, DiscordError>> + Send + 'a>>;
@@ -97,33 +97,33 @@ pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
     fn put_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Member,
     ) -> BackendFuture<'_, ()>;
     fn delete_member<'a>(
         &'a self,
         epoch: u64,
-        guild_id: &'a GenericId,
-        user_id: &'a GenericId,
+        guild_id: &'a GuildId,
+        user_id: &'a UserId,
     ) -> BackendFuture<'a, ()>;
     fn put_message(&self, epoch: u64, message: Message) -> BackendFuture<'_, ()>;
     fn get_message<'a>(
         &'a self,
-        channel_id: &'a GenericId,
-        message_id: &'a GenericId,
+        channel_id: &'a ChannelId,
+        message_id: &'a MessageId,
     ) -> BackendFuture<'a, Option<Arc<Message>>>;
     fn delete_message<'a>(
         &'a self,
         epoch: u64,
-        channel_id: &'a GenericId,
-        message_id: &'a GenericId,
+        channel_id: &'a ChannelId,
+        message_id: &'a MessageId,
     ) -> BackendFuture<'a, ()>;
     fn put_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: Presence,
     ) -> BackendFuture<'_, ()>;
 }
@@ -153,8 +153,8 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
     fn put_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Member,
     ) -> BackendFuture<'_, ()> {
         Box::pin(
@@ -165,8 +165,8 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
     fn delete_member<'a>(
         &'a self,
         epoch: u64,
-        guild_id: &'a GenericId,
-        user_id: &'a GenericId,
+        guild_id: &'a GuildId,
+        user_id: &'a UserId,
     ) -> BackendFuture<'a, ()> {
         Box::pin(async move { CacheBackend::delete_member(self, epoch, *guild_id, *user_id).await })
     }
@@ -177,8 +177,8 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
 
     fn get_message<'a>(
         &'a self,
-        channel_id: &'a GenericId,
-        message_id: &'a GenericId,
+        channel_id: &'a ChannelId,
+        message_id: &'a MessageId,
     ) -> BackendFuture<'a, Option<Arc<Message>>> {
         Box::pin(async move { CacheBackend::get_message(self, *channel_id, *message_id).await })
     }
@@ -186,8 +186,8 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
     fn delete_message<'a>(
         &'a self,
         epoch: u64,
-        channel_id: &'a GenericId,
-        message_id: &'a GenericId,
+        channel_id: &'a ChannelId,
+        message_id: &'a MessageId,
     ) -> BackendFuture<'a, ()> {
         Box::pin(async move {
             CacheBackend::delete_message(self, epoch, *channel_id, *message_id).await
@@ -197,8 +197,8 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
     fn put_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: Presence,
     ) -> BackendFuture<'_, ()> {
         Box::pin(async move {
@@ -258,28 +258,28 @@ type ShardPair = (u32, u32);
 pub(super) enum BackendWrite {
     ClearShard,
     PutMember {
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Box<crate::model::Member>,
     },
     DeleteMember {
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     },
     PutMembersChunk {
-        guild_id: GenericId,
+        guild_id: GuildId,
         members: Vec<crate::model::Member>,
         presences: Vec<crate::model::Presence>,
     },
     PutMessage(Box<crate::model::Message>),
     UpdateMessage(Box<BackendMessageUpdate>),
     DeleteMessages {
-        channel_id: GenericId,
-        message_ids: Vec<GenericId>,
+        channel_id: ChannelId,
+        message_ids: Vec<MessageId>,
     },
     PutPresence {
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: Box<crate::model::Presence>,
     },
     /// Test hook: acknowledges once every earlier write was applied.

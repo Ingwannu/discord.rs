@@ -1249,7 +1249,7 @@ impl ProcessShardManager {
         token: impl Into<String>,
         config: ProcessShardManagerConfig,
     ) -> Result<Self, DiscordError> {
-        let rest = RestClient::new(token, 0);
+        let rest = RestClient::new(token, None);
         Self::spawn_auto_with(rest, config).await
     }
 
@@ -5686,7 +5686,7 @@ done
     }
 
     fn rest_for(port: u16) -> RestClient {
-        RestClient::builder("token", 0)
+        RestClient::builder("token", None)
             .api_base(format!("http://127.0.0.1:{port}"))
             .build()
             .unwrap()

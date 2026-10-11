@@ -15,7 +15,7 @@ use tracing::warn;
 use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationCommandOptionChoice, GenericId, Interaction, InteractionContextData,
+    ApplicationCommandOptionChoice, Interaction, InteractionContextData, InteractionId,
     InteractionResponseState,
 };
 use crate::parsers::{
@@ -524,7 +524,7 @@ where
 /// body can still be rejected by Discord.
 fn typed_endpoint_answer(
     state: &InteractionResponseState,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     response: InteractionResponse,
 ) -> EndpointAnswer {
     if matches!(response, InteractionResponse::Accepted) {
@@ -1554,7 +1554,7 @@ mod tests {
         assert!(ctx.is_deferred());
         assert!(ctx.interaction.is_deferred());
         let error = ctx
-            .follow_up(&RestClient::new("bot-token", 200), "done")
+            .follow_up(&RestClient::new("bot-token", Some(test_id(200))), "done")
             .await
             .unwrap_err();
         assert!(

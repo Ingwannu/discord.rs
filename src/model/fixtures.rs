@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use super::{
     Attachment, AutocompleteInteraction, Channel, ChatInputCommandInteraction,
     CommandInteractionData, ComponentInteraction, ComponentInteractionData, Entitlement, ForumTag,
-    GenericId, Guild, Integration, InteractionContextData, InteractionResponseState, Message,
+    Guild, Id, IdMarker, Integration, InteractionContextData, InteractionResponseState, Message,
     MessageContextMenuInteraction, Role, SoundboardSound, StageInstance, Sticker, Subscription,
     User, UserContextMenuInteraction,
 };
@@ -34,7 +34,7 @@ fn from_json<T: DeserializeOwned>(value: Value) -> T {
     }
 }
 
-fn placeholder() -> GenericId {
+fn placeholder<M: IdMarker>() -> Id<M> {
     super::test_id(FIXTURE_ID)
 }
 

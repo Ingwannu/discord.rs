@@ -4,13 +4,13 @@ use serde_json::{json, Value};
 use super::*;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, Entitlement, GenericId, Guild, Integration, IntegrationAccount, Interaction,
+    Channel, Entitlement, Guild, Id, IdMarker, Integration, IntegrationAccount, Interaction,
     InteractionContextData, Member, Message, PingInteraction, Role, SoundboardSound, StageInstance,
     Subscription, User, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
-fn snowflake(id: &str) -> GenericId {
+fn snowflake<M: IdMarker>(id: &str) -> Id<M> {
     id.parse().unwrap()
 }
 
@@ -633,7 +633,7 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
                     .entry
                     .as_ref()
                     .and_then(|entry| entry.id)
-                    .map(GenericId::get),
+                    .map(u64::from),
                 Some(731)
             );
         }
@@ -2111,7 +2111,9 @@ fn event_kind_and_raw_cover_missing_variants() {
         (
             "APPLICATION_COMMAND_PERMISSIONS_UPDATE",
             Event::ApplicationCommandPermissionsUpdate(ApplicationCommandPermissionsUpdateEvent {
-                id: Some(snowflake("151")),
+                id: Some(crate::model::CommandPermissionsId::Command(snowflake(
+                    "151",
+                ))),
                 application_id: Some(snowflake("152")),
                 guild_id: Some(snowflake("153")),
                 permissions: vec![crate::model::ApplicationCommandPermission::role(
@@ -2698,21 +2700,23 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
     .unwrap()
     {
         Event::ApplicationCommandPermissionsUpdate(event) => {
+            use crate::model::{CommandPermissionTarget, CommandPermissionsId};
+
+            assert_eq!(event.id, Some(CommandPermissionsId::Command(test_id(300))));
             assert_eq!(event.permissions.len(), 3);
-            assert_eq!(event.permissions[0].id.get(), 303);
             assert_eq!(
-                event.permissions[0].kind,
-                crate::model::ApplicationCommandPermission::ROLE
+                event.permissions[0].target,
+                CommandPermissionTarget::Role(test_id(303))
             );
             assert!(event.permissions[0].permission);
             assert_eq!(
-                event.permissions[1].kind,
-                crate::model::ApplicationCommandPermission::USER
+                event.permissions[1].target,
+                CommandPermissionTarget::User(test_id(304))
             );
             assert!(!event.permissions[1].permission);
             assert_eq!(
-                event.permissions[2].kind,
-                crate::model::ApplicationCommandPermission::CHANNEL
+                event.permissions[2].target,
+                CommandPermissionTarget::Channel(test_id(305))
             );
             // The raw payload stays available alongside the typed view.
             assert_eq!(event.raw["permissions"][0]["id"], json!("303"));

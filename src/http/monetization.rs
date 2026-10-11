@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateTestEntitlement, Entitlement, EntitlementQuery, GenericId, Sku, Subscription,
-    SubscriptionQuery,
+    CreateTestEntitlement, Entitlement, EntitlementId, EntitlementQuery, Sku, SkuId, Subscription,
+    SubscriptionId, SubscriptionQuery,
 };
 
 use super::{configured_application_id, entitlement_query, subscription_query, RestClient};
@@ -22,7 +22,7 @@ impl RestClient {
 
     pub async fn get_sku_subscriptions(
         &self,
-        sku_id: GenericId,
+        sku_id: SkuId,
         query: &SubscriptionQuery,
     ) -> Result<Vec<Subscription>, DiscordError> {
         self.request_typed(
@@ -39,8 +39,8 @@ impl RestClient {
 
     pub async fn get_sku_subscription(
         &self,
-        sku_id: GenericId,
-        subscription_id: GenericId,
+        sku_id: SkuId,
+        subscription_id: SubscriptionId,
     ) -> Result<Subscription, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -68,7 +68,7 @@ impl RestClient {
 
     pub async fn get_entitlement(
         &self,
-        entitlement_id: GenericId,
+        entitlement_id: EntitlementId,
     ) -> Result<Entitlement, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
@@ -82,7 +82,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn consume_entitlement(&self, entitlement_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn consume_entitlement(
+        &self,
+        entitlement_id: EntitlementId,
+    ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::POST,
@@ -110,7 +113,7 @@ impl RestClient {
 
     pub async fn delete_test_entitlement(
         &self,
-        entitlement_id: GenericId,
+        entitlement_id: EntitlementId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(

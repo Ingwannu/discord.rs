@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    GenericId, GuildScheduledEvent, GuildScheduledEventUser, GuildScheduledEventUsersQuery,
-    GuildScheduledEventsQuery,
+    GuildId, GuildScheduledEvent, GuildScheduledEventUser, GuildScheduledEventUsersQuery,
+    GuildScheduledEventsQuery, ScheduledEventId,
 };
 
 use super::RestClient;
@@ -12,7 +12,7 @@ use super::RestClient;
 impl RestClient {
     pub async fn get_guild_scheduled_events(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<GuildScheduledEvent>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -26,7 +26,7 @@ impl RestClient {
     /// (`with_user_count=true` adds subscriber counts to each event).
     pub async fn get_guild_scheduled_events_with_query(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &GuildScheduledEventsQuery,
     ) -> Result<Vec<GuildScheduledEvent>, DiscordError> {
         let mut path = format!("/guilds/{}/scheduled-events", guild_id);
@@ -39,7 +39,7 @@ impl RestClient {
 
     pub async fn create_guild_scheduled_event(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &Value,
     ) -> Result<GuildScheduledEvent, DiscordError> {
         self.request_typed(
@@ -52,7 +52,7 @@ impl RestClient {
 
     pub async fn create_guild_scheduled_event_typed<B>(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &B,
     ) -> Result<GuildScheduledEvent, DiscordError>
     where
@@ -68,8 +68,8 @@ impl RestClient {
 
     pub async fn get_guild_scheduled_event(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
     ) -> Result<GuildScheduledEvent, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -81,8 +81,8 @@ impl RestClient {
 
     pub async fn modify_guild_scheduled_event(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
         body: &Value,
     ) -> Result<GuildScheduledEvent, DiscordError> {
         self.request_typed(
@@ -95,8 +95,8 @@ impl RestClient {
 
     pub async fn modify_guild_scheduled_event_typed<B>(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
         body: &B,
     ) -> Result<GuildScheduledEvent, DiscordError>
     where
@@ -112,8 +112,8 @@ impl RestClient {
 
     pub async fn delete_guild_scheduled_event(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -125,8 +125,8 @@ impl RestClient {
 
     pub async fn get_guild_scheduled_event_users(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
         limit: Option<u64>,
     ) -> Result<Vec<GuildScheduledEventUser>, DiscordError> {
         self.get_guild_scheduled_event_users_with_query(
@@ -144,8 +144,8 @@ impl RestClient {
     /// options: `limit`, `with_member`, and `before`/`after` pagination.
     pub async fn get_guild_scheduled_event_users_with_query(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
         query: &GuildScheduledEventUsersQuery,
     ) -> Result<Vec<GuildScheduledEventUser>, DiscordError> {
         let mut parameters = Vec::new();

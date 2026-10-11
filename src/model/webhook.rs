@@ -2,19 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::GenericId;
+use super::{ApplicationId, ChannelId, GuildId, WebhookId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Webhook`.
 pub struct Webhook {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<GenericId>,
+    pub id: Option<WebhookId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -22,7 +22,7 @@ pub struct Webhook {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 }
@@ -43,7 +43,7 @@ pub struct ModifyWebhook {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
 }
 
 /// Request body for modifying a token-authenticated webhook.
@@ -61,7 +61,7 @@ pub struct WebhookExecuteQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wait: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<GenericId>,
+    pub thread_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_components: Option<bool>,
 }
@@ -70,7 +70,7 @@ pub struct WebhookExecuteQuery {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct WebhookMessageQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread_id: Option<GenericId>,
+    pub thread_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_components: Option<bool>,
 }

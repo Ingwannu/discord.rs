@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::constants::button_style;
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::EmojiId;
 
 /// Backward-compatible error type alias. Prefer `DiscordError` directly.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
@@ -22,7 +22,7 @@ pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
 pub struct Emoji {
     /// Custom emoji ID; `None` for a Unicode emoji.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<GenericId>,
+    pub id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,7 +40,7 @@ impl Emoji {
     }
 
     /// Creates a custom (guild or application) emoji reference.
-    pub fn custom(name: &str, id: GenericId, animated: bool) -> Self {
+    pub fn custom(name: &str, id: EmojiId, animated: bool) -> Self {
         Self {
             name: Some(name.to_string()),
             id: Some(id),

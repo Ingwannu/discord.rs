@@ -4,13 +4,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, PermissionsBitField, User};
+use super::{
+    ActivityLaunchId, ApplicationId, ChannelId, GuildId, PermissionsBitField, SkuId, User, UserId,
+};
 
 /// Partial application object attached to messages sent by an app
 /// (e.g. Rich Presence or activity invites).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialApplication {
-    pub id: GenericId,
+    pub id: ApplicationId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -24,23 +26,23 @@ pub struct PartialApplication {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_sku_id: Option<GenericId>,
+    pub primary_sku_id: Option<SkuId>,
 }
 
 /// A running application Activity instance.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActivityInstance {
     /// Application ID that owns the Activity.
-    pub application_id: GenericId,
+    pub application_id: ApplicationId,
     /// Activity instance ID.
     pub instance_id: String,
     /// Unique launch ID for this Activity session.
-    pub launch_id: GenericId,
+    pub launch_id: ActivityLaunchId,
     /// Location where the Activity instance is running.
     pub location: ActivityLocation,
     /// Users currently connected to the Activity instance.
     #[serde(default)]
-    pub users: Vec<GenericId>,
+    pub users: Vec<UserId>,
 }
 
 /// Location where an application Activity instance is running.
@@ -51,16 +53,16 @@ pub struct ActivityLocation {
     /// Location kind, such as `gc` for guild channel or `pc` for private channel.
     pub kind: String,
     /// Channel ID for this location.
-    pub channel_id: GenericId,
+    pub channel_id: ChannelId,
     /// Guild ID for guild-channel Activity locations.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Application`.
 pub struct Application {
-    pub id: GenericId,
+    pub id: ApplicationId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -82,9 +84,9 @@ pub struct Application {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_sku_id: Option<GenericId>,
+    pub primary_sku_id: Option<SkuId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

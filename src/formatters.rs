@@ -46,7 +46,7 @@ use std::borrow::Cow;
 use std::fmt::{self, Display, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::model::GenericId;
+use crate::model::{ChannelId, GenericId, RoleId, UserId};
 
 // ---------------------------------------------------------------------------
 // Display building blocks
@@ -1436,19 +1436,50 @@ pub enum MentionKind {
     Channel,
 }
 
+/// What a parsed mention refers to, with the ID typed by its kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MentionTarget {
+    /// `<@id>` or the deprecated `<@!id>`.
+    User(UserId),
+    /// `<@&id>`
+    Role(RoleId),
+    /// `<#id>`
+    Channel(ChannelId),
+}
+
+impl MentionTarget {
+    /// The kind of mention.
+    pub const fn kind(self) -> MentionKind {
+        match self {
+            Self::User(_) => MentionKind::User,
+            Self::Role(_) => MentionKind::Role,
+            Self::Channel(_) => MentionKind::Channel,
+        }
+    }
+
+    /// The mentioned ID with its kind erased.
+    pub const fn id(self) -> GenericId {
+        match self {
+            Self::User(id) => id.erase(),
+            Self::Role(id) => id.erase(),
+            Self::Channel(id) => id.erase(),
+        }
+    }
+}
+
 /// Supplies display names for [`clean_content`]. Every method defaults to
 /// `None`, which leaves the mention untouched (discord.js does the same for
 /// uncached targets).
 ///
-/// Any `Fn(MentionKind, GenericId) -> Option<String>` closure is a
-/// resolver; annotate the parameter types when passing a closure literal:
+/// Any `Fn(MentionTarget) -> Option<String>` closure is a resolver;
+/// annotate the parameter type when passing a closure literal:
 ///
 /// ```
-/// use discordrs::formatters::{clean_content, MentionKind};
-/// use discordrs::GenericId;
+/// use discordrs::formatters::{clean_content, MentionTarget};
 ///
-/// let resolver = |kind: MentionKind, id: GenericId| match (kind, id.get()) {
-///     (MentionKind::User, 80351110224678912) => Some("Nelly".to_string()),
+/// let resolver = |target: MentionTarget| match target {
+///     MentionTarget::User(id) if id.get() == 80351110224678912 => Some("Nelly".to_string()),
 ///     _ => None,
 /// };
 /// assert_eq!(
@@ -1459,35 +1490,35 @@ pub enum MentionKind {
 pub trait MentionResolver {
     /// Display name for a user (discord.js uses the member's display name,
     /// then the user's).
-    fn user(&self, _id: GenericId) -> Option<String> {
+    fn user(&self, _id: UserId) -> Option<String> {
         None
     }
 
     /// Name of a role.
-    fn role(&self, _id: GenericId) -> Option<String> {
+    fn role(&self, _id: RoleId) -> Option<String> {
         None
     }
 
     /// Name of a channel.
-    fn channel(&self, _id: GenericId) -> Option<String> {
+    fn channel(&self, _id: ChannelId) -> Option<String> {
         None
     }
 }
 
 impl<F> MentionResolver for F
 where
-    F: Fn(MentionKind, GenericId) -> Option<String>,
+    F: Fn(MentionTarget) -> Option<String>,
 {
-    fn user(&self, id: GenericId) -> Option<String> {
-        self(MentionKind::User, id)
+    fn user(&self, id: UserId) -> Option<String> {
+        self(MentionTarget::User(id))
     }
 
-    fn role(&self, id: GenericId) -> Option<String> {
-        self(MentionKind::Role, id)
+    fn role(&self, id: RoleId) -> Option<String> {
+        self(MentionTarget::Role(id))
     }
 
-    fn channel(&self, id: GenericId) -> Option<String> {
-        self(MentionKind::Channel, id)
+    fn channel(&self, id: ChannelId) -> Option<String> {
+        self(MentionTarget::Channel(id))
     }
 }
 
@@ -1524,7 +1555,7 @@ where
 }
 
 enum Tag<'t> {
-    Mention(MentionKind, GenericId),
+    Mention(MentionTarget),
     Command(&'t str),
     Emoji(&'t str),
 }
@@ -1532,13 +1563,13 @@ enum Tag<'t> {
 impl Tag<'_> {
     fn resolve<R: MentionResolver + ?Sized>(&self, resolver: &R) -> Option<String> {
         match self {
-            Self::Mention(MentionKind::User, id) => {
+            Self::Mention(MentionTarget::User(id)) => {
                 resolver.user(*id).map(|name| format!("@{name}"))
             }
-            Self::Mention(MentionKind::Role, id) => {
+            Self::Mention(MentionTarget::Role(id)) => {
                 resolver.role(*id).map(|name| format!("@{name}"))
             }
-            Self::Mention(MentionKind::Channel, id) => {
+            Self::Mention(MentionTarget::Channel(id)) => {
                 resolver.channel(*id).map(|name| format!("#{name}"))
             }
             Self::Command(name) => Some(format!("/{name}")),
@@ -1569,7 +1600,13 @@ fn parse_tag(text: &str, open: usize) -> Option<(usize, Tag<'_>)> {
         // Twenty digits can exceed u64 and all-zero digits are not an ID.
         // Neither can name a real target, so the tag stays text, exactly
         // what an unresolved mention produces.
-        return id.parse().ok().map(|id| (end, Tag::Mention(kind, id)));
+        let id: GenericId = id.parse().ok()?;
+        let target = match kind {
+            MentionKind::User => MentionTarget::User(id.cast()),
+            MentionKind::Role => MentionTarget::Role(id.cast()),
+            MentionKind::Channel => MentionTarget::Channel(id.cast()),
+        };
+        return Some((end, Tag::Mention(target)));
     }
 
     if let Some(command) = rest.strip_prefix('/') {

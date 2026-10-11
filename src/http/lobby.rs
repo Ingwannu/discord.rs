@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AddLobbyMember, CreateLobby, CreateLobbyMessage, GenericId, GetOrCreateLobby, LinkLobbyChannel,
-    Lobby, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, ModifyLobby,
+    AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel, Lobby,
+    LobbyId, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, MessageId, ModifyLobby,
+    UserId,
 };
 use crate::types::invalid_data_error;
 
@@ -24,7 +25,7 @@ impl RestClient {
     }
 
     /// Returns one lobby by ID.
-    pub async fn get_lobby(&self, lobby_id: GenericId) -> Result<Lobby, DiscordError> {
+    pub async fn get_lobby(&self, lobby_id: LobbyId) -> Result<Lobby, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/lobbies/{}", lobby_id),
@@ -36,7 +37,7 @@ impl RestClient {
     /// Modifies one lobby.
     pub async fn modify_lobby(
         &self,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
         body: &ModifyLobby,
     ) -> Result<Lobby, DiscordError> {
         self.request_typed(Method::PATCH, &format!("/lobbies/{}", lobby_id), Some(body))
@@ -44,7 +45,7 @@ impl RestClient {
     }
 
     /// Deletes one lobby.
-    pub async fn delete_lobby(&self, lobby_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn delete_lobby(&self, lobby_id: LobbyId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/lobbies/{}", lobby_id),
@@ -56,8 +57,8 @@ impl RestClient {
     /// Adds or updates one lobby member.
     pub async fn add_lobby_member(
         &self,
-        lobby_id: GenericId,
-        user_id: GenericId,
+        lobby_id: LobbyId,
+        user_id: UserId,
         body: &AddLobbyMember,
     ) -> Result<LobbyMember, DiscordError> {
         self.request_typed(
@@ -71,7 +72,7 @@ impl RestClient {
     /// Adds, updates, or removes lobby members in bulk.
     pub async fn bulk_update_lobby_members(
         &self,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
         body: &[LobbyMemberUpdate],
     ) -> Result<Vec<LobbyMember>, DiscordError> {
         self.request_typed(
@@ -85,8 +86,8 @@ impl RestClient {
     /// Removes one lobby member.
     pub async fn remove_lobby_member(
         &self,
-        lobby_id: GenericId,
-        user_id: GenericId,
+        lobby_id: LobbyId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -100,7 +101,7 @@ impl RestClient {
     pub async fn leave_lobby(
         &self,
         bearer_token: &str,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
     ) -> Result<(), DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_with_headers_authorized(
@@ -117,7 +118,7 @@ impl RestClient {
     pub async fn link_lobby_channel(
         &self,
         bearer_token: &str,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
         body: &LinkLobbyChannel,
     ) -> Result<Lobby, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
@@ -133,8 +134,8 @@ impl RestClient {
     /// Updates app-scoped moderation metadata for lobby messages.
     pub async fn update_lobby_message_moderation_metadata(
         &self,
-        lobby_id: GenericId,
-        message_id: GenericId,
+        lobby_id: LobbyId,
+        message_id: MessageId,
         metadata: &HashMap<String, String>,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
@@ -171,7 +172,7 @@ impl RestClient {
     pub async fn send_lobby_message(
         &self,
         bearer_token: &str,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
         body: &CreateLobbyMessage,
     ) -> Result<LobbyMessage, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
@@ -189,7 +190,7 @@ impl RestClient {
     pub async fn get_lobby_messages(
         &self,
         bearer_token: &str,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
         limit: Option<u8>,
     ) -> Result<Vec<LobbyMessage>, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
@@ -217,7 +218,7 @@ impl RestClient {
     pub async fn create_lobby_channel_invite_for_self(
         &self,
         bearer_token: &str,
-        lobby_id: GenericId,
+        lobby_id: LobbyId,
     ) -> Result<LobbyInvite, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
@@ -233,8 +234,8 @@ impl RestClient {
     /// for `user_id`, on behalf of the application (Bot token).
     pub async fn create_lobby_channel_invite_for_user(
         &self,
-        lobby_id: GenericId,
-        user_id: GenericId,
+        lobby_id: LobbyId,
+        user_id: UserId,
     ) -> Result<LobbyInvite, DiscordError> {
         self.request_typed(
             Method::POST,

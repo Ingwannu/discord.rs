@@ -5,8 +5,9 @@ use std::time::{Duration, Instant};
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, GenericId, Guild, Member, Message, Presence, Role, SoundboardSound, StageInstance,
-    Sticker, User, VoiceState,
+    Channel, ChannelId, EmojiId, Guild, GuildId, Member, Message, MessageId, Presence, Role,
+    RoleId, ScheduledEventId, SoundboardSound, SoundboardSoundId, StageInstance, StageInstanceId,
+    Sticker, StickerId, User, UserId, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -100,41 +101,41 @@ where
 
 #[derive(Clone, Default)]
 pub(super) struct CacheStore {
-    pub(super) guilds: HashMap<GenericId, Guild>,
-    pub(super) channels: HashMap<GenericId, Channel>,
-    pub(super) users: HashMap<GenericId, User>,
-    pub(super) members: HashMap<(GenericId, GenericId), Arc<Member>>,
-    pub(super) messages: HashMap<(GenericId, GenericId), Arc<Message>>,
-    pub(super) roles: HashMap<(GenericId, GenericId), Role>,
-    pub(super) presences: HashMap<(GenericId, GenericId), Arc<Presence>>,
-    pub(super) voice_states: HashMap<(GenericId, GenericId), VoiceState>,
-    pub(super) soundboard_sounds: HashMap<(GenericId, GenericId), SoundboardSound>,
-    pub(super) emojis: HashMap<(GenericId, GenericId), Emoji>,
-    pub(super) stickers: HashMap<(GenericId, GenericId), Sticker>,
-    pub(super) scheduled_events: HashMap<(GenericId, GenericId), ScheduledEvent>,
-    pub(super) stage_instances: HashMap<(GenericId, GenericId), StageInstance>,
-    pub(super) guild_order: LruOrder<GenericId>,
-    pub(super) channel_order: LruOrder<GenericId>,
-    pub(super) user_order: LruOrder<GenericId>,
-    pub(super) member_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) message_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) role_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) presence_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) voice_state_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) soundboard_sound_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) emoji_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) sticker_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) scheduled_event_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) stage_instance_order: LruOrder<(GenericId, GenericId)>,
-    pub(super) member_seen: HashMap<(GenericId, GenericId), Instant>,
-    pub(super) message_seen: HashMap<(GenericId, GenericId), Instant>,
-    pub(super) presence_seen: HashMap<(GenericId, GenericId), Instant>,
+    pub(super) guilds: HashMap<GuildId, Guild>,
+    pub(super) channels: HashMap<ChannelId, Channel>,
+    pub(super) users: HashMap<UserId, User>,
+    pub(super) members: HashMap<(GuildId, UserId), Arc<Member>>,
+    pub(super) messages: HashMap<(ChannelId, MessageId), Arc<Message>>,
+    pub(super) roles: HashMap<(GuildId, RoleId), Role>,
+    pub(super) presences: HashMap<(GuildId, UserId), Arc<Presence>>,
+    pub(super) voice_states: HashMap<(GuildId, UserId), VoiceState>,
+    pub(super) soundboard_sounds: HashMap<(GuildId, SoundboardSoundId), SoundboardSound>,
+    pub(super) emojis: HashMap<(GuildId, EmojiId), Emoji>,
+    pub(super) stickers: HashMap<(GuildId, StickerId), Sticker>,
+    pub(super) scheduled_events: HashMap<(GuildId, ScheduledEventId), ScheduledEvent>,
+    pub(super) stage_instances: HashMap<(GuildId, StageInstanceId), StageInstance>,
+    pub(super) guild_order: LruOrder<GuildId>,
+    pub(super) channel_order: LruOrder<ChannelId>,
+    pub(super) user_order: LruOrder<UserId>,
+    pub(super) member_order: LruOrder<(GuildId, UserId)>,
+    pub(super) message_order: LruOrder<(ChannelId, MessageId)>,
+    pub(super) role_order: LruOrder<(GuildId, RoleId)>,
+    pub(super) presence_order: LruOrder<(GuildId, UserId)>,
+    pub(super) voice_state_order: LruOrder<(GuildId, UserId)>,
+    pub(super) soundboard_sound_order: LruOrder<(GuildId, SoundboardSoundId)>,
+    pub(super) emoji_order: LruOrder<(GuildId, EmojiId)>,
+    pub(super) sticker_order: LruOrder<(GuildId, StickerId)>,
+    pub(super) scheduled_event_order: LruOrder<(GuildId, ScheduledEventId)>,
+    pub(super) stage_instance_order: LruOrder<(GuildId, StageInstanceId)>,
+    pub(super) member_seen: HashMap<(GuildId, UserId), Instant>,
+    pub(super) message_seen: HashMap<(ChannelId, MessageId), Instant>,
+    pub(super) presence_seen: HashMap<(GuildId, UserId), Instant>,
     /// Number of cached members per guild, kept in sync incrementally so
     /// per-guild caps never require scanning every member key.
-    pub(super) member_counts: HashMap<GenericId, usize>,
+    pub(super) member_counts: HashMap<GuildId, usize>,
     /// Number of cached messages per channel, kept in sync incrementally so
     /// per-channel caps never require scanning every message key.
-    pub(super) message_counts: HashMap<GenericId, usize>,
+    pub(super) message_counts: HashMap<ChannelId, usize>,
     /// When the last full TTL sweep ran; used to throttle sweeps triggered
     /// from hot upsert paths.
     pub(super) last_prune: Option<Instant>,
@@ -171,7 +172,7 @@ where
         .collect()
 }
 
-fn decrement_count(counts: &mut HashMap<GenericId, usize>, id: GenericId) {
+fn decrement_count<K: Eq + Hash>(counts: &mut HashMap<K, usize>, id: K) {
     if let Some(count) = counts.get_mut(&id) {
         *count = count.saturating_sub(1);
         if *count == 0 {
@@ -185,7 +186,7 @@ fn decrement_count(counts: &mut HashMap<GenericId, usize>, id: GenericId) {
 /// counter.
 pub(super) fn insert_member_entry(
     store: &mut CacheStore,
-    key: (GenericId, GenericId),
+    key: (GuildId, UserId),
     member: Arc<Member>,
     now: Instant,
 ) {
@@ -201,7 +202,7 @@ pub(super) fn insert_member_entry(
 /// counter.
 pub(super) fn insert_message_entry(
     store: &mut CacheStore,
-    key: (GenericId, GenericId),
+    key: (ChannelId, MessageId),
     message: Arc<Message>,
     now: Instant,
 ) {
@@ -245,7 +246,7 @@ pub(super) fn enforce_channel_limit(store: &mut CacheStore, config: &CacheConfig
 pub(super) fn enforce_message_limits(
     store: &mut CacheStore,
     config: &CacheConfig,
-    channel_id: GenericId,
+    channel_id: ChannelId,
 ) {
     if let Some(max) = config.max_messages_per_channel {
         let count = store
@@ -285,7 +286,7 @@ pub(super) fn enforce_message_limits(
 pub(super) fn enforce_member_limit(
     store: &mut CacheStore,
     config: &CacheConfig,
-    guild_id: GenericId,
+    guild_id: GuildId,
 ) {
     let Some(max) = config.max_members_per_guild else {
         return;
@@ -311,7 +312,7 @@ pub(super) fn enforce_member_limit(
     }
 }
 
-pub(super) fn remove_message_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+pub(super) fn remove_message_key(store: &mut CacheStore, key: (ChannelId, MessageId)) {
     if store.messages.remove(&key).is_some() {
         decrement_count(&mut store.message_counts, key.0);
     }
@@ -319,7 +320,7 @@ pub(super) fn remove_message_key(store: &mut CacheStore, key: (GenericId, Generi
     store.message_order.remove(&key);
 }
 
-pub(super) fn remove_member_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+pub(super) fn remove_member_key(store: &mut CacheStore, key: (GuildId, UserId)) {
     if store.members.remove(&key).is_some() {
         decrement_count(&mut store.member_counts, key.0);
     }
@@ -327,7 +328,7 @@ pub(super) fn remove_member_key(store: &mut CacheStore, key: (GenericId, Generic
     store.member_order.remove(&key);
 }
 
-pub(super) fn remove_presence_key(store: &mut CacheStore, key: (GenericId, GenericId)) {
+pub(super) fn remove_presence_key(store: &mut CacheStore, key: (GuildId, UserId)) {
     store.presences.remove(&key);
     store.presence_seen.remove(&key);
     store.presence_order.remove(&key);
@@ -393,7 +394,7 @@ pub(super) fn seen_expired(seen: Option<&Instant>, ttl: Option<Duration>, now: I
     ttl.is_some_and(|ttl| seen.is_some_and(|seen| now.duration_since(*seen) >= ttl))
 }
 
-pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: GenericId) {
+pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: ChannelId) {
     store.channels.remove(&channel_id);
     store.channel_order.remove(&channel_id);
     let removed_message_keys: Vec<_> = store
@@ -407,7 +408,7 @@ pub(super) fn evict_channel_entries(store: &mut CacheStore, channel_id: GenericI
     }
 }
 
-pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: GenericId) {
+pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: GuildId) {
     evict_guilds_matching(store, |stored_guild_id| *stored_guild_id == guild_id);
 }
 
@@ -419,7 +420,7 @@ pub(super) fn evict_guild_entries(store: &mut CacheStore, guild_id: GenericId) {
 /// map once per guild (O(guilds × entries)) while holding the write lock.
 /// Keying the scan on a predicate keeps both callers on one implementation.
 /// Users are intentionally untouched: they are global, not guild-scoped.
-pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&GenericId) -> bool) {
+pub(super) fn evict_guilds_matching(store: &mut CacheStore, evict: impl Fn(&GuildId) -> bool) {
     let removed_channel_ids: HashSet<_> = store
         .channels
         .iter()

@@ -18,9 +18,9 @@ use crate::helpers::{
 use crate::http::RestClient;
 use crate::model::{
     AllowedMentions, AutocompleteInteraction, ChatInputCommandInteraction, ComponentInteraction,
-    CreateMessage, CreatePoll, GenericId, InteractionCallbackResponse, InteractionCallbackResult,
-    InteractionContextData, Message, MessageContextMenuInteraction, ModalSubmitInteraction,
-    UserContextMenuInteraction,
+    CreateMessage, CreatePoll, InteractionCallbackResponse, InteractionCallbackResult,
+    InteractionContextData, Message, MessageContextMenuInteraction, MessageId,
+    ModalSubmitInteraction, UserContextMenuInteraction,
 };
 
 /// Discord message flag marking a response as ephemeral, as raw bits for
@@ -1142,7 +1142,7 @@ impl InteractionContextData {
     pub async fn edit_follow_up(
         &self,
         http: &RestClient,
-        message_id: GenericId,
+        message_id: MessageId,
         data: impl Into<InteractionReplyData>,
     ) -> Result<Message, DiscordError> {
         let data = data.into();
@@ -1163,7 +1163,7 @@ impl InteractionContextData {
     pub async fn delete_follow_up(
         &self,
         http: &RestClient,
-        message_id: GenericId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.response_state.require_acknowledged().await?;
         http.delete_followup_message_with_application_id(
@@ -1328,7 +1328,7 @@ pub trait InteractionResponder {
     fn edit_follow_up(
         &self,
         http: &RestClient,
-        message_id: GenericId,
+        message_id: MessageId,
         data: impl Into<InteractionReplyData>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context()
@@ -1339,7 +1339,7 @@ pub trait InteractionResponder {
     fn delete_follow_up(
         &self,
         http: &RestClient,
-        message_id: GenericId,
+        message_id: MessageId,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send {
         self.responder_context().delete_follow_up(http, message_id)
     }
@@ -1489,11 +1489,11 @@ mod tests {
     /// Client that is never allowed to reach the network; every test using it
     /// asserts an error is returned before any HTTP request is attempted.
     fn offline_client() -> RestClient {
-        RestClient::new("test-token", 2)
+        RestClient::new("test-token", Some(test_id(2)))
     }
 
     fn mock_client(server: &mock::Server, timeout: Duration) -> RestClient {
-        RestClient::builder("bot-token", 2)
+        RestClient::builder("bot-token", Some(test_id(2)))
             .api_base(server.base_url.clone())
             .request_timeout(timeout)
             .build()

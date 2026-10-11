@@ -2,12 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, User};
+use super::{
+    EmojiId, GenericId, GuildId, SkuId, SoundboardSoundId, StickerId, StickerPackId, User,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StickerItem`.
 pub struct StickerItem {
-    pub id: GenericId,
+    pub id: StickerId,
     pub name: String,
     #[serde(rename = "format_type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<u8>,
@@ -16,9 +18,9 @@ pub struct StickerItem {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Sticker`.
 pub struct Sticker {
-    pub id: GenericId,
+    pub id: StickerId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pack_id: Option<GenericId>,
+    pub pack_id: Option<StickerPackId>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -30,7 +32,7 @@ pub struct Sticker {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,16 +61,18 @@ pub struct ModifyGuildSticker {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StickerPack`.
 pub struct StickerPack {
-    pub id: GenericId,
+    pub id: StickerPackId,
     #[serde(default)]
     pub stickers: Vec<Sticker>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku_id: Option<GenericId>,
+    pub sku_id: Option<SkuId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover_sticker_id: Option<GenericId>,
+    pub cover_sticker_id: Option<StickerId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// CDN asset ID of the pack's banner image. Assets are not a resource
+    /// kind with their own routes, so this stays a [`GenericId`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banner_asset_id: Option<GenericId>,
 }
@@ -84,14 +88,14 @@ pub struct StickerPackList {
 /// Typed Discord API object for `SoundboardSound`.
 pub struct SoundboardSound {
     pub name: String,
-    pub sound_id: GenericId,
+    pub sound_id: SoundboardSoundId,
     pub volume: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<GenericId>,
+    pub emoji_id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(default)]
     pub available: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

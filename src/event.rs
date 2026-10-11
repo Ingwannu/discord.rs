@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{
-    Activity, ApplicationCommandPermission, AuditLogEntry, AutoModerationAction,
-    AutoModerationTriggerMetadata, Channel, ClientStatus, Entitlement, GenericId, Guild,
-    GuildScheduledEventEntityMetadata, Integration, Interaction, Member, Message, PollAnswerId,
-    Presence, Role, SoundboardSound, StageInstance, Sticker, Subscription, ThreadMember, User,
+    Activity, ApplicationCommandPermission, ApplicationId, AuditLogEntry, AuditLogEntryId,
+    AutoModerationAction, AutoModerationRuleId, AutoModerationTriggerMetadata, Channel, ChannelId,
+    ClientStatus, CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
+    GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, Member, Message,
+    MessageId, PollAnswerId, Presence, Role, RoleId, ScheduledEventId, SoundboardSound,
+    SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User, UserId,
     VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
@@ -13,7 +15,7 @@ use crate::types::Emoji;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ReadyApplication`.
 pub struct ReadyApplication {
-    pub id: GenericId,
+    pub id: ApplicationId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,7 +46,7 @@ pub struct GuildEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildDeletePayload`.
 pub struct GuildDeletePayload {
-    pub id: GenericId,
+    pub id: GuildId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
 }
@@ -66,7 +68,7 @@ pub struct ChannelEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `MemberEvent`.
 pub struct MemberEvent {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub member: Member,
     pub raw: Value,
 }
@@ -74,7 +76,7 @@ pub struct MemberEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MemberRemovePayload`.
 pub struct MemberRemovePayload {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub user: User,
 }
 
@@ -88,13 +90,13 @@ pub struct MemberRemoveEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildMembersChunkPayload`.
 pub struct GuildMembersChunkPayload {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     #[serde(default)]
     pub members: Vec<Member>,
     pub chunk_index: u64,
     pub chunk_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub not_found: Vec<GenericId>,
+    pub not_found: Vec<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presences: Option<Vec<Presence>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,7 +113,7 @@ pub struct GuildMembersChunkEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `RoleEvent`.
 pub struct RoleEvent {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub role: Role,
     pub raw: Value,
 }
@@ -119,8 +121,8 @@ pub struct RoleEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `RoleDeletePayload`.
 pub struct RoleDeletePayload {
-    pub guild_id: GenericId,
-    pub role_id: GenericId,
+    pub guild_id: GuildId,
+    pub role_id: RoleId,
 }
 
 #[derive(Clone, Debug)]
@@ -140,10 +142,10 @@ pub struct MessageEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `MessageDeletePayload`.
 pub struct MessageDeletePayload {
-    pub id: GenericId,
-    pub channel_id: GenericId,
+    pub id: MessageId,
+    pub channel_id: ChannelId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
 }
 
 #[derive(Clone, Debug)]
@@ -183,17 +185,17 @@ pub struct ResumedEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `BulkMessageDeleteEvent`.
 pub struct BulkMessageDeleteEvent {
-    pub ids: Vec<GenericId>,
-    pub channel_id: GenericId,
-    pub guild_id: Option<GenericId>,
+    pub ids: Vec<MessageId>,
+    pub channel_id: ChannelId,
+    pub guild_id: Option<GuildId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ChannelPinsUpdateEvent`.
 pub struct ChannelPinsUpdateEvent {
-    pub channel_id: GenericId,
-    pub guild_id: Option<GenericId>,
+    pub channel_id: ChannelId,
+    pub guild_id: Option<GuildId>,
     pub last_pin_timestamp: Option<String>,
     pub raw: Value,
 }
@@ -201,7 +203,7 @@ pub struct ChannelPinsUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildBanEvent`.
 pub struct GuildBanEvent {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub user: User,
     pub raw: Value,
 }
@@ -209,7 +211,7 @@ pub struct GuildBanEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildEmojisUpdateEvent`.
 pub struct GuildEmojisUpdateEvent {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub emojis: Vec<Emoji>,
     pub raw: Value,
 }
@@ -232,26 +234,26 @@ pub struct SubscriptionEvent {
 /// Typed Discord API object for `IntegrationEvent`.
 pub struct IntegrationEvent {
     pub integration: Integration,
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `IntegrationDeleteEvent`.
 pub struct IntegrationDeleteEvent {
-    pub id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
-    pub application_id: Option<GenericId>,
+    pub id: Option<IntegrationId>,
+    pub guild_id: Option<GuildId>,
+    pub application_id: Option<ApplicationId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `PollVoteEvent`.
 pub struct PollVoteEvent {
-    pub user_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
-    pub message_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
+    pub channel_id: Option<ChannelId>,
+    pub message_id: Option<MessageId>,
+    pub guild_id: Option<GuildId>,
     pub answer_id: Option<PollAnswerId>,
     pub raw: Value,
 }
@@ -266,15 +268,15 @@ pub struct SoundboardSoundEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `SoundboardSoundDeleteEvent`.
 pub struct SoundboardSoundDeleteEvent {
-    pub sound_id: GenericId,
-    pub guild_id: GenericId,
+    pub sound_id: SoundboardSoundId,
+    pub guild_id: GuildId,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `SoundboardSoundsEvent`.
 pub struct SoundboardSoundsEvent {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub soundboard_sounds: Vec<SoundboardSound>,
     pub raw: Value,
 }
@@ -282,8 +284,8 @@ pub struct SoundboardSoundsEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `InviteEvent`.
 pub struct InviteEvent {
-    pub guild_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
+    pub channel_id: Option<ChannelId>,
     pub code: Option<String>,
     /// User who created the invite (INVITE_CREATE only).
     pub inviter: Option<User>,
@@ -304,12 +306,12 @@ pub struct InviteEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `ReactionEvent`.
 pub struct ReactionEvent {
-    pub user_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
-    pub message_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
+    pub channel_id: Option<ChannelId>,
+    pub message_id: Option<MessageId>,
+    pub guild_id: Option<GuildId>,
     pub member: Option<Member>,
-    pub message_author_id: Option<GenericId>,
+    pub message_author_id: Option<UserId>,
     pub emoji: Option<Emoji>,
     pub burst: Option<bool>,
     pub burst_colors: Vec<String>,
@@ -320,18 +322,18 @@ pub struct ReactionEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ReactionRemoveAllEvent`.
 pub struct ReactionRemoveAllEvent {
-    pub channel_id: Option<GenericId>,
-    pub message_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub message_id: Option<MessageId>,
+    pub guild_id: Option<GuildId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `TypingStartEvent`.
 pub struct TypingStartEvent {
-    pub channel_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
-    pub user_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub guild_id: Option<GuildId>,
+    pub user_id: Option<UserId>,
     pub timestamp: Option<u64>,
     pub raw: Value,
 }
@@ -340,8 +342,8 @@ pub struct TypingStartEvent {
 /// Typed Discord API object for `PresenceUpdateEvent`.
 pub struct PresenceUpdateEvent {
     pub user: Option<PresenceUpdateUser>,
-    pub user_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
+    pub guild_id: Option<GuildId>,
     pub status: Option<String>,
     pub activities: Vec<Activity>,
     pub client_status: Option<ClientStatus>,
@@ -351,7 +353,7 @@ pub struct PresenceUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `PresenceUpdateUser`.
 pub struct PresenceUpdateUser {
-    pub id: GenericId,
+    pub id: UserId,
     pub username: Option<String>,
     pub raw: Value,
 }
@@ -366,15 +368,15 @@ pub struct UserUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhooksUpdateEvent`.
 pub struct WebhooksUpdateEvent {
-    pub guild_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
+    pub channel_id: Option<ChannelId>,
     pub raw: Value,
 }
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildIntegrationsUpdateEvent`.
 pub struct GuildIntegrationsUpdateEvent {
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     pub raw: Value,
 }
 
@@ -391,9 +393,9 @@ pub struct ThreadEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadMemberUpdateEvent`.
 pub struct ThreadMemberUpdateEvent {
-    pub guild_id: Option<GenericId>,
-    pub thread_id: Option<GenericId>,
-    pub user_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
+    pub thread_id: Option<ChannelId>,
+    pub user_id: Option<UserId>,
     pub join_timestamp: Option<String>,
     pub flags: Option<u64>,
     pub raw: Value,
@@ -402,10 +404,10 @@ pub struct ThreadMemberUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadMembersUpdateEvent`.
 pub struct ThreadMembersUpdateEvent {
-    pub guild_id: Option<GenericId>,
-    pub thread_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
+    pub thread_id: Option<ChannelId>,
     pub added_members: Option<Vec<ThreadMember>>,
-    pub removed_member_ids: Option<Vec<GenericId>>,
+    pub removed_member_ids: Option<Vec<UserId>>,
     pub member_count: Option<u64>,
     pub raw: Value,
 }
@@ -413,10 +415,10 @@ pub struct ThreadMembersUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadListSyncEvent`.
 pub struct ThreadListSyncEvent {
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     /// Parent channel ids whose threads are being synced; empty means the
     /// entire guild was synced.
-    pub channel_ids: Vec<GenericId>,
+    pub channel_ids: Vec<ChannelId>,
     pub threads: Vec<Channel>,
     /// Thread member objects for the threads the current user has joined.
     pub members: Vec<ThreadMember>,
@@ -426,9 +428,9 @@ pub struct ThreadListSyncEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ReactionRemoveEmojiEvent`.
 pub struct ReactionRemoveEmojiEvent {
-    pub channel_id: Option<GenericId>,
-    pub message_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub message_id: Option<MessageId>,
+    pub guild_id: Option<GuildId>,
     pub emoji: Option<Emoji>,
     pub raw: Value,
 }
@@ -436,7 +438,7 @@ pub struct ReactionRemoveEmojiEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `GuildStickersUpdateEvent`.
 pub struct GuildStickersUpdateEvent {
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     pub stickers: Vec<Sticker>,
     pub raw: Value,
 }
@@ -444,10 +446,10 @@ pub struct GuildStickersUpdateEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `ScheduledEvent`.
 pub struct ScheduledEvent {
-    pub id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
-    pub creator_id: Option<GenericId>,
+    pub id: Option<ScheduledEventId>,
+    pub guild_id: Option<GuildId>,
+    pub channel_id: Option<ChannelId>,
+    pub creator_id: Option<UserId>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub scheduled_start_time: Option<String>,
@@ -455,6 +457,7 @@ pub struct ScheduledEvent {
     pub privacy_level: Option<u64>,
     pub status: Option<u64>,
     pub entity_type: Option<u64>,
+    /// See [`GuildScheduledEvent::entity_id`](crate::model::GuildScheduledEvent::entity_id).
     pub entity_id: Option<GenericId>,
     pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
     pub user_count: Option<u64>,
@@ -465,9 +468,9 @@ pub struct ScheduledEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEventUserEvent`.
 pub struct GuildScheduledEventUserEvent {
-    pub guild_scheduled_event_id: GenericId,
-    pub user_id: GenericId,
-    pub guild_id: GenericId,
+    pub guild_scheduled_event_id: ScheduledEventId,
+    pub user_id: UserId,
+    pub guild_id: GuildId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -485,10 +488,19 @@ pub struct StageInstanceEvent {
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ApplicationCommandPermissionsUpdateEvent`.
+///
+/// Decoded like [`GuildApplicationCommandPermissions`](crate::model::GuildApplicationCommandPermissions):
+/// `id` is compared with `application_id` (when both are present) and the
+/// permission targets are resolved against `guild_id` (when present), so
+/// `@everyone` and all-channels entries arrive as
+/// [`CommandPermissionTarget::Everyone`](crate::model::CommandPermissionTarget::Everyone)
+/// and [`AllChannels`](crate::model::CommandPermissionTarget::AllChannels).
 pub struct ApplicationCommandPermissionsUpdateEvent {
-    pub id: Option<GenericId>,
-    pub application_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    /// The command, or the application for application-wide permissions.
+    /// Without an `application_id` a present `id` is taken as a command.
+    pub id: Option<CommandPermissionsId>,
+    pub application_id: Option<ApplicationId>,
+    pub guild_id: Option<GuildId>,
     pub permissions: Vec<ApplicationCommandPermission>,
     pub raw: Value,
 }
@@ -496,13 +508,13 @@ pub struct ApplicationCommandPermissionsUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelEffectEvent`.
 pub struct VoiceChannelEffectEvent {
-    pub channel_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
-    pub user_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub guild_id: Option<GuildId>,
+    pub user_id: Option<UserId>,
     pub emoji: Option<Emoji>,
     pub animation_type: Option<u64>,
     pub animation_id: Option<u64>,
-    pub sound_id: Option<GenericId>,
+    pub sound_id: Option<SoundboardSoundId>,
     pub sound_volume: Option<f64>,
     pub raw: Value,
 }
@@ -510,8 +522,8 @@ pub struct VoiceChannelEffectEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelStartTimeUpdateEvent`.
 pub struct VoiceChannelStartTimeUpdateEvent {
-    pub channel_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub guild_id: Option<GuildId>,
     pub voice_channel_start_time: Option<String>,
     pub raw: Value,
 }
@@ -519,8 +531,8 @@ pub struct VoiceChannelStartTimeUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `VoiceChannelStatusUpdateEvent`.
 pub struct VoiceChannelStatusUpdateEvent {
-    pub channel_id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
+    pub guild_id: Option<GuildId>,
     pub status: Option<String>,
     pub raw: Value,
 }
@@ -529,7 +541,7 @@ pub struct VoiceChannelStatusUpdateEvent {
 /// Typed Discord API object for `ChannelInfoChannel`.
 pub struct ChannelInfoChannel {
     /// Channel ID whose metadata was returned.
-    pub id: GenericId,
+    pub id: ChannelId,
     /// Optional channel status value.
     pub status: Option<String>,
     /// Optional voice-channel start time value.
@@ -542,7 +554,7 @@ pub struct ChannelInfoChannel {
 /// Typed Discord API object for `ChannelInfoEvent`.
 pub struct ChannelInfoEvent {
     /// Guild ID for the channel-info dispatch.
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     /// Channel metadata objects included by Discord.
     pub channels: Vec<ChannelInfoChannel>,
     /// Raw event payload for forward-compatible access.
@@ -561,25 +573,25 @@ pub struct RateLimitedEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `AutoModerationEvent`.
 pub struct AutoModerationEvent {
-    pub id: Option<GenericId>,
-    pub guild_id: Option<GenericId>,
+    pub id: Option<AutoModerationRuleId>,
+    pub guild_id: Option<GuildId>,
     pub name: Option<String>,
-    pub creator_id: Option<GenericId>,
+    pub creator_id: Option<UserId>,
     pub event_type: Option<u64>,
     pub trigger_type: Option<u64>,
     pub trigger_metadata: Option<AutoModerationTriggerMetadata>,
     pub actions: Vec<AutoModerationAction>,
     pub enabled: Option<bool>,
-    pub exempt_roles: Vec<GenericId>,
-    pub exempt_channels: Vec<GenericId>,
+    pub exempt_roles: Vec<RoleId>,
+    pub exempt_channels: Vec<ChannelId>,
     /// The action that was executed (AUTO_MODERATION_ACTION_EXECUTION only).
     pub action: Option<AutoModerationAction>,
-    pub rule_id: Option<GenericId>,
+    pub rule_id: Option<AutoModerationRuleId>,
     pub rule_trigger_type: Option<u64>,
-    pub user_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
-    pub message_id: Option<GenericId>,
-    pub alert_system_message_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
+    pub channel_id: Option<ChannelId>,
+    pub message_id: Option<MessageId>,
+    pub alert_system_message_id: Option<MessageId>,
     pub content: Option<String>,
     pub matched_keyword: Option<String>,
     pub matched_content: Option<String>,
@@ -589,10 +601,11 @@ pub struct AutoModerationEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `AuditLogEntryEvent`.
 pub struct AuditLogEntryEvent {
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     pub entry: Option<AuditLogEntry>,
-    pub id: Option<GenericId>,
-    pub user_id: Option<GenericId>,
+    pub id: Option<AuditLogEntryId>,
+    pub user_id: Option<UserId>,
+    /// See [`AuditLogEntry::target_id`](crate::model::AuditLogEntry::target_id).
     pub target_id: Option<GenericId>,
     pub action_type: Option<u64>,
     pub changes: Option<Vec<Value>>,

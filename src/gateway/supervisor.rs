@@ -11,7 +11,7 @@ use tracing::warn;
 
 use super::client::voice_state_update_payload;
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::{ChannelId, GuildId};
 use crate::sharding::{ShardIpcMessage, ShardRuntimeStatus, ShardSupervisorEvent, ShardingManager};
 use crate::types::invalid_data_error;
 
@@ -257,8 +257,8 @@ impl ShardSupervisor {
     pub fn update_voice_state(
         &self,
         shard_id: u32,
-        guild_id: GenericId,
-        channel_id: Option<GenericId>,
+        guild_id: GuildId,
+        channel_id: Option<ChannelId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -273,8 +273,8 @@ impl ShardSupervisor {
     pub fn join_voice(
         &self,
         shard_id: u32,
-        guild_id: GenericId,
-        channel_id: GenericId,
+        guild_id: GuildId,
+        channel_id: ChannelId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -284,7 +284,7 @@ impl ShardSupervisor {
     pub fn leave_voice(
         &self,
         shard_id: u32,
-        guild_id: GenericId,
+        guild_id: GuildId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {

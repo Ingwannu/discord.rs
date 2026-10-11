@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateChannelInvite, GenericId, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus,
+    ChannelId, CreateChannelInvite, GuildId, Invite, InviteTargetUserIds,
+    InviteTargetUsersJobStatus, ScheduledEventId, UserId,
 };
 use crate::types::invalid_data_error;
 
@@ -17,10 +18,7 @@ use super::{decode_response, FileAttachment, RequestAuthorization, RestClient};
 const MAX_INVITE_TARGET_USERS: usize = 1000;
 
 impl RestClient {
-    pub async fn get_guild_invites(
-        &self,
-        guild_id: GenericId,
-    ) -> Result<Vec<Invite>, DiscordError> {
+    pub async fn get_guild_invites(&self, guild_id: GuildId) -> Result<Vec<Invite>, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/guilds/{}/invites", guild_id),
@@ -45,7 +43,7 @@ impl RestClient {
         code: &str,
         with_counts: Option<bool>,
         with_expiration: Option<bool>,
-        guild_scheduled_event_id: Option<GenericId>,
+        guild_scheduled_event_id: Option<ScheduledEventId>,
     ) -> Result<Invite, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -112,7 +110,7 @@ impl RestClient {
     pub async fn add_invite_target_user(
         &self,
         code: &str,
-        user_id: GenericId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -128,7 +126,7 @@ impl RestClient {
     pub async fn remove_invite_target_user(
         &self,
         code: &str,
-        user_id: GenericId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -145,7 +143,7 @@ impl RestClient {
     pub async fn bulk_add_invite_target_users(
         &self,
         code: &str,
-        user_ids: &[GenericId],
+        user_ids: &[UserId],
     ) -> Result<(), DiscordError> {
         self.bulk_invite_target_users(code, "bulk-add", user_ids)
             .await
@@ -155,7 +153,7 @@ impl RestClient {
     pub async fn bulk_delete_invite_target_users(
         &self,
         code: &str,
-        user_ids: &[GenericId],
+        user_ids: &[UserId],
     ) -> Result<(), DiscordError> {
         self.bulk_invite_target_users(code, "bulk-delete", user_ids)
             .await
@@ -165,7 +163,7 @@ impl RestClient {
         &self,
         code: &str,
         action: &str,
-        user_ids: &[GenericId],
+        user_ids: &[UserId],
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
@@ -202,7 +200,7 @@ impl RestClient {
 
     pub async fn create_channel_invite(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: Option<&Value>,
     ) -> Result<Invite, DiscordError> {
         self.request_typed(
@@ -215,7 +213,7 @@ impl RestClient {
 
     pub async fn get_channel_invites(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Invite>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -227,7 +225,7 @@ impl RestClient {
 
     pub async fn create_channel_invite_typed(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
         self.request_typed(
@@ -240,7 +238,7 @@ impl RestClient {
 
     pub async fn create_channel_invite_with_target_users_file(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &CreateChannelInvite,
         target_users_file: &FileAttachment,
     ) -> Result<Invite, DiscordError> {

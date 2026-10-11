@@ -23,7 +23,7 @@
 //!
 //! Discord's member payload does not include the guild ID (verified against
 //! [`Member`]'s fields), so every REST method on `Member` takes
-//! `guild_id: GenericId` explicitly rather than pretending the
+//! `guild_id: GuildId` explicitly rather than pretending the
 //! entity knows which guild it came from.
 //!
 //! # Testing strategy
@@ -40,9 +40,10 @@
 use crate::error::DiscordError;
 use crate::http::RestClient;
 use crate::model::{
-    Channel, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateMessage, GenericId, Guild, GuildMfaLevel, Invite, Member, Message,
-    MessageReference, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, User,
+    Channel, ChannelId, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
+    CreateGuildRole, CreateMessage, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member,
+    Message, MessageReference, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, RoleId, User,
+    UserId,
 };
 
 /// Discord CDN base used by the synchronous URL helpers.
@@ -109,7 +110,7 @@ fn timeout_body(until: Option<String>) -> ModifyGuildMember {
 
 /// Formats a CDN asset URL such as `/icons/{id}/{hash}.png?size=128`,
 /// switching to `.gif` for animated hashes (prefixed with `a_`).
-fn cdn_asset_url(kind: &str, id: GenericId, hash: &str, size: Option<u16>) -> String {
+fn cdn_asset_url<M: IdMarker>(kind: &str, id: Id<M>, hash: &str, size: Option<u16>) -> String {
     let ext = if hash.starts_with("a_") { "gif" } else { "png" };
     match size {
         Some(size) => format!("{CDN_BASE}/{kind}/{id}/{hash}.{ext}?size={size}"),
@@ -124,7 +125,7 @@ fn default_avatar_index(user: &User) -> u64 {
 
 /// Returns the ID of the [`User`] carried by a [`Member`], or a
 /// [`DiscordError::Model`] when the payload omitted the user object.
-fn member_user_id(member: &Member) -> Result<GenericId, DiscordError> {
+fn member_user_id(member: &Member) -> Result<UserId, DiscordError> {
     member
         .user
         .as_ref()
@@ -206,7 +207,7 @@ impl Message {
     pub async fn forward_to(
         &self,
         http: &RestClient,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Message, DiscordError> {
         http.forward_message(self.channel_id, self.id, channel_id)
             .await
@@ -245,7 +246,7 @@ impl Message {
 impl Member {
     /// Kicks this member from `guild_id`. For an audit-log reason use
     /// [`Member::kick_with_reason`] or call via `http.with_reason(...)`.
-    pub async fn kick(&self, http: &RestClient, guild_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn kick(&self, http: &RestClient, guild_id: GuildId) -> Result<(), DiscordError> {
         http.remove_guild_member(guild_id, member_user_id(self)?)
             .await
     }
@@ -254,7 +255,7 @@ impl Member {
     pub async fn kick_with_reason(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         reason: impl Into<String>,
     ) -> Result<(), DiscordError> {
         self.kick(&http.with_reason(reason), guild_id).await
@@ -267,7 +268,7 @@ impl Member {
     pub async fn ban(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
         http.create_guild_ban_typed(
@@ -282,7 +283,7 @@ impl Member {
     pub async fn ban_with_reason(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         reason: impl Into<String>,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
@@ -296,7 +297,7 @@ impl Member {
     pub async fn timeout(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         until: impl Into<String>,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(
@@ -312,7 +313,7 @@ impl Member {
     pub async fn remove_timeout(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(guild_id, member_user_id(self)?, &timeout_body(None))
             .await
@@ -322,8 +323,8 @@ impl Member {
     pub async fn add_role(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
-        role_id: GenericId,
+        guild_id: GuildId,
+        role_id: RoleId,
     ) -> Result<(), DiscordError> {
         http.add_guild_member_role(guild_id, member_user_id(self)?, role_id)
             .await
@@ -333,8 +334,8 @@ impl Member {
     pub async fn remove_role(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
-        role_id: GenericId,
+        guild_id: GuildId,
+        role_id: RoleId,
     ) -> Result<(), DiscordError> {
         http.remove_guild_member_role(guild_id, member_user_id(self)?, role_id)
             .await
@@ -345,7 +346,7 @@ impl Member {
     pub async fn edit(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &ModifyGuildMember,
     ) -> Result<(), DiscordError> {
         http.modify_guild_member_typed(guild_id, member_user_id(self)?, body)
@@ -409,7 +410,7 @@ impl Guild {
     pub async fn fetch_member(
         &self,
         http: &RestClient,
-        user_id: GenericId,
+        user_id: UserId,
     ) -> Result<Member, DiscordError> {
         http.get_member(self.id, user_id).await
     }
@@ -434,7 +435,7 @@ impl Guild {
     pub async fn ban(
         &self,
         http: &RestClient,
-        user_id: GenericId,
+        user_id: UserId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
         http.create_guild_ban_typed(self.id, user_id, &ban_body(delete_message_seconds))
@@ -442,13 +443,13 @@ impl Guild {
     }
 
     /// Removes a ban from this guild.
-    pub async fn unban(&self, http: &RestClient, user_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn unban(&self, http: &RestClient, user_id: UserId) -> Result<(), DiscordError> {
         http.remove_guild_ban(self.id, user_id).await
     }
 
     /// Kicks a user from this guild. Pass a `with_reason` client for an
     /// audit-log reason.
-    pub async fn kick(&self, http: &RestClient, user_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn kick(&self, http: &RestClient, user_id: UserId) -> Result<(), DiscordError> {
         http.remove_guild_member(self.id, user_id).await
     }
 
@@ -598,14 +599,14 @@ impl Role {
     pub async fn edit(
         &self,
         http: &RestClient,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &ModifyGuildRole,
     ) -> Result<Role, DiscordError> {
         http.modify_guild_role(guild_id, self.id, body).await
     }
 
     /// Deletes this role from `guild_id`.
-    pub async fn delete(&self, http: &RestClient, guild_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn delete(&self, http: &RestClient, guild_id: GuildId) -> Result<(), DiscordError> {
         http.delete_role(guild_id, self.id).await
     }
 

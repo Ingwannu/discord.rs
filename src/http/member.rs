@@ -4,7 +4,9 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{AddGuildMember, GenericId, GuildMembersQuery, Member, SearchGuildMembersQuery};
+use crate::model::{
+    AddGuildMember, GuildId, GuildMembersQuery, Member, RoleId, SearchGuildMembersQuery, UserId,
+};
 
 use super::paths::{guild_members_query, search_guild_members_query};
 use super::RestClient;
@@ -12,7 +14,7 @@ use super::RestClient;
 impl RestClient {
     pub async fn get_guild_members(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         limit: Option<u64>,
     ) -> Result<Vec<Member>, DiscordError> {
         self.get_guild_members_with_query(
@@ -27,7 +29,7 @@ impl RestClient {
 
     pub async fn get_guild_members_with_query(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &GuildMembersQuery,
     ) -> Result<Vec<Member>, DiscordError> {
         let query = guild_members_query(query);
@@ -45,8 +47,8 @@ impl RestClient {
     /// `None` when Discord reports the user is already a member.
     pub async fn add_guild_member(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         body: &AddGuildMember,
     ) -> Result<Option<Member>, DiscordError> {
         self.request_optional_typed_no_content(
@@ -59,8 +61,8 @@ impl RestClient {
 
     pub async fn remove_guild_member(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -72,9 +74,9 @@ impl RestClient {
 
     pub async fn add_guild_member_role(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
-        role_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
+        role_id: RoleId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
@@ -86,9 +88,9 @@ impl RestClient {
 
     pub async fn remove_guild_member_role(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
-        role_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
+        role_id: RoleId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -100,8 +102,8 @@ impl RestClient {
 
     pub async fn get_member(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<Member, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -113,8 +115,8 @@ impl RestClient {
 
     pub async fn modify_guild_member(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         body: &Value,
     ) -> Result<(), DiscordError> {
         self.modify_guild_member_typed(guild_id, user_id, body)
@@ -123,8 +125,8 @@ impl RestClient {
 
     pub async fn modify_guild_member_typed<B>(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         body: &B,
     ) -> Result<(), DiscordError>
     where
@@ -140,7 +142,7 @@ impl RestClient {
 
     pub async fn modify_current_member_nick(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         nick: Option<&str>,
     ) -> Result<(), DiscordError> {
         let body = serde_json::json!({ "nick": nick });
@@ -154,7 +156,7 @@ impl RestClient {
 
     pub async fn modify_current_member<B>(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &B,
     ) -> Result<Member, DiscordError>
     where
@@ -170,7 +172,7 @@ impl RestClient {
 
     pub async fn search_guild_members(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &str,
         limit: Option<u64>,
     ) -> Result<Vec<Member>, DiscordError> {
@@ -186,7 +188,7 @@ impl RestClient {
 
     pub async fn search_guild_members_with_query(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &SearchGuildMembersQuery,
     ) -> Result<Vec<Member>, DiscordError> {
         let query = search_guild_members_query(query);

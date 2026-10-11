@@ -3,17 +3,21 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationCommand, AutoModerationRule, Channel, GenericId, GuildScheduledEvent, Integration,
-    User, Webhook,
+    ApplicationCommand, AuditLogEntryId, AutoModerationRule, Channel, GenericId,
+    GuildScheduledEvent, Integration, User, UserId, Webhook,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `AuditLogEntry`.
 pub struct AuditLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<GenericId>,
+    pub id: Option<AuditLogEntryId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
+    /// The affected entity: a user, role, channel, webhook, emoji, ...
+    /// depending on `action_type` (and absent for some actions), so it stays
+    /// a [`GenericId`]. Use [`Id::cast`](super::Id::cast) once the action type
+    /// tells you the kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,9 +54,9 @@ pub struct AuditLog {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `AuditLogQuery`.
 pub struct AuditLogQuery {
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
     pub action_type: Option<u64>,
-    pub before: Option<GenericId>,
-    pub after: Option<GenericId>,
+    pub before: Option<AuditLogEntryId>,
+    pub after: Option<AuditLogEntryId>,
     pub limit: Option<u64>,
 }

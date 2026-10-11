@@ -25,7 +25,7 @@ use crate::collector::CollectorHub;
 use crate::error::DiscordError;
 use crate::event::Event;
 use crate::http::DiscordHttpClient;
-use crate::model::{GenericId, Interaction};
+use crate::model::{ApplicationId, ChannelId, GuildId, Interaction, MessageId, RoleId, UserId};
 #[cfg(feature = "sharding")]
 use crate::sharding::{
     ShardInfo, ShardIpcMessage, ShardRuntimeChannels, ShardRuntimeState, ShardSupervisorEvent,
@@ -357,7 +357,7 @@ impl Context {
     /// in any guild served by this process. Falls back to the context's own
     /// shard when the owner runs elsewhere (for example another process), so
     /// single-shard and externally sharded setups behave as before.
-    fn messenger_for_guild(&self, guild_id: GenericId) -> Result<ShardMessenger, DiscordError> {
+    fn messenger_for_guild(&self, guild_id: GuildId) -> Result<ShardMessenger, DiscordError> {
         let commands = read_gateway_commands(&self.gateway_commands);
         let owner = crate::cache::shard_for_guild_id(guild_id, self.shard_count);
         commands
@@ -412,7 +412,7 @@ impl Context {
     /// runs in this process.
     pub async fn fetch_members(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: Option<String>,
         limit: Option<u32>,
     ) -> Result<Vec<crate::model::Member>, DiscordError> {
@@ -426,7 +426,7 @@ impl Context {
     /// is cancelled, and the call fails promptly if the shard stops.
     pub async fn fetch_members_with_timeout(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: Option<String>,
         limit: Option<u32>,
         timeout: Duration,
@@ -517,8 +517,8 @@ impl Context {
     /// Sends a voice state update on the shard that owns the guild.
     pub async fn update_voice_state(
         &self,
-        guild_id: GenericId,
-        channel_id: Option<GenericId>,
+        guild_id: GuildId,
+        channel_id: Option<ChannelId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -528,7 +528,7 @@ impl Context {
 
     pub async fn request_soundboard_sounds(
         &self,
-        guild_ids: impl IntoIterator<Item = GenericId>,
+        guild_ids: impl IntoIterator<Item = GuildId>,
     ) -> Result<(), DiscordError> {
         let messenger = self
             .shard_messenger()
@@ -540,8 +540,8 @@ impl Context {
     /// Joins a voice channel through the shard that owns the guild.
     pub async fn join_voice(
         &self,
-        guild_id: GenericId,
-        channel_id: GenericId,
+        guild_id: GuildId,
+        channel_id: ChannelId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -552,7 +552,7 @@ impl Context {
     /// Leaves voice through the shard that owns the guild.
     pub async fn leave_voice(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -572,17 +572,13 @@ impl Context {
     }
 
     #[cfg(feature = "voice")]
-    pub async fn disconnect_voice(&self, guild_id: GenericId) -> Option<VoiceConnectionState> {
+    pub async fn disconnect_voice(&self, guild_id: GuildId) -> Option<VoiceConnectionState> {
         let mut voice = self.voice.write().await;
         voice.disconnect(guild_id)
     }
 
     #[cfg(feature = "voice")]
-    pub async fn enqueue_voice_track(
-        &self,
-        guild_id: GenericId,
-        track: AudioTrack,
-    ) -> Option<usize> {
+    pub async fn enqueue_voice_track(&self, guild_id: GuildId, track: AudioTrack) -> Option<usize> {
         let mut voice = self.voice.write().await;
         voice.enqueue(guild_id, track)
     }
@@ -590,8 +586,8 @@ impl Context {
     #[cfg(feature = "voice")]
     pub async fn voice_runtime_config(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Option<VoiceRuntimeConfig> {
         let voice = self.voice.read().await;
         voice.runtime_config(guild_id, user_id)
@@ -600,8 +596,8 @@ impl Context {
     #[cfg(feature = "voice")]
     pub async fn connect_voice_runtime(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<VoiceRuntimeHandle, DiscordError> {
         let config = self
             .voice_runtime_config(guild_id, user_id)
@@ -671,7 +667,7 @@ impl Context {
 
     /// Like [`Context::message_collector`], for reactions on one message.
     #[cfg(feature = "collectors")]
-    pub fn reaction_collector(&self, message_id: GenericId) -> crate::collector::ReactionCollector {
+    pub fn reaction_collector(&self, message_id: MessageId) -> crate::collector::ReactionCollector {
         self.collectors
             .reaction_collector_from(self.collector_start(), message_id)
     }
@@ -921,7 +917,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_add(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _member: crate::model::Member,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -929,7 +925,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_update(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _member: crate::model::Member,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -937,7 +933,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_remove(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _user: crate::model::User,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -952,7 +948,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_create(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _role: crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -960,7 +956,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_update(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _role: crate::model::Role,
     ) -> impl Future<Output = ()> + Send {
         async {}
@@ -968,8 +964,8 @@ pub trait EventHandler: Send + Sync + 'static {
     fn role_delete(
         &self,
         _ctx: Context,
-        _guild_id: GenericId,
-        _role_id: GenericId,
+        _guild_id: GuildId,
+        _role_id: RoleId,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -990,8 +986,8 @@ pub trait EventHandler: Send + Sync + 'static {
     fn message_delete(
         &self,
         _ctx: Context,
-        _channel_id: GenericId,
-        _message_id: GenericId,
+        _channel_id: ChannelId,
+        _message_id: MessageId,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -1609,7 +1605,7 @@ pub struct ClientBuilder {
     intents: u64,
     handler: Option<Arc<dyn ErasedEventHandler>>,
     data: TypeMap,
-    application_id: Option<u64>,
+    application_id: Option<ApplicationId>,
     gateway_config: GatewayConnectionConfig,
     cache_config: CacheConfig,
     shard: Option<(u32, u32)>,
@@ -1793,7 +1789,9 @@ impl ClientBuilder {
         self
     }
 
-    pub fn application_id(mut self, id: u64) -> Self {
+    /// Sets the application ID up front. Without it the REST client learns
+    /// the ID from `READY`; application-scoped routes fail until then.
+    pub fn application_id(mut self, id: ApplicationId) -> Self {
         self.application_id = Some(id);
         self
     }
@@ -1845,8 +1843,7 @@ impl ClientBuilder {
 
     /// Returns just the REST client without starting a gateway connection.
     pub fn rest_only(self) -> Arc<DiscordHttpClient> {
-        let application_id = self.application_id.unwrap_or(0);
-        Arc::new(DiscordHttpClient::new(self.token, application_id))
+        Arc::new(DiscordHttpClient::new(self.token, self.application_id))
     }
 
     /// Runs one shard (shard `(0, 1)` unless [`ClientBuilder::shard`] was
@@ -1877,7 +1874,6 @@ impl ClientBuilder {
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
-        let application_id = application_id.unwrap_or(0);
         let shard = shard.unwrap_or((0, 1));
         let runtime = SharedRuntime::new(
             &token,
@@ -1974,7 +1970,6 @@ impl ClientBuilder {
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
-        let application_id = application_id.unwrap_or(0);
         let total_shards = shard_count.max(1);
         // Even with a manual shard count, /gateway/bot tells us how many
         // shards may IDENTIFY concurrently; fall back to one at a time if
@@ -2036,7 +2031,6 @@ impl ClientBuilder {
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
-        let application_id = application_id.unwrap_or(0);
         let metadata_http = DiscordHttpClient::new(&token, application_id);
         let gateway_bot = metadata_http.get_gateway_bot().await?;
         let auto_shard_plan = auto_shard_plan(&gateway_bot);
@@ -2100,7 +2094,10 @@ impl Client {
     }
 
     /// Creates a `rest` value.
-    pub fn rest(token: impl Into<String>, application_id: u64) -> DiscordHttpClient {
+    pub fn rest(
+        token: impl Into<String>,
+        application_id: Option<ApplicationId>,
+    ) -> DiscordHttpClient {
         DiscordHttpClient::new(token, application_id)
     }
 }
@@ -2137,7 +2134,7 @@ struct SharedRuntime {
 impl SharedRuntime {
     fn new(
         token: &str,
-        application_id: u64,
+        application_id: Option<ApplicationId>,
         data: TypeMap,
         cache_config: CacheConfig,
         default_allowed_mentions: Option<crate::model::AllowedMentions>,
@@ -2986,7 +2983,7 @@ fn merge_message_update(
 /// and backend paths so both store the same value.
 fn presence_from_update(
     event: &crate::event::PresenceUpdateEvent,
-    user_id: GenericId,
+    user_id: UserId,
 ) -> crate::model::Presence {
     crate::model::Presence {
         user_id: Some(user_id),

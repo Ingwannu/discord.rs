@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, Member, User};
+use super::{ChannelId, GenericId, GuildId, Member, ScheduledEventId, User, UserId};
 
 /// Query options for `GET /guilds/{id}/scheduled-events`.
 #[derive(Clone, Debug, Default)]
@@ -15,19 +15,19 @@ pub struct GuildScheduledEventsQuery {
 pub struct GuildScheduledEventUsersQuery {
     pub limit: Option<u64>,
     pub with_member: Option<bool>,
-    pub before: Option<GenericId>,
-    pub after: Option<GenericId>,
+    pub before: Option<UserId>,
+    pub after: Option<UserId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEvent`.
 pub struct GuildScheduledEvent {
-    pub id: GenericId,
-    pub guild_id: GenericId,
+    pub id: ScheduledEventId,
+    pub guild_id: GuildId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub creator_id: Option<GenericId>,
+    pub creator_id: Option<UserId>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -37,6 +37,8 @@ pub struct GuildScheduledEvent {
     pub privacy_level: u8,
     pub status: u8,
     pub entity_type: u8,
+    /// ID of an entity tied to the event. Discord documents it only as "an
+    /// entity" and does not say which kind, so it stays a [`GenericId`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,7 +92,7 @@ pub struct GuildScheduledEventRecurrenceRule {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildScheduledEventUser`.
 pub struct GuildScheduledEventUser {
-    pub guild_scheduled_event_id: GenericId,
+    pub guild_scheduled_event_id: ScheduledEventId,
     pub user: User,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,

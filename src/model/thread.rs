@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Channel, GenericId, Member};
+use super::{Channel, ChannelId, Member, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `ThreadMember`.
 pub struct ThreadMember {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<GenericId>,
+    pub id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub join_timestamp: Option<String>,
     #[serde(default)]
@@ -32,7 +32,7 @@ pub struct ThreadListResponse {
 /// Typed Discord API object for `ThreadMemberQuery`.
 pub struct ThreadMemberQuery {
     pub with_member: Option<bool>,
-    pub after: Option<GenericId>,
+    pub after: Option<UserId>,
     pub limit: Option<u64>,
 }
 
@@ -46,7 +46,7 @@ pub struct ArchivedThreadsQuery {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `JoinedArchivedThreadsQuery`.
 pub struct JoinedArchivedThreadsQuery {
-    pub before: Option<GenericId>,
+    pub before: Option<ChannelId>,
     pub limit: Option<u64>,
 }
 

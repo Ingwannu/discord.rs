@@ -1,10 +1,10 @@
 //! Message components (legacy and Components V2) and their parts.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::types::Emoji;
 
-use super::{ComponentId, GenericId};
+use super::{AttachmentId, ChannelId, ComponentId, GenericId, RoleId, SkuId, UserId};
 
 /// A single component attached to a received message, modal, or snapshot.
 ///
@@ -48,7 +48,7 @@ pub struct MessageComponent {
     pub url: Option<String>,
     /// SKU targeted by premium-style buttons.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sku_id: Option<GenericId>,
+    pub sku_id: Option<SkuId>,
     /// Whether the interactive component is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled: Option<bool>,
@@ -66,7 +66,7 @@ pub struct MessageComponent {
     pub placeholder: Option<String>,
     /// Pre-selected values of auto-populated select menus.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub default_values: Vec<MessageSelectDefaultValue>,
+    pub default_values: Vec<SelectDefaultValue>,
     /// Minimum number of select values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_values: Option<u64>,
@@ -202,13 +202,179 @@ pub struct MessageSelectOption {
     pub default: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-/// Default value of an auto-populated select menu component.
-pub struct MessageSelectDefaultValue {
-    pub id: GenericId,
-    /// Target type: `"user"`, `"role"`, or `"channel"`.
+/// A pre-selected value of an auto-populated (user, role, mentionable, or
+/// channel) select menu.
+///
+/// Reads and writes Discord's shape, `{"id": "...", "type": "user"}`. The
+/// same type is used for received components ([`MessageComponent`]) and for
+/// [`SelectMenuBuilder`](crate::builders::SelectMenuBuilder) defaults, so a
+/// builder takes a [`UserId`], [`RoleId`], or [`ChannelId`] rather than a
+/// string. A `type` this version does not know (or a missing one, read as
+/// `""`) is kept in [`SelectDefaultValue::Unknown`] and written back as sent.
+///
+/// ```
+/// use discordrs::{SelectDefaultValue, UserId};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let user_id: UserId = "80351110224678912".parse()?;
+/// let value = SelectDefaultValue::user(user_id);
+/// assert_eq!(
+///     serde_json::to_string(&value)?,
+///     r#"{"id":"80351110224678912","type":"user"}"#
+/// );
+/// assert_eq!(serde_json::from_str::<SelectDefaultValue>(r#"{"id":"80351110224678912","type":"user"}"#)?, value);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(from = "SelectDefaultValueWire")]
+pub enum SelectDefaultValue {
+    /// `"user"`.
+    User(UserId),
+    /// `"role"`.
+    Role(RoleId),
+    /// `"channel"`.
+    Channel(ChannelId),
+    /// A `type` this version of discord.rs does not know, kept as sent.
+    Unknown {
+        /// The raw `type` string.
+        kind: String,
+        /// The `id`, whose kind is unknown.
+        id: GenericId,
+    },
+}
+
+impl SelectDefaultValue {
+    /// A `user` default value.
+    pub const fn user(id: UserId) -> Self {
+        Self::User(id)
+    }
+
+    /// A `role` default value.
+    pub const fn role(id: RoleId) -> Self {
+        Self::Role(id)
+    }
+
+    /// A `channel` default value.
+    pub const fn channel(id: ChannelId) -> Self {
+        Self::Channel(id)
+    }
+
+    /// The wire `id`.
+    pub const fn id(&self) -> GenericId {
+        match self {
+            Self::User(id) => id.erase(),
+            Self::Role(id) => id.erase(),
+            Self::Channel(id) => id.erase(),
+            Self::Unknown { id, .. } => *id,
+        }
+    }
+
+    /// The wire `type`: `"user"`, `"role"`, `"channel"`, or the unknown
+    /// string as sent.
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::User(_) => "user",
+            Self::Role(_) => "role",
+            Self::Channel(_) => "channel",
+            Self::Unknown { kind, .. } => kind,
+        }
+    }
+}
+
+impl From<MentionableId> for SelectDefaultValue {
+    fn from(id: MentionableId) -> Self {
+        match id {
+            MentionableId::User(id) => Self::User(id),
+            MentionableId::Role(id) => Self::Role(id),
+        }
+    }
+}
+
+impl Serialize for SelectDefaultValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            id: GenericId,
+            #[serde(rename = "type")]
+            kind: &'a str,
+        }
+
+        Wire {
+            id: self.id(),
+            kind: self.kind(),
+        }
+        .serialize(serializer)
+    }
+}
+
+/// The wire shape of [`SelectDefaultValue`], unchanged from 2.x.
+#[derive(Deserialize)]
+struct SelectDefaultValueWire {
+    id: GenericId,
     #[serde(rename = "type", default)]
-    pub kind: String,
+    kind: String,
+}
+
+impl From<SelectDefaultValueWire> for SelectDefaultValue {
+    fn from(wire: SelectDefaultValueWire) -> Self {
+        match wire.kind.as_str() {
+            "user" => Self::User(wire.id.cast()),
+            "role" => Self::Role(wire.id.cast()),
+            "channel" => Self::Channel(wire.id.cast()),
+            _ => Self::Unknown {
+                kind: wire.kind,
+                id: wire.id,
+            },
+        }
+    }
+}
+
+/// The 2.x name of [`SelectDefaultValue`] for received components.
+#[deprecated(
+    since = "3.0.0",
+    note = "received and builder select defaults are one type now: use SelectDefaultValue"
+)]
+pub type MessageSelectDefaultValue = SelectDefaultValue;
+
+/// The ID of something a mentionable select or `MENTIONABLE` command option
+/// can pick: a user or a role.
+///
+/// A mentionable option value is a bare snowflake; which kind it is shows
+/// only in the interaction's resolved data, so
+/// [`ResolvedData::mentionable`](super::ResolvedData::mentionable) builds
+/// this from a value and the resolved maps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MentionableId {
+    /// A user.
+    User(UserId),
+    /// A role.
+    Role(RoleId),
+}
+
+impl MentionableId {
+    /// The snowflake with its kind erased.
+    pub const fn id(self) -> GenericId {
+        match self {
+            Self::User(id) => id.erase(),
+            Self::Role(id) => id.erase(),
+        }
+    }
+}
+
+impl From<UserId> for MentionableId {
+    fn from(id: UserId) -> Self {
+        Self::User(id)
+    }
+}
+
+impl From<RoleId> for MentionableId {
+    fn from(id: RoleId) -> Self {
+        Self::Role(id)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -225,7 +391,7 @@ pub struct UnfurledMediaItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachment_id: Option<GenericId>,
+    pub attachment_id: Option<AttachmentId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

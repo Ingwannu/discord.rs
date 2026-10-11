@@ -2,7 +2,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::{EmojiId, GuildId};
 use crate::types::Emoji;
 
 use super::{configured_application_id, RestClient};
@@ -16,7 +16,7 @@ struct EmojiListResponse {
 impl RestClient {
     pub async fn get_guild_emojis(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -28,7 +28,7 @@ impl RestClient {
 
     pub async fn get_guild_emojis_typed(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<Emoji>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -40,8 +40,8 @@ impl RestClient {
 
     pub async fn get_guild_emoji(
         &self,
-        guild_id: GenericId,
-        emoji_id: GenericId,
+        guild_id: GuildId,
+        emoji_id: EmojiId,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
             Method::GET,
@@ -53,8 +53,8 @@ impl RestClient {
 
     pub async fn get_guild_emoji_typed(
         &self,
-        guild_id: GenericId,
-        emoji_id: GenericId,
+        guild_id: GuildId,
+        emoji_id: EmojiId,
     ) -> Result<Emoji, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -66,7 +66,7 @@ impl RestClient {
 
     pub async fn create_guild_emoji(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
@@ -79,7 +79,7 @@ impl RestClient {
 
     pub async fn create_guild_emoji_typed<B>(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -95,8 +95,8 @@ impl RestClient {
 
     pub async fn modify_guild_emoji(
         &self,
-        guild_id: GenericId,
-        emoji_id: GenericId,
+        guild_id: GuildId,
+        emoji_id: EmojiId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         self.request(
@@ -109,8 +109,8 @@ impl RestClient {
 
     pub async fn modify_guild_emoji_typed<B>(
         &self,
-        guild_id: GenericId,
-        emoji_id: GenericId,
+        guild_id: GuildId,
+        emoji_id: EmojiId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -126,8 +126,8 @@ impl RestClient {
 
     pub async fn delete_guild_emoji(
         &self,
-        guild_id: GenericId,
-        emoji_id: GenericId,
+        guild_id: GuildId,
+        emoji_id: EmojiId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -167,7 +167,7 @@ impl RestClient {
 
     pub async fn get_application_emoji(
         &self,
-        emoji_id: GenericId,
+        emoji_id: EmojiId,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request(
@@ -180,7 +180,7 @@ impl RestClient {
 
     pub async fn get_application_emoji_typed(
         &self,
-        emoji_id: GenericId,
+        emoji_id: EmojiId,
     ) -> Result<Emoji, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
@@ -219,7 +219,7 @@ impl RestClient {
 
     pub async fn modify_application_emoji(
         &self,
-        emoji_id: GenericId,
+        emoji_id: EmojiId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
@@ -233,7 +233,7 @@ impl RestClient {
 
     pub async fn modify_application_emoji_typed<B>(
         &self,
-        emoji_id: GenericId,
+        emoji_id: EmojiId,
         body: &B,
     ) -> Result<Emoji, DiscordError>
     where
@@ -248,7 +248,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn delete_application_emoji(&self, emoji_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn delete_application_emoji(&self, emoji_id: EmojiId) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_no_content(
             Method::DELETE,

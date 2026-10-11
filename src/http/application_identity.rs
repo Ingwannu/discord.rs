@@ -10,8 +10,8 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId, GenericId,
-    UpdateApplicationIdentityProfile,
+    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId,
+    UpdateApplicationIdentityProfile, UserId,
 };
 
 use super::paths::external_path_segment;
@@ -28,7 +28,7 @@ impl RestClient {
     /// documented limits before sending.
     pub async fn update_application_identity_profile(
         &self,
-        user_id: GenericId,
+        user_id: UserId,
         provider_issued_user_id: &str,
         body: &UpdateApplicationIdentityProfile,
     ) -> Result<Option<ApplicationIdentityProfile>, DiscordError> {
@@ -41,7 +41,7 @@ impl RestClient {
     /// Reads the profile stored on the user's matching Application Identity.
     pub async fn get_application_identity_profile(
         &self,
-        user_id: GenericId,
+        user_id: UserId,
         provider_issued_user_id: &str,
     ) -> Result<ApplicationIdentityProfile, DiscordError> {
         let path = self.identity_profile_path(user_id, provider_issued_user_id)?;
@@ -53,7 +53,7 @@ impl RestClient {
     /// discover the exact external ID values (no profile data).
     pub async fn get_user_application_identities(
         &self,
-        user_id: GenericId,
+        user_id: UserId,
     ) -> Result<ApplicationIdentities, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         self.request_typed(
@@ -99,7 +99,7 @@ impl RestClient {
     /// `NONE` identities can always be deleted.
     pub async fn delete_application_identity(
         &self,
-        user_id: GenericId,
+        user_id: UserId,
         provider_type: &str,
         provider_issued_user_id: &str,
         provider_id: Option<&str>,
@@ -124,7 +124,7 @@ impl RestClient {
 
     fn identity_profile_path(
         &self,
-        user_id: GenericId,
+        user_id: UserId,
         provider_issued_user_id: &str,
     ) -> Result<String, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;

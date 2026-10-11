@@ -3,18 +3,19 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ArchivedThreadsQuery, AuditLogQuery, CurrentUserGuildsQuery, EntitlementQuery, GenericId,
-    GetGuildQuery, GuildBansQuery, GuildMembersQuery, JoinedArchivedThreadsQuery,
-    SearchGuildMembersQuery, SubscriptionQuery, ThreadMemberQuery, WebhookExecuteQuery,
-    WebhookMessageQuery,
+    ApplicationId, ArchivedThreadsQuery, AuditLogQuery, CurrentUserGuildsQuery, EntitlementQuery,
+    GetGuildQuery, GuildBansQuery, GuildMembersQuery, InteractionId, JoinedArchivedThreadsQuery,
+    RoleId, ScheduledEventId, SearchGuildMembersQuery, SubscriptionQuery, ThreadMemberQuery,
+    UserId, WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
 };
 use crate::types::invalid_data_error;
 
-/// The client's application ID as a path parameter. The client stores `0`
-/// for "not configured", which is not a valid ID, so it becomes an error
-/// here instead of a `/applications/0/...` request.
-pub(crate) fn configured_application_id(application_id: u64) -> Result<GenericId, DiscordError> {
-    GenericId::try_new(application_id).map_err(|_| {
+/// The client's application ID as a path parameter. An unset ID becomes an
+/// error here instead of a `/applications/0/...` request.
+pub(crate) fn configured_application_id(
+    application_id: Option<ApplicationId>,
+) -> Result<ApplicationId, DiscordError> {
+    application_id.ok_or_else(|| {
         invalid_data_error(
             "application_id must be set before follow-up webhook calls; use set_application_id() or create_followup_message_with_application_id()",
         )
@@ -51,7 +52,9 @@ pub(crate) fn validate_token_path_segment(
     Ok(())
 }
 
-pub(crate) fn global_commands_path(application_id: u64) -> Result<String, DiscordError> {
+pub(crate) fn global_commands_path(
+    application_id: Option<ApplicationId>,
+) -> Result<String, DiscordError> {
     let application_id = configured_application_id(application_id)?;
     Ok(format!("/applications/{application_id}/commands"))
 }
@@ -62,7 +65,7 @@ pub(crate) fn validate_template_code(code: &str) -> Result<(), DiscordError> {
 }
 
 pub(crate) fn interaction_callback_path(
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
 ) -> Result<String, DiscordError> {
     let interaction_token = interaction_token.trim();
@@ -73,7 +76,7 @@ pub(crate) fn interaction_callback_path(
 }
 
 pub(crate) fn execute_webhook_path(
-    webhook_id: GenericId,
+    webhook_id: WebhookId,
     token: &str,
 ) -> Result<String, DiscordError> {
     execute_webhook_path_with_query(
@@ -88,7 +91,7 @@ pub(crate) fn execute_webhook_path(
 }
 
 pub(crate) fn execute_webhook_path_with_query(
-    webhook_id: GenericId,
+    webhook_id: WebhookId,
     token: &str,
     query: &WebhookExecuteQuery,
     suffix: Option<&str>,
@@ -102,7 +105,7 @@ pub(crate) fn execute_webhook_path_with_query(
 }
 
 pub(crate) fn webhook_message_path(
-    webhook_id: GenericId,
+    webhook_id: WebhookId,
     token: &str,
     message_id: &str,
 ) -> Result<String, DiscordError> {
@@ -116,7 +119,7 @@ pub(crate) fn webhook_message_path(
 }
 
 pub(crate) fn webhook_message_path_with_query(
-    webhook_id: GenericId,
+    webhook_id: WebhookId,
     token: &str,
     message_id: &str,
     query: &WebhookMessageQuery,
@@ -168,7 +171,7 @@ pub(crate) fn webhook_execute_query(
 pub(crate) fn guild_prune_query(
     days: Option<u64>,
     compute_prune_count: Option<bool>,
-    include_roles: &[GenericId],
+    include_roles: &[RoleId],
 ) -> String {
     let mut params = Vec::new();
     if let Some(days) = days {
@@ -180,7 +183,7 @@ pub(crate) fn guild_prune_query(
     if !include_roles.is_empty() {
         let roles = include_roles
             .iter()
-            .map(GenericId::to_string)
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
         params.push(format!("include_roles={roles}"));
@@ -378,7 +381,7 @@ pub(crate) fn entitlement_query(query: &EntitlementQuery) -> String {
         let sku_ids = query
             .sku_ids
             .iter()
-            .map(GenericId::to_string)
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(",");
         params.push(format!("sku_ids={sku_ids}"));
@@ -424,7 +427,7 @@ pub(crate) fn subscription_query(query: &SubscriptionQuery) -> String {
 pub(crate) fn invite_query(
     with_counts: Option<bool>,
     with_expiration: Option<bool>,
-    guild_scheduled_event_id: Option<GenericId>,
+    guild_scheduled_event_id: Option<ScheduledEventId>,
 ) -> String {
     let mut params = Vec::new();
     if let Some(with_counts) = with_counts {
@@ -441,7 +444,7 @@ pub(crate) fn invite_query(
     query_string(params)
 }
 
-pub(crate) fn poll_answer_voters_query(after: Option<GenericId>, limit: Option<u64>) -> String {
+pub(crate) fn poll_answer_voters_query(after: Option<UserId>, limit: Option<u64>) -> String {
     let mut params = Vec::new();
     if let Some(after) = after {
         params.push(format!("after={after}"));
@@ -455,7 +458,7 @@ pub(crate) fn poll_answer_voters_query(after: Option<GenericId>, limit: Option<u
 /// `message_id` stays a string because Discord also accepts `@original`
 /// there (the interaction's original response).
 pub(crate) fn followup_webhook_path(
-    application_id: GenericId,
+    application_id: ApplicationId,
     interaction_token: &str,
     message_id: Option<&str>,
 ) -> Result<String, DiscordError> {

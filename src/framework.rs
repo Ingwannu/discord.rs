@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::{
     interactions::{InteractionResponse, TypedInteractionHandler},
-    model::{GenericId, Interaction, InteractionContextData},
+    model::{Interaction, InteractionContextData, UserId},
     response::InteractionResponder,
 };
 
@@ -51,7 +51,7 @@ pub struct AppContext {
 
 impl AppContext {
     /// Returns the best available user ID from the interaction context.
-    pub fn user_id(&self) -> Option<GenericId> {
+    pub fn user_id(&self) -> Option<UserId> {
         self.context.user.as_ref().map(|user| user.id).or_else(|| {
             self.context
                 .member
@@ -113,12 +113,12 @@ pub struct AppFramework {
     routes: HashMap<RouteKey, Arc<dyn AppRouteHandler>>,
     guards: Vec<Arc<dyn AppGuard>>,
     cooldowns: HashMap<RouteKey, Duration>,
-    cooldown_state: Arc<Mutex<HashMap<(RouteKey, GenericId), Instant>>>,
+    cooldown_state: Arc<Mutex<HashMap<(RouteKey, UserId), Instant>>>,
     fallback: Arc<dyn AppRouteHandler>,
 }
 
 impl AppFramework {
-    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<(RouteKey, GenericId), Instant>> {
+    fn lock_cooldowns(&self) -> MutexGuard<'_, HashMap<(RouteKey, UserId), Instant>> {
         self.cooldown_state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -627,7 +627,10 @@ mod tests {
 
         assert!(!ctx.is_acknowledged());
         let error = ctx
-            .follow_up(&crate::http::RestClient::new("bot-token", 2), "early")
+            .follow_up(
+                &crate::http::RestClient::new("bot-token", Some(test_id(2))),
+                "early",
+            )
             .await
             .unwrap_err();
         assert!(error.to_string().contains("has not been acknowledged"));

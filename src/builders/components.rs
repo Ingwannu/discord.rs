@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::command::validation;
 use crate::constants::{button_style, component_type};
 use crate::error::DiscordError;
+use crate::model::{ChannelId, ComponentId, MentionableId, RoleId, SelectDefaultValue, UserId};
 use crate::types::{to_json_value, Emoji, SelectOption};
 
 use super::container::{ContainerBuilder, SeparatorBuilder, TextDisplayBuilder};
@@ -160,7 +161,7 @@ pub struct ActionRowBuilder {
     component_type: u8,
     components: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl ActionRowBuilder {
@@ -193,7 +194,7 @@ impl ActionRowBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -258,7 +259,7 @@ pub struct SelectMenuBuilder {
     #[serde(rename = "type")]
     component_type: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
     custom_id: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     options: Vec<SelectOption>,
@@ -276,38 +277,6 @@ pub struct SelectMenuBuilder {
     required: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
-}
-
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
-/// Typed Discord API object for `SelectDefaultValue`.
-pub struct SelectDefaultValue {
-    id: String,
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-impl SelectDefaultValue {
-    /// Creates a `user` value.
-    pub fn user(id: impl Into<String>) -> Self {
-        Self::new(id, "user")
-    }
-
-    /// Creates a `role` value.
-    pub fn role(id: impl Into<String>) -> Self {
-        Self::new(id, "role")
-    }
-
-    /// Creates a `channel` value.
-    pub fn channel(id: impl Into<String>) -> Self {
-        Self::new(id, "channel")
-    }
-
-    fn new(id: impl Into<String>, kind: &'static str) -> Self {
-        Self {
-            id: id.into(),
-            kind: kind.to_string(),
-        }
-    }
 }
 
 impl SelectMenuBuilder {
@@ -396,7 +365,7 @@ impl SelectMenuBuilder {
         }
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -426,16 +395,21 @@ impl SelectMenuBuilder {
         self
     }
 
-    pub fn default_user(self, id: impl Into<String>) -> Self {
-        self.default_value(SelectDefaultValue::user(id))
+    pub fn default_user(self, id: UserId) -> Self {
+        self.default_value(SelectDefaultValue::User(id))
     }
 
-    pub fn default_role(self, id: impl Into<String>) -> Self {
-        self.default_value(SelectDefaultValue::role(id))
+    pub fn default_role(self, id: RoleId) -> Self {
+        self.default_value(SelectDefaultValue::Role(id))
     }
 
-    pub fn default_channel(self, id: impl Into<String>) -> Self {
-        self.default_value(SelectDefaultValue::channel(id))
+    pub fn default_channel(self, id: ChannelId) -> Self {
+        self.default_value(SelectDefaultValue::Channel(id))
+    }
+
+    /// Pre-selects a user or role in a mentionable select.
+    pub fn default_mentionable(self, id: MentionableId) -> Self {
+        self.default_value(SelectDefaultValue::from(id))
     }
 
     pub fn channel_types(mut self, channel_types: Vec<u8>) -> Self {
@@ -668,6 +642,7 @@ mod tests {
     };
     use crate::constants::{button_style, component_type, text_input_style};
     use crate::model::test_id;
+    use crate::model::ComponentId;
     use crate::types::{Emoji, MediaGalleryItem, SelectOption};
     use serde_json::json;
 
@@ -737,9 +712,9 @@ mod tests {
 
         let row = ActionRowBuilder::new()
             .add_component(json!({ "type": 99 }))
-            .id(42)
+            .id(ComponentId::new(42))
             .build_typed();
-        assert_eq!(row.id, Some(42));
+        assert_eq!(row.id, Some(ComponentId::new(42)));
         assert_eq!(row.components.len(), 1);
     }
 
@@ -880,7 +855,7 @@ mod tests {
                     .required(true),
             )
             .add_component(json!({ "type": 99, "custom": "raw" }))
-            .id(7)
+            .id(ComponentId::new(7))
             .build();
 
         let components = payload
@@ -953,8 +928,8 @@ mod tests {
             .placeholder("Pick a target")
             .add_option(SelectOption::new("One", "one"))
             .channel_types(vec![0, 2])
-            .default_user("42")
-            .default_role("43")
+            .default_user(test_id(42))
+            .default_role(test_id(43))
             .required(false)
             .min_values(1)
             .max_values(3)
@@ -999,8 +974,8 @@ mod tests {
     #[test]
     fn user_select_builder_sets_expected_component_type() {
         let payload = SelectMenuBuilder::user("menu")
-            .id(22)
-            .default_values(vec![SelectDefaultValue::user("900")])
+            .id(ComponentId::new(22))
+            .default_values(vec![SelectDefaultValue::user(test_id(900))])
             .build();
 
         assert_eq!(
@@ -1022,7 +997,7 @@ mod tests {
     #[test]
     fn string_select_omits_auto_populated_default_values() {
         let payload = SelectMenuBuilder::string("menu")
-            .default_channel("123")
+            .default_channel(test_id(123))
             .add_option(SelectOption::new("One", "one"))
             .build();
 
@@ -1209,7 +1184,7 @@ mod tests {
     #[test]
     fn components_v2_message_preserves_component_order() {
         let payload = ComponentsV2Message::new()
-            .add_text_display(TextDisplayBuilder::new("Intro").id(1))
+            .add_text_display(TextDisplayBuilder::new("Intro").id(ComponentId::new(1)))
             .add_action_row(
                 ActionRowBuilder::new()
                     .add_button(ButtonBuilder::new().label("Continue").custom_id("continue")),

@@ -11,14 +11,14 @@ use std::io::Write;
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 use discordrs::{
-    gateway_intents, Client, Context, EventHandler, GenericId, ReadyPayload, VoiceServerUpdate,
-    VoiceState,
+    gateway_intents, ChannelId, Client, Context, EventHandler, GuildId, ReadyPayload, UserId,
+    VoiceServerUpdate, VoiceState,
 };
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 #[derive(Default)]
 struct CaptureState {
-    user_id: Option<GenericId>,
+    user_id: Option<UserId>,
     session_id: Option<String>,
     server: Option<VoiceServerUpdate>,
     printed: bool,
@@ -26,14 +26,14 @@ struct CaptureState {
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 struct Handler {
-    guild_id: GenericId,
-    channel_id: GenericId,
+    guild_id: GuildId,
+    channel_id: ChannelId,
     state: Mutex<CaptureState>,
 }
 
 #[cfg(all(feature = "gateway", feature = "voice"))]
 impl Handler {
-    fn new(guild_id: GenericId, channel_id: GenericId) -> Self {
+    fn new(guild_id: GuildId, channel_id: ChannelId) -> Self {
         Self {
             guild_id,
             channel_id,
@@ -154,10 +154,10 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() -> Result<(), discordrs::DiscordError> {
     let token = std::env::var("DISCORD_TOKEN")?;
-    let guild_id: GenericId = std::env::var("DISCORDRS_CAPTURE_GUILD_ID")
+    let guild_id: GuildId = std::env::var("DISCORDRS_CAPTURE_GUILD_ID")
         .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_GUILD_ID"))?
         .parse()?;
-    let channel_id: GenericId = std::env::var("DISCORDRS_CAPTURE_CHANNEL_ID")
+    let channel_id: ChannelId = std::env::var("DISCORDRS_CAPTURE_CHANNEL_ID")
         .map_err(|_| discordrs::DiscordError::model("set DISCORDRS_CAPTURE_CHANNEL_ID"))?
         .parse()?;
 

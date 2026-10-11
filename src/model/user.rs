@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::GenericId;
+use super::{GuildId, SkuId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's avatar decoration.
@@ -10,14 +10,14 @@ pub struct AvatarDecorationData {
     /// Decoration asset hash.
     pub asset: String,
     /// SKU that owns the decoration.
-    pub sku_id: GenericId,
+    pub sku_id: SkuId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's profile nameplate collectible.
 pub struct UserNameplate {
     /// SKU that owns the nameplate.
-    pub sku_id: GenericId,
+    pub sku_id: SkuId,
     /// Nameplate asset path.
     pub asset: String,
     /// Nameplate label.
@@ -39,7 +39,7 @@ pub struct UserCollectibles {
 pub struct UserPrimaryGuild {
     /// Guild ID for the displayed server identity.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity_guild_id: Option<GenericId>,
+    pub identity_guild_id: Option<GuildId>,
     /// Whether the identity is enabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_enabled: Option<bool>,
@@ -54,7 +54,7 @@ pub struct UserPrimaryGuild {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `User`.
 pub struct User {
-    pub id: GenericId,
+    pub id: UserId,
     pub username: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_name: Option<String>,

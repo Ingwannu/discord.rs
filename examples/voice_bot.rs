@@ -5,8 +5,8 @@
 
 #[cfg(feature = "voice")]
 use discordrs::{
-    AudioTrack, GenericId, VoiceConnectionConfig, VoiceEncryptionMode, VoiceManager,
-    VoiceSpeakingFlags, VoiceTransportState,
+    AudioTrack, ChannelId, GuildId, UserId, VoiceConnectionConfig, VoiceEncryptionMode,
+    VoiceManager, VoiceSpeakingFlags, VoiceTransportState,
 };
 #[cfg(feature = "voice")]
 use discordrs::{VoiceServerUpdate, VoiceState};
@@ -16,9 +16,9 @@ fn main() -> Result<(), discordrs::DiscordError> {
     let mut voice = VoiceManager::new();
     // IDs are checked when built (`?` maps `InvalidId` into `DiscordError`)
     // and are `Copy` afterwards.
-    let guild_id: GenericId = "1".parse()?;
-    let channel_id = GenericId::try_from(2_u64)?;
-    let user_id = GenericId::try_from(3_u64)?;
+    let guild_id: GuildId = "1".parse()?;
+    let channel_id = ChannelId::try_from(2_u64)?;
+    let user_id = UserId::try_from(3_u64)?;
 
     voice.connect(VoiceConnectionConfig::new(guild_id, channel_id));
     let _ = voice.update_voice_state(&VoiceState {

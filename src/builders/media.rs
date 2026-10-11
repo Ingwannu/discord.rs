@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::command::validation;
 use crate::constants::component_type;
 use crate::error::DiscordError;
+use crate::model::ComponentId;
 use crate::types::{to_json_value, MediaGalleryItem, MediaInfo};
 
 use super::components::ButtonBuilder;
@@ -17,7 +18,7 @@ pub struct MediaGalleryBuilder {
     component_type: u8,
     items: Vec<MediaGalleryItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl MediaGalleryBuilder {
@@ -40,7 +41,7 @@ impl MediaGalleryBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -89,7 +90,7 @@ pub struct ThumbnailBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     spoiler: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl ThumbnailBuilder {
@@ -116,7 +117,7 @@ impl ThumbnailBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -155,7 +156,7 @@ pub struct FileBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     spoiler: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl FileBuilder {
@@ -176,7 +177,7 @@ impl FileBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -195,7 +196,7 @@ pub struct SectionBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     accessory: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl SectionBuilder {
@@ -224,7 +225,7 @@ impl SectionBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -260,6 +261,7 @@ impl SectionBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::ComponentId;
     use serde_json::json;
 
     use super::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
@@ -275,7 +277,7 @@ mod tests {
                 MediaGalleryItem::new("https://example.com/two.png").description("second"),
                 MediaGalleryItem::new("https://example.com/three.png").spoiler(true),
             ])
-            .id(7)
+            .id(ComponentId::new(7))
             .build();
 
         let items = payload
@@ -313,7 +315,7 @@ mod tests {
         let payload = ThumbnailBuilder::new("https://example.com/thumb.png")
             .description("preview")
             .spoiler(true)
-            .id(3)
+            .id(ComponentId::new(3))
             .build();
 
         assert_eq!(
@@ -341,7 +343,7 @@ mod tests {
 
         let payload = FileBuilder::new("https://example.com/file.txt")
             .spoiler(true)
-            .id(11)
+            .id(ComponentId::new(11))
             .build();
 
         assert_eq!(
@@ -451,9 +453,9 @@ mod tests {
             .set_thumbnail_accessory(
                 ThumbnailBuilder::new("https://example.com/thumb.png")
                     .description("preview")
-                    .id(8),
+                    .id(ComponentId::new(8)),
             )
-            .id(4)
+            .id(ComponentId::new(4))
             .build();
 
         assert_eq!(

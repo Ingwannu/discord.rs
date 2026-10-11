@@ -56,16 +56,19 @@ pub use audit_log::{AuditLog, AuditLogEntry, AuditLogQuery};
 pub use channel::{
     AddGroupDmRecipient, Attachment, Channel, ChannelType, CreateDmChannel, CreateGroupDmChannel,
     CreateGuildChannel, DefaultReaction, EditChannelPermission, FollowedChannel, ForumTag,
-    ModifyGuildChannelPosition, PermissionOverwrite,
+    ModifyGuildChannelPosition, OverwriteTarget, PermissionOverwrite,
 };
 pub use command::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
     ApplicationCommandOptionChoice, ApplicationCommandPermission, ApplicationIntegrationType,
-    EditApplicationCommandPermissions, GuildApplicationCommandPermissions, InteractionContextType,
+    CommandPermissionTarget, CommandPermissionsId, EditApplicationCommandPermissions,
+    GuildApplicationCommandPermissions, InteractionContextType,
 };
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
+pub use component::MessageSelectDefaultValue;
 pub use component::{
-    MessageComponent, MessageComponentIter, MessageMediaGalleryItem, MessageSelectDefaultValue,
-    MessageSelectOption, UnfurledMediaItem,
+    MentionableId, MessageComponent, MessageComponentIter, MessageMediaGalleryItem,
+    MessageSelectOption, SelectDefaultValue, UnfurledMediaItem,
 };
 pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedMedia};
 pub use entity::DiscordModel;
@@ -119,7 +122,8 @@ pub use moderation::{
     GuildBansQuery,
 };
 pub use monetization::{
-    CreateTestEntitlement, Entitlement, EntitlementQuery, Sku, Subscription, SubscriptionQuery,
+    CreateTestEntitlement, Entitlement, EntitlementOwner, EntitlementQuery, Sku, Subscription,
+    SubscriptionQuery,
 };
 pub use permissions::PermissionsBitField;
 pub use poll::{
@@ -155,8 +159,8 @@ pub use webhook::{
     WebhookMessageQuery,
 };
 
-// Phase 3 primitives. Series 2 step A moved every ID field and parameter to
-// `GenericId`; step B narrows them to the per-resource aliases. Raw `u8`
+// Phase 3 primitives. Since series 2 step B every ID field and parameter has
+// its per-resource alias (`GenericId` only where the kind is unknown). Raw `u8`
 // discriminants and `Option<Option<T>>` stay until series 3–4 migrate them;
 // discriminants whose names are still taken by 2.x types stay under
 // `model::discriminant` (see that module's staging plan).

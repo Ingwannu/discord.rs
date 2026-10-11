@@ -10,7 +10,8 @@ use crate::bitfield::{permissions as p, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
 use crate::model::{
-    Channel, GenericId, Guild, Member, PermissionOverwrite, PermissionsBitField, Role, User,
+    Channel, Guild, GuildId, Id, IdMarker, Member, OverwriteTarget, OverwriteType,
+    PermissionOverwrite, PermissionsBitField, Role, RoleId, User, UserId,
 };
 
 const GUILD: u64 = 100;
@@ -25,7 +26,7 @@ const VOICE: u8 = 2;
 const CATEGORY: u8 = 4;
 const PUBLIC_THREAD: u8 = 11;
 
-fn sf(id: u64) -> GenericId {
+fn sf<M: IdMarker>(id: u64) -> Id<M> {
     test_id(id)
 }
 
@@ -43,8 +44,7 @@ fn member_overwrite(id: u64, allow: Permissions, deny: Permissions) -> Permissio
 
 fn overwrite(id: u64, kind: u8, allow: Permissions, deny: Permissions) -> PermissionOverwrite {
     PermissionOverwrite {
-        id: sf(id),
-        kind,
+        target: OverwriteTarget::from_wire(OverwriteType::new(kind), sf(id)),
         allow: Some(PermissionsBitField(allow.bits())),
         deny: Some(PermissionsBitField(deny.bits())),
     }
@@ -57,11 +57,11 @@ fn none() -> Permissions {
 /// Everyone can view and send; the member has ROLE_A and ROLE_B (no
 /// permissions of their own unless a test adds them).
 struct Fixture {
-    guild: GenericId,
-    owner: GenericId,
-    member: GenericId,
-    role_a: GenericId,
-    role_b: GenericId,
+    guild: GuildId,
+    owner: UserId,
+    member: UserId,
+    role_a: RoleId,
+    role_b: RoleId,
 }
 
 impl Fixture {
@@ -291,12 +291,7 @@ fn unknown_overwrite_kinds_are_ignored() {
 #[test]
 fn absent_allow_and_deny_fields_count_as_empty() {
     let fx = Fixture::new();
-    let overwrites = [PermissionOverwrite {
-        id: sf(GUILD),
-        kind: 0,
-        allow: None,
-        deny: None,
-    }];
+    let overwrites = [PermissionOverwrite::new(OverwriteTarget::Role(sf(GUILD)))];
     let computed = known(fx.input(base_everyone()).in_channel(&text(&overwrites)));
     assert_eq!(computed.permissions, base_everyone());
 }
@@ -306,7 +301,9 @@ fn everyone_listed_as_member_role_is_not_a_role_overwrite() {
     // If @everyone were also aggregated as a role overwrite, its allow would
     // cancel ROLE_A's deny.
     let fx = Fixture::new();
-    let input = fx.input(base_everyone()).role(fx.guild, none());
+    let input = fx
+        .input(base_everyone())
+        .role(fx.guild.everyone_role(), none());
     let overwrites = [
         role_overwrite(GUILD, p::EMBED_LINKS, none()),
         role_overwrite(ROLE_A, none(), p::EMBED_LINKS),
@@ -1342,14 +1339,14 @@ async fn cached_permissions_report_each_missing_piece() {
         }
     );
 
-    cache.remove_role(guild, guild).await;
+    cache.remove_role(guild, guild.everyone_role()).await;
     assert_eq!(
         cached_guild_permissions(&cache, guild, member, now())
             .await
             .unwrap_err(),
         PermissionDataError::MissingRole {
             guild_id: guild,
-            role_id: guild
+            role_id: guild.everyone_role()
         }
     );
 }

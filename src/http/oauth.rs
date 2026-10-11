@@ -5,9 +5,9 @@ use super::paths::{configured_application_id, current_user_guilds_query};
 use super::{validate_authorization_token, RequestAuthorization, RestClient};
 use crate::error::DiscordError;
 use crate::model::{
-    Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, GenericId,
+    Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, GuildId,
     Member, ModifyCurrentUser, UpdateUserApplicationRoleConnection, User,
-    UserApplicationRoleConnection, UserConnection,
+    UserApplicationRoleConnection, UserConnection, UserId,
 };
 
 impl RestClient {
@@ -25,7 +25,7 @@ impl RestClient {
             .await
     }
 
-    pub async fn get_user(&self, user_id: GenericId) -> Result<User, DiscordError> {
+    pub async fn get_user(&self, user_id: UserId) -> Result<User, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/users/{}", user_id),
@@ -76,7 +76,7 @@ impl RestClient {
     pub async fn get_current_user_guild_member(
         &self,
         bearer_token: &str,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Member, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         self.request_typed_with_authorization(
@@ -88,7 +88,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn leave_guild(&self, guild_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn leave_guild(&self, guild_id: GuildId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/users/@me/guilds/{}", guild_id),

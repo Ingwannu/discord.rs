@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::GenericId;
+use super::{ApplicationId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Presence`.
 pub struct Presence {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
     /// Partial user object carried by gateway presence payloads
     /// (GUILD_CREATE `presences[]` and GUILD_MEMBERS_CHUNK `presences[]`
     /// identify the user this way instead of `user_id`). Only `id` is
@@ -29,7 +29,7 @@ pub struct Presence {
 /// guarantees `id` here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresenceUser {
-    pub id: GenericId,
+    pub id: UserId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
 }
@@ -133,7 +133,7 @@ pub struct Activity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamps: Option<ActivityTimestamps>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

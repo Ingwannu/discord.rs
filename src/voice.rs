@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod player;
 
 use crate::error::DiscordError;
-use crate::model::{GenericId, VoiceServerUpdate, VoiceState};
+use crate::model::{ChannelId, GuildId, UserId, VoiceServerUpdate, VoiceState};
 use crate::types::invalid_data_error;
 #[cfg(feature = "voice")]
 use crate::voice_runtime::VoiceRuntimeConfig;
@@ -125,8 +125,8 @@ impl VoiceSpeakingFlags {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceConnectionConfig`.
 pub struct VoiceConnectionConfig {
-    pub guild_id: GenericId,
-    pub channel_id: GenericId,
+    pub guild_id: GuildId,
+    pub channel_id: ChannelId,
     pub endpoint: Option<String>,
     pub session_id: Option<String>,
     pub token: Option<String>,
@@ -136,7 +136,7 @@ pub struct VoiceConnectionConfig {
 
 impl VoiceConnectionConfig {
     /// Creates a `new` value.
-    pub fn new(guild_id: GenericId, channel_id: GenericId) -> Self {
+    pub fn new(guild_id: GuildId, channel_id: ChannelId) -> Self {
         Self {
             guild_id,
             channel_id,
@@ -214,8 +214,8 @@ impl VoiceSpeakingState {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceConnectionState`.
 pub struct VoiceConnectionState {
-    pub guild_id: GenericId,
-    pub channel_id: GenericId,
+    pub guild_id: GuildId,
+    pub channel_id: ChannelId,
     pub endpoint: Option<String>,
     pub session_id: Option<String>,
     pub token: Option<String>,
@@ -448,9 +448,9 @@ pub enum VoiceGatewayCommand {
     /// Discord API enum variant `Identify`.
     Identify {
         /// Guild or server ID for the voice session.
-        server_id: GenericId,
+        server_id: GuildId,
         /// Current user ID.
-        user_id: GenericId,
+        user_id: UserId,
         /// Voice session ID from Gateway voice state.
         session_id: String,
         /// Voice server token from Gateway voice server update.
@@ -463,7 +463,7 @@ pub enum VoiceGatewayCommand {
     /// Discord API enum variant `Resume`.
     Resume {
         /// Guild or server ID for the voice session.
-        server_id: GenericId,
+        server_id: GuildId,
         /// Voice session ID from the previous connection.
         session_id: String,
         /// Voice server token for resuming the session.
@@ -792,73 +792,73 @@ pub enum VoiceEvent {
     /// Discord API enum variant `Connecting`.
     Connecting {
         /// Guild ID for the voice connection.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Voice channel ID being joined.
-        channel_id: GenericId,
+        channel_id: ChannelId,
     },
     /// Discord API enum variant `Connected`.
     Connected(VoiceConnectionState),
     /// Discord API enum variant `Disconnected`.
     Disconnected {
         /// Guild ID for the disconnected voice session.
-        guild_id: GenericId,
+        guild_id: GuildId,
     },
     /// Discord API enum variant `ServerUpdated`.
     ServerUpdated {
         /// Guild ID whose voice server data changed.
-        guild_id: GenericId,
+        guild_id: GuildId,
     },
     /// Discord API enum variant `SessionUpdated`.
     SessionUpdated {
         /// Guild ID whose voice session data changed.
-        guild_id: GenericId,
+        guild_id: GuildId,
     },
     /// Discord API enum variant `TransportConfigured`.
     TransportConfigured {
         /// Guild ID for the configured transport.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Voice transport details.
         transport: VoiceTransportState,
     },
     /// Discord API enum variant `SpeakingUpdated`.
     SpeakingUpdated {
         /// Guild ID for the speaking update.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Current speaking state.
         speaking: VoiceSpeakingState,
     },
     /// Discord API enum variant `PlayerStarted`.
     PlayerStarted {
         /// Guild ID for the player event.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Track that started.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerStopped`.
     PlayerStopped {
         /// Guild ID for the player event.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Track that stopped.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerPaused`.
     PlayerPaused {
         /// Guild ID for the player event.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Track that paused.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerResumed`.
     PlayerResumed {
         /// Guild ID for the player event.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Track that resumed.
         track: AudioTrack,
     },
     /// Discord API enum variant `PlayerSkipped`.
     PlayerSkipped {
         /// Guild ID for the player event.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Track that was skipped.
         track: AudioTrack,
     },
@@ -867,8 +867,8 @@ pub enum VoiceEvent {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `VoiceManager`.
 pub struct VoiceManager {
-    connections: HashMap<GenericId, VoiceConnectionState>,
-    players: HashMap<GenericId, AudioPlayer>,
+    connections: HashMap<GuildId, VoiceConnectionState>,
+    players: HashMap<GuildId, AudioPlayer>,
     events: Vec<VoiceEvent>,
 }
 
@@ -896,7 +896,7 @@ impl VoiceManager {
         state
     }
 
-    pub fn disconnect(&mut self, guild_id: GenericId) -> Option<VoiceConnectionState> {
+    pub fn disconnect(&mut self, guild_id: GuildId) -> Option<VoiceConnectionState> {
         self.players.remove(&guild_id);
         let mut state = self.connections.remove(&guild_id)?;
         state.mark_disconnected();
@@ -951,7 +951,7 @@ impl VoiceManager {
 
     pub fn configure_transport(
         &mut self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         transport: VoiceTransportState,
     ) -> Option<VoiceTransportState> {
         let state = self.connections.get_mut(&guild_id)?;
@@ -965,7 +965,7 @@ impl VoiceManager {
 
     pub fn set_speaking(
         &mut self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         speaking: VoiceSpeakingState,
     ) -> Option<VoiceSpeakingState> {
         let state = self.connections.get_mut(&guild_id)?;
@@ -979,8 +979,8 @@ impl VoiceManager {
 
     pub fn identify_command(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Option<VoiceGatewayCommand> {
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceGatewayCommand::Identify {
@@ -991,11 +991,7 @@ impl VoiceManager {
         })
     }
 
-    pub fn runtime_config(
-        &self,
-        guild_id: GenericId,
-        user_id: GenericId,
-    ) -> Option<VoiceRuntimeConfig> {
+    pub fn runtime_config(&self, guild_id: GuildId, user_id: UserId) -> Option<VoiceRuntimeConfig> {
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceRuntimeConfig::new(
             guild_id,
@@ -1006,7 +1002,7 @@ impl VoiceManager {
         ))
     }
 
-    pub fn resume_command(&self, guild_id: GenericId) -> Option<VoiceGatewayCommand> {
+    pub fn resume_command(&self, guild_id: GuildId) -> Option<VoiceGatewayCommand> {
         let connection = self.connections.get(&guild_id)?;
         Some(VoiceGatewayCommand::Resume {
             server_id: guild_id,
@@ -1015,7 +1011,7 @@ impl VoiceManager {
         })
     }
 
-    pub fn select_protocol_command(&self, guild_id: GenericId) -> Option<VoiceGatewayCommand> {
+    pub fn select_protocol_command(&self, guild_id: GuildId) -> Option<VoiceGatewayCommand> {
         let transport = self.connections.get(&guild_id)?.transport.clone()?;
         Some(VoiceGatewayCommand::SelectProtocol(
             VoiceSelectProtocolCommand::new(
@@ -1027,7 +1023,7 @@ impl VoiceManager {
 
     pub fn speaking_command(
         &mut self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         flags: VoiceSpeakingFlags,
         delay: u32,
     ) -> Option<VoiceGatewayCommand> {
@@ -1040,21 +1036,21 @@ impl VoiceManager {
         ))
     }
 
-    pub fn connection(&self, guild_id: GenericId) -> Option<&VoiceConnectionState> {
+    pub fn connection(&self, guild_id: GuildId) -> Option<&VoiceConnectionState> {
         self.connections.get(&guild_id)
     }
 
-    pub fn player(&self, guild_id: GenericId) -> Option<&AudioPlayer> {
+    pub fn player(&self, guild_id: GuildId) -> Option<&AudioPlayer> {
         self.players.get(&guild_id)
     }
 
-    pub fn enqueue(&mut self, guild_id: GenericId, track: AudioTrack) -> Option<usize> {
+    pub fn enqueue(&mut self, guild_id: GuildId, track: AudioTrack) -> Option<usize> {
         let player = self.players.get_mut(&guild_id)?;
         player.enqueue(track);
         Some(player.queue_len())
     }
 
-    pub fn start_next(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
+    pub fn start_next(&mut self, guild_id: GuildId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let started_track = player.play_next().cloned()?;
         self.events.push(VoiceEvent::PlayerStarted {
@@ -1064,7 +1060,7 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn stop(&mut self, guild_id: GenericId) -> Option<AudioTrack> {
+    pub fn stop(&mut self, guild_id: GuildId) -> Option<AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let stopped_track = player.stop()?;
         self.events.push(VoiceEvent::PlayerStopped {
@@ -1074,7 +1070,7 @@ impl VoiceManager {
         Some(stopped_track)
     }
 
-    pub fn pause(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
+    pub fn pause(&mut self, guild_id: GuildId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         player.pause();
         let paused_track = player.current().cloned()?;
@@ -1085,7 +1081,7 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn resume(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
+    pub fn resume(&mut self, guild_id: GuildId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         player.resume();
         let resumed_track = player.current().cloned()?;
@@ -1096,7 +1092,7 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn skip(&mut self, guild_id: GenericId) -> Option<&AudioTrack> {
+    pub fn skip(&mut self, guild_id: GuildId) -> Option<&AudioTrack> {
         let player = self.players.get_mut(&guild_id)?;
         let skipped_track = player.current().cloned();
         let next_track = player.skip().cloned()?;
@@ -1111,13 +1107,13 @@ impl VoiceManager {
         player.current()
     }
 
-    pub fn clear_queue(&mut self, guild_id: GenericId) -> Option<usize> {
+    pub fn clear_queue(&mut self, guild_id: GuildId) -> Option<usize> {
         self.players
             .get_mut(&guild_id)
             .map(AudioPlayer::clear_queue)
     }
 
-    pub fn set_volume(&mut self, guild_id: GenericId, volume: f32) -> Option<f32> {
+    pub fn set_volume(&mut self, guild_id: GuildId, volume: f32) -> Option<f32> {
         let player = self.players.get_mut(&guild_id)?;
         player.set_volume(volume);
         Some(player.volume())

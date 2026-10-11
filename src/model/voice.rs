@@ -2,17 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, Member};
+use super::{ChannelId, GuildId, Member, ScheduledEventId, StageInstanceId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `VoiceState`.
 pub struct VoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,7 +42,7 @@ pub struct VoiceState {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyCurrentUserVoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,7 +53,7 @@ pub struct ModifyCurrentUserVoiceState {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyUserVoiceState {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress: Option<bool>,
 }
@@ -61,7 +61,7 @@ pub struct ModifyUserVoiceState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `VoiceServerUpdate`.
 pub struct VoiceServerUpdate {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
@@ -89,33 +89,33 @@ pub struct SetVoiceChannelStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StageInstance`.
 pub struct StageInstance {
-    pub id: GenericId,
-    pub guild_id: GenericId,
-    pub channel_id: GenericId,
+    pub id: StageInstanceId,
+    pub guild_id: GuildId,
+    pub channel_id: ChannelId,
     pub topic: String,
     pub privacy_level: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discoverable_disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_scheduled_event_id: Option<GenericId>,
+    pub guild_scheduled_event_id: Option<ScheduledEventId>,
 }
 
 /// Request body for creating a stage instance.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CreateStageInstance {
-    pub channel_id: GenericId,
+    pub channel_id: ChannelId,
     pub topic: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privacy_level: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub send_start_notification: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_scheduled_event_id: Option<GenericId>,
+    pub guild_scheduled_event_id: Option<ScheduledEventId>,
 }
 
 impl CreateStageInstance {
     /// Starts a stage in `channel_id` with `topic`; optional fields unset.
-    pub fn new(channel_id: GenericId, topic: impl Into<String>) -> Self {
+    pub fn new(channel_id: ChannelId, topic: impl Into<String>) -> Self {
         Self {
             channel_id,
             topic: topic.into(),

@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::parsers::V2ModalSubmission;
 
 use super::{
-    Attachment, Channel, Entitlement, GenericId, GuildInstallOwner, InteractionContextType,
-    InteractionResponseState, Member, Message, PermissionsBitField, Role, User, UserId,
+    ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, Entitlement, GenericId,
+    GuildId, GuildInstallOwner, InteractionContextType, InteractionId, InteractionResponseState,
+    Member, MentionableId, Message, MessageId, PermissionsBitField, Role, RoleId, User, UserId,
 };
 
 /// `authorizing_integration_owners` of an interaction (or of a message's
@@ -55,19 +56,19 @@ impl AuthorizingIntegrationOwners {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ResolvedData {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub users: HashMap<GenericId, User>,
+    pub users: HashMap<UserId, User>,
     /// Partial members (no `user`, `deaf`, or `mute` fields).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub members: HashMap<GenericId, Member>,
+    pub members: HashMap<UserId, Member>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub roles: HashMap<GenericId, Role>,
+    pub roles: HashMap<RoleId, Role>,
     /// Partial channels (id, name, type, permissions, and thread fields).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub channels: HashMap<GenericId, Channel>,
+    pub channels: HashMap<ChannelId, Channel>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub messages: HashMap<GenericId, Message>,
+    pub messages: HashMap<MessageId, Message>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub attachments: HashMap<GenericId, Attachment>,
+    pub attachments: HashMap<AttachmentId, Attachment>,
 }
 
 impl ResolvedData {
@@ -82,33 +83,50 @@ impl ResolvedData {
     }
 
     /// Looks up a resolved user by ID.
-    pub fn user(&self, id: GenericId) -> Option<&User> {
+    pub fn user(&self, id: UserId) -> Option<&User> {
         self.users.get(&id)
     }
 
     /// Looks up a resolved partial member by user ID.
-    pub fn member(&self, id: GenericId) -> Option<&Member> {
+    pub fn member(&self, id: UserId) -> Option<&Member> {
         self.members.get(&id)
     }
 
     /// Looks up a resolved role by ID.
-    pub fn role(&self, id: GenericId) -> Option<&Role> {
+    pub fn role(&self, id: RoleId) -> Option<&Role> {
         self.roles.get(&id)
     }
 
     /// Looks up a resolved partial channel by ID.
-    pub fn channel(&self, id: GenericId) -> Option<&Channel> {
+    pub fn channel(&self, id: ChannelId) -> Option<&Channel> {
         self.channels.get(&id)
     }
 
     /// Looks up a resolved message by ID.
-    pub fn message(&self, id: GenericId) -> Option<&Message> {
+    pub fn message(&self, id: MessageId) -> Option<&Message> {
         self.messages.get(&id)
     }
 
     /// Looks up a resolved attachment by ID.
-    pub fn attachment(&self, id: GenericId) -> Option<&Attachment> {
+    pub fn attachment(&self, id: AttachmentId) -> Option<&Attachment> {
         self.attachments.get(&id)
+    }
+
+    /// Tells whether a `MENTIONABLE` option value (or mentionable select
+    /// value) names a user or a role, using the resolved maps; `None` when
+    /// `id` is in neither.
+    ///
+    /// The value itself is a bare snowflake, so the resolved data is the
+    /// only place its kind shows.
+    pub fn mentionable(&self, id: GenericId) -> Option<MentionableId> {
+        let user_id: UserId = id.cast();
+        if self.users.contains_key(&user_id) || self.members.contains_key(&user_id) {
+            return Some(MentionableId::User(user_id));
+        }
+        let role_id: RoleId = id.cast();
+        self.roles
+            .contains_key(&role_id)
+            .then_some(MentionableId::Role(role_id))
     }
 }
 
@@ -116,15 +134,15 @@ impl ResolvedData {
 #[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `InteractionContextData`.
 pub struct InteractionContextData {
-    pub id: GenericId,
-    pub application_id: GenericId,
+    pub id: InteractionId,
+    pub application_id: ApplicationId,
     /// Interaction token: authorizes responses and follow-ups for 15
     /// minutes. Redacted from `Debug` output.
     pub token: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -238,7 +256,7 @@ impl CommandInteractionOption {
 /// Typed Discord API object for `CommandInteractionData`.
 pub struct CommandInteractionData {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<GenericId>,
+    pub id: Option<CommandId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -247,6 +265,10 @@ pub struct CommandInteractionData {
     pub options: Vec<CommandInteractionOption>,
     #[serde(default)]
     pub resolved: Option<ResolvedData>,
+    /// Target of a user or message context menu command. Its kind depends
+    /// on the command type, so this shared field is untyped; use
+    /// [`UserContextMenuInteraction::target_id`] or
+    /// [`MessageContextMenuInteraction::target_id`] for the typed ID.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<GenericId>,
 }
@@ -279,6 +301,32 @@ pub struct UserContextMenuInteraction {
 pub struct MessageContextMenuInteraction {
     pub context: InteractionContextData,
     pub data: CommandInteractionData,
+}
+
+impl UserContextMenuInteraction {
+    /// The user the command was used on (`data.target_id`).
+    pub fn target_id(&self) -> Option<UserId> {
+        self.data.target_id.map(GenericId::cast)
+    }
+
+    /// The resolved target user, when Discord included it.
+    pub fn target_user(&self) -> Option<&User> {
+        let target_id = self.target_id()?;
+        self.data.resolved.as_ref()?.user(target_id)
+    }
+}
+
+impl MessageContextMenuInteraction {
+    /// The message the command was used on (`data.target_id`).
+    pub fn target_id(&self) -> Option<MessageId> {
+        self.data.target_id.map(GenericId::cast)
+    }
+
+    /// The resolved target message, when Discord included it.
+    pub fn target_message(&self) -> Option<&Message> {
+        let target_id = self.target_id()?;
+        self.data.resolved.as_ref()?.message(target_id)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,7 +399,7 @@ impl Interaction {
         }
     }
 
-    pub fn id(&self) -> GenericId {
+    pub fn id(&self) -> InteractionId {
         self.context().id
     }
 
@@ -359,7 +407,7 @@ impl Interaction {
         &self.context().token
     }
 
-    pub fn application_id(&self) -> GenericId {
+    pub fn application_id(&self) -> ApplicationId {
         self.context().application_id
     }
 
@@ -394,13 +442,13 @@ pub struct InteractionCallbackResponse {
 /// (`POST /interactions/{id}/{token}/callback?with_response=true`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InteractionCallbackInteraction {
-    pub id: GenericId,
+    pub id: InteractionId,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_instance_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_message_id: Option<GenericId>,
+    pub response_message_id: Option<MessageId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_message_loading: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

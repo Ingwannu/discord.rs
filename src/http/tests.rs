@@ -23,21 +23,22 @@ use crate::error::DiscordError;
 use crate::model::{
     AddGroupDmRecipient, AddGuildMember, AddLobbyMember, ApplicationCommandPermission,
     ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, AuditLogQuery, BeginGuildPruneRequest,
-    BulkGuildBanRequest, ChannelPinsQuery, CreateChannelInvite, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance,
-    CreateTestEntitlement, CreateWebhook, CurrentUserGuildsQuery,
-    EditApplicationCommandPermissions, EditChannelPermission, EntitlementQuery, GenericId,
-    GetGuildQuery, GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle,
-    InteractionCallbackResponse, JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember,
-    LobbyMemberUpdate, ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser,
-    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
-    ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
-    ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
-    ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
-    ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField, PollAnswerId, RoleColors,
-    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery,
-    ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreenChannel,
+    BulkGuildBanRequest, ChannelPinsQuery, CommandPermissionsId, CreateChannelInvite,
+    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateLobby,
+    CreateMessage, CreateStageInstance, CreateTestEntitlement, CreateWebhook,
+    CurrentUserGuildsQuery, EditApplicationCommandPermissions, EditChannelPermission,
+    EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildBansQuery, GuildMembersQuery,
+    GuildWidgetImageStyle, InteractionCallbackResponse, JoinedArchivedThreadsQuery,
+    LinkLobbyChannel, LobbyMember, LobbyMemberUpdate, ModifyCurrentApplication,
+    ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState, ModifyGuild,
+    ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget,
+    PermissionsBitField, PollAnswerId, RoleColors, SearchGuildMembersQuery,
+    SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery, ThreadMemberQuery,
+    UpdateUserApplicationRoleConnection, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreenChannel,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -671,20 +672,20 @@ fn assert_model_error_contains(error: DiscordError, expected: &str) {
 
 #[test]
 fn configured_application_id_rejects_zero() {
-    let error = configured_application_id(0).unwrap_err();
+    let error = configured_application_id(None).unwrap_err();
     assert!(error.to_string().contains("application_id must be set"));
 }
 
 #[test]
 fn global_commands_path_rejects_zero_application_id() {
-    let error = global_commands_path(0).unwrap_err();
+    let error = global_commands_path(None).unwrap_err();
     assert!(error.to_string().contains("application_id must be set"));
 }
 
 #[test]
 fn global_commands_path_uses_configured_application_id() {
     assert_eq!(
-        global_commands_path(123).unwrap(),
+        global_commands_path(Some(test_id(123))).unwrap(),
         "/applications/123/commands"
     );
 }
@@ -1917,7 +1918,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
             .await
             .expect("create webhook")
             .id
-            .map(GenericId::get),
+            .map(u64::from),
         Some(700)
     );
     client
@@ -2646,7 +2647,7 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
             .await
             .unwrap()
             .id
-            .map(GenericId::get),
+            .map(u64::from),
         Some(1)
     );
     assert_eq!(
@@ -2679,7 +2680,7 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
             .await
             .unwrap()
             .id
-            .map(GenericId::get),
+            .map(u64::from),
         Some(3)
     );
     assert_eq!(
@@ -2921,7 +2922,7 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
         )
         .await
         .unwrap();
-    assert_eq!(batch[0].id.get(), 401);
+    assert_eq!(batch[0].id, CommandPermissionsId::Command(test_id(401)));
 
     let edited = client
         .edit_application_command_permissions(
@@ -2932,7 +2933,7 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
         )
         .await
         .unwrap();
-    assert_eq!(edited.id.get(), 401);
+    assert_eq!(edited.id, CommandPermissionsId::Command(test_id(401)));
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -3525,7 +3526,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     client
         .edit_channel_permissions(
             test_id(100),
-            test_id(200),
+            OverwriteTarget::Role(test_id(200)),
             &json!({ "type": 0, "allow": "8" }),
         )
         .await
@@ -3533,7 +3534,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     client
         .edit_channel_permissions_typed(
             test_id(100),
-            test_id(201),
+            OverwriteTarget::Member(test_id(201)),
             &EditChannelPermission {
                 kind: 1,
                 allow: Some(PermissionsBitField(8)),
@@ -3543,7 +3544,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     client
-        .delete_channel_permission(test_id(100), test_id(202))
+        .delete_channel_permission(test_id(100), OverwriteTarget::Member(test_id(202)))
         .await
         .unwrap();
     assert_eq!(
@@ -3968,7 +3969,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
     client
         .edit_channel_permissions_typed(
             test_id(100),
-            test_id(300),
+            OverwriteTarget::Role(test_id(300)),
             &EditChannelPermission {
                 kind: 0,
                 allow: Some(PermissionsBitField(1024)),
@@ -3978,7 +3979,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
         .await
         .unwrap();
     client
-        .delete_channel_permission(test_id(100), test_id(300))
+        .delete_channel_permission(test_id(100), OverwriteTarget::Role(test_id(300)))
         .await
         .unwrap();
 
@@ -4813,7 +4814,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     let entitlement = client.get_entitlements(&query).await.unwrap().remove(0);
     assert_eq!(entitlement.sku_id.get(), 900);
     assert_eq!(entitlement.gift_code_flags, Some(0));
-    assert_eq!(entitlement.subscription_id.map(GenericId::get), Some(950));
+    assert_eq!(entitlement.subscription_id.map(u64::from), Some(950));
     assert_eq!(
         client
             .get_entitlement(test_id(901))
@@ -4827,11 +4828,10 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     client.consume_entitlement(test_id(901)).await.unwrap();
     assert_eq!(
         client
-            .create_test_entitlement(&CreateTestEntitlement {
-                sku_id: test_id(900),
-                owner_id: test_id(200),
-                owner_type: 1,
-            })
+            .create_test_entitlement(&CreateTestEntitlement::new(
+                test_id(900),
+                EntitlementOwner::Guild(test_id(200)),
+            ))
             .await
             .unwrap()
             .id
@@ -5234,7 +5234,7 @@ async fn poll_thread_invite_and_integration_wrappers_hit_expected_paths() {
 
 #[tokio::test]
 async fn client_methods_reject_missing_application_id_before_request() {
-    let client = RestClient::new("token", 0);
+    let client = RestClient::new("token", None);
     let command = sample_command();
     let commands = vec![command.clone()];
     let body = sample_message();
@@ -5314,7 +5314,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
 
 #[tokio::test]
 async fn client_methods_reject_unsafe_tokens_before_request() {
-    let client = RestClient::new("token", 123);
+    let client = RestClient::new("token", Some(test_id(123)));
     let body = sample_message();
     let response = sample_interaction_response();
 
@@ -5386,7 +5386,7 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
 
 #[tokio::test]
 async fn client_followup_methods_validate_application_and_message_segments() {
-    let client = RestClient::new("token", 123);
+    let client = RestClient::new("token", Some(test_id(123)));
     let body = sample_message();
 
     assert_model_error_contains(
@@ -5821,7 +5821,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("guild-token", 0, base_url);
-    client.set_application_id(555);
+    client.set_application_id(test_id(555));
     let command = sample_command();
 
     let guild = client.get_guild(test_id(200)).await.expect("get guild");
@@ -7142,7 +7142,7 @@ async fn server_errors_are_replayed_for_post_when_explicitly_enabled() {
     ])
     .await;
 
-    let client = RestClient::builder("opt-in-token", 123)
+    let client = RestClient::builder("opt-in-token", Some(test_id(123)))
         .api_base(base_url)
         .retry_non_idempotent_requests(true)
         .build()
@@ -7317,7 +7317,7 @@ async fn managed_client_does_not_follow_redirects() {
         .push(("Location".to_string(), "/elsewhere".to_string()));
     let (base_url, captured, task) = spawn_test_server(vec![redirect]).await;
 
-    let client = RestClient::builder("redirect-token", 123)
+    let client = RestClient::builder("redirect-token", Some(test_id(123)))
         .api_base(base_url)
         .build()
         .expect("client");
@@ -7345,7 +7345,7 @@ async fn custom_clients_do_not_retry_post_connect_failures() {
 
     // The custom client's redirect policy is unknown, so a connect failure
     // does not prove a POST was never delivered.
-    let client = RestClient::builder("custom-client", 123)
+    let client = RestClient::builder("custom-client", Some(test_id(123)))
         .api_base(format!("http://{address}"))
         .use_client(reqwest::Client::new())
         .build()
@@ -7392,7 +7392,7 @@ async fn queued_requests_move_to_the_learned_bucket_gate() {
     // R. A's response teaches bucket K; C then takes K's gate directly. When
     // A releases R, B must notice the key changed and wait for K instead of
     // running beside C.
-    let client = RestClient::new("gate-race", 123);
+    let client = RestClient::new("gate-race", Some(test_id(123)));
     let messages = route(Method::POST, "/channels/1/messages");
     let (route_gate_key, a_permit) = client.acquire_route_gate(&messages).await;
     assert_eq!(route_gate_key, messages.key);
@@ -7614,7 +7614,7 @@ async fn rest_client_builder_applies_base_url_user_agent_and_api_version() {
     )];
     let (base_url, captured, server) = spawn_test_server(responses).await;
 
-    let client = RestClient::builder("builder-token", 123)
+    let client = RestClient::builder("builder-token", Some(test_id(123)))
         .api_base(format!("{base_url}/"))
         .user_agent("MyLib/1.2 (+https://example.test)")
         .connect_timeout(Duration::from_secs(2))
@@ -7636,18 +7636,20 @@ async fn rest_client_builder_applies_base_url_user_agent_and_api_version() {
     );
 
     // api_version selects the versioned default host; api_base wins when set.
-    let versioned = RestClient::builder("t", 1)
+    let versioned = RestClient::builder("t", Some(test_id(1)))
         .api_version(9)
         .build()
         .expect("versioned client");
     assert_eq!(versioned.api_base(), "https://discord.com/api/v9");
-    let overridden = RestClient::builder("t", 1)
+    let overridden = RestClient::builder("t", Some(test_id(1)))
         .api_version(9)
         .api_base("http://proxy.example.test/api")
         .build()
         .expect("overridden client");
     assert_eq!(overridden.api_base(), "http://proxy.example.test/api");
-    let default_base = RestClient::builder("t", 1).build().expect("default client");
+    let default_base = RestClient::builder("t", Some(test_id(1)))
+        .build()
+        .expect("default client");
     assert_eq!(default_base.api_base(), super::API_BASE);
 }
 
@@ -7676,7 +7678,7 @@ async fn rest_client_builder_rate_limit_callback_fires_on_every_429() {
 
     let observed: Arc<Mutex<Vec<super::RateLimitInfo>>> = Arc::new(Mutex::new(Vec::new()));
     let observed_for_callback = Arc::clone(&observed);
-    let client = RestClient::builder("limited-token", 123)
+    let client = RestClient::builder("limited-token", Some(test_id(123)))
         .api_base(base_url)
         .rate_limit_callback(Arc::new(move |info| {
             observed_for_callback
@@ -7714,19 +7716,19 @@ async fn rest_client_builder_rate_limit_callback_fires_on_every_429() {
 
 #[test]
 fn rest_client_builder_proxy_and_custom_client_construct() {
-    RestClient::builder("t", 1)
+    RestClient::builder("t", Some(test_id(1)))
         .proxy("http://127.0.0.1:9999")
         .build()
         .expect("http proxy accepted");
-    RestClient::builder("t", 1)
+    RestClient::builder("t", Some(test_id(1)))
         .proxy("https://user:pass@127.0.0.1:9999")
         .build()
         .expect("https proxy accepted");
-    assert!(RestClient::builder("t", 1)
+    assert!(RestClient::builder("t", Some(test_id(1)))
         .proxy("::::not a proxy url")
         .build()
         .is_err());
-    RestClient::builder("t", 1)
+    RestClient::builder("t", Some(test_id(1)))
         .use_client(default_http_client())
         .build()
         .expect("custom reqwest client accepted");
@@ -7741,7 +7743,7 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
 
-    let client = RestClient::builder("mentions-token", 123)
+    let client = RestClient::builder("mentions-token", Some(test_id(123)))
         .api_base(base_url)
         .default_allowed_mentions(crate::model::AllowedMentions {
             users: vec![test_id(42)],
@@ -7820,7 +7822,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
 
-    let client = RestClient::builder("mentions-token", 123)
+    let client = RestClient::builder("mentions-token", Some(test_id(123)))
         .api_base(base_url)
         .default_allowed_mentions(crate::model::AllowedMentions {
             replied_user: Some(false),
@@ -7959,7 +7961,7 @@ async fn invite_target_user_routes_have_expected_shapes() {
 
 #[tokio::test]
 async fn invite_target_user_bulk_routes_reject_more_than_1000_ids_locally() {
-    let client = RestClient::new("bulk-limit", 123);
+    let client = RestClient::new("bulk-limit", Some(test_id(123)));
     let ids = (1..=1001).map(test_id).collect::<Vec<_>>();
     let error = client
         .bulk_add_invite_target_users("abc", &ids)
@@ -8105,7 +8107,7 @@ async fn application_identity_profile_routes_have_expected_shapes() {
 
 #[tokio::test]
 async fn application_identity_profile_update_enforces_documented_limits() {
-    let client = RestClient::new("identity-limits", 555);
+    let client = RestClient::new("identity-limits", Some(test_id(555)));
     let too_many = crate::model::UpdateApplicationIdentityProfile {
         username: None,
         data: Some(crate::model::ApplicationIdentityProfileData {
@@ -8154,7 +8156,7 @@ async fn application_identity_profile_update_enforces_documented_limits() {
     let error = oversized.validate().expect_err("over 10 KB serialized");
     assert!(error.to_string().contains("10240"), "{error}");
 
-    assert!(RestClient::new("no-app", 0)
+    assert!(RestClient::new("no-app", None)
         .get_user_application_identities(test_id(7))
         .await
         .is_err());
@@ -8276,7 +8278,7 @@ async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes
 
 #[tokio::test]
 async fn lobby_message_limit_is_checked_locally() {
-    let client = RestClient::new("bot-token", 555);
+    let client = RestClient::new("bot-token", Some(test_id(555)));
     for limit in [0_u8, 201] {
         assert!(client
             .get_lobby_messages("bearer", test_id(100), Some(limit))

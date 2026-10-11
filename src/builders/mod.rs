@@ -8,9 +8,9 @@ mod limits;
 mod media;
 mod modal;
 
-pub use components::{
-    ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectDefaultValue, SelectMenuBuilder,
-};
+/// Select menu defaults are the model type, shared with received components.
+pub use crate::model::SelectDefaultValue;
+pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
 pub use container::{
     create_container, create_default_buttons, ContainerBuilder, SeparatorBuilder,
     TextDisplayBuilder,

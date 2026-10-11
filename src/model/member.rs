@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AvatarDecorationData, GenericId, PermissionsBitField, User, UserCollectibles};
+use super::{
+    AvatarDecorationData, ChannelId, PermissionsBitField, RoleId, User, UserCollectibles, UserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Member`.
@@ -10,7 +12,7 @@ pub struct Member {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user: Option<User>,
     #[serde(default)]
-    pub roles: Vec<GenericId>,
+    pub roles: Vec<RoleId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nick: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,7 +54,7 @@ pub struct AddGuildMember {
     pub nick: Option<String>,
     /// Optional initial guild roles for the member.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Vec<GenericId>>,
+    pub roles: Option<Vec<RoleId>>,
     /// Whether the member should be muted in voice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute: Option<bool>,
@@ -73,7 +75,7 @@ pub struct ModifyGuildMember {
     pub nick: Option<Option<String>>,
     /// Replacement role IDs for the member.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub roles: Option<Option<Vec<GenericId>>>,
+    pub roles: Option<Option<Vec<RoleId>>>,
     /// Whether the member should be muted in voice.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mute: Option<Option<bool>>,
@@ -82,7 +84,7 @@ pub struct ModifyGuildMember {
     pub deaf: Option<Option<bool>>,
     /// Voice channel to move the member to, or `Some(None)` to disconnect them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Option<GenericId>>,
+    pub channel_id: Option<Option<ChannelId>>,
     /// Timeout expiration timestamp, or `Some(None)` to remove the timeout.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub communication_disabled_until: Option<Option<String>>,
@@ -115,7 +117,7 @@ pub struct ModifyCurrentMember {
 /// Typed Discord API object for `GuildMembersQuery`.
 pub struct GuildMembersQuery {
     pub limit: Option<u64>,
-    pub after: Option<GenericId>,
+    pub after: Option<UserId>,
 }
 
 #[derive(Clone, Debug, Default)]

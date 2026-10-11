@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::Emoji;
 
 use super::{
-    Channel, GenericId, Member, PermissionsBitField, Presence, Role, SoundboardSound,
-    StageInstance, Sticker, VoiceState,
+    ApplicationId, Channel, ChannelId, GuildId, Member, PermissionsBitField, Presence, Role,
+    SoundboardSound, StageInstance, Sticker, UserId, VoiceState,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -53,7 +53,7 @@ pub struct CreateGuild {
 /// `0`) so that channel `parent_id`, permission overwrites, and
 /// `afk_channel_id`/`system_channel_id` could point at them before Discord
 /// assigned real IDs. Those numbers are not snowflakes and mean nothing
-/// outside the request, so they get this type instead of [`GenericId`]
+/// outside the request, so they get this type instead of [`GenericId`](super::GenericId)
 /// (docs/design/3.0-types-events-requests.md §1 exceptions). Serialized as a
 /// JSON integer. Only used by the deprecated `RestClient::create_guild`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -153,7 +153,7 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit_content_filter: Option<Option<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub afk_channel_id: Option<Option<GenericId>>,
+    pub afk_channel_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,13 +165,13 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banner: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_channel_id: Option<Option<GenericId>>,
+    pub system_channel_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_channel_flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rules_channel_id: Option<Option<GenericId>>,
+    pub rules_channel_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_updates_channel_id: Option<Option<GenericId>>,
+    pub public_updates_channel_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_locale: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,16 +181,16 @@ pub struct ModifyGuild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_progress_bar_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub safety_alerts_channel_id: Option<Option<GenericId>>,
+    pub safety_alerts_channel_id: Option<Option<ChannelId>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Guild`.
 pub struct Guild {
-    pub id: GenericId,
+    pub id: GuildId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_id: Option<GenericId>,
+    pub owner_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
     #[serde(default)]
@@ -216,13 +216,13 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vanity_url_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_channel_id: Option<GenericId>,
+    pub system_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rules_channel_id: Option<GenericId>,
+    pub rules_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_locale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub afk_channel_id: Option<GenericId>,
+    pub afk_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub afk_timeout: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,11 +234,11 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mfa_level: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_channel_flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_updates_channel_id: Option<GenericId>,
+    pub public_updates_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw_level: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -246,7 +246,7 @@ pub struct Guild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub premium_progress_bar_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub safety_alerts_channel_id: Option<GenericId>,
+    pub safety_alerts_channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approximate_member_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -337,7 +337,7 @@ pub struct ModifyGuildIncidentActions {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `CurrentUserGuild`.
 pub struct CurrentUserGuild {
-    pub id: GenericId,
+    pub id: GuildId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -358,8 +358,8 @@ pub struct CurrentUserGuild {
 #[derive(Clone, Debug, Default)]
 /// Typed Discord API object for `CurrentUserGuildsQuery`.
 pub struct CurrentUserGuildsQuery {
-    pub before: Option<GenericId>,
-    pub after: Option<GenericId>,
+    pub before: Option<GuildId>,
+    pub after: Option<GuildId>,
     pub limit: Option<u64>,
     pub with_counts: Option<bool>,
     /// Returns only the guilds stored in this shard (`0` to
@@ -372,7 +372,7 @@ pub struct CurrentUserGuildsQuery {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildPreview`.
 pub struct GuildPreview {
-    pub id: GenericId,
+    pub id: GuildId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,

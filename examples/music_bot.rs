@@ -32,8 +32,8 @@ mod bot {
         AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
     };
     use discordrs::{
-        gateway_intents, Client, Context, DiscordError, EventHandler, GenericId, ReadyPayload,
-        VoiceRuntimeConfig, VoiceServerUpdate, VoiceState,
+        gateway_intents, ChannelId, Client, Context, DiscordError, EventHandler, GuildId,
+        ReadyPayload, UserId, VoiceRuntimeConfig, VoiceServerUpdate, VoiceState,
     };
 
     /// How long FFmpeg may take to produce the first frame before the bot
@@ -42,21 +42,21 @@ mod bot {
 
     #[derive(Default)]
     struct SessionState {
-        user_id: Option<GenericId>,
+        user_id: Option<UserId>,
         session_id: Option<String>,
         server: Option<VoiceServerUpdate>,
         started: bool,
     }
 
     pub struct Handler {
-        guild_id: GenericId,
-        channel_id: GenericId,
+        guild_id: GuildId,
+        channel_id: ChannelId,
         input: String,
         state: Mutex<SessionState>,
     }
 
     impl Handler {
-        pub fn new(guild_id: GenericId, channel_id: GenericId, input: String) -> Self {
+        pub fn new(guild_id: GuildId, channel_id: ChannelId, input: String) -> Self {
             Self {
                 guild_id,
                 channel_id,
@@ -209,10 +209,10 @@ mod bot {
         let token = std::env::var("DISCORD_TOKEN")?;
         // IDs are validated once, here; a typo fails at startup instead of
         // as a 404 later. `?` turns the `InvalidId` into a `DiscordError`.
-        let guild_id: GenericId = std::env::var("MUSIC_GUILD_ID")
+        let guild_id: GuildId = std::env::var("MUSIC_GUILD_ID")
             .map_err(|_| DiscordError::model("set MUSIC_GUILD_ID"))?
             .parse()?;
-        let channel_id: GenericId = std::env::var("MUSIC_CHANNEL_ID")
+        let channel_id: ChannelId = std::env::var("MUSIC_CHANNEL_ID")
             .map_err(|_| DiscordError::model("set MUSIC_CHANNEL_ID"))?
             .parse()?;
         let input =

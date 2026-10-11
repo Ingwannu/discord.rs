@@ -4,7 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{AuditLog, AuditLogQuery, GenericId};
+use crate::model::{AuditLog, AuditLogEntryId, AuditLogQuery, GuildId, UserId};
 
 use super::paths::audit_log_query;
 use super::RestClient;
@@ -17,10 +17,10 @@ impl RestClient {
     )]
     pub async fn get_guild_audit_log(
         &self,
-        guild_id: GenericId,
-        user_id: Option<GenericId>,
+        guild_id: GuildId,
+        user_id: Option<UserId>,
         action_type: Option<u64>,
-        before: Option<GenericId>,
+        before: Option<AuditLogEntryId>,
         limit: Option<u64>,
     ) -> Result<serde_json::Value, DiscordError> {
         let query = audit_log_query(&AuditLogQuery {
@@ -40,7 +40,7 @@ impl RestClient {
 
     pub async fn get_guild_audit_log_typed(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &AuditLogQuery,
     ) -> Result<AuditLog, DiscordError> {
         let query = audit_log_query(query);

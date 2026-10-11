@@ -4,7 +4,8 @@
 )]
 
 use discordrs::{
-    CommandOptionBuilder, PermissionsBitField, RestClient, SlashCommandBuilder, UserCommandBuilder,
+    ApplicationId, CommandOptionBuilder, PermissionsBitField, RestClient, SlashCommandBuilder,
+    UserCommandBuilder,
 };
 
 fn command_definitions() -> Vec<discordrs::CommandDefinition> {
@@ -25,11 +26,10 @@ fn command_definitions() -> Vec<discordrs::CommandDefinition> {
 #[tokio::main]
 async fn main() -> Result<(), discordrs::DiscordError> {
     let token = std::env::var("DISCORD_TOKEN")?;
-    let application_id = std::env::var("DISCORD_APPLICATION_ID")?
-        .parse()
-        .expect("DISCORD_APPLICATION_ID must be a u64");
+    // `?` turns a malformed or zero ID into a `DiscordError`.
+    let application_id: ApplicationId = std::env::var("DISCORD_APPLICATION_ID")?.parse()?;
 
-    let client = RestClient::new(token, application_id);
+    let client = RestClient::new(token, Some(application_id));
     let commands = command_definitions();
     let registered = client
         .bulk_overwrite_global_commands_typed(&commands)

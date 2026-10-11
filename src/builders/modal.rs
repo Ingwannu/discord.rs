@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::command::validation;
 use crate::constants::{component_type, text_input_style};
 use crate::error::DiscordError;
+use crate::model::ComponentId;
 use crate::types::{to_json_value, SelectOption};
 
 use super::components::{ActionRowBuilder, SelectMenuBuilder};
@@ -159,7 +160,7 @@ pub struct RadioGroupBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl RadioGroupBuilder {
@@ -195,7 +196,7 @@ impl RadioGroupBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -221,7 +222,7 @@ pub struct CheckboxGroupBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl CheckboxGroupBuilder {
@@ -269,7 +270,7 @@ impl CheckboxGroupBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -292,7 +293,7 @@ pub struct CheckboxBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl CheckboxBuilder {
@@ -323,7 +324,7 @@ impl CheckboxBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -348,7 +349,7 @@ pub struct FileUploadBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     file_types: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl FileUploadBuilder {
@@ -406,7 +407,7 @@ impl FileUploadBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -426,7 +427,7 @@ pub struct LabelBuilder {
     description: Option<String>,
     component: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl LabelBuilder {
@@ -490,7 +491,7 @@ impl LabelBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -665,6 +666,7 @@ impl ModalBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::ComponentId;
     use serde_json::json;
 
     use super::{
@@ -714,7 +716,7 @@ mod tests {
             .add_options(vec![SelectOption::new("Two", "2").default_selected(true)])
             .required(true)
             .disabled(false)
-            .id(4)
+            .id(ComponentId::new(4))
             .build();
 
         assert_eq!(
@@ -748,7 +750,7 @@ mod tests {
             .max_values(2)
             .required(true)
             .disabled(true)
-            .id(8)
+            .id(ComponentId::new(8))
             .build();
 
         assert_eq!(
@@ -775,7 +777,7 @@ mod tests {
             .checked(true)
             .required(true)
             .disabled(false)
-            .id(3)
+            .id(ComponentId::new(3))
             .build();
 
         assert_eq!(
@@ -794,7 +796,7 @@ mod tests {
             .min_values(1)
             .max_values(3)
             .required(true)
-            .id(6)
+            .id(ComponentId::new(6))
             .build();
 
         assert_eq!(
@@ -819,7 +821,7 @@ mod tests {
                     SelectMenuBuilder::string("select").add_option(SelectOption::new("One", "1")),
                 )
                 .description("pick one")
-                .id(1)
+                .id(ComponentId::new(1))
                 .build(),
                 component_type::STRING_SELECT,
             ),

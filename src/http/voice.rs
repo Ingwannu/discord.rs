@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateStageInstance, GenericId, ModifyCurrentUserVoiceState, ModifyStageInstance,
-    ModifyUserVoiceState, SetVoiceChannelStatus, StageInstance, VoiceRegion, VoiceState,
+    ChannelId, CreateStageInstance, GuildId, ModifyCurrentUserVoiceState, ModifyStageInstance,
+    ModifyUserVoiceState, SetVoiceChannelStatus, StageInstance, UserId, VoiceRegion, VoiceState,
 };
 
 use super::RestClient;
@@ -15,7 +15,7 @@ use super::RestClient;
 impl RestClient {
     pub async fn set_voice_channel_status(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &SetVoiceChannelStatus,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
@@ -50,7 +50,7 @@ impl RestClient {
 
     pub async fn get_stage_instance(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<StageInstance, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -62,7 +62,7 @@ impl RestClient {
 
     pub async fn modify_stage_instance(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<StageInstance, DiscordError> {
         self.modify_stage_instance_typed(channel_id, body).await
@@ -70,7 +70,7 @@ impl RestClient {
 
     pub async fn modify_stage_instance_typed<B>(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &B,
     ) -> Result<StageInstance, DiscordError>
     where
@@ -86,13 +86,13 @@ impl RestClient {
 
     pub async fn modify_stage_instance_from_request(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &ModifyStageInstance,
     ) -> Result<StageInstance, DiscordError> {
         self.modify_stage_instance_typed(channel_id, body).await
     }
 
-    pub async fn delete_stage_instance(&self, channel_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn delete_stage_instance(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/stage-instances/{}", channel_id),
@@ -113,7 +113,7 @@ impl RestClient {
 
     pub async fn get_guild_voice_regions(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<VoiceRegion>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -125,7 +125,7 @@ impl RestClient {
 
     pub async fn get_current_user_voice_state(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<VoiceState, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -137,8 +137,8 @@ impl RestClient {
 
     pub async fn get_user_voice_state(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<VoiceState, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -150,7 +150,7 @@ impl RestClient {
 
     pub async fn modify_current_user_voice_state<B>(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &B,
     ) -> Result<(), DiscordError>
     where
@@ -166,7 +166,7 @@ impl RestClient {
 
     pub async fn modify_current_user_voice_state_from_request(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &ModifyCurrentUserVoiceState,
     ) -> Result<(), DiscordError> {
         self.modify_current_user_voice_state(guild_id, body).await
@@ -174,8 +174,8 @@ impl RestClient {
 
     pub async fn modify_user_voice_state<B>(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         body: &B,
     ) -> Result<(), DiscordError>
     where
@@ -191,8 +191,8 @@ impl RestClient {
 
     pub async fn modify_user_voice_state_from_request(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         body: &ModifyUserVoiceState,
     ) -> Result<(), DiscordError> {
         self.modify_user_voice_state(guild_id, user_id, body).await

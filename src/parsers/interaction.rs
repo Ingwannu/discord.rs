@@ -2,10 +2,10 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AutocompleteInteraction, ChatInputCommandInteraction, CommandInteractionData,
-    ComponentInteraction, ComponentInteractionData, GenericId, Interaction, InteractionContextData,
-    InteractionResponseState, MessageContextMenuInteraction, ModalSubmitInteraction,
-    PingInteraction, UserContextMenuInteraction,
+    ApplicationId, AutocompleteInteraction, ChannelId, ChatInputCommandInteraction, CommandId,
+    CommandInteractionData, ComponentInteraction, ComponentInteractionData, GuildId, Interaction,
+    InteractionContextData, InteractionId, InteractionResponseState, MessageContextMenuInteraction,
+    ModalSubmitInteraction, PingInteraction, UserContextMenuInteraction, UserId,
 };
 use crate::types::invalid_data_error;
 
@@ -23,7 +23,7 @@ pub enum RawInteraction {
     /// Discord API enum variant `Command`.
     Command {
         /// Command ID (`data.id`) from the raw command payload.
-        id: Option<GenericId>,
+        id: Option<CommandId>,
         /// Command name from the raw command payload.
         name: Option<String>,
         /// Discord command type value.
@@ -34,7 +34,7 @@ pub enum RawInteraction {
     /// Discord API enum variant `Autocomplete`.
     Autocomplete {
         /// Command ID (`data.id`) from the raw autocomplete payload.
-        id: Option<GenericId>,
+        id: Option<CommandId>,
         /// Command name from the raw autocomplete payload.
         name: Option<String>,
         /// Discord command type value.
@@ -63,14 +63,14 @@ pub enum RawInteraction {
 /// The raw-handler context carries no shared response state: helpers that
 /// take its id and token are stateless (see [`crate::helpers`]).
 pub struct InteractionContext {
-    pub id: GenericId,
+    pub id: InteractionId,
     /// Interaction token. Redacted from `Debug` output, including inside
     /// [`Self::raw`].
     pub token: String,
-    pub application_id: GenericId,
-    pub guild_id: Option<GenericId>,
-    pub channel_id: Option<GenericId>,
-    pub user_id: Option<GenericId>,
+    pub application_id: ApplicationId,
+    pub guild_id: Option<GuildId>,
+    pub channel_id: Option<ChannelId>,
+    pub user_id: Option<UserId>,
     /// Full interaction payload as received, including the token.
     pub raw: Value,
 }

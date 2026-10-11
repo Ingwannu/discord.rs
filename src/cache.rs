@@ -7,8 +7,9 @@ use tokio::sync::RwLock;
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, GenericId, Guild, Member, Message, Presence, Role, SoundboardSound, StageInstance,
-    Sticker, User, VoiceState,
+    Channel, ChannelId, EmojiId, Guild, GuildId, Member, Message, MessageId, Presence, Role,
+    RoleId, ScheduledEventId, SoundboardSound, SoundboardSoundId, StageInstance, StageInstanceId,
+    Sticker, StickerId, User, UserId, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -40,7 +41,7 @@ use store::{
 /// invalidation with it. A `shard_count` of zero is treated as one, so the
 /// formula never divides by zero.
 #[cfg(any(feature = "cache", feature = "gateway"))]
-pub(crate) fn shard_for_guild_id(guild_id: GenericId, shard_count: u32) -> u32 {
+pub(crate) fn shard_for_guild_id(guild_id: GuildId, shard_count: u32) -> u32 {
     let shard = (guild_id.get() >> 22) % u64::from(shard_count.max(1));
     // The remainder is below `shard_count`, so the conversion cannot fail.
     u32::try_from(shard).unwrap_or(0)
@@ -202,8 +203,8 @@ impl CacheHandle {
     pub(crate) async fn fenced_upsert_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Member,
     ) {
         let mut store = self.store.write().await;
@@ -216,8 +217,8 @@ impl CacheHandle {
     pub(crate) async fn fenced_remove_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
@@ -237,8 +238,8 @@ impl CacheHandle {
     pub(crate) async fn fenced_remove_message(
         &self,
         epoch: u64,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
@@ -250,8 +251,8 @@ impl CacheHandle {
     pub(crate) async fn fenced_upsert_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: Presence,
     ) {
         let mut store = self.store.write().await;
@@ -264,8 +265,8 @@ impl CacheHandle {
     pub(crate) async fn fenced_remove_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) {
         let mut store = self.store.write().await;
         if Self::epoch_is_current(&store, epoch) {
@@ -295,21 +296,21 @@ impl CacheHandle {
     pub async fn upsert_guild(&self, _guild: Guild) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_guild(&self, guild_id: GenericId) {
+    pub async fn remove_guild(&self, guild_id: GuildId) {
         let mut store = self.store.write().await;
         evict_guild_entries(&mut store, guild_id);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_guild(&self, _guild_id: GenericId) {}
+    pub async fn remove_guild(&self, _guild_id: GuildId) {}
 
     #[cfg(feature = "cache")]
-    pub async fn guild(&self, guild_id: GenericId) -> Option<Guild> {
+    pub async fn guild(&self, guild_id: GuildId) -> Option<Guild> {
         self.store.read().await.guilds.get(&guild_id).cloned()
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn guild(&self, _guild_id: GenericId) -> Option<Guild> {
+    pub async fn guild(&self, _guild_id: GuildId) -> Option<Guild> {
         None
     }
 
@@ -323,7 +324,7 @@ impl CacheHandle {
         Vec::new()
     }
 
-    pub async fn contains_guild(&self, guild_id: GenericId) -> bool {
+    pub async fn contains_guild(&self, guild_id: GuildId) -> bool {
         self.guild(guild_id).await.is_some()
     }
 
@@ -501,7 +502,7 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn apply_members_chunk(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         members: &[Member],
         presences: Option<&[Presence]>,
     ) {
@@ -553,28 +554,28 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn apply_members_chunk(
         &self,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _members: &[Member],
         _presences: Option<&[Presence]>,
     ) {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn remove_channel(&self, channel_id: GenericId) {
+    pub async fn remove_channel(&self, channel_id: ChannelId) {
         let mut store = self.store.write().await;
         evict_channel_entries(&mut store, channel_id);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_channel(&self, _channel_id: GenericId) {}
+    pub async fn remove_channel(&self, _channel_id: ChannelId) {}
 
     #[cfg(not(feature = "cache"))]
-    pub async fn channel(&self, _channel_id: GenericId) -> Option<Channel> {
+    pub async fn channel(&self, _channel_id: ChannelId) -> Option<Channel> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn channel(&self, channel_id: GenericId) -> Option<Channel> {
+    pub async fn channel(&self, channel_id: ChannelId) -> Option<Channel> {
         self.store.read().await.channels.get(&channel_id).cloned()
     }
 
@@ -588,7 +589,7 @@ impl CacheHandle {
         Vec::new()
     }
 
-    pub async fn contains_channel(&self, channel_id: GenericId) -> bool {
+    pub async fn contains_channel(&self, channel_id: ChannelId) -> bool {
         self.channel(channel_id).await.is_some()
     }
 
@@ -608,22 +609,22 @@ impl CacheHandle {
     pub async fn upsert_user(&self, _user: User) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_user(&self, user_id: GenericId) {
+    pub async fn remove_user(&self, user_id: UserId) {
         let mut store = self.store.write().await;
         store.users.remove(&user_id);
         store.user_order.remove(&user_id);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_user(&self, _user_id: GenericId) {}
+    pub async fn remove_user(&self, _user_id: UserId) {}
 
     #[cfg(feature = "cache")]
-    pub async fn user(&self, user_id: GenericId) -> Option<User> {
+    pub async fn user(&self, user_id: UserId) -> Option<User> {
         self.store.read().await.users.get(&user_id).cloned()
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn user(&self, _user_id: GenericId) -> Option<User> {
+    pub async fn user(&self, _user_id: UserId) -> Option<User> {
         None
     }
 
@@ -637,12 +638,12 @@ impl CacheHandle {
         Vec::new()
     }
 
-    pub async fn contains_user(&self, user_id: GenericId) -> bool {
+    pub async fn contains_user(&self, user_id: UserId) -> bool {
         self.user(user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_member(&self, guild_id: GenericId, user_id: GenericId, member: Member) {
+    pub async fn upsert_member(&self, guild_id: GuildId, user_id: UserId, member: Member) {
         let mut store = self.store.write().await;
         self.upsert_member_locked(&mut store, guild_id, user_id, member);
     }
@@ -651,8 +652,8 @@ impl CacheHandle {
     fn upsert_member_locked(
         &self,
         store: &mut CacheStore,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Member,
     ) {
         let now = Instant::now();
@@ -663,32 +664,32 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_member(&self, _guild_id: GenericId, _user_id: GenericId, _member: Member) {}
+    pub async fn upsert_member(&self, _guild_id: GuildId, _user_id: UserId, _member: Member) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_member(&self, guild_id: GenericId, user_id: GenericId) {
+    pub async fn remove_member(&self, guild_id: GuildId, user_id: UserId) {
         let mut store = self.store.write().await;
         let key = (guild_id, user_id);
         remove_member_key(&mut store, key);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_member(&self, _guild_id: GenericId, _user_id: GenericId) {}
+    pub async fn remove_member(&self, _guild_id: GuildId, _user_id: UserId) {}
 
     #[cfg(not(feature = "cache"))]
-    pub async fn member(&self, _guild_id: GenericId, _user_id: GenericId) -> Option<Member> {
+    pub async fn member(&self, _guild_id: GuildId, _user_id: UserId) -> Option<Member> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn member(&self, guild_id: GenericId, user_id: GenericId) -> Option<Member> {
+    pub async fn member(&self, guild_id: GuildId, user_id: UserId) -> Option<Member> {
         self.member_arc(guild_id, user_id)
             .await
             .map(|member| member.as_ref().clone())
     }
 
     #[cfg(feature = "cache")]
-    pub async fn member_arc(&self, guild_id: GenericId, user_id: GenericId) -> Option<Arc<Member>> {
+    pub async fn member_arc(&self, guild_id: GuildId, user_id: UserId) -> Option<Arc<Member>> {
         let key = (guild_id, user_id);
         let now = Instant::now();
         let store = self.store.read().await;
@@ -701,16 +702,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn member_arc(
-        &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
-    ) -> Option<Arc<Member>> {
+    pub async fn member_arc(&self, _guild_id: GuildId, _user_id: UserId) -> Option<Arc<Member>> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn members(&self, guild_id: GenericId) -> Vec<Member> {
+    pub async fn members(&self, guild_id: GuildId) -> Vec<Member> {
         self.members_arc(guild_id)
             .await
             .into_iter()
@@ -719,7 +716,7 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn members_arc(&self, guild_id: GenericId) -> Vec<Arc<Member>> {
+    pub async fn members_arc(&self, guild_id: GuildId) -> Vec<Arc<Member>> {
         let now = Instant::now();
         let store = self.store.read().await;
         store
@@ -736,16 +733,16 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn members_arc(&self, _guild_id: GenericId) -> Vec<Arc<Member>> {
+    pub async fn members_arc(&self, _guild_id: GuildId) -> Vec<Arc<Member>> {
         Vec::new()
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn members(&self, _guild_id: GenericId) -> Vec<Member> {
+    pub async fn members(&self, _guild_id: GuildId) -> Vec<Member> {
         Vec::new()
     }
 
-    pub async fn contains_member(&self, guild_id: GenericId, user_id: GenericId) -> bool {
+    pub async fn contains_member(&self, guild_id: GuildId, user_id: UserId) -> bool {
         self.member(guild_id, user_id).await.is_some()
     }
 
@@ -769,17 +766,17 @@ impl CacheHandle {
     pub async fn upsert_message(&self, _message: Message) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_message(&self, channel_id: GenericId, message_id: GenericId) {
+    pub async fn remove_message(&self, channel_id: ChannelId, message_id: MessageId) {
         let mut store = self.store.write().await;
         let key = (channel_id, message_id);
         remove_message_key(&mut store, key);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_message(&self, _channel_id: GenericId, _message_id: GenericId) {}
+    pub async fn remove_message(&self, _channel_id: ChannelId, _message_id: MessageId) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_messages_bulk(&self, channel_id: GenericId, message_ids: &[GenericId]) {
+    pub async fn remove_messages_bulk(&self, channel_id: ChannelId, message_ids: &[MessageId]) {
         let mut store = self.store.write().await;
         for message_id in message_ids {
             let key = (channel_id, *message_id);
@@ -788,15 +785,15 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_messages_bulk(&self, _channel_id: GenericId, _message_ids: &[GenericId]) {}
+    pub async fn remove_messages_bulk(&self, _channel_id: ChannelId, _message_ids: &[MessageId]) {}
 
     #[cfg(not(feature = "cache"))]
-    pub async fn message(&self, _channel_id: GenericId, _message_id: GenericId) -> Option<Message> {
+    pub async fn message(&self, _channel_id: ChannelId, _message_id: MessageId) -> Option<Message> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn message(&self, channel_id: GenericId, message_id: GenericId) -> Option<Message> {
+    pub async fn message(&self, channel_id: ChannelId, message_id: MessageId) -> Option<Message> {
         self.message_arc(channel_id, message_id)
             .await
             .map(|message| message.as_ref().clone())
@@ -805,8 +802,8 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn message_arc(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Option<Arc<Message>> {
         let key = (channel_id, message_id);
         let now = Instant::now();
@@ -822,14 +819,14 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn message_arc(
         &self,
-        _channel_id: GenericId,
-        _message_id: GenericId,
+        _channel_id: ChannelId,
+        _message_id: MessageId,
     ) -> Option<Arc<Message>> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn messages(&self, channel_id: GenericId) -> Vec<Message> {
+    pub async fn messages(&self, channel_id: ChannelId) -> Vec<Message> {
         self.messages_arc(channel_id)
             .await
             .into_iter()
@@ -838,7 +835,7 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn messages_arc(&self, channel_id: GenericId) -> Vec<Arc<Message>> {
+    pub async fn messages_arc(&self, channel_id: ChannelId) -> Vec<Arc<Message>> {
         let now = Instant::now();
         let store = self.store.read().await;
         store
@@ -855,21 +852,21 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn messages_arc(&self, _channel_id: GenericId) -> Vec<Arc<Message>> {
+    pub async fn messages_arc(&self, _channel_id: ChannelId) -> Vec<Arc<Message>> {
         Vec::new()
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn messages(&self, _channel_id: GenericId) -> Vec<Message> {
+    pub async fn messages(&self, _channel_id: ChannelId) -> Vec<Message> {
         Vec::new()
     }
 
-    pub async fn contains_message(&self, channel_id: GenericId, message_id: GenericId) -> bool {
+    pub async fn contains_message(&self, channel_id: ChannelId, message_id: MessageId) -> bool {
         self.message(channel_id, message_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_role(&self, guild_id: GenericId, role: Role) {
+    pub async fn upsert_role(&self, guild_id: GuildId, role: Role) {
         let mut store = self.store.write().await;
         let key = (guild_id, role.id);
         store.roles.insert(key, role);
@@ -881,10 +878,10 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_role(&self, _guild_id: GenericId, _role: Role) {}
+    pub async fn upsert_role(&self, _guild_id: GuildId, _role: Role) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_role(&self, guild_id: GenericId, role_id: GenericId) {
+    pub async fn remove_role(&self, guild_id: GuildId, role_id: RoleId) {
         let mut store = self.store.write().await;
         let key = (guild_id, role_id);
         store.roles.remove(&key);
@@ -892,15 +889,15 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_role(&self, _guild_id: GenericId, _role_id: GenericId) {}
+    pub async fn remove_role(&self, _guild_id: GuildId, _role_id: RoleId) {}
 
     #[cfg(not(feature = "cache"))]
-    pub async fn roles(&self, _guild_id: GenericId) -> Vec<Role> {
+    pub async fn roles(&self, _guild_id: GuildId) -> Vec<Role> {
         Vec::new()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn roles(&self, guild_id: GenericId) -> Vec<Role> {
+    pub async fn roles(&self, guild_id: GuildId) -> Vec<Role> {
         self.store
             .read()
             .await
@@ -912,7 +909,7 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn role(&self, guild_id: GenericId, role_id: GenericId) -> Option<Role> {
+    pub async fn role(&self, guild_id: GuildId, role_id: RoleId) -> Option<Role> {
         self.store
             .read()
             .await
@@ -922,21 +919,16 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn role(&self, _guild_id: GenericId, _role_id: GenericId) -> Option<Role> {
+    pub async fn role(&self, _guild_id: GuildId, _role_id: RoleId) -> Option<Role> {
         None
     }
 
-    pub async fn contains_role(&self, guild_id: GenericId, role_id: GenericId) -> bool {
+    pub async fn contains_role(&self, guild_id: GuildId, role_id: RoleId) -> bool {
         self.role(guild_id, role_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_presence(
-        &self,
-        guild_id: GenericId,
-        user_id: GenericId,
-        presence: Presence,
-    ) {
+    pub async fn upsert_presence(&self, guild_id: GuildId, user_id: UserId, presence: Presence) {
         let mut store = self.store.write().await;
         self.upsert_presence_locked(&mut store, guild_id, user_id, presence);
     }
@@ -945,8 +937,8 @@ impl CacheHandle {
     fn upsert_presence_locked(
         &self,
         store: &mut CacheStore,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: Presence,
     ) {
         let now = Instant::now();
@@ -967,37 +959,28 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_presence(
-        &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
-        _presence: Presence,
-    ) {
+    pub async fn upsert_presence(&self, _guild_id: GuildId, _user_id: UserId, _presence: Presence) {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn remove_presence(&self, guild_id: GenericId, user_id: GenericId) {
+    pub async fn remove_presence(&self, guild_id: GuildId, user_id: UserId) {
         let mut store = self.store.write().await;
         let key = (guild_id, user_id);
         remove_presence_key(&mut store, key);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_presence(&self, _guild_id: GenericId, _user_id: GenericId) {}
+    pub async fn remove_presence(&self, _guild_id: GuildId, _user_id: UserId) {}
 
     #[cfg(feature = "cache")]
-    pub async fn presence(&self, guild_id: GenericId, user_id: GenericId) -> Option<Presence> {
+    pub async fn presence(&self, guild_id: GuildId, user_id: UserId) -> Option<Presence> {
         self.presence_arc(guild_id, user_id)
             .await
             .map(|presence| presence.as_ref().clone())
     }
 
     #[cfg(feature = "cache")]
-    pub async fn presence_arc(
-        &self,
-        guild_id: GenericId,
-        user_id: GenericId,
-    ) -> Option<Arc<Presence>> {
+    pub async fn presence_arc(&self, guild_id: GuildId, user_id: UserId) -> Option<Arc<Presence>> {
         let key = (guild_id, user_id);
         let now = Instant::now();
         let store = self.store.read().await;
@@ -1012,19 +995,19 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn presence_arc(
         &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
+        _guild_id: GuildId,
+        _user_id: UserId,
     ) -> Option<Arc<Presence>> {
         None
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn presence(&self, _guild_id: GenericId, _user_id: GenericId) -> Option<Presence> {
+    pub async fn presence(&self, _guild_id: GuildId, _user_id: UserId) -> Option<Presence> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn presences(&self, guild_id: GenericId) -> Vec<Presence> {
+    pub async fn presences(&self, guild_id: GuildId) -> Vec<Presence> {
         self.presences_arc(guild_id)
             .await
             .into_iter()
@@ -1033,7 +1016,7 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn presences_arc(&self, guild_id: GenericId) -> Vec<Arc<Presence>> {
+    pub async fn presences_arc(&self, guild_id: GuildId) -> Vec<Arc<Presence>> {
         let now = Instant::now();
         let store = self.store.read().await;
         store
@@ -1050,24 +1033,24 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn presences_arc(&self, _guild_id: GenericId) -> Vec<Arc<Presence>> {
+    pub async fn presences_arc(&self, _guild_id: GuildId) -> Vec<Arc<Presence>> {
         Vec::new()
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn presences(&self, _guild_id: GenericId) -> Vec<Presence> {
+    pub async fn presences(&self, _guild_id: GuildId) -> Vec<Presence> {
         Vec::new()
     }
 
-    pub async fn contains_presence(&self, guild_id: GenericId, user_id: GenericId) -> bool {
+    pub async fn contains_presence(&self, guild_id: GuildId, user_id: UserId) -> bool {
         self.presence(guild_id, user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
     pub async fn upsert_voice_state(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         voice_state: VoiceState,
     ) {
         let mut store = self.store.write().await;
@@ -1087,14 +1070,14 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn upsert_voice_state(
         &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
+        _guild_id: GuildId,
+        _user_id: UserId,
         _voice_state: VoiceState,
     ) {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn remove_voice_state(&self, guild_id: GenericId, user_id: GenericId) {
+    pub async fn remove_voice_state(&self, guild_id: GuildId, user_id: UserId) {
         let mut store = self.store.write().await;
         let key = (guild_id, user_id);
         store.voice_states.remove(&key);
@@ -1102,10 +1085,10 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_voice_state(&self, _guild_id: GenericId, _user_id: GenericId) {}
+    pub async fn remove_voice_state(&self, _guild_id: GuildId, _user_id: UserId) {}
 
     #[cfg(feature = "cache")]
-    pub async fn voice_state(&self, guild_id: GenericId, user_id: GenericId) -> Option<VoiceState> {
+    pub async fn voice_state(&self, guild_id: GuildId, user_id: UserId) -> Option<VoiceState> {
         self.store
             .read()
             .await
@@ -1115,16 +1098,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn voice_state(
-        &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
-    ) -> Option<VoiceState> {
+    pub async fn voice_state(&self, _guild_id: GuildId, _user_id: UserId) -> Option<VoiceState> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn voice_states(&self, guild_id: GenericId) -> Vec<VoiceState> {
+    pub async fn voice_states(&self, guild_id: GuildId) -> Vec<VoiceState> {
         self.store
             .read()
             .await
@@ -1136,16 +1115,16 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn voice_states(&self, _guild_id: GenericId) -> Vec<VoiceState> {
+    pub async fn voice_states(&self, _guild_id: GuildId) -> Vec<VoiceState> {
         Vec::new()
     }
 
-    pub async fn contains_voice_state(&self, guild_id: GenericId, user_id: GenericId) -> bool {
+    pub async fn contains_voice_state(&self, guild_id: GuildId, user_id: UserId) -> bool {
         self.voice_state(guild_id, user_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_soundboard_sound(&self, guild_id: GenericId, sound: SoundboardSound) {
+    pub async fn upsert_soundboard_sound(&self, guild_id: GuildId, sound: SoundboardSound) {
         let mut store = self.store.write().await;
         let key = (guild_id, sound.sound_id);
         store.soundboard_sounds.insert(key, sound);
@@ -1161,14 +1140,10 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_soundboard_sound(&self, _guild_id: GenericId, _sound: SoundboardSound) {}
+    pub async fn upsert_soundboard_sound(&self, _guild_id: GuildId, _sound: SoundboardSound) {}
 
     #[cfg(feature = "cache")]
-    pub async fn replace_soundboard_sounds(
-        &self,
-        guild_id: GenericId,
-        sounds: Vec<SoundboardSound>,
-    ) {
+    pub async fn replace_soundboard_sounds(&self, guild_id: GuildId, sounds: Vec<SoundboardSound>) {
         let mut store = self.store.write().await;
         store
             .soundboard_sounds
@@ -1194,13 +1169,13 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn replace_soundboard_sounds(
         &self,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
         _sounds: Vec<SoundboardSound>,
     ) {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn remove_soundboard_sound(&self, guild_id: GenericId, sound_id: GenericId) {
+    pub async fn remove_soundboard_sound(&self, guild_id: GuildId, sound_id: SoundboardSoundId) {
         let mut store = self.store.write().await;
         let key = (guild_id, sound_id);
         store.soundboard_sounds.remove(&key);
@@ -1208,13 +1183,13 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_soundboard_sound(&self, _guild_id: GenericId, _sound_id: GenericId) {}
+    pub async fn remove_soundboard_sound(&self, _guild_id: GuildId, _sound_id: SoundboardSoundId) {}
 
     #[cfg(feature = "cache")]
     pub async fn soundboard_sound(
         &self,
-        guild_id: GenericId,
-        sound_id: GenericId,
+        guild_id: GuildId,
+        sound_id: SoundboardSoundId,
     ) -> Option<SoundboardSound> {
         self.store
             .read()
@@ -1227,14 +1202,14 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn soundboard_sound(
         &self,
-        _guild_id: GenericId,
-        _sound_id: GenericId,
+        _guild_id: GuildId,
+        _sound_id: SoundboardSoundId,
     ) -> Option<SoundboardSound> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn soundboard_sounds(&self, guild_id: GenericId) -> Vec<SoundboardSound> {
+    pub async fn soundboard_sounds(&self, guild_id: GuildId) -> Vec<SoundboardSound> {
         self.store
             .read()
             .await
@@ -1246,20 +1221,20 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn soundboard_sounds(&self, _guild_id: GenericId) -> Vec<SoundboardSound> {
+    pub async fn soundboard_sounds(&self, _guild_id: GuildId) -> Vec<SoundboardSound> {
         Vec::new()
     }
 
     pub async fn contains_soundboard_sound(
         &self,
-        guild_id: GenericId,
-        sound_id: GenericId,
+        guild_id: GuildId,
+        sound_id: SoundboardSoundId,
     ) -> bool {
         self.soundboard_sound(guild_id, sound_id).await.is_some()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn replace_emojis(&self, guild_id: GenericId, emojis: Vec<Emoji>) {
+    pub async fn replace_emojis(&self, guild_id: GuildId, emojis: Vec<Emoji>) {
         if !self.config.cache_emojis {
             return;
         }
@@ -1284,10 +1259,10 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn replace_emojis(&self, _guild_id: GenericId, _emojis: Vec<Emoji>) {}
+    pub async fn replace_emojis(&self, _guild_id: GuildId, _emojis: Vec<Emoji>) {}
 
     #[cfg(feature = "cache")]
-    pub async fn emoji(&self, guild_id: GenericId, emoji_id: GenericId) -> Option<Emoji> {
+    pub async fn emoji(&self, guild_id: GuildId, emoji_id: EmojiId) -> Option<Emoji> {
         self.store
             .read()
             .await
@@ -1297,12 +1272,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn emoji(&self, _guild_id: GenericId, _emoji_id: GenericId) -> Option<Emoji> {
+    pub async fn emoji(&self, _guild_id: GuildId, _emoji_id: EmojiId) -> Option<Emoji> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn emojis(&self, guild_id: GenericId) -> Vec<Emoji> {
+    pub async fn emojis(&self, guild_id: GuildId) -> Vec<Emoji> {
         self.store
             .read()
             .await
@@ -1314,12 +1289,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn emojis(&self, _guild_id: GenericId) -> Vec<Emoji> {
+    pub async fn emojis(&self, _guild_id: GuildId) -> Vec<Emoji> {
         Vec::new()
     }
 
     #[cfg(feature = "cache")]
-    pub async fn replace_stickers(&self, guild_id: GenericId, stickers: Vec<Sticker>) {
+    pub async fn replace_stickers(&self, guild_id: GuildId, stickers: Vec<Sticker>) {
         if !self.config.cache_stickers {
             return;
         }
@@ -1342,10 +1317,10 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn replace_stickers(&self, _guild_id: GenericId, _stickers: Vec<Sticker>) {}
+    pub async fn replace_stickers(&self, _guild_id: GuildId, _stickers: Vec<Sticker>) {}
 
     #[cfg(feature = "cache")]
-    pub async fn sticker(&self, guild_id: GenericId, sticker_id: GenericId) -> Option<Sticker> {
+    pub async fn sticker(&self, guild_id: GuildId, sticker_id: StickerId) -> Option<Sticker> {
         self.store
             .read()
             .await
@@ -1355,12 +1330,12 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn sticker(&self, _guild_id: GenericId, _sticker_id: GenericId) -> Option<Sticker> {
+    pub async fn sticker(&self, _guild_id: GuildId, _sticker_id: StickerId) -> Option<Sticker> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn stickers(&self, guild_id: GenericId) -> Vec<Sticker> {
+    pub async fn stickers(&self, guild_id: GuildId) -> Vec<Sticker> {
         self.store
             .read()
             .await
@@ -1372,7 +1347,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn stickers(&self, _guild_id: GenericId) -> Vec<Sticker> {
+    pub async fn stickers(&self, _guild_id: GuildId) -> Vec<Sticker> {
         Vec::new()
     }
 
@@ -1402,7 +1377,7 @@ impl CacheHandle {
     pub async fn upsert_scheduled_event(&self, _event: ScheduledEvent) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_scheduled_event(&self, guild_id: GenericId, event_id: GenericId) {
+    pub async fn remove_scheduled_event(&self, guild_id: GuildId, event_id: ScheduledEventId) {
         let mut store = self.store.write().await;
         let key = (guild_id, event_id);
         store.scheduled_events.remove(&key);
@@ -1410,13 +1385,13 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_scheduled_event(&self, _guild_id: GenericId, _event_id: GenericId) {}
+    pub async fn remove_scheduled_event(&self, _guild_id: GuildId, _event_id: ScheduledEventId) {}
 
     #[cfg(feature = "cache")]
     pub async fn scheduled_event(
         &self,
-        guild_id: GenericId,
-        event_id: GenericId,
+        guild_id: GuildId,
+        event_id: ScheduledEventId,
     ) -> Option<ScheduledEvent> {
         self.store
             .read()
@@ -1429,14 +1404,14 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn scheduled_event(
         &self,
-        _guild_id: GenericId,
-        _event_id: GenericId,
+        _guild_id: GuildId,
+        _event_id: ScheduledEventId,
     ) -> Option<ScheduledEvent> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn scheduled_events(&self, guild_id: GenericId) -> Vec<ScheduledEvent> {
+    pub async fn scheduled_events(&self, guild_id: GuildId) -> Vec<ScheduledEvent> {
         self.store
             .read()
             .await
@@ -1448,7 +1423,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn scheduled_events(&self, _guild_id: GenericId) -> Vec<ScheduledEvent> {
+    pub async fn scheduled_events(&self, _guild_id: GuildId) -> Vec<ScheduledEvent> {
         Vec::new()
     }
 
@@ -1475,7 +1450,11 @@ impl CacheHandle {
     pub async fn upsert_stage_instance(&self, _stage_instance: StageInstance) {}
 
     #[cfg(feature = "cache")]
-    pub async fn remove_stage_instance(&self, guild_id: GenericId, stage_instance_id: GenericId) {
+    pub async fn remove_stage_instance(
+        &self,
+        guild_id: GuildId,
+        stage_instance_id: StageInstanceId,
+    ) {
         let mut store = self.store.write().await;
         let key = (guild_id, stage_instance_id);
         store.stage_instances.remove(&key);
@@ -1483,14 +1462,18 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn remove_stage_instance(&self, _guild_id: GenericId, _stage_instance_id: GenericId) {
+    pub async fn remove_stage_instance(
+        &self,
+        _guild_id: GuildId,
+        _stage_instance_id: StageInstanceId,
+    ) {
     }
 
     #[cfg(feature = "cache")]
     pub async fn stage_instance(
         &self,
-        guild_id: GenericId,
-        stage_instance_id: GenericId,
+        guild_id: GuildId,
+        stage_instance_id: StageInstanceId,
     ) -> Option<StageInstance> {
         self.store
             .read()
@@ -1503,14 +1486,14 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn stage_instance(
         &self,
-        _guild_id: GenericId,
-        _stage_instance_id: GenericId,
+        _guild_id: GuildId,
+        _stage_instance_id: StageInstanceId,
     ) -> Option<StageInstance> {
         None
     }
 
     #[cfg(feature = "cache")]
-    pub async fn stage_instances(&self, guild_id: GenericId) -> Vec<StageInstance> {
+    pub async fn stage_instances(&self, guild_id: GuildId) -> Vec<StageInstance> {
         self.store
             .read()
             .await
@@ -1522,7 +1505,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn stage_instances(&self, _guild_id: GenericId) -> Vec<StageInstance> {
+    pub async fn stage_instances(&self, _guild_id: GuildId) -> Vec<StageInstance> {
         Vec::new()
     }
 }
@@ -1536,6 +1519,7 @@ pub use managers::{
 #[cfg(all(test, feature = "cache"))]
 mod tests {
     use crate::model::test_id;
+    use crate::model::{ChannelId, GuildId, MessageId, UserId};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1543,8 +1527,8 @@ mod tests {
     #[cfg(feature = "gateway")]
     use crate::manager::CachedManager;
     use crate::model::{
-        Channel, GenericId, Guild, Message, Presence, Role, SoundboardSound, StageInstance,
-        Sticker, User, VoiceState,
+        Channel, Guild, Message, Presence, Role, SoundboardSound, StageInstance, Sticker, User,
+        VoiceState,
     };
     use crate::types::Emoji;
 
@@ -1563,8 +1547,7 @@ mod tests {
 
     /// Fills every guild-scoped store for `guild_id`, using IDs derived from
     /// `base` so several guilds can coexist.
-    async fn populate_guild_entries(cache: &CacheHandle, guild_id: GenericId, base: u64) {
-        let id = |offset: u64| test_id(base + offset);
+    async fn populate_guild_entries(cache: &CacheHandle, guild_id: GuildId, base: u64) {
         cache
             .upsert_guild(Guild {
                 id: guild_id,
@@ -1574,7 +1557,7 @@ mod tests {
             .await;
         cache
             .upsert_channel(Channel {
-                id: id(1),
+                id: test_id(base + 1),
                 guild_id: Some(guild_id),
                 ..Channel::fixture()
             })
@@ -1583,14 +1566,14 @@ mod tests {
         // ties this one to the guild.
         cache
             .upsert_message(Message {
-                id: id(2),
-                channel_id: id(1),
+                id: test_id(base + 2),
+                channel_id: test_id(base + 1),
                 ..Message::fixture()
             })
             .await;
         cache
             .upsert_user(User {
-                id: id(3),
+                id: test_id(base + 3),
                 username: format!("user-{base}"),
                 ..User::fixture()
             })
@@ -1598,10 +1581,10 @@ mod tests {
         cache
             .upsert_member(
                 guild_id,
-                id(3),
+                test_id(base + 3),
                 crate::model::Member {
                     user: Some(User {
-                        id: id(3),
+                        id: test_id(base + 3),
                         ..User::fixture()
                     }),
                     ..crate::model::Member::default()
@@ -1612,7 +1595,7 @@ mod tests {
             .upsert_role(
                 guild_id,
                 Role {
-                    id: id(4),
+                    id: test_id(base + 4),
                     ..Role::fixture()
                 },
             )
@@ -1620,9 +1603,9 @@ mod tests {
         cache
             .upsert_presence(
                 guild_id,
-                id(3),
+                test_id(base + 3),
                 Presence {
-                    user_id: Some(id(3)),
+                    user_id: Some(test_id(base + 3)),
                     ..Presence::default()
                 },
             )
@@ -1630,11 +1613,11 @@ mod tests {
         cache
             .upsert_voice_state(
                 guild_id,
-                id(3),
+                test_id(base + 3),
                 VoiceState {
                     guild_id: Some(guild_id),
-                    channel_id: Some(id(1)),
-                    user_id: Some(id(3)),
+                    channel_id: Some(test_id(base + 1)),
+                    user_id: Some(test_id(base + 3)),
                     ..VoiceState::default()
                 },
             )
@@ -1643,7 +1626,7 @@ mod tests {
             .upsert_soundboard_sound(
                 guild_id,
                 SoundboardSound {
-                    sound_id: id(5),
+                    sound_id: test_id(base + 5),
                     ..SoundboardSound::fixture()
                 },
             )
@@ -1652,7 +1635,7 @@ mod tests {
             .replace_emojis(
                 guild_id,
                 vec![Emoji {
-                    id: Some(id(6)),
+                    id: Some(test_id(base + 6)),
                     ..Emoji::default()
                 }],
             )
@@ -1661,23 +1644,23 @@ mod tests {
             .replace_stickers(
                 guild_id,
                 vec![Sticker {
-                    id: id(7),
+                    id: test_id(base + 7),
                     ..Sticker::fixture()
                 }],
             )
             .await;
         cache
             .upsert_scheduled_event(ScheduledEvent {
-                id: Some(id(8)),
+                id: Some(test_id(base + 8)),
                 guild_id: Some(guild_id),
                 ..ScheduledEvent::default()
             })
             .await;
         cache
             .upsert_stage_instance(StageInstance {
-                id: id(9),
+                id: test_id(base + 9),
                 guild_id,
-                channel_id: id(1),
+                channel_id: test_id(base + 1),
                 ..StageInstance::fixture()
             })
             .await;
@@ -1685,8 +1668,8 @@ mod tests {
         // the guild by its guild_id.
         cache
             .upsert_message(Message {
-                id: id(11),
-                channel_id: id(10),
+                id: test_id(base + 11),
+                channel_id: test_id(base + 10),
                 guild_id: Some(guild_id),
                 ..Message::fixture()
             })
@@ -1697,42 +1680,74 @@ mod tests {
     /// (except the global user) is still cached.
     async fn assert_guild_entries(
         cache: &CacheHandle,
-        guild_id: GenericId,
+        guild_id: GuildId,
         base: u64,
         present: bool,
     ) {
-        let id = |offset: u64| test_id(base + offset);
         let found = [
             ("guild", cache.guild(guild_id).await.is_some()),
-            ("channel", cache.channel(id(1)).await.is_some()),
+            ("channel", cache.channel(test_id(base + 1)).await.is_some()),
             (
                 "channel message",
-                cache.message(id(1), id(2)).await.is_some(),
+                cache
+                    .message(test_id(base + 1), test_id(base + 2))
+                    .await
+                    .is_some(),
             ),
-            ("member", cache.member(guild_id, id(3)).await.is_some()),
-            ("role", cache.role(guild_id, id(4)).await.is_some()),
-            ("presence", cache.presence(guild_id, id(3)).await.is_some()),
+            (
+                "member",
+                cache.member(guild_id, test_id(base + 3)).await.is_some(),
+            ),
+            (
+                "role",
+                cache.role(guild_id, test_id(base + 4)).await.is_some(),
+            ),
+            (
+                "presence",
+                cache.presence(guild_id, test_id(base + 3)).await.is_some(),
+            ),
             (
                 "voice state",
-                cache.voice_state(guild_id, id(3)).await.is_some(),
+                cache
+                    .voice_state(guild_id, test_id(base + 3))
+                    .await
+                    .is_some(),
             ),
             (
                 "soundboard sound",
-                cache.soundboard_sound(guild_id, id(5)).await.is_some(),
+                cache
+                    .soundboard_sound(guild_id, test_id(base + 5))
+                    .await
+                    .is_some(),
             ),
-            ("emoji", cache.emoji(guild_id, id(6)).await.is_some()),
-            ("sticker", cache.sticker(guild_id, id(7)).await.is_some()),
+            (
+                "emoji",
+                cache.emoji(guild_id, test_id(base + 6)).await.is_some(),
+            ),
+            (
+                "sticker",
+                cache.sticker(guild_id, test_id(base + 7)).await.is_some(),
+            ),
             (
                 "scheduled event",
-                cache.scheduled_event(guild_id, id(8)).await.is_some(),
+                cache
+                    .scheduled_event(guild_id, test_id(base + 8))
+                    .await
+                    .is_some(),
             ),
             (
                 "stage instance",
-                cache.stage_instance(guild_id, id(9)).await.is_some(),
+                cache
+                    .stage_instance(guild_id, test_id(base + 9))
+                    .await
+                    .is_some(),
             ),
             (
                 "guild message",
-                cache.message(id(10), id(11)).await.is_some(),
+                cache
+                    .message(test_id(base + 10), test_id(base + 11))
+                    .await
+                    .is_some(),
             ),
         ];
         for (entry, is_cached) in found {
@@ -2663,10 +2678,10 @@ mod tests {
         async fn exercise_backend<B: CacheBackend + ?Sized>(
             backend: &B,
             epoch: u64,
-            guild_id: GenericId,
-            channel_id: GenericId,
-            user_id: GenericId,
-            message_id: GenericId,
+            guild_id: GuildId,
+            channel_id: ChannelId,
+            user_id: UserId,
+            message_id: MessageId,
         ) {
             backend
                 .put_member(
@@ -2806,10 +2821,10 @@ mod tests {
                     .presence_ttl(Duration::from_millis(1))
                     .member_ttl(Duration::from_millis(1)),
             );
-            let guild_id: GenericId = format!("1{suffix}").parse().unwrap();
-            let channel_id: GenericId = format!("10{suffix}").parse().unwrap();
-            let user_id: GenericId = format!("20{suffix}").parse().unwrap();
-            let message_id: GenericId = format!("30{suffix}").parse().unwrap();
+            let guild_id: GuildId = format!("1{suffix}").parse().unwrap();
+            let channel_id: ChannelId = format!("10{suffix}").parse().unwrap();
+            let user_id: UserId = format!("20{suffix}").parse().unwrap();
+            let message_id: MessageId = format!("30{suffix}").parse().unwrap();
 
             cache
                 .upsert_message(Message {
@@ -2886,7 +2901,7 @@ mod tests {
         let guild_a = test_id(1);
         let guild_b = test_id(2);
 
-        let upsert = |guild: GenericId, id: u64| {
+        let upsert = |guild: GuildId, id: u64| {
             let cache = cache.clone();
             let user_id = test_id(id);
             async move {
@@ -3455,7 +3470,7 @@ mod tests {
     #[tokio::test]
     async fn managers_return_cached_values_without_hitting_http() {
         let cache = CacheHandle::new();
-        let http = Arc::new(DiscordHttpClient::new("token", 1));
+        let http = Arc::new(DiscordHttpClient::new("token", Some(test_id(1))));
         let guild_id = test_id(100);
         let channel_id = test_id(200);
         let user_id = test_id(300);
@@ -3605,7 +3620,7 @@ mod tests {
     #[tokio::test]
     async fn cached_manager_trait_impls_delegate_to_cache_for_hits() {
         let cache = CacheHandle::new();
-        let http = Arc::new(DiscordHttpClient::new("token", 1));
+        let http = Arc::new(DiscordHttpClient::new("token", Some(test_id(1))));
         let guild_id = test_id(701);
         let channel_id = test_id(702);
         let user_id = test_id(703);

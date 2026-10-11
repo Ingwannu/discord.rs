@@ -4,13 +4,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Channel, GenericId, User};
+use super::{ApplicationId, Channel, ChannelId, LobbyId, MessageId, User, UserId};
 
 /// Lobby member object used by Discord's Lobby resource.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LobbyMember {
     /// User ID of the lobby member.
-    pub id: GenericId,
+    pub id: UserId,
     /// App-defined member metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -21,7 +21,7 @@ pub struct LobbyMember {
 
 impl LobbyMember {
     /// Member `id` with no metadata or flags.
-    pub fn new(id: GenericId) -> Self {
+    pub fn new(id: UserId) -> Self {
         Self {
             id,
             metadata: None,
@@ -34,9 +34,9 @@ impl LobbyMember {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Lobby {
     /// Lobby ID.
-    pub id: GenericId,
+    pub id: LobbyId,
     /// Application that owns the lobby.
-    pub application_id: GenericId,
+    pub application_id: ApplicationId,
     /// App-defined lobby metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -131,16 +131,16 @@ pub struct LobbyMessageMember {
 /// Message sent in a lobby.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LobbyMessage {
-    pub id: GenericId,
+    pub id: MessageId,
     /// Message type.
     #[serde(rename = "type", default)]
     pub kind: u8,
     #[serde(default)]
     pub content: String,
-    pub lobby_id: GenericId,
+    pub lobby_id: LobbyId,
     /// Equal to `lobby_id`; present for compatibility with message APIs.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,7 +152,7 @@ pub struct LobbyMessage {
     #[serde(default)]
     pub flags: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
 }
 
 /// Single-use, one-hour guild invite to a lobby's linked channel.
@@ -165,7 +165,7 @@ pub struct LobbyInvite {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LobbyMemberUpdate {
     /// User ID to add, update, or remove.
-    pub id: GenericId,
+    pub id: UserId,
     /// App-defined member metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<HashMap<String, String>>,
@@ -179,7 +179,7 @@ pub struct LobbyMemberUpdate {
 
 impl LobbyMemberUpdate {
     /// Update for member `id` that changes nothing until a field is set.
-    pub fn new(id: GenericId) -> Self {
+    pub fn new(id: UserId) -> Self {
         Self {
             id,
             metadata: None,
@@ -194,5 +194,5 @@ impl LobbyMemberUpdate {
 pub struct LinkLobbyChannel {
     /// Channel to link. Omit this field to unlink any currently linked channel.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
 }

@@ -8,14 +8,14 @@ use super::paths::{
 use super::{FileAttachment, RestClient};
 use crate::error::DiscordError;
 use crate::model::{
-    CreateMessage, CreateWebhook, GenericId, Message, ModifyWebhook, ModifyWebhookWithToken,
-    Webhook, WebhookExecuteQuery, WebhookMessageQuery,
+    ChannelId, CreateMessage, CreateWebhook, GuildId, Message, ModifyWebhook,
+    ModifyWebhookWithToken, Webhook, WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
 };
 
 impl RestClient {
     pub async fn create_webhook(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.create_webhook_raw(channel_id, body).await
@@ -23,7 +23,7 @@ impl RestClient {
 
     pub async fn create_webhook_typed<B>(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &B,
     ) -> Result<Webhook, DiscordError>
     where
@@ -39,7 +39,7 @@ impl RestClient {
 
     pub async fn create_webhook_from_request(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &CreateWebhook,
     ) -> Result<Webhook, DiscordError> {
         self.create_webhook_typed(channel_id, body).await
@@ -47,7 +47,7 @@ impl RestClient {
 
     pub async fn create_webhook_raw(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
@@ -60,14 +60,14 @@ impl RestClient {
 
     pub async fn get_channel_webhooks(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Value>, DiscordError> {
         self.get_channel_webhooks_raw(channel_id).await
     }
 
     pub async fn get_channel_webhooks_typed(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Webhook>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -79,7 +79,7 @@ impl RestClient {
 
     pub async fn get_channel_webhooks_raw(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Value>, DiscordError> {
         let response = self
             .request(
@@ -96,7 +96,7 @@ impl RestClient {
 
     pub async fn execute_webhook(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         body: &Value,
     ) -> Result<Value, DiscordError> {
@@ -107,7 +107,7 @@ impl RestClient {
 
     pub async fn execute_webhook_with_query(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
@@ -118,7 +118,7 @@ impl RestClient {
 
     pub async fn execute_slack_compatible_webhook(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
@@ -129,7 +129,7 @@ impl RestClient {
 
     pub async fn execute_github_compatible_webhook(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         query: &WebhookExecuteQuery,
         body: &Value,
@@ -140,7 +140,7 @@ impl RestClient {
 
     pub async fn execute_webhook_with_files(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         body: &Value,
         files: &[FileAttachment],
@@ -152,7 +152,7 @@ impl RestClient {
 
     pub async fn get_webhook_message(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
     ) -> Result<Message, DiscordError> {
@@ -163,7 +163,7 @@ impl RestClient {
 
     pub async fn get_webhook_message_with_query(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
@@ -175,7 +175,7 @@ impl RestClient {
 
     pub async fn edit_webhook_message(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         body: &CreateMessage,
@@ -186,7 +186,7 @@ impl RestClient {
 
     pub async fn edit_webhook_message_with_query(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
@@ -198,7 +198,7 @@ impl RestClient {
 
     pub async fn edit_webhook_message_with_files(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         body: &CreateMessage,
@@ -211,7 +211,7 @@ impl RestClient {
 
     pub async fn edit_webhook_message_with_files_and_query(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
@@ -225,7 +225,7 @@ impl RestClient {
 
     pub async fn delete_webhook_message(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
     ) -> Result<(), DiscordError> {
@@ -236,7 +236,7 @@ impl RestClient {
 
     pub async fn delete_webhook_message_with_query(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
@@ -248,7 +248,7 @@ impl RestClient {
 
     pub async fn get_guild_webhooks(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<Webhook>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -258,7 +258,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_webhook(&self, webhook_id: GenericId) -> Result<Webhook, DiscordError> {
+    pub async fn get_webhook(&self, webhook_id: WebhookId) -> Result<Webhook, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/webhooks/{}", webhook_id),
@@ -269,7 +269,7 @@ impl RestClient {
 
     pub async fn get_webhook_with_token(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
@@ -283,7 +283,7 @@ impl RestClient {
 
     pub async fn modify_webhook(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         body: &Value,
     ) -> Result<Webhook, DiscordError> {
         self.request_typed(
@@ -296,7 +296,7 @@ impl RestClient {
 
     pub async fn modify_webhook_typed<B>(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         body: &B,
     ) -> Result<Webhook, DiscordError>
     where
@@ -312,13 +312,13 @@ impl RestClient {
 
     pub async fn modify_webhook_from_request(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         body: &ModifyWebhook,
     ) -> Result<Webhook, DiscordError> {
         self.modify_webhook_typed(webhook_id, body).await
     }
 
-    pub async fn delete_webhook(&self, webhook_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn delete_webhook(&self, webhook_id: WebhookId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/webhooks/{}", webhook_id),
@@ -329,7 +329,7 @@ impl RestClient {
 
     pub async fn modify_webhook_with_token(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         body: &Value,
     ) -> Result<Webhook, DiscordError> {
@@ -340,7 +340,7 @@ impl RestClient {
 
     pub async fn modify_webhook_with_token_typed<B>(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         body: &B,
     ) -> Result<Webhook, DiscordError>
@@ -354,7 +354,7 @@ impl RestClient {
 
     pub async fn modify_webhook_with_token_from_request(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
         body: &ModifyWebhookWithToken,
     ) -> Result<Webhook, DiscordError> {
@@ -364,7 +364,7 @@ impl RestClient {
 
     pub async fn delete_webhook_with_token(
         &self,
-        webhook_id: GenericId,
+        webhook_id: WebhookId,
         token: &str,
     ) -> Result<(), DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;

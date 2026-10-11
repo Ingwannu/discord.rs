@@ -6,7 +6,7 @@ use reqwest::{Client, Proxy};
 use tracing::warn;
 
 use crate::error::DiscordError;
-use crate::model::AllowedMentions;
+use crate::model::{AllowedMentions, ApplicationId};
 use crate::types::invalid_data_error;
 
 use super::rate_limit::RateLimitState;
@@ -61,7 +61,7 @@ pub type RateLimitCallback = Arc<dyn Fn(RateLimitInfo) + Send + Sync>;
 /// [`RestClient::new`] keeps the previous zero-configuration behavior.
 pub struct RestClientBuilder {
     token: String,
-    application_id: u64,
+    application_id: Option<ApplicationId>,
     api_base: Option<String>,
     api_version: Option<u8>,
     connect_timeout: Option<Duration>,
@@ -75,7 +75,7 @@ pub struct RestClientBuilder {
 }
 
 impl RestClientBuilder {
-    pub(super) fn new(token: impl Into<String>, application_id: u64) -> Self {
+    pub(super) fn new(token: impl Into<String>, application_id: Option<ApplicationId>) -> Self {
         Self {
             token: token.into(),
             application_id,
@@ -226,7 +226,9 @@ impl RestClientBuilder {
         Ok(RestClient {
             client,
             token: self.token,
-            application_id: Arc::new(AtomicU64::new(self.application_id)),
+            application_id: Arc::new(AtomicU64::new(super::application_id_raw(
+                self.application_id,
+            ))),
             rate_limits: Arc::new(RateLimitState::default()),
             route_gates: Arc::new(RateLimitRouteGates::default()),
             audit_log_reason: None,

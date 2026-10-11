@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{Application, Channel, Entitlement, GenericId, Guild, User};
+use crate::model::{
+    Application, ApplicationId, Channel, ChannelId, Entitlement, Guild, Id, IdMarker, LobbyId,
+    MessageId, User, UserId,
+};
 use crate::types::invalid_data_error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,7 +24,7 @@ impl WebhookPayloadType {
 /// Typed Discord API object for `WebhookEventPayload`.
 pub struct WebhookEventPayload {
     pub version: u8,
-    pub application_id: GenericId,
+    pub application_id: ApplicationId,
     pub kind: WebhookPayloadType,
     pub event: Option<WebhookEventBody>,
     pub raw: Value,
@@ -92,21 +95,21 @@ pub struct ApplicationDeauthorizedWebhookEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookSocialMessage`.
 pub struct WebhookSocialMessage {
-    pub id: GenericId,
+    pub id: MessageId,
     pub kind: Option<u8>,
     pub content: Option<String>,
-    pub lobby_id: Option<GenericId>,
-    pub channel_id: GenericId,
+    pub lobby_id: Option<LobbyId>,
+    pub channel_id: ChannelId,
     pub author: Option<User>,
     pub metadata: Option<HashMap<String, String>>,
     pub flags: Option<u64>,
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
     pub timestamp: Option<String>,
     pub edited_timestamp: Option<String>,
     pub attachments: Vec<Value>,
     pub components: Vec<Value>,
     pub channel: Option<Channel>,
-    pub recipient_id: Option<GenericId>,
+    pub recipient_id: Option<UserId>,
     pub activity: Option<Value>,
     pub application: Option<Application>,
     pub raw: Value,
@@ -115,8 +118,8 @@ pub struct WebhookSocialMessage {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookDeletedMessage`.
 pub struct WebhookDeletedMessage {
-    pub id: GenericId,
-    pub lobby_id: Option<GenericId>,
+    pub id: MessageId,
+    pub lobby_id: Option<LobbyId>,
     pub raw: Value,
 }
 
@@ -302,11 +305,14 @@ where
     }
 }
 
-fn required_snowflake(data: &Value, field: &str) -> Result<GenericId, DiscordError> {
+fn required_snowflake<M: IdMarker>(data: &Value, field: &str) -> Result<Id<M>, DiscordError> {
     from_field(data, field)
 }
 
-fn optional_snowflake(data: &Value, field: &str) -> Result<Option<GenericId>, DiscordError> {
+fn optional_snowflake<M: IdMarker>(
+    data: &Value,
+    field: &str,
+) -> Result<Option<Id<M>>, DiscordError> {
     optional_from_field(data, field)
 }
 

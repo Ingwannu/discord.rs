@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, User, WidgetUserId};
+use super::{
+    ApplicationId, ChannelId, EmojiId, GuildId, IntegrationId, RoleId, User, UserId, WidgetUserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `VanityUrl`.
@@ -35,7 +37,7 @@ pub struct BeginGuildPruneRequest {
     pub compute_prune_count: Option<bool>,
     /// Role IDs to include in the prune.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_roles: Option<Vec<GenericId>>,
+    pub include_roles: Option<Vec<RoleId>>,
     /// Deprecated Discord field for audit-log prune reason.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -51,7 +53,7 @@ pub struct IntegrationAccount {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `IntegrationApplication`.
 pub struct IntegrationApplication {
-    pub id: GenericId,
+    pub id: ApplicationId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
@@ -64,7 +66,7 @@ pub struct IntegrationApplication {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Integration`.
 pub struct Integration {
-    pub id: GenericId,
+    pub id: IntegrationId,
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
@@ -73,7 +75,7 @@ pub struct Integration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub syncing: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_id: Option<GenericId>,
+    pub role_id: Option<RoleId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_emoticons: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,7 +102,7 @@ pub struct Integration {
 pub struct GuildWidgetSettings {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
 }
 
 /// Request body for modifying guild widget settings.
@@ -109,13 +111,13 @@ pub struct ModifyGuildWidgetSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Option<GenericId>>,
+    pub channel_id: Option<Option<ChannelId>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildWidgetChannel`.
 pub struct GuildWidgetChannel {
-    pub id: GenericId,
+    pub id: ChannelId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<i64>,
@@ -141,7 +143,7 @@ pub struct GuildWidgetMember {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildWidget`.
 pub struct GuildWidget {
-    pub id: GenericId,
+    pub id: GuildId,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instant_invite: Option<String>,
@@ -183,10 +185,10 @@ impl GuildWidgetImageStyle {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API object for `WelcomeScreenChannel`.
 pub struct WelcomeScreenChannel {
-    pub channel_id: GenericId,
+    pub channel_id: ChannelId,
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<GenericId>,
+    pub emoji_id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
 }
@@ -220,13 +222,13 @@ pub struct GuildTemplate {
     pub description: Option<String>,
     pub usage_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub creator_id: Option<GenericId>,
+    pub creator_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub creator: Option<User>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_guild_id: Option<GenericId>,
+    pub source_guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serialized_source_guild: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -236,11 +238,11 @@ pub struct GuildTemplate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildOnboarding`.
 pub struct GuildOnboarding {
-    pub guild_id: GenericId,
+    pub guild_id: GuildId,
     #[serde(default)]
     pub prompts: Vec<serde_json::Value>,
     #[serde(default)]
-    pub default_channel_ids: Vec<GenericId>,
+    pub default_channel_ids: Vec<ChannelId>,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<u8>,
@@ -252,7 +254,7 @@ pub struct ModifyGuildOnboarding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompts: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_channel_ids: Option<Vec<GenericId>>,
+    pub default_channel_ids: Option<Vec<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

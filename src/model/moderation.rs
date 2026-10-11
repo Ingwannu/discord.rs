@@ -2,12 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, User};
+use super::{AutoModerationRuleId, ChannelId, GuildId, RoleId, User, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `BulkGuildBanRequest`.
 pub struct BulkGuildBanRequest {
-    pub user_ids: Vec<GenericId>,
+    pub user_ids: Vec<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_message_seconds: Option<u64>,
 }
@@ -27,18 +27,18 @@ pub struct CreateGuildBan {
 /// Typed Discord API object for `BulkGuildBanResponse`.
 pub struct BulkGuildBanResponse {
     #[serde(default)]
-    pub banned_users: Vec<GenericId>,
+    pub banned_users: Vec<UserId>,
     #[serde(default)]
-    pub failed_users: Vec<GenericId>,
+    pub failed_users: Vec<UserId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `AutoModerationRule`.
 pub struct AutoModerationRule {
-    pub id: GenericId,
-    pub guild_id: GenericId,
+    pub id: AutoModerationRuleId,
+    pub guild_id: GuildId,
     pub name: String,
-    pub creator_id: GenericId,
+    pub creator_id: UserId,
     pub event_type: u8,
     pub trigger_type: u8,
     #[serde(default)]
@@ -48,9 +48,9 @@ pub struct AutoModerationRule {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub exempt_roles: Vec<GenericId>,
+    pub exempt_roles: Vec<RoleId>,
     #[serde(default)]
-    pub exempt_channels: Vec<GenericId>,
+    pub exempt_channels: Vec<ChannelId>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -83,7 +83,7 @@ pub struct AutoModerationAction {
 /// Typed Discord API object for `AutoModerationActionMetadata`.
 pub struct AutoModerationActionMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<GenericId>,
+    pub channel_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +103,6 @@ pub struct Ban {
 /// Typed Discord API object for `GuildBansQuery`.
 pub struct GuildBansQuery {
     pub limit: Option<u64>,
-    pub before: Option<GenericId>,
-    pub after: Option<GenericId>,
+    pub before: Option<UserId>,
+    pub after: Option<UserId>,
 }

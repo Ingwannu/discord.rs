@@ -3,14 +3,14 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    CreateGuildSticker, GenericId, ModifyGuildSticker, SoundboardSound, SoundboardSoundList,
-    Sticker, StickerPack, StickerPackList,
+    ChannelId, CreateGuildSticker, GuildId, ModifyGuildSticker, SoundboardSound, SoundboardSoundId,
+    SoundboardSoundList, Sticker, StickerId, StickerPack, StickerPackId, StickerPackList,
 };
 
 use super::{decode_response, serialize_body, FileAttachment, RequestBody, RestClient};
 
 impl RestClient {
-    pub async fn get_sticker(&self, sticker_id: GenericId) -> Result<Sticker, DiscordError> {
+    pub async fn get_sticker(&self, sticker_id: StickerId) -> Result<Sticker, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/stickers/{}", sticker_id),
@@ -24,7 +24,10 @@ impl RestClient {
             .await
     }
 
-    pub async fn get_sticker_pack(&self, pack_id: GenericId) -> Result<StickerPack, DiscordError> {
+    pub async fn get_sticker_pack(
+        &self,
+        pack_id: StickerPackId,
+    ) -> Result<StickerPack, DiscordError> {
         self.request_typed(
             Method::GET,
             &format!("/sticker-packs/{}", pack_id),
@@ -35,7 +38,7 @@ impl RestClient {
 
     pub async fn get_guild_stickers(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<Sticker>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -47,8 +50,8 @@ impl RestClient {
 
     pub async fn get_guild_sticker(
         &self,
-        guild_id: GenericId,
-        sticker_id: GenericId,
+        guild_id: GuildId,
+        sticker_id: StickerId,
     ) -> Result<Sticker, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -60,7 +63,7 @@ impl RestClient {
 
     pub async fn create_guild_sticker(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &Value,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
@@ -80,7 +83,7 @@ impl RestClient {
 
     pub async fn create_guild_sticker_typed<B>(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &B,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError>
@@ -103,7 +106,7 @@ impl RestClient {
 
     pub async fn create_guild_sticker_from_request(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &CreateGuildSticker,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
@@ -112,8 +115,8 @@ impl RestClient {
 
     pub async fn modify_guild_sticker(
         &self,
-        guild_id: GenericId,
-        sticker_id: GenericId,
+        guild_id: GuildId,
+        sticker_id: StickerId,
         body: &Value,
     ) -> Result<Sticker, DiscordError> {
         self.request_typed(
@@ -126,8 +129,8 @@ impl RestClient {
 
     pub async fn modify_guild_sticker_typed<B>(
         &self,
-        guild_id: GenericId,
-        sticker_id: GenericId,
+        guild_id: GuildId,
+        sticker_id: StickerId,
         body: &B,
     ) -> Result<Sticker, DiscordError>
     where
@@ -143,8 +146,8 @@ impl RestClient {
 
     pub async fn modify_guild_sticker_from_request(
         &self,
-        guild_id: GenericId,
-        sticker_id: GenericId,
+        guild_id: GuildId,
+        sticker_id: StickerId,
         body: &ModifyGuildSticker,
     ) -> Result<Sticker, DiscordError> {
         self.modify_guild_sticker_typed(guild_id, sticker_id, body)
@@ -153,8 +156,8 @@ impl RestClient {
 
     pub async fn delete_guild_sticker(
         &self,
-        guild_id: GenericId,
-        sticker_id: GenericId,
+        guild_id: GuildId,
+        sticker_id: StickerId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -166,7 +169,7 @@ impl RestClient {
 
     pub async fn send_soundboard_sound(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
@@ -190,7 +193,7 @@ impl RestClient {
 
     pub async fn list_guild_soundboard_sounds(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<SoundboardSoundList, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -202,8 +205,8 @@ impl RestClient {
 
     pub async fn get_guild_soundboard_sound(
         &self,
-        guild_id: GenericId,
-        sound_id: GenericId,
+        guild_id: GuildId,
+        sound_id: SoundboardSoundId,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -215,7 +218,7 @@ impl RestClient {
 
     pub async fn create_guild_soundboard_sound(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
@@ -228,8 +231,8 @@ impl RestClient {
 
     pub async fn modify_guild_soundboard_sound(
         &self,
-        guild_id: GenericId,
-        sound_id: GenericId,
+        guild_id: GuildId,
+        sound_id: SoundboardSoundId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
         self.request_typed(
@@ -242,8 +245,8 @@ impl RestClient {
 
     pub async fn delete_guild_soundboard_sound(
         &self,
-        guild_id: GenericId,
-        sound_id: GenericId,
+        guild_id: GuildId,
+        sound_id: SoundboardSoundId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,

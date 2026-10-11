@@ -99,10 +99,7 @@ fn application_command_created_at_uses_assigned_id() {
         ..ApplicationCommand::default()
     };
 
-    assert_eq!(
-        command.id_opt().map(GenericId::get),
-        Some(1759288472266248192)
-    );
+    assert_eq!(command.id_opt().map(u64::from), Some(1759288472266248192));
     assert!(command.created_at().is_some());
 }
 
@@ -537,8 +534,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
         kind: Some(ChannelType::Text as u8),
         topic: Some(Some("read first".to_string())),
         permission_overwrites: Some(Some(vec![PermissionOverwrite {
-            id: test_id(300),
-            kind: 0,
+            target: super::OverwriteTarget::Role(test_id(300)),
             allow: Some(PermissionsBitField(1024)),
             deny: None,
         }])),
@@ -669,7 +665,7 @@ fn monetization_poll_and_thread_response_models_decode() {
     assert_eq!(entitlement.kind, 8);
     assert_eq!(entitlement.gift_code_flags, Some(0));
     assert_eq!(
-        entitlement.subscription_id.map(GenericId::get),
+        entitlement.subscription_id.map(u64::from),
         Some(1019653835926409216)
     );
 
@@ -923,7 +919,7 @@ fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
 
     assert_eq!(DiscordModel::id(&user).get(), 1759288472266248192);
     assert_eq!(
-        DiscordModel::id_opt(&user).map(GenericId::get),
+        DiscordModel::id_opt(&user).map(u64::from),
         Some(1759288472266248192)
     );
     assert!(DiscordModel::created_at(&user).is_some());
@@ -1610,8 +1606,11 @@ fn message_components_v2_tree_decodes_typed() {
     let channel_select = &container.components[6].components[0];
     assert_eq!(channel_select.kind, MessageComponent::CHANNEL_SELECT);
     assert_eq!(channel_select.channel_types, vec![0, 5]);
-    assert_eq!(channel_select.default_values[0].id.get(), 42);
-    assert_eq!(channel_select.default_values[0].kind, "channel");
+    assert_eq!(
+        channel_select.default_values[0],
+        super::SelectDefaultValue::Channel(test_id(42))
+    );
+    assert_eq!(channel_select.default_values[0].kind(), "channel");
 
     // Depth-first iteration visits the whole tree, including the accessory.
     let all: Vec<_> = container.iter().collect();
@@ -1779,21 +1778,18 @@ fn message_interaction_metadata_decodes_with_nested_trigger() {
         Some(42)
     );
     assert_eq!(
-        metadata.original_response_message_id.map(GenericId::get),
+        metadata.original_response_message_id.map(u64::from),
         Some(901)
     );
     assert_eq!(metadata.target_user.as_ref().unwrap().id.get(), 43);
-    assert_eq!(metadata.target_message_id.map(GenericId::get), Some(902));
-    assert_eq!(
-        metadata.interacted_message_id.map(GenericId::get),
-        Some(903)
-    );
+    assert_eq!(metadata.target_message_id.map(u64::from), Some(902));
+    assert_eq!(metadata.interacted_message_id.map(u64::from), Some(903));
 
     let trigger = metadata.triggering_interaction_metadata.unwrap();
     assert_eq!(trigger.id.get(), 890);
     assert_eq!(trigger.kind, 3);
     assert!(trigger.authorizing_integration_owners.is_empty());
-    assert_eq!(trigger.interacted_message_id.map(GenericId::get), Some(880));
+    assert_eq!(trigger.interacted_message_id.map(u64::from), Some(880));
     assert!(trigger.triggering_interaction_metadata.is_none());
 
     let legacy = message.interaction.unwrap();
@@ -1818,7 +1814,7 @@ fn command_interaction_resolved_data_is_typed() {
     .unwrap();
 
     let resolved = data.resolved.unwrap();
-    let target_id = data.target_id.unwrap();
+    let target_id = data.target_id.unwrap().cast();
     assert_eq!(
         resolved.user(target_id).map(|user| user.username.as_str()),
         Some("target-user")
@@ -2005,33 +2001,36 @@ fn required_id_request_bodies_have_constructors_instead_of_default() {
         LobbyMemberUpdate, ModifyGuildChannelPosition, ModifyGuildRolePosition,
     };
 
-    let id: GenericId = test_id(42);
     assert_eq!(
-        serde_json::to_value(CreateDmChannel::new(id)).unwrap(),
+        serde_json::to_value(CreateDmChannel::new(test_id(42))).unwrap(),
         json!({ "recipient_id": "42" })
     );
     assert_eq!(
-        serde_json::to_value(ModifyGuildChannelPosition::new(id)).unwrap(),
+        serde_json::to_value(ModifyGuildChannelPosition::new(test_id(42))).unwrap(),
         json!({ "id": "42" })
     );
     assert_eq!(
-        serde_json::to_value(ModifyGuildRolePosition::new(id)).unwrap(),
+        serde_json::to_value(ModifyGuildRolePosition::new(test_id(42))).unwrap(),
         json!({ "id": "42" })
     );
     assert_eq!(
-        serde_json::to_value(CreateTestEntitlement::new(id, test_id(7), 2)).unwrap(),
+        serde_json::to_value(CreateTestEntitlement::new(
+            test_id(42),
+            super::EntitlementOwner::User(test_id(7))
+        ))
+        .unwrap(),
         json!({ "sku_id": "42", "owner_id": "7", "owner_type": 2 })
     );
     assert_eq!(
-        serde_json::to_value(CreateStageInstance::new(id, "town hall")).unwrap(),
+        serde_json::to_value(CreateStageInstance::new(test_id(42), "town hall")).unwrap(),
         json!({ "channel_id": "42", "topic": "town hall" })
     );
     assert_eq!(
-        serde_json::to_value(LobbyMember::new(id)).unwrap(),
+        serde_json::to_value(LobbyMember::new(test_id(42))).unwrap(),
         json!({ "id": "42" })
     );
     assert_eq!(
-        serde_json::to_value(LobbyMemberUpdate::new(id)).unwrap(),
+        serde_json::to_value(LobbyMemberUpdate::new(test_id(42))).unwrap(),
         json!({ "id": "42" })
     );
 }

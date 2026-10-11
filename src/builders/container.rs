@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::command::validation;
 use crate::constants::{component_type, separator_spacing};
 use crate::error::DiscordError;
+use crate::model::ComponentId;
 use crate::types::{to_json_value, ButtonConfig, MediaGalleryItem};
 
 use super::components::{ActionRowBuilder, ButtonBuilder};
@@ -17,10 +18,11 @@ pub struct TextDisplayBuilder {
     component_type: u8,
     content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 #[cfg(test)]
 mod tests {
+    use crate::model::ComponentId;
     use serde_json::json;
 
     use super::{
@@ -46,7 +48,7 @@ mod tests {
 
         let payload = TextDisplayBuilder::new("hello")
             .content("updated")
-            .id(42)
+            .id(ComponentId::new(42))
             .build();
 
         assert_eq!(
@@ -74,7 +76,7 @@ mod tests {
         let payload = SeparatorBuilder::new()
             .divider(false)
             .spacing(separator_spacing::LARGE)
-            .id(7)
+            .id(ComponentId::new(7))
             .build();
 
         assert_eq!(
@@ -93,25 +95,25 @@ mod tests {
         let payload = ContainerBuilder::new()
             .accent_color(0xFFAA11)
             .spoiler(true)
-            .id(99)
+            .id(ComponentId::new(99))
             .add_media_gallery(
                 MediaGalleryBuilder::new()
-                    .id(1)
+                    .id(ComponentId::new(1))
                     .add_item(MediaGalleryItem::new("https://example.com/a.png")),
             )
-            .add_text_display(TextDisplayBuilder::new("headline").id(2))
-            .add_separator(SeparatorBuilder::new().id(3))
+            .add_text_display(TextDisplayBuilder::new("headline").id(ComponentId::new(2)))
+            .add_separator(SeparatorBuilder::new().id(ComponentId::new(3)))
             .add_action_row(
                 ActionRowBuilder::new()
-                    .id(4)
+                    .id(ComponentId::new(4))
                     .add_button(ButtonBuilder::new().label("Open").custom_id("open")),
             )
             .add_section(
                 SectionBuilder::new()
-                    .id(5)
+                    .id(ComponentId::new(5))
                     .add_text_display(TextDisplayBuilder::new("body")),
             )
-            .add_file(FileBuilder::new("https://example.com/file.txt").id(6))
+            .add_file(FileBuilder::new("https://example.com/file.txt").id(ComponentId::new(6)))
             .add_component(json!({"type": 255, "name": "raw"}))
             .build();
 
@@ -169,7 +171,7 @@ mod tests {
 
     #[test]
     fn text_display_try_build_matches_build_and_rejects_invalid_content() {
-        let make = || TextDisplayBuilder::new("hello").id(42);
+        let make = || TextDisplayBuilder::new("hello").id(ComponentId::new(42));
         assert_eq!(
             make().build(),
             make().try_build().expect("valid text display")
@@ -346,7 +348,7 @@ impl TextDisplayBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -384,7 +386,7 @@ pub struct SeparatorBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     spacing: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl SeparatorBuilder {
@@ -408,7 +410,7 @@ impl SeparatorBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
@@ -429,7 +431,7 @@ pub struct ContainerBuilder {
     #[serde(skip_serializing_if = "Option::is_none")]
     spoiler: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<u32>,
+    id: Option<ComponentId>,
 }
 
 impl ContainerBuilder {
@@ -454,7 +456,7 @@ impl ContainerBuilder {
         self
     }
 
-    pub fn id(mut self, id: u32) -> Self {
+    pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }

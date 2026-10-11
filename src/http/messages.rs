@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelPins, ChannelPinsQuery, CreateMessage, GenericId, Message, SearchGuildMessagesQuery,
-    SearchGuildMessagesResponse, User,
+    ChannelId, ChannelPins, ChannelPinsQuery, CreateMessage, GuildId, Id, IdMarker, Message,
+    MessageId, SearchGuildMessagesQuery, SearchGuildMessagesResponse, User, UserId,
 };
 
 use super::paths::query_string;
@@ -13,7 +13,7 @@ use super::{FileAttachment, RestClient};
 impl RestClient {
     pub async fn create_message(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
@@ -30,9 +30,9 @@ impl RestClient {
     /// discord.js's `message.forward(channel)`.
     pub async fn forward_message(
         &self,
-        from_channel_id: GenericId,
-        message_id: GenericId,
-        to_channel_id: GenericId,
+        from_channel_id: ChannelId,
+        message_id: MessageId,
+        to_channel_id: ChannelId,
     ) -> Result<Message, DiscordError> {
         let body = CreateMessage {
             message_reference: Some(crate::model::MessageReference::forward(
@@ -46,7 +46,7 @@ impl RestClient {
 
     pub async fn create_message_with_files(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
@@ -62,8 +62,8 @@ impl RestClient {
 
     pub async fn update_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
@@ -77,8 +77,8 @@ impl RestClient {
 
     pub async fn update_message_with_files(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
@@ -94,8 +94,8 @@ impl RestClient {
 
     pub async fn get_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<Message, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -107,7 +107,7 @@ impl RestClient {
 
     pub async fn get_channel_messages(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         limit: Option<u64>,
     ) -> Result<Vec<Message>, DiscordError> {
         let path = match limit {
@@ -120,7 +120,7 @@ impl RestClient {
 
     pub async fn search_guild_messages(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         query: &SearchGuildMessagesQuery,
     ) -> Result<SearchGuildMessagesResponse, DiscordError> {
         let query = search_guild_messages_query(query);
@@ -134,8 +134,8 @@ impl RestClient {
 
     pub async fn bulk_delete_messages(
         &self,
-        channel_id: GenericId,
-        message_ids: Vec<GenericId>,
+        channel_id: ChannelId,
+        message_ids: Vec<MessageId>,
     ) -> Result<(), DiscordError> {
         let body = serde_json::json!({ "messages": message_ids });
         self.request_no_content(
@@ -148,8 +148,8 @@ impl RestClient {
 
     pub async fn add_reaction(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         let path = format!(
@@ -162,8 +162,8 @@ impl RestClient {
 
     pub async fn remove_reaction(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         let path = format!(
@@ -176,8 +176,8 @@ impl RestClient {
 
     pub(crate) async fn edit_message_json(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
@@ -190,8 +190,8 @@ impl RestClient {
 
     pub async fn delete_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -203,8 +203,8 @@ impl RestClient {
 
     pub async fn crosspost_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<Message, DiscordError> {
         self.request_typed(
             Method::POST,
@@ -216,11 +216,11 @@ impl RestClient {
 
     pub async fn get_channel_messages_paginated(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         limit: Option<u64>,
-        before: Option<GenericId>,
-        after: Option<GenericId>,
-        around: Option<GenericId>,
+        before: Option<MessageId>,
+        after: Option<MessageId>,
+        around: Option<MessageId>,
     ) -> Result<Vec<Message>, DiscordError> {
         let mut params = Vec::new();
         if let Some(limit) = limit {
@@ -246,11 +246,11 @@ impl RestClient {
 
     pub async fn get_reactions(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         emoji: &str,
         limit: Option<u64>,
-        after: Option<GenericId>,
+        after: Option<UserId>,
     ) -> Result<Vec<User>, DiscordError> {
         let mut params = Vec::new();
         if let Some(limit) = limit {
@@ -274,7 +274,7 @@ impl RestClient {
 
     pub async fn get_channel_pins(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         query: &ChannelPinsQuery,
     ) -> Result<ChannelPins, DiscordError> {
         let query = channel_pins_query(query);
@@ -288,10 +288,10 @@ impl RestClient {
 
     pub async fn remove_user_reaction(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         emoji: &str,
-        user_id: GenericId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         let path = format!(
             "/channels/{}/messages/{}/reactions/{}/{}",
@@ -303,8 +303,8 @@ impl RestClient {
 
     pub async fn remove_all_reactions(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -316,8 +316,8 @@ impl RestClient {
 
     pub async fn remove_all_reactions_for_emoji(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
@@ -333,7 +333,7 @@ impl RestClient {
 
     pub(crate) async fn send_message_json(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
         self.request(
@@ -346,8 +346,8 @@ impl RestClient {
 
     pub async fn pin_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
@@ -359,8 +359,8 @@ impl RestClient {
 
     pub async fn unpin_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -372,7 +372,7 @@ impl RestClient {
 
     pub async fn get_pinned_messages(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Message>, DiscordError> {
         self.request_typed(
             Method::GET,
@@ -385,8 +385,8 @@ impl RestClient {
     /// Calls the legacy `pin_message` route.
     pub async fn pin_message_legacy(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
@@ -399,8 +399,8 @@ impl RestClient {
     /// Calls the legacy `unpin_message` route.
     pub async fn unpin_message_legacy(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -489,7 +489,7 @@ fn search_guild_messages_query(query: &SearchGuildMessagesQuery) -> String {
     query_string(params)
 }
 
-fn push_snowflakes(params: &mut Vec<String>, name: &str, values: &[GenericId]) {
+fn push_snowflakes<M: IdMarker>(params: &mut Vec<String>, name: &str, values: &[Id<M>]) {
     params.extend(values.iter().map(|value| format!("{name}={value}")));
 }
 

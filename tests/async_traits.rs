@@ -102,7 +102,7 @@ mod event_handler {
 
     fn context() -> Context {
         Context::new(
-            Arc::new(DiscordHttpClient::new("token", 0)),
+            Arc::new(DiscordHttpClient::new("token", None)),
             Arc::new(RwLock::new(TypeMap::new())),
         )
     }
@@ -197,7 +197,9 @@ mod cache_backend {
 
     use discordrs::cache::{CacheBackend, CacheClear, CacheClearId};
     use discordrs::model::Presence;
-    use discordrs::{CacheHandle, DiscordError, GenericId, Member, Message, User};
+    use discordrs::{
+        CacheHandle, ChannelId, DiscordError, GuildId, Member, Message, MessageId, User, UserId,
+    };
 
     use super::spawnable;
 
@@ -237,8 +239,8 @@ mod cache_backend {
         async fn put_member(
             &self,
             epoch: u64,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
             member: Member,
         ) -> Result<(), DiscordError> {
             self.store
@@ -248,24 +250,21 @@ mod cache_backend {
 
         async fn get_member(
             &self,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
         ) -> Result<Option<Arc<Member>>, DiscordError> {
             self.store.get_member(guild_id, user_id).await
         }
 
-        async fn list_members(
-            &self,
-            guild_id: GenericId,
-        ) -> Result<Vec<Arc<Member>>, DiscordError> {
+        async fn list_members(&self, guild_id: GuildId) -> Result<Vec<Arc<Member>>, DiscordError> {
             self.store.list_members(guild_id).await
         }
 
         async fn delete_member(
             &self,
             epoch: u64,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
         ) -> Result<(), DiscordError> {
             self.store.delete_member(epoch, guild_id, user_id).await
         }
@@ -276,15 +275,15 @@ mod cache_backend {
 
         async fn get_message(
             &self,
-            channel_id: GenericId,
-            message_id: GenericId,
+            channel_id: ChannelId,
+            message_id: MessageId,
         ) -> Result<Option<Arc<Message>>, DiscordError> {
             self.store.get_message(channel_id, message_id).await
         }
 
         async fn list_messages(
             &self,
-            channel_id: GenericId,
+            channel_id: ChannelId,
         ) -> Result<Vec<Arc<Message>>, DiscordError> {
             self.store.list_messages(channel_id).await
         }
@@ -292,8 +291,8 @@ mod cache_backend {
         async fn delete_message(
             &self,
             epoch: u64,
-            channel_id: GenericId,
-            message_id: GenericId,
+            channel_id: ChannelId,
+            message_id: MessageId,
         ) -> Result<(), DiscordError> {
             self.store
                 .delete_message(epoch, channel_id, message_id)
@@ -303,8 +302,8 @@ mod cache_backend {
         async fn put_presence(
             &self,
             epoch: u64,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
             presence: Presence,
         ) -> Result<(), DiscordError> {
             self.store
@@ -314,15 +313,15 @@ mod cache_backend {
 
         async fn get_presence(
             &self,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
         ) -> Result<Option<Arc<Presence>>, DiscordError> {
             self.store.get_presence(guild_id, user_id).await
         }
 
         async fn list_presences(
             &self,
-            guild_id: GenericId,
+            guild_id: GuildId,
         ) -> Result<Vec<Arc<Presence>>, DiscordError> {
             self.store.list_presences(guild_id).await
         }
@@ -330,8 +329,8 @@ mod cache_backend {
         async fn delete_presence(
             &self,
             epoch: u64,
-            guild_id: GenericId,
-            user_id: GenericId,
+            guild_id: GuildId,
+            user_id: UserId,
         ) -> Result<(), DiscordError> {
             self.store.delete_presence(epoch, guild_id, user_id).await
         }
@@ -350,8 +349,8 @@ mod cache_backend {
             };
             // Outside the crate, IDs come from checked parsing or
             // conversion; there is no infallible `From<&str>`/`From<u64>`.
-            let guild_id: GenericId = "1".parse().expect("valid id");
-            let user_id = GenericId::try_from(2_u64).expect("valid id");
+            let guild_id: GuildId = "1".parse().expect("valid id");
+            let user_id = UserId::try_from(2_u64).expect("valid id");
             let user: User = serde_json::from_value(serde_json::json!({
                 "id": user_id,
                 "username": "wumpus",
@@ -393,69 +392,80 @@ mod cache_backend {
     }
 }
 
-#[cfg(feature = "gateway")]
+/// `CachedManager` is the same async trait with and without the `gateway`
+/// feature, so this runs in every feature configuration.
 mod cached_manager {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use discordrs::{CachedManager, DiscordError, GenericId};
+    use discordrs::{CachedManager, DiscordError, User, UserId};
     use tokio::sync::RwLock;
 
     use super::spawnable;
 
-    fn id(value: u64) -> GenericId {
-        GenericId::try_new(value).expect("nonzero test id")
+    fn id(value: u64) -> UserId {
+        UserId::try_new(value).expect("nonzero test id")
     }
 
-    /// A user-defined manager with its own store.
+    fn user(value: u64, username: &str) -> User {
+        serde_json::from_value(serde_json::json!({ "id": id(value), "username": username }))
+            .expect("minimal user")
+    }
+
+    /// A user-defined manager with its own store. The trait takes the
+    /// model's own ID type (`UserId` for `User`).
     #[derive(Clone, Default)]
-    struct Tags {
-        entries: Arc<RwLock<HashMap<GenericId, String>>>,
+    struct Users {
+        entries: Arc<RwLock<HashMap<UserId, User>>>,
     }
 
-    impl CachedManager<String> for Tags {
-        async fn get(&self, id: GenericId) -> Result<String, DiscordError> {
+    impl CachedManager<User> for Users {
+        async fn get(&self, id: UserId) -> Result<User, DiscordError> {
             self.cached(id)
                 .await
-                .ok_or_else(|| DiscordError::model(format!("no tag {id}")))
+                .ok_or_else(|| DiscordError::model(format!("no user {id}")))
         }
 
-        async fn cached(&self, id: GenericId) -> Option<String> {
+        async fn cached(&self, id: UserId) -> Option<User> {
             self.entries.read().await.get(&id).cloned()
         }
 
-        async fn contains(&self, id: GenericId) -> bool {
+        async fn contains(&self, id: UserId) -> bool {
             self.entries.read().await.contains_key(&id)
         }
 
-        async fn list_cached(&self) -> Vec<String> {
+        async fn list_cached(&self) -> Vec<User> {
             self.entries.read().await.values().cloned().collect()
         }
     }
 
+    fn usernames(users: Vec<User>) -> Vec<String> {
+        users.into_iter().map(|user| user.username).collect()
+    }
+
     #[tokio::test]
     async fn async_fn_manager_futures_are_send() {
-        let tags = Tags::default();
-        tags.entries
-            .write()
-            .await
-            .insert(id(7), "seven".to_string());
+        let users = Users::default();
+        users.entries.write().await.insert(id(7), user(7, "seven"));
         let found = tokio::spawn(spawnable({
-            let tags = tags.clone();
+            let users = users.clone();
             async move {
                 (
-                    tags.get(id(7)).await,
-                    tags.contains(id(8)).await,
-                    tags.list_cached().await,
+                    users.get(id(7)).await,
+                    users.contains(id(8)).await,
+                    users.list_cached().await,
                 )
             }
         }))
         .await
         .expect("manager task completes");
-        assert_eq!(found.0.ok(), Some("seven".to_string()));
+        assert_eq!(
+            found.0.ok().map(|user| user.username),
+            Some("seven".to_string())
+        );
         assert!(!found.1);
-        assert_eq!(found.2, vec!["seven".to_string()]);
-        assert!(tags.get(id(8)).await.is_err());
+        assert_eq!(usernames(found.2), vec!["seven".to_string()]);
+        assert!(users.get(id(8)).await.is_err());
     }
 }
 

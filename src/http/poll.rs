@@ -4,7 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{GenericId, Message, PollAnswerId, PollAnswerVoters};
+use crate::model::{ChannelId, Message, MessageId, PollAnswerId, PollAnswerVoters, UserId};
 
 use super::paths::poll_answer_voters_query;
 use super::RestClient;
@@ -12,10 +12,10 @@ use super::RestClient;
 impl RestClient {
     pub async fn get_poll_answer_voters(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         answer_id: PollAnswerId,
-        after: Option<GenericId>,
+        after: Option<UserId>,
         limit: Option<u64>,
     ) -> Result<PollAnswerVoters, DiscordError> {
         self.request_typed(
@@ -33,8 +33,8 @@ impl RestClient {
 
     pub async fn end_poll(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<Message, DiscordError> {
         self.request_typed(
             Method::POST,

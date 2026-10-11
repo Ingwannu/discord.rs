@@ -120,7 +120,7 @@ pub use event::{
 };
 pub use formatters::{
     EscapeMarkdownOptions, GuildNavigation, HeadingLevel, ListItem, MentionKind, MentionResolver,
-    SlashCommandMention, Timestamp, TimestampStyle,
+    MentionTarget, SlashCommandMention, Timestamp, TimestampStyle,
 };
 #[cfg(feature = "interactions")]
 pub use framework::{
@@ -142,12 +142,13 @@ pub use model::{
     AutocompleteInteraction, Ban, BeginGuildPruneRequest, BulkGuildBanRequest,
     BulkGuildBanResponse, Channel, ChannelMention, ChannelPins, ChannelPinsQuery,
     ChatInputCommandInteraction, ClientStatus, CommandInteractionData, CommandInteractionOption,
-    ComponentInteraction, CreateChannelInvite, CreateDmChannel, CreateGroupDmChannel,
-    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateLobby,
-    CreateLobbyMessage, CreateMessage, CreatePoll, CreateStageInstance, CreateTestEntitlement,
-    CreateWebhook, CurrentUserGuild, CurrentUserGuildsQuery, DefaultReaction, DiscordModel,
-    DynamicProfileField, EditApplicationCommandPermissions, EditChannelPermission, Embed,
-    Entitlement, EntitlementQuery, FollowedChannel, ForumTag, Gateway, GatewayBot, GetGuildQuery,
+    CommandPermissionTarget, CommandPermissionsId, ComponentInteraction, CreateChannelInvite,
+    CreateDmChannel, CreateGroupDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
+    CreateGuildSticker, CreateLobby, CreateLobbyMessage, CreateMessage, CreatePoll,
+    CreateStageInstance, CreateTestEntitlement, CreateWebhook, CurrentUserGuild,
+    CurrentUserGuildsQuery, DefaultReaction, DiscordModel, DynamicProfileField,
+    EditApplicationCommandPermissions, EditChannelPermission, Embed, Entitlement, EntitlementOwner,
+    EntitlementQuery, FollowedChannel, ForumTag, Gateway, GatewayBot, GetGuildQuery,
     GetOrCreateLobby, Guild, GuildApplicationCommandPermissions, GuildBansQuery,
     GuildIncidentsData, GuildMembersQuery, GuildOnboarding, GuildPreview, GuildPruneCount,
     GuildPruneResult, GuildScheduledEvent, GuildScheduledEventEntityMetadata,
@@ -157,20 +158,20 @@ pub use model::{
     IntegrationApplication, Interaction, InteractionCallbackResponse, InteractionContextData,
     InteractionContextType, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus,
     JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby, LobbyInvite, LobbyMember,
-    LobbyMemberUpdate, LobbyMessage, LobbyMessageMember, Member, Message, MessageActivity,
-    MessageCall, MessageComponent, MessageComponentIter, MessageContextMenuInteraction,
-    MessageInteraction, MessageInteractionMetadata, MessageMediaGalleryItem, MessagePin,
-    MessageReference, MessageSelectDefaultValue, MessageSelectOption, MessageSnapshot,
+    LobbyMemberUpdate, LobbyMessage, LobbyMessageMember, Member, MentionableId, Message,
+    MessageActivity, MessageCall, MessageComponent, MessageComponentIter,
+    MessageContextMenuInteraction, MessageInteraction, MessageInteractionMetadata,
+    MessageMediaGalleryItem, MessagePin, MessageReference, MessageSelectOption, MessageSnapshot,
     MessageSnapshotMessage, ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
     ModifyCurrentUser, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
     ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
     ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
     ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
-    ModifyWebhook, ModifyWebhookWithToken, PartialApplication, PermissionOverwrite,
-    PermissionsBitField, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia,
-    PollResults, PrimaryProfileData, ProfileMedia, ReactionCountDetails, RequestChannelInfo,
-    RequestGuildMembers, ResolvedData, Role, RoleColors, RoleSubscriptionData, RoleTags,
-    SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
+    ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PartialApplication,
+    PermissionOverwrite, PermissionsBitField, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters,
+    PollMedia, PollResults, PrimaryProfileData, ProfileMedia, ReactionCountDetails,
+    RequestChannelInfo, RequestGuildMembers, ResolvedData, Role, RoleColors, RoleSubscriptionData,
+    RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
     SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
     StageInstance, Sticker, StickerItem, StickerPack, StickerPackList, Subscription,
     SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, UnfurledMediaItem,
@@ -180,7 +181,7 @@ pub use model::{
     Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
 };
 // Phase 3 primitives (typed IDs, open discriminants, patch fields). Since
-// series 2 step A every ID in the crate is a `GenericId`; series 3–4 migrate
+// series 2 step B every ID has its per-resource alias; series 3–4 migrate
 // the discriminants and patch fields. See `model::discriminant` for the
 // discriminants not re-exported yet.
 pub use model::{
@@ -203,10 +204,11 @@ pub use model::{
     TextInputStyle, UploadId, UserId, UserPremiumType, VerificationLevel, VideoQualityMode,
     WebhookId, WebhookType, WidgetUserId,
 };
-// The deprecated 2.x name, kept so `discordrs::Snowflake` users get a
-// deprecation note pointing at the typed IDs instead of "not found".
+// The deprecated 2.x names, kept so `discordrs::Snowflake` and
+// `discordrs::MessageSelectDefaultValue` users get a deprecation note
+// pointing at the new types instead of "not found".
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
-pub use model::Snowflake;
+pub use model::{MessageSelectDefaultValue, Snowflake};
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,

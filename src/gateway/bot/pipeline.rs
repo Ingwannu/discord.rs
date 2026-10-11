@@ -22,6 +22,7 @@ use super::{
     OVERLOAD_WARNING_INTERVAL,
 };
 use crate::event::{decode_event, Event};
+use crate::model::ApplicationId;
 
 /// How long aborted pipeline tasks get to confirm they stopped. Aborting is
 /// asynchronous: a task only stops at its next await point, so shutdown
@@ -970,11 +971,11 @@ pub(super) async fn process_gateway_dispatch(
         received_at,
     } = dispatch;
 
-    if event_name == "READY" && ctx.http.application_id() == 0 {
+    if event_name == "READY" && ctx.http.application_id().is_none() {
         if let Some(app_id) = data
             .pointer("/application/id")
             .and_then(|value| value.as_str())
-            .and_then(|value| value.parse::<u64>().ok())
+            .and_then(|value| value.parse::<ApplicationId>().ok())
         {
             ctx.http.set_application_id(app_id);
             info!("Set application_id from READY: {app_id}");

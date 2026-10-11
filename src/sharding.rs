@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::GuildId;
 use crate::types::invalid_data_error;
 use crate::ws::GatewayConnectionConfig;
 
@@ -316,7 +316,7 @@ impl ShardingManager {
 
     /// Returns the shard that owns `guild_id` (`(guild_id >> 22) %
     /// total_shards`), or `None` when no shards are configured.
-    pub fn shard_for_guild(&self, guild_id: GenericId) -> Option<ShardInfo> {
+    pub fn shard_for_guild(&self, guild_id: GuildId) -> Option<ShardInfo> {
         let shard_id = crate::cache::shard_for_guild_id(guild_id, self.config.total_shards);
         self.config.shard_info(shard_id)
     }

@@ -5,7 +5,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use serde_json::Value;
 
 use super::*;
-use crate::model::GenericId;
+use crate::model::{ChannelId, GenericId, RoleId, UserId};
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -633,15 +633,15 @@ fn emoji_tail_requires_digits_and_a_closing_angle() {
 struct Names;
 
 impl MentionResolver for Names {
-    fn user(&self, id: GenericId) -> Option<String> {
+    fn user(&self, id: UserId) -> Option<String> {
         (id.get() == 80351110224678912).then(|| "Nelly".to_string())
     }
 
-    fn role(&self, id: GenericId) -> Option<String> {
+    fn role(&self, id: RoleId) -> Option<String> {
         (id.get() == 165511591545143296).then(|| "Mods".to_string())
     }
 
-    fn channel(&self, id: GenericId) -> Option<String> {
+    fn channel(&self, id: ChannelId) -> Option<String> {
         (id.get() == 103735883630395392).then(|| "general".to_string())
     }
 }
@@ -702,7 +702,7 @@ fn clean_content_matches_discord_js() {
 
 #[test]
 fn clean_content_accepts_twenty_digit_ids_but_not_longer() {
-    let resolver = |_: MentionKind, id: GenericId| Some(format!("id{}", id.to_string().len()));
+    let resolver = |target: MentionTarget| Some(format!("id{}", target.id().to_string().len()));
     assert_eq!(clean_content("<@12345678901234567890>", &resolver), "@id20");
     assert_eq!(
         clean_content("<@123456789012345678901>", &resolver),
@@ -722,10 +722,10 @@ fn clean_content_borrows_when_nothing_resolves() {
 
 #[test]
 fn clean_content_with_closures_and_default_resolvers() {
-    let closure = |kind: MentionKind, id: GenericId| match kind {
-        MentionKind::User => Some(format!("user{id}")),
-        MentionKind::Role => Some("role".to_string()),
-        MentionKind::Channel => None,
+    let closure = |target: MentionTarget| match target {
+        MentionTarget::User(id) => Some(format!("user{id}")),
+        MentionTarget::Role(_) => Some("role".to_string()),
+        _ => None,
     };
     assert_eq!(
         clean_content(
@@ -806,7 +806,7 @@ fn command_names_use_discord_js_character_class() {
         ("a\u{0085}", false),
         ("a-b_c d", true),
     ];
-    let nobody = |_: MentionKind, _: GenericId| None;
+    let nobody = |_: MentionTarget| None;
     for (name, accepted) in cases {
         let input = format!("</{name}:123456789012345678>");
         let expected = if accepted {

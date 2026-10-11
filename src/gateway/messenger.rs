@@ -4,7 +4,7 @@ use super::client::{
     request_soundboard_sounds_payload, voice_state_update_payload, GatewayCommand,
 };
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::{ChannelId, GuildId};
 
 #[derive(Clone)]
 /// Typed Discord API object for `ShardMessenger`.
@@ -46,8 +46,8 @@ impl ShardMessenger {
 
     pub fn update_voice_state(
         &self,
-        guild_id: GenericId,
-        channel_id: Option<GenericId>,
+        guild_id: GuildId,
+        channel_id: Option<ChannelId>,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -58,7 +58,7 @@ impl ShardMessenger {
 
     pub fn request_soundboard_sounds(
         &self,
-        guild_ids: impl IntoIterator<Item = GenericId>,
+        guild_ids: impl IntoIterator<Item = GuildId>,
     ) -> Result<(), DiscordError> {
         self.send(GatewayCommand::SendPayload(
             request_soundboard_sounds_payload(guild_ids.into_iter().collect(), None),
@@ -67,8 +67,8 @@ impl ShardMessenger {
 
     pub fn join_voice(
         &self,
-        guild_id: GenericId,
-        channel_id: GenericId,
+        guild_id: GuildId,
+        channel_id: ChannelId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
@@ -77,7 +77,7 @@ impl ShardMessenger {
 
     pub fn leave_voice(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {

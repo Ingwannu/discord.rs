@@ -22,7 +22,7 @@ use tokio::time::{interval, sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::error::DiscordError;
-use crate::model::GenericId;
+use crate::model::{GuildId, UserId};
 use crate::types::invalid_data_error;
 use crate::voice::{
     VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayOpcode, VoiceGatewayReady,
@@ -98,8 +98,8 @@ const DISCORD_OPUS_FRAME_MS: u64 = 20;
 #[derive(Clone, PartialEq, Eq)]
 /// Typed Discord API object for `VoiceRuntimeConfig`.
 pub struct VoiceRuntimeConfig {
-    pub server_id: GenericId,
-    pub user_id: GenericId,
+    pub server_id: GuildId,
+    pub user_id: UserId,
     pub session_id: String,
     pub token: String,
     pub endpoint: String,
@@ -126,8 +126,8 @@ impl fmt::Debug for VoiceRuntimeConfig {
 impl VoiceRuntimeConfig {
     /// Creates a `new` value.
     pub fn new(
-        server_id: GenericId,
-        user_id: GenericId,
+        server_id: GuildId,
+        user_id: UserId,
         session_id: impl Into<String>,
         token: impl Into<String>,
         endpoint: impl Into<String>,
@@ -260,7 +260,7 @@ pub struct VoiceRuntimeState {
     pub discovery: VoiceUdpDiscoveryPacket,
     pub selected_mode: VoiceEncryptionMode,
     pub session_description: Option<VoiceSessionDescription>,
-    pub ssrc_users: HashMap<u32, GenericId>,
+    pub ssrc_users: HashMap<u32, UserId>,
     pub speaking: HashMap<u32, VoiceSpeakingUpdate>,
     pub dave: VoiceDaveState,
     pub resumed: bool,
@@ -323,7 +323,7 @@ pub struct VoiceRtpHeader {
 pub struct VoiceReceivedPacket {
     pub raw: VoiceRawUdpPacket,
     pub rtp: VoiceRtpHeader,
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
     pub opus_frame: Vec<u8>,
 }
 
@@ -859,7 +859,7 @@ pub trait VoiceDaveFrameDecryptor {
     fn decrypt_frame(
         &mut self,
         rtp: &VoiceRtpHeader,
-        user_id: Option<GenericId>,
+        user_id: Option<UserId>,
         frame: &VoiceDaveFrame,
     ) -> Result<Vec<u8>, DiscordError>;
 }
@@ -978,11 +978,11 @@ impl VoiceDaveFrameDecryptor for VoiceDaveySession {
     fn decrypt_frame(
         &mut self,
         _rtp: &VoiceRtpHeader,
-        user_id: Option<GenericId>,
+        user_id: Option<UserId>,
         frame: &VoiceDaveFrame,
     ) -> Result<Vec<u8>, DiscordError> {
         let user_id = user_id
-            .map(GenericId::get)
+            .map(UserId::get)
             .ok_or_else(|| invalid_data_error("DAVE frame decrypt requires a mapped user_id"))?;
         self.session
             .decrypt(user_id, davey::MediaType::AUDIO, &frame.bytes)
@@ -996,7 +996,7 @@ pub struct VoiceSpeakingUpdate {
     pub speaking: u64,
     pub ssrc: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<GenericId>,
+    pub user_id: Option<UserId>,
 }
 
 fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {

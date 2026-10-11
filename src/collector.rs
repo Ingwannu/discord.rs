@@ -14,7 +14,8 @@ use tokio::time;
 use crate::event::{Event, ReactionEvent};
 #[cfg(feature = "collectors")]
 use crate::model::{
-    Channel, ComponentInteraction, GenericId, Interaction, Message, ModalSubmitInteraction,
+    Channel, ChannelId, ComponentInteraction, EmojiId, GuildId, Interaction, Message, MessageId,
+    ModalSubmitInteraction, UserId,
 };
 #[cfg(feature = "collectors")]
 use crate::types::Emoji;
@@ -338,7 +339,7 @@ impl CollectorHub {
     /// channel/thread/guild deletion only ends collection after that; use
     /// [`reaction_collector_for_message`](Self::reaction_collector_for_message)
     /// or [`ReactionCollector::channel_id`] when you already know them.
-    pub fn reaction_collector(&self, message_id: GenericId) -> ReactionCollector {
+    pub fn reaction_collector(&self, message_id: MessageId) -> ReactionCollector {
         ReactionCollector::new(self.subscribe(), message_id)
     }
 
@@ -347,7 +348,7 @@ impl CollectorHub {
     pub fn reaction_collector_from(
         &self,
         cursor: EventCursor,
-        message_id: GenericId,
+        message_id: MessageId,
     ) -> ReactionCollector {
         ReactionCollector::new(self.subscribe_from(cursor), message_id)
     }
@@ -909,7 +910,7 @@ impl_extracting_collector!(ModalCollector, ModalSubmitInteraction, extract_modal
 /// U+FE0F variation selector) are different keys.
 pub enum EmojiKey {
     /// A custom (guild or application) emoji.
-    Custom(GenericId),
+    Custom(EmojiId),
     /// A Unicode emoji such as `"✅"`.
     Unicode(String),
 }
@@ -917,7 +918,7 @@ pub enum EmojiKey {
 #[cfg(feature = "collectors")]
 impl EmojiKey {
     /// Key for a custom emoji id.
-    pub fn custom(id: GenericId) -> Self {
+    pub fn custom(id: EmojiId) -> Self {
         Self::Custom(id)
     }
 
@@ -945,8 +946,8 @@ impl EmojiKey {
 /// user can hold both for the same emoji and remove them independently.
 pub struct CollectedReaction {
     emoji: Emoji,
-    users: BTreeSet<GenericId>,
-    burst_users: BTreeSet<GenericId>,
+    users: BTreeSet<UserId>,
+    burst_users: BTreeSet<UserId>,
 }
 
 #[cfg(feature = "collectors")]
@@ -958,12 +959,12 @@ impl CollectedReaction {
     }
 
     /// Users holding a normal reaction with this emoji.
-    pub fn users(&self) -> &BTreeSet<GenericId> {
+    pub fn users(&self) -> &BTreeSet<UserId> {
         &self.users
     }
 
     /// Users holding a burst (super) reaction with this emoji.
-    pub fn burst_users(&self) -> &BTreeSet<GenericId> {
+    pub fn burst_users(&self) -> &BTreeSet<UserId> {
         &self.burst_users
     }
 
@@ -974,11 +975,11 @@ impl CollectedReaction {
     }
 
     /// Whether `user_id` holds a normal or burst reaction with this emoji.
-    pub fn contains_user(&self, user_id: GenericId) -> bool {
+    pub fn contains_user(&self, user_id: UserId) -> bool {
         self.users.contains(&user_id) || self.burst_users.contains(&user_id)
     }
 
-    fn set_mut(&mut self, burst: bool) -> &mut BTreeSet<GenericId> {
+    fn set_mut(&mut self, burst: bool) -> &mut BTreeSet<UserId> {
         if burst {
             &mut self.burst_users
         } else {
@@ -1010,7 +1011,7 @@ pub struct ReactionCollection {
     // How many (emoji, normal/burst) slots each user holds, so `users()` and
     // the `max_users` check stay O(log n) instead of re-scanning every set
     // on each event.
-    user_slots: BTreeMap<GenericId, usize>,
+    user_slots: BTreeMap<UserId, usize>,
     total: usize,
     reaction_count: usize,
 }
@@ -1055,7 +1056,7 @@ impl ReactionCollection {
 
     /// Distinct users holding at least one collected reaction
     /// (discord.js `collector.users`), in id order.
-    pub fn users(&self) -> impl Iterator<Item = &GenericId> {
+    pub fn users(&self) -> impl Iterator<Item = &UserId> {
         self.user_slots.keys()
     }
 
@@ -1070,7 +1071,7 @@ impl ReactionCollection {
             .position(|(candidate, _)| candidate == key)
     }
 
-    fn insert(&mut self, key: EmojiKey, emoji: Emoji, user_id: GenericId, burst: bool) {
+    fn insert(&mut self, key: EmojiKey, emoji: Emoji, user_id: UserId, burst: bool) {
         let index = self.position(&key).unwrap_or_else(|| {
             self.reactions.push((key, CollectedReaction::default()));
             self.reactions.len() - 1
@@ -1087,7 +1088,7 @@ impl ReactionCollection {
         }
     }
 
-    fn remove_user(&mut self, key: &EmojiKey, user_id: GenericId, burst: bool) {
+    fn remove_user(&mut self, key: &EmojiKey, user_id: UserId, burst: bool) {
         let Some(index) = self.position(key) else {
             return;
         };
@@ -1130,7 +1131,7 @@ impl ReactionCollection {
         self.reaction_count = 0;
     }
 
-    fn release_user(&mut self, user_id: GenericId) {
+    fn release_user(&mut self, user_id: UserId) {
         if let Some(slots) = self.user_slots.get_mut(&user_id) {
             *slots = slots.saturating_sub(1);
             if *slots == 0 {
@@ -1175,12 +1176,12 @@ impl ReactionCollection {
 #[cfg(feature = "collectors")]
 /// Logic behind [`ReactionCollector`].
 struct ReactionLogic {
-    message_id: GenericId,
-    channel_id: Option<GenericId>,
+    message_id: MessageId,
+    channel_id: Option<ChannelId>,
     // Set when the message lives in a thread whose parent is known; Discord
     // sends no THREAD_DELETE for threads removed with their parent channel.
-    parent_channel_id: Option<GenericId>,
-    guild_id: Option<GenericId>,
+    parent_channel_id: Option<ChannelId>,
+    guild_id: Option<GuildId>,
     filter: Option<EventFilter<ReactionEvent>>,
     dispose: bool,
     max_items: Option<usize>,
@@ -1191,7 +1192,7 @@ struct ReactionLogic {
 
 #[cfg(feature = "collectors")]
 impl ReactionLogic {
-    fn new(message_id: GenericId) -> Self {
+    fn new(message_id: MessageId) -> Self {
         Self {
             message_id,
             channel_id: None,
@@ -1211,9 +1212,9 @@ impl ReactionLogic {
     /// collection even when only the message id was given.
     fn targets(
         &mut self,
-        message_id: Option<GenericId>,
-        channel_id: Option<GenericId>,
-        guild_id: Option<GenericId>,
+        message_id: Option<MessageId>,
+        channel_id: Option<ChannelId>,
+        guild_id: Option<GuildId>,
     ) -> bool {
         if message_id != Some(self.message_id) {
             return false;
@@ -1251,7 +1252,7 @@ impl ReactionLogic {
 #[cfg(feature = "collectors")]
 /// Key, user, and normal/burst kind of a reaction add/remove event, or `None`
 /// when Discord omitted the emoji or user.
-fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, GenericId, bool)> {
+fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, UserId, bool)> {
     let key = EmojiKey::from_emoji(reaction.emoji.as_ref()?)?;
     let user_id = reaction.user_id?;
     // `type` 1 is a burst reaction; older payloads only carry `burst`.
@@ -1393,7 +1394,7 @@ pub struct ReactionCollector {
 
 #[cfg(feature = "collectors")]
 impl ReactionCollector {
-    fn new(receiver: EventSubscription, message_id: GenericId) -> Self {
+    fn new(receiver: EventSubscription, message_id: MessageId) -> Self {
         Self {
             core: CollectorCore::new(receiver, ReactionLogic::new(message_id)),
         }
@@ -1441,7 +1442,7 @@ impl ReactionCollector {
 
     /// Channel (or thread) holding the message, so its deletion ends
     /// collection before the first reaction arrives.
-    pub fn channel_id(mut self, channel_id: GenericId) -> Self {
+    pub fn channel_id(mut self, channel_id: ChannelId) -> Self {
         self.core.logic.channel_id = Some(channel_id);
         self
     }
@@ -1452,20 +1453,20 @@ impl ReactionCollector {
     /// events carry the parent; without this call it is only learned from a
     /// `THREAD_CREATE` / `THREAD_UPDATE` / `THREAD_LIST_SYNC` for the thread
     /// seen while collecting.
-    pub fn parent_channel_id(mut self, parent_channel_id: GenericId) -> Self {
+    pub fn parent_channel_id(mut self, parent_channel_id: ChannelId) -> Self {
         self.core.logic.parent_channel_id = Some(parent_channel_id);
         self
     }
 
     /// Guild holding the message, so removal from it ends collection before
     /// the first reaction arrives.
-    pub fn guild_id(mut self, guild_id: GenericId) -> Self {
+    pub fn guild_id(mut self, guild_id: GuildId) -> Self {
         self.core.logic.guild_id = Some(guild_id);
         self
     }
 
     /// The watched message.
-    pub fn message_id(&self) -> GenericId {
+    pub fn message_id(&self) -> MessageId {
         self.core.logic.message_id
     }
 
@@ -1492,6 +1493,7 @@ impl_collector_controls!(ReactionCollector, ReactionEvent);
 #[cfg(all(test, feature = "collectors"))]
 mod tests {
     use crate::model::test_id;
+    use crate::model::UserId;
     use std::time::Duration;
 
     use serde_json::json;
@@ -1499,7 +1501,7 @@ mod tests {
     use tokio::time;
 
     use crate::event::{decode_event, Event};
-    use crate::model::{GenericId, Interaction, Message};
+    use crate::model::{Id, IdMarker, Interaction, Message};
     use crate::types::Emoji;
 
     use super::{CollectorEndReason, CollectorHub, EmojiKey, ReactionCollection};
@@ -2165,12 +2167,12 @@ mod tests {
         EmojiKey::unicode(name)
     }
 
-    fn user(id: &str) -> GenericId {
+    fn user(id: &str) -> UserId {
         id.parse().unwrap()
     }
 
     /// The payload helpers take the wire text; collectors take typed IDs.
-    fn id(text: &str) -> GenericId {
+    fn id<M: IdMarker>(text: &str) -> Id<M> {
         text.parse().unwrap()
     }
 
@@ -2228,7 +2230,7 @@ mod tests {
         let hub = CollectorHub::new();
         let mut collector = hub
             .reaction_collector(id(MESSAGE))
-            .filter(|reaction| reaction.user_id.map(GenericId::get) == Some(1))
+            .filter(|reaction| reaction.user_id.map(u64::from) == Some(1))
             .timeout(Duration::from_secs(30));
         assert_eq!(collector.message_id(), id(MESSAGE));
 

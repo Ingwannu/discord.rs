@@ -14,7 +14,8 @@
 // - 기존 구현 및 제약 조건: 2.x Snowflake는 String + Option<u64>라 복사마다 할당하고,
 //   "abc"도 받아들이며, 종류 구분이 없다. 3단계 시리즈 1이 새 타입을 추가했고, 시리즈 2의
 //   A 단계가 모든 사용처를 GenericId로 옮기고 옛 구조체를 지웠다(이름 `Snowflake`는
-//   model.rs의 deprecated 별칭으로만 남는다). B 단계가 도메인별 마커로 좁힌다.
+//   model.rs의 deprecated 별칭으로만 남는다). B 단계가 도메인별 마커로 좁혔고, 종류가
+//   정해지지 않은 자리(감사 로그 target_id 등)만 GenericId로 남았다.
 // - 검토한 주요 대안: (1) Snowflake를 u64 newtype으로만 교체, (2) Id<M>(u64),
 //   (3) Id<M>(NonZeroU64) + PhantomData<fn() -> M>.
 // - 선택한 방식: (3). 비교·해시·포맷은 숫자 값만 보고 마커 트레이트를 요구하지 않게 직접
@@ -460,6 +461,24 @@ pub type OnboardingOptionId = Id<marker::OnboardingOption>;
 /// ID whose resource kind is not statically known, such as an audit log
 /// `target_id`.
 pub type GenericId = Id<marker::Generic>;
+
+impl GuildId {
+    /// The ID of this guild's `@everyone` role, which Discord gives the
+    /// guild's own ID.
+    ///
+    /// ```
+    /// use discordrs::GuildId;
+    ///
+    /// # fn main() -> Result<(), discordrs::InvalidId> {
+    /// let guild_id: GuildId = "81384788765712384".parse()?;
+    /// assert_eq!(guild_id.everyone_role().get(), guild_id.get());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub const fn everyone_role(self) -> RoleId {
+        self.cast()
+    }
+}
 
 /// Builds an ID from a test literal, inferring the marker from context.
 ///

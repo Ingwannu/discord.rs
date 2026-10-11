@@ -2,12 +2,15 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{GenericId, PermissionsBitField, ThreadMetadata};
+use super::{
+    ApplicationId, AttachmentId, ChannelId, EmojiId, ForumTagId, GenericId, GuildId, MessageId,
+    OverwriteType, PermissionsBitField, RoleId, ThreadMetadata, UserId, WebhookId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Attachment`.
 pub struct Attachment {
-    pub id: GenericId,
+    pub id: AttachmentId,
     pub filename: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -60,16 +63,157 @@ pub enum ChannelType {
     GuildMedia = 16,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-/// Typed Discord API object for `PermissionOverwrite`.
+/// Who a channel permission overwrite applies to: the overwrite's wire `id`
+/// and `type` read together.
+///
+/// A role overwrite and a member overwrite share one `id` field on the wire,
+/// so the ID's kind depends on `type`. Matching on this enum gives a
+/// [`RoleId`] or [`UserId`] and makes it impossible to build a role
+/// overwrite from a user ID by accident. Overwrite types Discord adds later
+/// decode as [`OverwriteTarget::Unknown`] and serialize back unchanged.
+///
+/// ```
+/// use discordrs::model::{OverwriteTarget, PermissionOverwrite};
+/// use discordrs::UserId;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let overwrite: PermissionOverwrite =
+///     serde_json::from_str(r#"{"id": "41771983423143936", "type": 1, "deny": "1024"}"#)?;
+/// let user_id: UserId = "41771983423143936".parse()?;
+/// assert_eq!(overwrite.target, OverwriteTarget::Member(user_id));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OverwriteTarget {
+    /// `type: 0`: a role (the guild's ID is its `@everyone` role).
+    Role(RoleId),
+    /// `type: 1`: a guild member, addressed by user ID.
+    Member(UserId),
+    /// A `type` this version of discord.rs does not know, kept as sent.
+    ///
+    /// [`OverwriteTarget::from_wire`] never produces this for
+    /// [`OverwriteType::ROLE`] or [`OverwriteType::MEMBER`]; build `Role` or
+    /// `Member` for those so that equality and matching work.
+    Unknown {
+        /// The raw overwrite `type`.
+        kind: OverwriteType,
+        /// The overwrite `id`, whose kind is unknown.
+        id: GenericId,
+    },
+}
+
+impl OverwriteTarget {
+    /// Interprets a wire `id` according to the overwrite `type`.
+    pub const fn from_wire(kind: OverwriteType, id: GenericId) -> Self {
+        match kind.get() {
+            0 => Self::Role(id.cast()),
+            1 => Self::Member(id.cast()),
+            _ => Self::Unknown { kind, id },
+        }
+    }
+
+    /// The wire `id`: the role or user ID with its kind erased.
+    pub const fn id(self) -> GenericId {
+        match self {
+            Self::Role(id) => id.erase(),
+            Self::Member(id) => id.erase(),
+            Self::Unknown { id, .. } => id,
+        }
+    }
+
+    /// The wire `type`.
+    pub const fn kind(self) -> OverwriteType {
+        match self {
+            Self::Role(_) => OverwriteType::ROLE,
+            Self::Member(_) => OverwriteType::MEMBER,
+            Self::Unknown { kind, .. } => kind,
+        }
+    }
+}
+
+impl From<RoleId> for OverwriteTarget {
+    fn from(id: RoleId) -> Self {
+        Self::Role(id)
+    }
+}
+
+impl From<UserId> for OverwriteTarget {
+    fn from(id: UserId) -> Self {
+        Self::Member(id)
+    }
+}
+
+/// A channel permission overwrite.
+///
+/// Reads and writes Discord's shape, `{"id", "type", "allow", "deny"}`;
+/// `id` and `type` together become [`Self::target`].
+// [Decision Log]
+// - 목적과 의도: 덮어쓰기 `id`는 `type`에 따라 역할 ID이거나 사용자 ID다. 사용자 ID로 역할
+//   덮어쓰기를 만드는 실수를 컴파일 시점에 막는다(설계 §1 다형 ID).
+// - 기존 구현 및 제약 조건: 2.x와 A 단계는 `id: GenericId` + `kind: u8`였고, 와이어 형태
+//   (`id`, `type`, 생략 가능한 `allow`/`deny`)는 바뀌면 안 된다.
+// - 검토한 주요 대안: (1) `id`를 GenericId로 두고 접근자만 추가, (2) `#[serde(flatten)]` +
+//   내부 태그 enum, (3) 비공개 와이어 구조체를 거치는 from/into 변환.
+// - 선택한 방식: (3).
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 잘못된 조합을 막지 못한다. (2)는 serde가
+//   flatten 필드를 중간 Content로 버퍼링해 느리고, 정수 `type`을 내부 태그로 쓸 수 없다.
+//   (3)은 와이어 구조체가 기존 필드 정의와 같아 형태가 그대로 유지된다.
+// - 장점, 단점 및 영향: 공개 필드 `id`/`kind`가 `target` 하나로 바뀐다(마이그레이션 노트).
+//   모르는 `type`은 Unknown으로 보존되어 왕복한다.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "PermissionOverwriteWire", into = "PermissionOverwriteWire")]
 pub struct PermissionOverwrite {
-    pub id: GenericId,
-    #[serde(rename = "type")]
-    pub kind: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The role or member the overwrite applies to (wire `id` and `type`).
+    pub target: OverwriteTarget,
+    /// Permissions explicitly allowed.
     pub allow: Option<PermissionsBitField>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Permissions explicitly denied.
     pub deny: Option<PermissionsBitField>,
+}
+
+impl PermissionOverwrite {
+    /// An overwrite for `target` that allows and denies nothing yet.
+    pub const fn new(target: OverwriteTarget) -> Self {
+        Self {
+            target,
+            allow: None,
+            deny: None,
+        }
+    }
+}
+
+/// The wire shape of [`PermissionOverwrite`], unchanged from 2.x.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+struct PermissionOverwriteWire {
+    id: GenericId,
+    #[serde(rename = "type")]
+    kind: OverwriteType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow: Option<PermissionsBitField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deny: Option<PermissionsBitField>,
+}
+
+impl From<PermissionOverwriteWire> for PermissionOverwrite {
+    fn from(wire: PermissionOverwriteWire) -> Self {
+        Self {
+            target: OverwriteTarget::from_wire(wire.kind, wire.id),
+            allow: wire.allow,
+            deny: wire.deny,
+        }
+    }
+}
+
+impl From<PermissionOverwrite> for PermissionOverwriteWire {
+    fn from(overwrite: PermissionOverwrite) -> Self {
+        Self {
+            id: overwrite.target.id(),
+            kind: overwrite.target.kind(),
+            allow: overwrite.allow,
+            deny: overwrite.deny,
+        }
+    }
 }
 
 /// Request body for creating a guild channel.
@@ -95,7 +239,7 @@ pub struct CreateGuildChannel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_overwrites: Option<Option<Vec<PermissionOverwrite>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<GenericId>>,
+    pub parent_id: Option<Option<ChannelId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<Option<bool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +262,10 @@ pub struct CreateGuildChannel {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 /// Typed Discord API object for `EditChannelPermission`.
+///
+/// `kind` must match the [`OverwriteTarget`] passed to
+/// [`RestClient::edit_channel_permissions_typed`](crate::http::RestClient::edit_channel_permissions_typed);
+/// [`EditChannelPermission::for_target`] fills it in.
 pub struct EditChannelPermission {
     #[serde(rename = "type")]
     pub kind: u8,
@@ -127,12 +275,23 @@ pub struct EditChannelPermission {
     pub deny: Option<PermissionsBitField>,
 }
 
+impl EditChannelPermission {
+    /// A body whose `type` matches `target`, allowing and denying nothing yet.
+    pub const fn for_target(target: OverwriteTarget) -> Self {
+        Self {
+            kind: target.kind().get(),
+            allow: None,
+            deny: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Channel`.
 pub struct Channel {
-    pub id: GenericId,
+    pub id: ChannelId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub guild_id: Option<GenericId>,
+    pub guild_id: Option<GuildId>,
     #[serde(rename = "type")]
     pub kind: u8,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,7 +299,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<GenericId>,
+    pub parent_id: Option<ChannelId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nsfw: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,11 +309,11 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit_per_user: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_message_id: Option<GenericId>,
+    pub last_message_id: Option<MessageId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_id: Option<GenericId>,
+    pub owner_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_id: Option<GenericId>,
+    pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -182,7 +341,7 @@ pub struct Channel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_tags: Option<Vec<ForumTag>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub applied_tags: Option<Vec<GenericId>>,
+    pub applied_tags: Option<Vec<ForumTagId>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reaction_emoji: Option<DefaultReaction>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,7 +363,7 @@ impl Channel {
     /// than a `..` fill, makes a newly added field a compile error until its
     /// stub value is chosen.
     #[cfg(feature = "gateway")]
-    pub(crate) fn stub(id: GenericId, guild_id: Option<GenericId>, kind: u8) -> Self {
+    pub(crate) fn stub(id: ChannelId, guild_id: Option<GuildId>, kind: u8) -> Self {
         Self {
             id,
             guild_id,
@@ -245,7 +404,7 @@ impl Channel {
 /// Typed Discord API object for `DefaultReaction`.
 pub struct DefaultReaction {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<GenericId>,
+    pub emoji_id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
 }
@@ -253,12 +412,12 @@ pub struct DefaultReaction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `ForumTag`.
 pub struct ForumTag {
-    pub id: GenericId,
+    pub id: ForumTagId,
     pub name: String,
     #[serde(default)]
     pub moderated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub emoji_id: Option<GenericId>,
+    pub emoji_id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
 }
@@ -270,7 +429,7 @@ pub struct ForumTag {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModifyGuildChannelPosition {
     /// Channel to modify.
-    pub id: GenericId,
+    pub id: ChannelId,
     /// New sorting position, or `Some(None)` to send `null`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<Option<i64>>,
@@ -279,12 +438,12 @@ pub struct ModifyGuildChannelPosition {
     pub lock_permissions: Option<Option<bool>>,
     /// New parent category ID, or `Some(None)` to remove the parent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<GenericId>>,
+    pub parent_id: Option<Option<ChannelId>>,
 }
 
 impl ModifyGuildChannelPosition {
     /// Entry for channel `id` that changes nothing until a field is set.
-    pub fn new(id: GenericId) -> Self {
+    pub fn new(id: ChannelId) -> Self {
         Self {
             id,
             position: None,
@@ -297,12 +456,12 @@ impl ModifyGuildChannelPosition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `CreateDmChannel`.
 pub struct CreateDmChannel {
-    pub recipient_id: GenericId,
+    pub recipient_id: UserId,
 }
 
 impl CreateDmChannel {
     /// Opens (or returns) the DM channel with `recipient_id`.
-    pub fn new(recipient_id: GenericId) -> Self {
+    pub fn new(recipient_id: UserId) -> Self {
         Self { recipient_id }
     }
 }
@@ -311,7 +470,7 @@ impl CreateDmChannel {
 /// Typed Discord API object for `CreateGroupDmChannel`.
 pub struct CreateGroupDmChannel {
     pub access_tokens: Vec<String>,
-    pub nicks: HashMap<GenericId, String>,
+    pub nicks: HashMap<UserId, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -324,6 +483,6 @@ pub struct AddGroupDmRecipient {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `FollowedChannel`.
 pub struct FollowedChannel {
-    pub channel_id: GenericId,
-    pub webhook_id: GenericId,
+    pub channel_id: ChannelId,
+    pub webhook_id: WebhookId,
 }

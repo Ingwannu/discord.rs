@@ -66,7 +66,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::bitfield::{permissions as flag, Permissions};
 use crate::cache::CacheHandle;
 use crate::error::DiscordError;
-use crate::model::{Channel, GenericId, Guild, Member, PermissionOverwrite, Role};
+use crate::model::{
+    Channel, ChannelId, Guild, GuildId, Member, OverwriteTarget, PermissionOverwrite, Role, RoleId,
+    UserId,
+};
 
 /// Permissions that cannot be set in channel overwrites (no T/V/S column in
 /// Discord's table): KICK_MEMBERS, BAN_MEMBERS, ADMINISTRATOR, MANAGE_GUILD,
@@ -101,10 +104,6 @@ const SEND_DEPENDENT: u64 = flag::MENTION_EVERYONE.bits()
     | flag::SEND_TTS_MESSAGES.bits()
     | flag::ATTACH_FILES.bits()
     | flag::EMBED_LINKS.bits();
-
-/// `PermissionOverwrite::kind` values.
-const OVERWRITE_ROLE: u8 = 0;
-const OVERWRITE_MEMBER: u8 = 1;
 
 /// Discord channel type `GUILD_DIRECTORY`, which cannot contain threads.
 const GUILD_DIRECTORY: u8 = 14;
@@ -273,13 +272,13 @@ impl ChannelClass {
 /// ```
 /// use discordrs::bitfield::permissions;
 /// use discordrs::permissions::{ChannelClass, ChannelPermissionInput, MemberPermissionInput};
-/// use discordrs::GenericId;
+/// use discordrs::{GuildId, RoleId, UserId};
 ///
 /// # fn main() -> Result<(), discordrs::InvalidId> {
-/// let guild = GenericId::try_from(100_u64)?;
-/// let owner = GenericId::try_from(1_u64)?;
-/// let member = GenericId::try_from(2_u64)?;
-/// let moderators: GenericId = "300".parse()?;
+/// let guild = GuildId::try_from(100_u64)?;
+/// let owner = UserId::try_from(1_u64)?;
+/// let member = UserId::try_from(2_u64)?;
+/// let moderators: RoleId = "300".parse()?;
 ///
 /// let input = MemberPermissionInput::new(guild, owner, member, permissions::VIEW_CHANNEL)
 ///     .role(moderators, permissions::SEND_MESSAGES | permissions::ATTACH_FILES);
@@ -292,11 +291,11 @@ impl ChannelClass {
 /// ```
 #[derive(Clone, Debug)]
 pub struct MemberPermissionInput {
-    guild_id: GenericId,
-    owner_id: GenericId,
-    member_id: GenericId,
+    guild_id: GuildId,
+    owner_id: UserId,
+    member_id: UserId,
     everyone: Permissions,
-    roles: Vec<(GenericId, Permissions)>,
+    roles: Vec<(RoleId, Permissions)>,
     timed_out: bool,
 }
 
@@ -304,9 +303,9 @@ impl MemberPermissionInput {
     /// Starts an input for `member_id` in `guild_id` (owned by `owner_id`),
     /// where `everyone` is the `@everyone` role's permissions.
     pub fn new(
-        guild_id: GenericId,
-        owner_id: GenericId,
-        member_id: GenericId,
+        guild_id: GuildId,
+        owner_id: UserId,
+        member_id: UserId,
         everyone: Permissions,
     ) -> Self {
         Self {
@@ -322,7 +321,7 @@ impl MemberPermissionInput {
     /// Adds one of the member's roles with its guild-level permissions.
     /// An entry for the `@everyone` role (ID equal to the guild ID) only adds
     /// its permissions to the base; it never counts as a role overwrite.
-    pub fn role(mut self, role_id: GenericId, permissions: Permissions) -> Self {
+    pub fn role(mut self, role_id: RoleId, permissions: Permissions) -> Self {
         self.roles.push((role_id, permissions));
         self
     }
@@ -330,7 +329,7 @@ impl MemberPermissionInput {
     /// Adds several roles; see [`MemberPermissionInput::role`].
     pub fn roles<I>(mut self, roles: I) -> Self
     where
-        I: IntoIterator<Item = (GenericId, Permissions)>,
+        I: IntoIterator<Item = (RoleId, Permissions)>,
     {
         self.roles.extend(roles);
         self
@@ -414,8 +413,8 @@ impl MemberPermissionInput {
             .fold(self.everyone, |acc, (_, permissions)| acc | *permissions)
     }
 
-    fn has_role(&self, role_id: GenericId) -> bool {
-        role_id != self.guild_id && self.roles.iter().any(|(id, _)| *id == role_id)
+    fn has_role(&self, role_id: RoleId) -> bool {
+        role_id != self.guild_id.everyone_role() && self.roles.iter().any(|(id, _)| *id == role_id)
     }
 
     /// Discord's `compute_overwrites`. Allow/deny pairs are aggregated per
@@ -425,10 +424,12 @@ impl MemberPermissionInput {
         let mut roles = (0u64, 0u64);
         let mut member = (0u64, 0u64);
         for overwrite in overwrites {
-            let tier = match overwrite.kind {
-                OVERWRITE_ROLE if overwrite.id == self.guild_id => &mut everyone,
-                OVERWRITE_ROLE if self.has_role(overwrite.id) => &mut roles,
-                OVERWRITE_MEMBER if overwrite.id == self.member_id => &mut member,
+            let tier = match overwrite.target {
+                OverwriteTarget::Role(role_id) if role_id == self.guild_id.everyone_role() => {
+                    &mut everyone
+                }
+                OverwriteTarget::Role(role_id) if self.has_role(role_id) => &mut roles,
+                OverwriteTarget::Member(user_id) if user_id == self.member_id => &mut member,
                 // Other members' and roles' overwrites, plus overwrite types
                 // Discord has not defined, do not apply to this member.
                 _ => continue,
@@ -522,7 +523,7 @@ impl<'a> ChannelPermissionInput<'a> {
     /// rejected. Parents of channel types this crate does not know yet are
     /// accepted as the caller asserts them.
     pub fn from_channel(
-        guild_id: GenericId,
+        guild_id: GuildId,
         channel: &'a Channel,
         parent: Option<&'a Channel>,
     ) -> Result<Self, PermissionDataError> {
@@ -547,7 +548,7 @@ impl<'a> ChannelPermissionInput<'a> {
 /// absent is left to [`ChannelPermissionInput::from_channel`], so owners and
 /// administrators, whose answer needs no overwrites, are not blocked by it.
 fn validate_target(
-    guild_id: GenericId,
+    guild_id: GuildId,
     channel: &Channel,
     parent: Option<&Channel>,
 ) -> Result<ChannelClass, PermissionDataError> {
@@ -582,7 +583,7 @@ fn validate_target(
 }
 
 fn guild_channel_class(
-    guild_id: GenericId,
+    guild_id: GuildId,
     channel: &Channel,
 ) -> Result<ChannelClass, PermissionDataError> {
     let class = ChannelClass::from_channel_type(channel.kind).ok_or({
@@ -634,32 +635,32 @@ pub enum PermissionDataError {
     /// The guild is not cached.
     MissingGuild {
         /// Guild that was looked up.
-        guild_id: GenericId,
+        guild_id: GuildId,
     },
     /// The guild object has no `owner_id`.
     MissingGuildOwner {
         /// Guild whose owner is unknown.
-        guild_id: GenericId,
+        guild_id: GuildId,
     },
     /// A role (the `@everyone` role when `role_id == guild_id`) is not
     /// available.
     MissingRole {
         /// Guild the role belongs to.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// Role that was looked up.
-        role_id: GenericId,
+        role_id: RoleId,
     },
     /// A role object has no `permissions` field.
     MissingRolePermissions {
         /// Role without permissions.
-        role_id: GenericId,
+        role_id: RoleId,
     },
     /// The member is not cached.
     MissingMember {
         /// Guild that was looked up.
-        guild_id: GenericId,
+        guild_id: GuildId,
         /// User whose member object is missing.
-        user_id: GenericId,
+        user_id: UserId,
     },
     /// The member object has no `user`, so its ID (needed for the owner
     /// check and member overwrites) is unknown. Message `member` objects are
@@ -668,53 +669,53 @@ pub enum PermissionDataError {
     /// The channel is not cached.
     MissingChannel {
         /// Channel that was looked up.
-        channel_id: GenericId,
+        channel_id: ChannelId,
     },
     /// A thread was given without its parent channel (or the parent is not
     /// cached).
     MissingParentChannel {
         /// The thread.
-        thread_id: GenericId,
+        thread_id: ChannelId,
         /// The thread's `parent_id`, when the thread object has one.
-        parent_id: Option<GenericId>,
+        parent_id: Option<ChannelId>,
     },
     /// The channel has no `permission_overwrites` (a partial channel).
     MissingPermissionOverwrites {
         /// Channel without overwrites.
-        channel_id: GenericId,
+        channel_id: ChannelId,
     },
     /// The channel is a DM or group DM.
     NotGuildChannel {
         /// The channel.
-        channel_id: GenericId,
+        channel_id: ChannelId,
         /// Its Discord channel type.
         kind: u8,
     },
     /// The channel belongs to another guild.
     GuildMismatch {
         /// The channel.
-        channel_id: GenericId,
+        channel_id: ChannelId,
         /// Guild the calculation is for.
-        expected: GenericId,
+        expected: GuildId,
         /// Guild the channel says it belongs to.
-        found: GenericId,
+        found: GuildId,
     },
     /// The supplied parent is not the thread's `parent_id`.
     ParentMismatch {
         /// The thread.
-        thread_id: GenericId,
+        thread_id: ChannelId,
         /// The thread's `parent_id`.
-        expected: GenericId,
+        expected: ChannelId,
         /// ID of the channel supplied as parent.
-        found: GenericId,
+        found: ChannelId,
     },
     /// The supplied parent cannot contain threads (a voice, stage,
     /// category, directory, or thread channel).
     InvalidParentChannel {
         /// The thread.
-        thread_id: GenericId,
+        thread_id: ChannelId,
         /// The supplied parent.
-        parent_id: GenericId,
+        parent_id: ChannelId,
         /// The parent's Discord channel type.
         kind: u8,
     },
@@ -733,7 +734,7 @@ impl fmt::Display for PermissionDataError {
             Self::MissingGuildOwner { guild_id } => {
                 write!(f, "guild {guild_id} has no owner_id")
             }
-            Self::MissingRole { guild_id, role_id } if guild_id == role_id => {
+            Self::MissingRole { guild_id, role_id } if *role_id == guild_id.everyone_role() => {
                 write!(f, "@everyone role of guild {guild_id} is not available")
             }
             Self::MissingRole { guild_id, role_id } => {
@@ -864,8 +865,8 @@ pub fn permissions_for(
 /// for what is read.
 pub async fn cached_guild_permissions(
     cache: &CacheHandle,
-    guild_id: GenericId,
-    user_id: GenericId,
+    guild_id: GuildId,
+    user_id: UserId,
     now: SystemTime,
 ) -> Result<ComputedPermissions, PermissionDataError> {
     match MemberFacts::from_cache(cache, guild_id, user_id)
@@ -893,9 +894,9 @@ pub async fn cached_guild_permissions(
 /// administrators need nothing else beyond what proves their status.
 pub async fn cached_permissions_for(
     cache: &CacheHandle,
-    guild_id: GenericId,
-    user_id: GenericId,
-    channel_id: GenericId,
+    guild_id: GuildId,
+    user_id: UserId,
+    channel_id: ChannelId,
     now: SystemTime,
 ) -> Result<ChannelPermissions, PermissionDataError> {
     let facts = MemberFacts::from_cache(cache, guild_id, user_id).await?;
@@ -927,13 +928,13 @@ type Found<T> = Result<T, PermissionDataError>;
 /// the facts that prove their status, while everyone else still gets an
 /// error naming the first missing piece.
 struct MemberFacts {
-    guild_id: GenericId,
-    user_id: Found<GenericId>,
-    owner_id: Found<GenericId>,
+    guild_id: GuildId,
+    user_id: Found<UserId>,
+    owner_id: Found<UserId>,
     everyone: Found<Permissions>,
     /// `Err` when the member object itself is missing; otherwise one entry
     /// per role the member lists.
-    roles: Found<Vec<Found<(GenericId, Permissions)>>>,
+    roles: Found<Vec<Found<(RoleId, Permissions)>>>,
     communication_disabled_until: Option<String>,
 }
 
@@ -946,7 +947,7 @@ enum Resolution {
 
 impl MemberFacts {
     fn from_guild(guild: &Guild, member: &Member) -> Self {
-        let find = |role_id: GenericId| {
+        let find = |role_id: RoleId| {
             guild
                 .roles
                 .iter()
@@ -967,7 +968,7 @@ impl MemberFacts {
             owner_id: guild
                 .owner_id
                 .ok_or(PermissionDataError::MissingGuildOwner { guild_id: guild.id }),
-            everyone: find(guild.id),
+            everyone: find(guild.id.everyone_role()),
             roles: Ok(member_role_ids(&guild.id, member)
                 .map(|role_id| find(*role_id).map(|permissions| (*role_id, permissions)))
                 .collect()),
@@ -977,8 +978,8 @@ impl MemberFacts {
 
     async fn from_cache(
         cache: &CacheHandle,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<Self, PermissionDataError> {
         if !cache.is_enabled() {
             return Err(PermissionDataError::CacheDisabled);
@@ -989,7 +990,7 @@ impl MemberFacts {
                 .ok_or(PermissionDataError::MissingGuildOwner { guild_id }),
             None => Err(PermissionDataError::MissingGuild { guild_id }),
         };
-        let everyone = cached_role(cache, guild_id, guild_id).await;
+        let everyone = cached_role(cache, guild_id, guild_id.everyone_role()).await;
         let mut communication_disabled_until = None;
         let roles = match cache.member(guild_id, user_id).await {
             Some(member) => {
@@ -1064,11 +1065,11 @@ impl MemberFacts {
 
 /// Owned member-side data for the full calculation.
 struct ResolvedMember {
-    guild_id: GenericId,
-    owner_id: GenericId,
-    user_id: GenericId,
+    guild_id: GuildId,
+    owner_id: UserId,
+    user_id: UserId,
     everyone: Permissions,
-    roles: Vec<(GenericId, Permissions)>,
+    roles: Vec<(RoleId, Permissions)>,
     timeout: Option<SystemTime>,
     now: SystemTime,
 }
@@ -1088,13 +1089,13 @@ impl ResolvedMember {
 /// The member's role IDs without `@everyone`, which Discord never lists but
 /// a hand-built member might.
 fn member_role_ids<'m>(
-    guild_id: &'m GenericId,
+    guild_id: &'m GuildId,
     member: &'m Member,
-) -> impl Iterator<Item = &'m GenericId> + 'm {
+) -> impl Iterator<Item = &'m RoleId> + 'm {
     member
         .roles
         .iter()
-        .filter(move |role_id| *role_id != guild_id)
+        .filter(move |role_id| **role_id != guild_id.everyone_role())
 }
 
 fn role_permissions(role: &Role) -> Result<Permissions, PermissionDataError> {
@@ -1105,8 +1106,8 @@ fn role_permissions(role: &Role) -> Result<Permissions, PermissionDataError> {
 
 async fn cached_role(
     cache: &CacheHandle,
-    guild_id: GenericId,
-    role_id: GenericId,
+    guild_id: GuildId,
+    role_id: RoleId,
 ) -> Result<Permissions, PermissionDataError> {
     let role = cache
         .role(guild_id, role_id)

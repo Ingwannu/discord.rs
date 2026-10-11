@@ -4,7 +4,7 @@
 )]
 
 #[cfg(feature = "sharding")]
-use discordrs::{GatewayConnectionConfig, GenericId, ShardConfig, ShardingManager};
+use discordrs::{GatewayConnectionConfig, GuildId, ShardConfig, ShardingManager};
 
 #[cfg(feature = "sharding")]
 fn main() {
@@ -29,7 +29,7 @@ fn main() {
     println!("runtime_statuses={}", manager.statuses().len());
 
     let shard = manager
-        .shard_for_guild(GenericId::try_from(81384788765712384_u64).expect("nonzero guild id"))
+        .shard_for_guild(GuildId::try_from(81384788765712384_u64).expect("nonzero guild id"))
         .expect("guild id should map to a shard");
     println!("guild_shard={}/{}", shard.id, shard.total);
 }

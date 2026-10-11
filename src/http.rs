@@ -51,7 +51,7 @@ mod voice;
 mod webhook;
 
 use crate::error::DiscordError;
-use crate::model::{AllowedMentions, CreateMessage, InteractionCallbackResponse};
+use crate::model::{AllowedMentions, ApplicationId, CreateMessage, InteractionCallbackResponse};
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
@@ -91,6 +91,10 @@ enum RequestAuthorization<'a> {
 pub struct RestClient {
     client: Client,
     token: String,
+    /// The application ID, or `0` while it is not known yet (an `Option`
+    /// cannot be stored atomically; `0` is never a valid snowflake). Read
+    /// and written through [`Self::application_id`] and
+    /// [`Self::set_application_id`] only.
     application_id: Arc<AtomicU64>,
     rate_limits: Arc<RateLimitState>,
     route_gates: Arc<RateLimitRouteGates>,
@@ -137,13 +141,25 @@ impl RateLimitRouteGates {
     }
 }
 
+/// The stored form of an optional application ID: the raw snowflake, or `0`
+/// for "not set" (see `RestClient::application_id`).
+pub(crate) fn application_id_raw(application_id: Option<ApplicationId>) -> u64 {
+    application_id.map_or(0, ApplicationId::get)
+}
+
 impl RestClient {
     /// Creates a Discord REST client with bounded connect and request timeouts.
-    pub fn new(token: impl Into<String>, application_id: u64) -> Self {
+    ///
+    /// `application_id` is needed by application-scoped routes (commands,
+    /// interaction follow-ups, application emojis, entitlements, ...). Pass
+    /// `None` when it is not known yet; those routes then fail with an error
+    /// until [`Self::set_application_id`] is called (the gateway client does
+    /// this from `READY`).
+    pub fn new(token: impl Into<String>, application_id: Option<ApplicationId>) -> Self {
         Self {
             client: client_config::default_http_client(),
             token: token.into(),
-            application_id: Arc::new(AtomicU64::new(application_id)),
+            application_id: Arc::new(AtomicU64::new(application_id_raw(application_id))),
             rate_limits: Arc::new(RateLimitState::default()),
             route_gates: Arc::new(RateLimitRouteGates::default()),
             audit_log_reason: None,
@@ -159,7 +175,10 @@ impl RestClient {
     /// Returns a [`RestClientBuilder`] for a client with a custom API base,
     /// timeouts, user agent, proxy, rate-limit callback, or default
     /// allowed-mentions — the equivalent of discord.js's `RESTOptions`.
-    pub fn builder(token: impl Into<String>, application_id: u64) -> RestClientBuilder {
+    pub fn builder(
+        token: impl Into<String>,
+        application_id: Option<ApplicationId>,
+    ) -> RestClientBuilder {
         RestClientBuilder::new(token, application_id)
     }
 
@@ -169,7 +188,7 @@ impl RestClient {
         application_id: u64,
         base_url: impl Into<String>,
     ) -> Self {
-        let mut client = Self::new(token, application_id);
+        let mut client = Self::new(token, ApplicationId::try_new(application_id).ok());
         client.base_url = base_url.into();
         client
     }
@@ -209,12 +228,16 @@ impl RestClient {
         &self.base_url
     }
 
-    pub fn application_id(&self) -> u64 {
-        self.application_id.load(Ordering::Relaxed)
+    /// The application ID used by application-scoped routes, or `None` if it
+    /// has not been set.
+    pub fn application_id(&self) -> Option<ApplicationId> {
+        ApplicationId::try_new(self.application_id.load(Ordering::Relaxed)).ok()
     }
 
-    pub fn set_application_id(&self, application_id: u64) {
-        self.application_id.store(application_id, Ordering::Relaxed);
+    /// Sets the application ID for this client and every clone of it.
+    pub fn set_application_id(&self, application_id: ApplicationId) {
+        self.application_id
+            .store(application_id.get(), Ordering::Relaxed);
     }
 
     // [Decision Log] Shim plus erased transport core

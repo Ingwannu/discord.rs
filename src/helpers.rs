@@ -29,8 +29,8 @@ use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationCommandOptionChoice, CreateMessage, GenericId, InteractionCallbackResponse,
-    InteractionContextData, Message,
+    ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionCallbackResponse,
+    InteractionContextData, InteractionId, Message, MessageId,
 };
 use crate::response::InteractionReplyData;
 use crate::types::ButtonConfig;
@@ -90,7 +90,7 @@ impl ComponentsV2Payload {
 /// Provides the `send_container_message` helper.
 pub async fn send_container_message(
     http: &DiscordHttpClient,
-    channel_id: GenericId,
+    channel_id: ChannelId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
@@ -100,7 +100,7 @@ pub async fn send_container_message(
 /// Provides the `send_message` helper.
 pub async fn send_message(
     http: &DiscordHttpClient,
-    channel_id: GenericId,
+    channel_id: ChannelId,
     body: &CreateMessage,
 ) -> Result<Message, DiscordError> {
     http.create_message(channel_id, body).await
@@ -109,7 +109,7 @@ pub async fn send_message(
 /// Provides the `send_to_channel` helper.
 pub async fn send_to_channel(
     http: &DiscordHttpClient,
-    channel_id: GenericId,
+    channel_id: ChannelId,
     title: &str,
     description: &str,
     buttons: Vec<ButtonConfig>,
@@ -126,7 +126,7 @@ pub async fn send_to_channel(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_container(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -188,7 +188,7 @@ fn reply_data(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_container(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -212,7 +212,7 @@ pub async fn respond_component_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_modal_with_container(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -327,7 +327,7 @@ pub async fn delete_original_response(
 pub async fn delete_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message_id: GenericId,
+    message_id: MessageId,
 ) -> Result<(), DiscordError> {
     context.delete_follow_up(http, message_id).await
 }
@@ -342,7 +342,7 @@ pub async fn delete_followup_response(
 pub async fn edit_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message_id: GenericId,
+    message_id: MessageId,
     message: CreateMessage,
 ) -> Result<Message, DiscordError> {
     context
@@ -353,8 +353,8 @@ pub async fn edit_followup_response(
 /// Provides the `edit_message_with_container` helper.
 pub async fn edit_message_with_container(
     http: &DiscordHttpClient,
-    channel_id: GenericId,
-    message_id: GenericId,
+    channel_id: ChannelId,
+    message_id: MessageId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
@@ -368,7 +368,7 @@ pub async fn edit_message_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn update_component_with_container(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     container: ContainerBuilder,
 ) -> Result<(), DiscordError> {
@@ -389,7 +389,7 @@ pub async fn update_component_with_container(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_modal(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     modal: ModalBuilder,
 ) -> Result<(), DiscordError> {
@@ -517,7 +517,7 @@ pub async fn launch_activity(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn defer_and_followup_container(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
@@ -541,7 +541,7 @@ pub async fn defer_and_followup_container(
 /// Provides the `send_components_v2` helper.
 pub async fn send_components_v2(
     http: &DiscordHttpClient,
-    channel_id: GenericId,
+    channel_id: ChannelId,
     message: ComponentsV2Message,
 ) -> Result<Value, DiscordError> {
     let body = ComponentsV2Payload::new(message.build()).into_value();
@@ -555,7 +555,7 @@ pub async fn send_components_v2(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_with_components_v2(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     message: ComponentsV2Message,
     ephemeral: bool,
@@ -580,7 +580,7 @@ pub async fn respond_with_components_v2(
 /// interaction prefer [`InteractionResponder`](crate::response::InteractionResponder).
 pub async fn respond_component_with_components_v2(
     http: &DiscordHttpClient,
-    interaction_id: GenericId,
+    interaction_id: InteractionId,
     interaction_token: &str,
     message: ComponentsV2Message,
     ephemeral: bool,
@@ -629,7 +629,9 @@ mod tests {
     use crate::response::AckKind;
 
     fn sample_http(application_id: u64) -> DiscordHttpClient {
-        DiscordHttpClient::new("test-token", application_id)
+        use crate::model::ApplicationId;
+
+        DiscordHttpClient::new("test-token", ApplicationId::try_new(application_id).ok())
     }
 
     fn sample_context(application_id: &str, token: &str) -> InteractionContextData {

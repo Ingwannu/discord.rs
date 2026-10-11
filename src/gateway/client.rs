@@ -15,7 +15,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::model::{GenericId, RequestChannelInfo, RequestGuildMembers, UpdatePresence};
+use crate::model::{ChannelId, GuildId, RequestChannelInfo, RequestGuildMembers, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
 use crate::ws::{GatewayConnectionConfig, IdentifyOutcome, IdentifyPermit};
@@ -818,8 +818,8 @@ async fn recv_control_command(
 }
 
 pub(crate) fn voice_state_update_payload(
-    guild_id: GenericId,
-    channel_id: Option<GenericId>,
+    guild_id: GuildId,
+    channel_id: Option<ChannelId>,
     self_mute: bool,
     self_deaf: bool,
 ) -> Value {
@@ -849,8 +849,8 @@ pub(crate) fn request_guild_members_payload(request: &RequestGuildMembers) -> Va
 }
 
 pub(crate) fn request_soundboard_sounds_payload(
-    guild_ids: Vec<GenericId>,
-    channels: Option<HashMap<GenericId, Vec<GenericId>>>,
+    guild_ids: Vec<GuildId>,
+    channels: Option<HashMap<GuildId, Vec<ChannelId>>>,
 ) -> Value {
     serde_json::json!({
         "op": OP_REQUEST_SOUNDBOARD_SOUNDS,

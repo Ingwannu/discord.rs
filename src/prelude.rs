@@ -67,11 +67,10 @@ pub use crate::model::{
     WebhookMessageQuery,
 };
 // Typed IDs (docs/design/3.0-types-events-requests.md §1): the common
-// resource kinds plus `GenericId`, which every ID parameter takes until the
-// per-domain narrowing of series 2 step B.
-pub use crate::model::{
-    ApplicationId, ChannelId, GenericId, GuildId, InvalidId, MessageId, RoleId, UserId,
-};
+// resource kinds, plus `InvalidId` for annotating checked parsing. The other
+// aliases (and `GenericId`, used only where Discord leaves the kind open) are
+// imported from the crate root.
+pub use crate::model::{ApplicationId, ChannelId, GuildId, InvalidId, MessageId, RoleId, UserId};
 // Deprecated 2.x name; glob importers get a note pointing at the typed IDs.
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use crate::model::Snowflake;

@@ -3,8 +3,8 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ArchivedThreadsQuery, Channel, GenericId, JoinedArchivedThreadsQuery, ThreadListResponse,
-    ThreadMember, ThreadMemberQuery,
+    ArchivedThreadsQuery, Channel, ChannelId, GuildId, JoinedArchivedThreadsQuery, MessageId,
+    ThreadListResponse, ThreadMember, ThreadMemberQuery, UserId,
 };
 
 use super::{
@@ -15,8 +15,8 @@ use super::{
 impl RestClient {
     pub async fn create_thread_from_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
         body: &Value,
     ) -> Result<Channel, DiscordError> {
         self.request_typed(
@@ -29,7 +29,7 @@ impl RestClient {
 
     pub async fn create_thread(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         body: &Value,
     ) -> Result<Channel, DiscordError> {
         self.request_typed(
@@ -40,7 +40,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn join_thread(&self, channel_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn join_thread(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
             &format!("/channels/{}/thread-members/@me", channel_id),
@@ -51,8 +51,8 @@ impl RestClient {
 
     pub async fn add_thread_member(
         &self,
-        channel_id: GenericId,
-        user_id: GenericId,
+        channel_id: ChannelId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::PUT,
@@ -62,7 +62,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn leave_thread(&self, channel_id: GenericId) -> Result<(), DiscordError> {
+    pub async fn leave_thread(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
             &format!("/channels/{}/thread-members/@me", channel_id),
@@ -73,8 +73,8 @@ impl RestClient {
 
     pub async fn remove_thread_member(
         &self,
-        channel_id: GenericId,
-        user_id: GenericId,
+        channel_id: ChannelId,
+        user_id: UserId,
     ) -> Result<(), DiscordError> {
         self.request_no_content(
             Method::DELETE,
@@ -86,8 +86,8 @@ impl RestClient {
 
     pub async fn get_thread_member(
         &self,
-        channel_id: GenericId,
-        user_id: GenericId,
+        channel_id: ChannelId,
+        user_id: UserId,
         with_member: Option<bool>,
     ) -> Result<ThreadMember, DiscordError> {
         let query = bool_query("with_member", with_member);
@@ -104,7 +104,7 @@ impl RestClient {
 
     pub async fn get_thread_members(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<ThreadMember>, DiscordError> {
         self.list_thread_members(channel_id, &ThreadMemberQuery::default())
             .await
@@ -112,7 +112,7 @@ impl RestClient {
 
     pub async fn list_thread_members(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         query: &ThreadMemberQuery,
     ) -> Result<Vec<ThreadMember>, DiscordError> {
         self.request_typed(
@@ -134,7 +134,7 @@ impl RestClient {
     )]
     pub async fn get_public_archived_threads(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         limit: Option<u64>,
     ) -> Result<serde_json::Value, DiscordError> {
         let path = match limit {
@@ -150,7 +150,7 @@ impl RestClient {
 
     pub async fn list_public_archived_threads(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         query: &ArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
         self.request_typed(
@@ -167,7 +167,7 @@ impl RestClient {
 
     pub async fn list_private_archived_threads(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         query: &ArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
         self.request_typed(
@@ -184,7 +184,7 @@ impl RestClient {
 
     pub async fn list_joined_private_archived_threads(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
         query: &JoinedArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
         self.request_typed(
@@ -201,7 +201,7 @@ impl RestClient {
 
     pub async fn get_active_guild_threads(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<ThreadListResponse, DiscordError> {
         self.request_typed(
             Method::GET,

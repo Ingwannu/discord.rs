@@ -16,7 +16,7 @@ use tokio::time::Duration;
 /// Maps a readable test label ("a", "old-member") to a stable ID. Decimal
 /// labels keep their value so they line up with `test_id(n)`; other labels
 /// hash (FNV-1a) into the top half of the range, away from small literals.
-fn named_id(label: &str) -> GenericId {
+fn named_id<M: IdMarker>(label: &str) -> Id<M> {
     if let Ok(id) = label.parse() {
         return id;
     }
@@ -44,12 +44,13 @@ use crate::event::{
 use crate::gateway::client::{GatewayCommand, GATEWAY_COMMAND_QUEUE_CAPACITY};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    Activity, Attachment, ComponentInteraction, ComponentInteractionData, Embed, GenericId,
-    Interaction, InteractionContextData, Member, Message, Reaction, RequestChannelInfo, Role,
-    SoundboardSound, StageInstance, Sticker, User, VoiceServerUpdate, VoiceState,
+    Activity, Attachment, ChannelId, ComponentInteraction, ComponentInteractionData, Embed,
+    GuildId, Interaction, InteractionContextData, Member, Message, MessageId, Reaction,
+    RequestChannelInfo, Role, RoleId, SoundboardSound, StageInstance, Sticker, User, UserId,
+    VoiceServerUpdate, VoiceState,
 };
 #[cfg(feature = "sharding")]
-use crate::model::{GatewayBot, SessionStartLimit};
+use crate::model::{GatewayBot, Id, IdMarker, SessionStartLimit};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardConfig, ShardingManager};
 use crate::types::Emoji;
@@ -630,7 +631,7 @@ async fn event_handler_routes_typed_hooks_and_reserves_raw_for_unknowns() {
         hits: Arc::clone(&hits),
     };
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
 
@@ -738,7 +739,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
     let handler: Arc<dyn super::ErasedEventHandler> = Arc::new(OrderedHandler {
         hits: Arc::clone(&hits),
     });
-    let http = Arc::new(DiscordHttpClient::new("token", 0));
+    let http = Arc::new(DiscordHttpClient::new("token", None));
     let context = super::Context::new(
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
@@ -784,7 +785,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
         .await
         .expect("pipeline drains cleanly");
 
-    assert_eq!(http.application_id(), 42);
+    assert_eq!(http.application_id().map(u64::from), Some(42));
     assert_eq!(
         *hits.lock().await,
         vec!["ready".to_string(), "message:hello".to_string()]
@@ -802,7 +803,7 @@ async fn type_map_and_context_data_helpers_round_trip_values() {
     assert_eq!(map.get::<u32>().copied(), Some(9));
     assert!(map.get::<bool>().is_none());
 
-    let http = Arc::new(DiscordHttpClient::new("token", 123));
+    let http = Arc::new(DiscordHttpClient::new("token", Some(test_id(123))));
     let data = Arc::new(RwLock::new(map));
     let context = super::Context::new(Arc::clone(&http), Arc::clone(&data));
     let rest = context.rest();
@@ -832,7 +833,7 @@ async fn type_map_and_context_data_helpers_round_trip_values() {
 #[tokio::test]
 async fn context_forwards_shard_commands_and_reports_missing_messenger() {
     let mut context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
     context.shard_id = 4;
@@ -945,13 +946,13 @@ fn shard_messenger_reports_channel_send_failures() {
 fn client_builder_and_rest_helpers_preserve_configuration() {
     let gateway_config = crate::ws::GatewayConnectionConfig::new("wss://gateway.example.test");
     let builder = super::Client::builder("token", Intents::from_bits(7))
-        .application_id(42)
+        .application_id(test_id(42))
         .type_map_insert::<String>("state".to_string())
         .gateway_config(gateway_config.clone())
         .cache_config(CacheConfig::unbounded().max_total_messages(5))
         .shard(9, 0);
 
-    assert_eq!(builder.application_id, Some(42));
+    assert_eq!(builder.application_id, Some(test_id(42)));
     assert_eq!(builder.shard, Some((9, 1)));
     assert_eq!(
         builder.gateway_config.normalized_url(),
@@ -965,10 +966,10 @@ fn client_builder_and_rest_helpers_preserve_configuration() {
     );
 
     let rest_only = builder.rest_only();
-    assert_eq!(rest_only.application_id(), 42);
+    assert_eq!(rest_only.application_id().map(u64::from), Some(42));
 
-    let rest = super::Client::rest("other", 7);
-    assert_eq!(rest.application_id(), 7);
+    let rest = super::Client::rest("other", Some(test_id(7)));
+    assert_eq!(rest.application_id().map(u64::from), Some(7));
 }
 
 #[tokio::test]
@@ -1021,7 +1022,13 @@ async fn client_builder_start_variants_require_event_handler() {
 async fn shared_runtime_context_reuses_shared_state() {
     let mut data = super::TypeMap::new();
     data.insert::<String>("runtime".to_string());
-    let runtime = super::SharedRuntime::new("token", 77, data, CacheConfig::default(), None);
+    let runtime = super::SharedRuntime::new(
+        "token",
+        Some(test_id(77)),
+        data,
+        CacheConfig::default(),
+        None,
+    );
     let (command_tx, _command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
 
     super::write_gateway_commands(&runtime.gateway_commands).insert(
@@ -1039,7 +1046,7 @@ async fn shared_runtime_context_reuses_shared_state() {
         context.get_data_cloned::<String>().await,
         Some("runtime".to_string())
     );
-    assert_eq!(context.rest().application_id(), 77);
+    assert_eq!(context.rest().application_id().map(u64::from), Some(77));
     assert_eq!(context.shard_messenger().await.unwrap().shard_id(), 2);
     #[cfg(feature = "sharding")]
     assert_eq!(
@@ -1056,7 +1063,7 @@ async fn shared_runtime_context_reuses_shared_state() {
 async fn shared_runtime_context_reuses_collectors_hub() {
     let runtime = super::SharedRuntime::new(
         "token",
-        0,
+        None,
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -1105,7 +1112,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
     let handler = DispatchHandler {
         hits: Arc::clone(&hits),
     };
-    let http = Arc::new(DiscordHttpClient::new("token", 7));
+    let http = Arc::new(DiscordHttpClient::new("token", Some(test_id(7))));
     let context = super::Context::new(
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
@@ -1148,7 +1155,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
         handler.handle_event(context.clone(), event.event).await;
     }
 
-    assert_eq!(http.application_id(), 7);
+    assert_eq!(http.application_id().map(u64::from), Some(7));
     assert_eq!(
         *hits.lock().await,
         vec![
@@ -1532,7 +1539,7 @@ async fn event_handler_routes_additional_typed_hooks() {
     }
 
     impl super::EventHandler for ExtendedHandler {
-        async fn member_add(&self, _ctx: super::Context, guild_id: GenericId, member: Member) {
+        async fn member_add(&self, _ctx: super::Context, guild_id: GuildId, member: Member) {
             self.hits.lock().await.push(format!(
                 "member_add:{}:{}",
                 guild_id,
@@ -1540,7 +1547,7 @@ async fn event_handler_routes_additional_typed_hooks() {
             ));
         }
 
-        async fn role_delete(&self, _ctx: super::Context, guild_id: GenericId, role_id: GenericId) {
+        async fn role_delete(&self, _ctx: super::Context, guild_id: GuildId, role_id: RoleId) {
             self.hits
                 .lock()
                 .await
@@ -1550,8 +1557,8 @@ async fn event_handler_routes_additional_typed_hooks() {
         async fn message_delete(
             &self,
             _ctx: super::Context,
-            channel_id: GenericId,
-            message_id: GenericId,
+            channel_id: ChannelId,
+            message_id: MessageId,
         ) {
             self.hits
                 .lock()
@@ -1614,7 +1621,7 @@ async fn event_handler_routes_additional_typed_hooks() {
         hits: Arc::clone(&hits),
     };
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
 
@@ -1757,7 +1764,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
 
     let handler = NoopHandler;
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
 
@@ -2071,7 +2078,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
 #[tokio::test]
 async fn context_manager_accessors_reuse_the_underlying_cache() {
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
     let guild_id = test_id(720);
@@ -2405,7 +2412,7 @@ fn shard_messenger_builds_voice_state_update_gateway_payload() {
 
 #[tokio::test]
 async fn context_new_keeps_legacy_http_and_data_entry_points() {
-    let http = Arc::new(crate::http::DiscordHttpClient::new("token", 0));
+    let http = Arc::new(crate::http::DiscordHttpClient::new("token", None));
     let data = Arc::new(RwLock::new(super::TypeMap::new()));
     let context = super::Context::new(Arc::clone(&http), Arc::clone(&data));
 
@@ -2422,7 +2429,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
     impl super::EventHandler for NoopHandler {}
 
     let handler = NoopHandler;
-    let http = Arc::new(DiscordHttpClient::new("token", 0));
+    let http = Arc::new(DiscordHttpClient::new("token", None));
     let context = super::Context::new(
         Arc::clone(&http),
         Arc::new(RwLock::new(super::TypeMap::new())),
@@ -2488,7 +2495,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
 #[tokio::test]
 async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
     let guild_id = test_id(301);
@@ -2577,7 +2584,7 @@ async fn context_voice_wrappers_and_apply_voice_updates_share_state() {
 #[tokio::test]
 async fn apply_voice_updates_ignores_non_voice_events_and_runtime_connect_requires_full_state() {
     let context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 0)),
+        Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
 
@@ -2858,7 +2865,7 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
         .unwrap();
     let runtime = super::SharedRuntime::new(
         "token",
-        0,
+        None,
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -3159,7 +3166,7 @@ async fn component_interaction_stub_does_not_overwrite_cached_channel() {
 struct RecordingBackend {
     calls: std::sync::Mutex<Vec<String>>,
     /// Messages stored by `put_message`, served by `get_message`.
-    messages: std::sync::Mutex<std::collections::HashMap<(GenericId, GenericId), Message>>,
+    messages: std::sync::Mutex<std::collections::HashMap<(ChannelId, MessageId), Message>>,
     /// When set, every `put_message` waits for a permit before recording,
     /// modelling a slow remote store.
     put_message_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -3264,8 +3271,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn put_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         _member: Member,
     ) -> Result<(), crate::error::DiscordError> {
         if self
@@ -3281,15 +3288,15 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn get_member(
         &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
+        _guild_id: GuildId,
+        _user_id: UserId,
     ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
         Ok(None)
     }
 
     async fn list_members(
         &self,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
     ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3297,8 +3304,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_member:{guild_id}:{user_id}"));
@@ -3327,8 +3334,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn get_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
         if self.fail_get_message {
             return Err(crate::error::DiscordError::model("backend unreachable"));
@@ -3344,7 +3351,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn list_messages(
         &self,
-        _channel_id: GenericId,
+        _channel_id: ChannelId,
     ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3352,8 +3359,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_message(
         &self,
         epoch: u64,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_message:{channel_id}:{message_id}"));
@@ -3367,8 +3374,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn put_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: crate::model::Presence,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
@@ -3381,15 +3388,15 @@ impl crate::cache::CacheBackend for RecordingBackend {
 
     async fn get_presence(
         &self,
-        _guild_id: GenericId,
-        _user_id: GenericId,
+        _guild_id: GuildId,
+        _user_id: UserId,
     ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         Ok(None)
     }
 
     async fn list_presences(
         &self,
-        _guild_id: GenericId,
+        _guild_id: GuildId,
     ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         Ok(Vec::new())
     }
@@ -3397,8 +3404,8 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!("delete_presence:{guild_id}:{user_id}"));
@@ -3611,7 +3618,7 @@ async fn shared_runtime_propagates_default_allowed_mentions_to_context_and_rest(
     };
     let runtime = super::SharedRuntime::new(
         "token",
-        1,
+        Some(test_id(1)),
         super::TypeMap::new(),
         CacheConfig::default(),
         Some(mentions.clone()),
@@ -3622,7 +3629,7 @@ async fn shared_runtime_propagates_default_allowed_mentions_to_context_and_rest(
 
     let bare_runtime = super::SharedRuntime::new(
         "token",
-        1,
+        Some(test_id(1)),
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -3646,7 +3653,7 @@ fn client_builder_gateway_capabilities_reach_the_connection_config() {
 /// A context for shard `shard` with no messengers registered yet.
 fn pipeline_test_context(shard: (u32, u32)) -> super::Context {
     let mut context = super::Context::new(
-        Arc::new(DiscordHttpClient::new("token", 1)),
+        Arc::new(DiscordHttpClient::new("token", Some(test_id(1)))),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
     context.shard_id = shard.0;
@@ -4239,7 +4246,7 @@ async fn fetch_members_unregisters_its_waiter_on_timeout_cancellation_and_send_f
 async fn stopping_a_shard_fails_its_pending_fetch_members_immediately() {
     let runtime = super::SharedRuntime::new(
         "token",
-        1,
+        Some(test_id(1)),
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -4868,7 +4875,7 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
 
     let runtime = super::SharedRuntime::new(
         "token",
-        0,
+        None,
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -4939,7 +4946,7 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
 
     let runtime = super::SharedRuntime::new(
         "token",
-        0,
+        None,
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -5340,7 +5347,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
 
     let runtime = super::SharedRuntime::new(
         "token",
-        0,
+        None,
         super::TypeMap::new(),
         CacheConfig::default(),
         None,
@@ -6049,7 +6056,7 @@ async fn spawn_test_supervisor(
         handler: Arc::new(NoopEventHandler),
         runtime: super::SharedRuntime::new(
             "token",
-            0,
+            None,
             super::TypeMap::new(),
             CacheConfig::default(),
             None,
@@ -6436,7 +6443,7 @@ struct DelayedStore {
     /// Every clear waits for a permit.
     clear_gate: Arc<tokio::sync::Semaphore>,
     /// Message ids whose `put_message` fails.
-    fail_put: std::sync::Mutex<std::collections::HashSet<GenericId>>,
+    fail_put: std::sync::Mutex<std::collections::HashSet<MessageId>>,
     /// The next this many clears commit but report a failure, as if the
     /// response were lost.
     lose_clear_responses: std::sync::atomic::AtomicUsize,
@@ -6526,8 +6533,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn put_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         member: Member,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
@@ -6537,15 +6544,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_member(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<Option<Arc<Member>>, crate::error::DiscordError> {
         self.store.get_member(guild_id, user_id).await
     }
 
     async fn list_members(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<Arc<Member>>, crate::error::DiscordError> {
         self.store.list_members(guild_id).await
     }
@@ -6553,8 +6560,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_member(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store.delete_member(epoch, guild_id, user_id).await
     }
@@ -6573,15 +6580,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_message(
         &self,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<Option<Arc<Message>>, crate::error::DiscordError> {
         self.store.get_message(channel_id, message_id).await
     }
 
     async fn list_messages(
         &self,
-        channel_id: GenericId,
+        channel_id: ChannelId,
     ) -> Result<Vec<Arc<Message>>, crate::error::DiscordError> {
         self.store.list_messages(channel_id).await
     }
@@ -6589,8 +6596,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_message(
         &self,
         epoch: u64,
-        channel_id: GenericId,
-        message_id: GenericId,
+        channel_id: ChannelId,
+        message_id: MessageId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
             .delete_message(epoch, channel_id, message_id)
@@ -6600,8 +6607,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn put_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
         presence: crate::model::Presence,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
@@ -6611,15 +6618,15 @@ impl crate::cache::CacheBackend for DelayedStore {
 
     async fn get_presence(
         &self,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<Option<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         self.store.get_presence(guild_id, user_id).await
     }
 
     async fn list_presences(
         &self,
-        guild_id: GenericId,
+        guild_id: GuildId,
     ) -> Result<Vec<Arc<crate::model::Presence>>, crate::error::DiscordError> {
         self.store.list_presences(guild_id).await
     }
@@ -6627,8 +6634,8 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn delete_presence(
         &self,
         epoch: u64,
-        guild_id: GenericId,
-        user_id: GenericId,
+        guild_id: GuildId,
+        user_id: UserId,
     ) -> Result<(), crate::error::DiscordError> {
         self.store.delete_presence(epoch, guild_id, user_id).await
     }
@@ -6752,7 +6759,7 @@ async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
         handler: Arc::new(StuckOnMessage { started }),
         runtime: super::SharedRuntime::new(
             "token",
-            0,
+            None,
             super::TypeMap::new(),
             CacheConfig::default(),
             None,
