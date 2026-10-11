@@ -20,6 +20,12 @@
 //! It also pins the received modal values (a later fix, same payloads): a
 //! submitted checkbox's boolean `value`, a radio group's string `value`, and
 //! the `values` lists, both through `MessageComponent` and the modal parser.
+//!
+//! The interaction tests (phase 4 direct decoding) send every documented
+//! interaction — the command interactions, the message component
+//! interactions, and the modal submits — through
+//! [`crate::decode_interaction`] in Discord's key order and with `data`
+//! moved first, and write them back through the wire-format `Serialize`.
 
 // Generated verbatim by ci/doc_examples.py; formatting it would make the
 // next regeneration a noisy diff.
@@ -36,6 +42,7 @@ use super::{
     Invite, Message, MessageComponent, MessageComponentValue, SharedClientTheme, Sku,
     StageInstance, Sticker, StickerPack, Subscription, UpdatePresence, User, Webhook,
 };
+use crate::model::Interaction;
 use crate::model::{
     ActivityType, ApplicationEventWebhookStatus, AuditLogActionType, AutoModerationEventType,
     AutoModerationTriggerType, BaseTheme, ButtonStyle, ChannelType, CommandOptionType, CommandType,
@@ -44,7 +51,7 @@ use crate::model::{
     StageInstancePrivacyLevel, StickerFormatType, StickerType, SubscriptionStatus, UserPremiumType,
     VerificationLevel, WebhookType,
 };
-use crate::parsers::parse_interaction;
+use crate::parsers::{decode_interaction, parse_interaction};
 
 /// Keys holding a discriminant (or the presence status vocabulary) somewhere
 /// in Discord's payloads. A modeled object that received one must write it
@@ -694,4 +701,213 @@ fn unknown_discriminants_survive_and_wide_ones_fail() {
         serde_json::from_value::<AuditLogEntry>(json!({ "action_type": 65_536 })).is_err(),
         "audit log action 65536 must not decode"
     );
+}
+
+/// A documented `data` object wrapped in the interaction fields Discord's
+/// component examples leave out (`...additionalInteractionFields`).
+fn interaction_with(kind: u8, data: &str) -> Value {
+    json!({
+        "id": "1194523212315476038",
+        "application_id": "775799577604522054",
+        "token": "A_UNIQUE_TOKEN",
+        "type": kind,
+        "version": 1,
+        "guild_id": "290926798626357999",
+        "channel_id": "645027906669510667",
+        "member": {
+            "user": { "id": "53908232506183680", "username": "Mason", "discriminator": "1337" },
+            "roles": [],
+            "joined_at": "2017-03-13T19:19:14.040000+00:00",
+            "deaf": false,
+            "mute": false
+        },
+        "locale": "en-US",
+        "data": parse("data", data),
+    })
+}
+
+/// Re-encodes `payload` with `data` as the first key, the order a sorted
+/// `serde_json::Value` (or another producer) may use.
+fn data_first(payload: &Value) -> String {
+    let Some(object) = payload.as_object() else {
+        panic!("interaction payloads are objects");
+    };
+    let mut text = format!("{{\"data\":{}", object["data"]);
+    for (key, value) in object.iter().filter(|(key, _)| *key != "data") {
+        text.push_str(&format!(",{}:{value}", Value::String(key.clone())));
+    }
+    text.push('}');
+    text
+}
+
+/// Decodes `payload` from text in both key orders and from the `Value`,
+/// checks the three agree, and returns the decoded interaction with its
+/// wire-format JSON.
+fn decode_every_way(name: &str, payload: &Value) -> (Interaction, Value) {
+    let in_order = match decode_interaction(&payload.to_string()) {
+        Ok(interaction) => interaction,
+        Err(error) => panic!("{name}: does not decode: {error}"),
+    };
+    let written = encode(name, &in_order);
+    let reordered = match decode_interaction(&data_first(payload)) {
+        Ok(interaction) => interaction,
+        Err(error) => panic!("{name}: does not decode with data first: {error}"),
+    };
+    assert_eq!(encode(name, &reordered), written, "{name}: data first");
+    let from_value = match parse_interaction(payload) {
+        Ok(interaction) => interaction,
+        Err(error) => panic!("{name}: does not decode from a Value: {error}"),
+    };
+    assert_eq!(encode(name, &from_value), written, "{name}: from a Value");
+    let again = match decode_interaction(&written.to_string()) {
+        Ok(interaction) => interaction,
+        Err(error) => panic!("{name}: the written JSON does not decode: {error}"),
+    };
+    assert_eq!(
+        encode(name, &again),
+        written,
+        "{name}: a second round trip writes different JSON"
+    );
+    (in_order, written)
+}
+
+#[test]
+fn documented_command_interactions_round_trip_through_the_decoder() {
+    for (name, json) in [
+        ("command interaction 1", payloads::COMMAND_INTERACTION_1),
+        ("command interaction 2", payloads::COMMAND_INTERACTION_2),
+        ("command interaction 3", payloads::COMMAND_INTERACTION_3),
+    ] {
+        let mut payload = parse(name, json);
+        if payload.get("application_id").is_none() {
+            payload["application_id"] = json!("775799577604522054");
+        }
+        let (interaction, written) = decode_every_way(name, &payload);
+        compare(name, "$", &written, &payload);
+        // The invoker is read from `member.user` but not written twice.
+        assert!(written.get("user").is_none(), "{name}: writes user");
+        assert!(interaction.context().user.is_some(), "{name}: invoker");
+        match (name, &interaction) {
+            ("command interaction 1", Interaction::ChatInputCommand(command)) => {
+                assert_eq!(
+                    command.data.options[0]
+                        .value
+                        .as_ref()
+                        .and_then(|v| v.as_str()),
+                    Some("The Gitrog Monster")
+                );
+            }
+            ("command interaction 2", Interaction::UserContextMenu(command)) => {
+                assert_eq!(
+                    command.target_user().map(|user| user.username.as_str()),
+                    Some("VoltyDemo")
+                );
+            }
+            ("command interaction 3", Interaction::MessageContextMenu(command)) => {
+                assert_eq!(
+                    command
+                        .target_message()
+                        .map(|message| message.content.as_str()),
+                    Some("some message")
+                );
+            }
+            _ => panic!("{name}: decoded as {interaction:?}"),
+        }
+    }
+}
+
+#[test]
+fn documented_component_interactions_round_trip_through_the_decoder() {
+    assert_eq!(
+        payloads::COMPONENT_INTERACTIONS.len(),
+        6,
+        "component interaction examples changed"
+    );
+    for (section, data) in payloads::COMPONENT_INTERACTIONS {
+        let payload = interaction_with(3, data);
+        let (interaction, written) = decode_every_way(section, &payload);
+        compare(section, "$", &written, &payload);
+        let Interaction::Component(component) = interaction else {
+            panic!("{section}: decoded as {interaction:?}");
+        };
+        let original = parse(section, data);
+        assert_eq!(
+            Some(component.data.custom_id.as_str()),
+            original["custom_id"].as_str(),
+            "{section}"
+        );
+        assert_eq!(
+            component.data.values.len(),
+            original["values"].as_array().map_or(0, Vec::len),
+            "{section}"
+        );
+    }
+}
+
+/// Every documented modal submit decodes as a whole interaction with its
+/// `resolved` data, which 2.x and 3.0 before phase 4 dropped.
+#[test]
+fn documented_modal_submit_interactions_keep_resolved_data() {
+    use crate::model::ModalSubmitInteraction;
+    use crate::parsers::parse_modal_submission;
+
+    for (section, data) in payloads::MODAL_SUBMITS {
+        // The File Upload example's attachment ID has 21 digits, past
+        // u64::MAX, so no real snowflake (or typed ID) can hold it; use an
+        // 18-digit one.
+        let data = &data.replace("111111111111111111111", "111111111111111111");
+        let payload = interaction_with(5, data);
+        let (interaction, written) = decode_every_way(section, &payload);
+        let Interaction::ModalSubmit(modal) = interaction else {
+            panic!("{section}: decoded as {interaction:?}");
+        };
+        // The leaves are written without their label wrappers, so compare
+        // the rest of the payload and the submitted values.
+        let mut without_components = written.clone();
+        without_components["data"]["components"] = json!(null);
+        let mut original = payload.clone();
+        original["data"]["components"] = json!(null);
+        compare(section, "$", &without_components, &original);
+        let from_parser = match parse_modal_submission(&parse(section, data)) {
+            Ok(submission) => submission,
+            Err(error) => panic!("{section}: {error}"),
+        };
+        assert_eq!(modal.submission, from_parser, "{section}");
+        assert_eq!(
+            modal.resolved.is_some(),
+            parse(section, data).get("resolved").is_some(),
+            "{section}: resolved"
+        );
+
+        let check = |modal: &ModalSubmitInteraction| match *section {
+            "File Upload" => {
+                let files: Vec<_> = modal.get_attachments("file_upload").collect();
+                assert_eq!(files.len(), 1, "{section}");
+                assert_eq!(files[0].filename, "bug.png");
+                assert_eq!(files[0].id.get(), 111_111_111_111_111_111);
+                assert!(files[0]
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.starts_with("https://cdn.discordapp.com/")));
+            }
+            "User Select" => {
+                let users: Vec<_> = modal.get_users("user_selected").collect();
+                assert_eq!(users.len(), 1, "{section}");
+                assert_eq!(modal.get_members("user_selected").count(), 1, "{section}");
+            }
+            "Role Select" => {
+                assert_eq!(modal.get_roles("roles_selected").count(), 2, "{section}");
+            }
+            "Mentionable Select" => {
+                assert_eq!(modal.get_roles("mentionables_selected").count(), 1);
+                assert_eq!(modal.get_users("mentionables_selected").count(), 0);
+            }
+            "Channel Select" => {
+                let channels: Vec<_> = modal.get_channels("channel_selected").collect();
+                assert_eq!(channels.len(), 1, "{section}");
+            }
+            _ => {}
+        };
+        check(&modal);
+    }
 }

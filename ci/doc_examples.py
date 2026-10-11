@@ -147,6 +147,7 @@ for name, body in INTERACTIONS:
 s = (DOCS / "components/reference.mdx").read_text()
 components = []
 modal_submits = []
+component_interactions = []
 current = None
 for m in re.finditer(r"(?m)^## ([^\n]+)$|```jsonc\n(.*?)\n\s*```", s, re.S):
     if m.group(1):
@@ -173,6 +174,10 @@ for m in re.finditer(r"(?m)^## ([^\n]+)$|```jsonc\n(.*?)\n\s*```", s, re.S):
     # as a whole `data` object.
     if value.get("type") == 5 and isinstance(data, dict):
         modal_submits.append((current, json.dumps(data, separators=(",", ":"))))
+    # Message component interactions (`type: 3`) go through the interaction
+    # decoder as a whole `data` object.
+    if value.get("type") == 3 and isinstance(data, dict):
+        component_interactions.append((current, json.dumps(data, separators=(",", ":"))))
 
 out.append("/// components/reference.mdx — every component of every message, modal,")
 out.append("/// and interaction example, as `(section, component JSON)`.")
@@ -190,9 +195,17 @@ for section_name, body in modal_submits:
 out.append("];")
 out.append("")
 
+out.append("/// components/reference.mdx — the `data` of every message component")
+out.append("/// interaction example, as `(section, data JSON)`.")
+out.append("pub(super) const COMPONENT_INTERACTIONS: &[(&str, &str)] = &[")
+for section_name, body in component_interactions:
+    out.append(f'    ("{section_name}", r##"{body}"##),')
+out.append("];")
+out.append("")
+
 OUT.write_text("\n".join(out))
 print(
     f"{len(EXAMPLES)} examples, {len(INTERACTIONS)} interactions, {len(components)} components, "
-    f"{len(modal_submits)} modal submits",
+    f"{len(modal_submits)} modal submits, {len(component_interactions)} component interactions",
     file=sys.stderr,
 )
