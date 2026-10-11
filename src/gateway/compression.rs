@@ -107,6 +107,15 @@ impl GatewayZstdStream {
     }
 }
 
+/// Bytes zlib consumed or produced in one call. Bounded by the slices it was
+/// given, so this fails only if the stream's counters are corrupt.
+pub(super) fn byte_delta(after: u64, before: u64) -> Result<usize, String> {
+    after
+        .checked_sub(before)
+        .and_then(|delta| usize::try_from(delta).ok())
+        .ok_or_else(|| format!("zlib-stream byte counter moved from {before} to {after}"))
+}
+
 impl GatewayZlibStream {
     pub(super) fn new() -> Self {
         Self {
@@ -125,8 +134,8 @@ impl GatewayZlibStream {
                 .decompress(input, &mut output, FlushDecompress::Sync)
                 .map_err(|e| format!("zlib-stream decompression failed: {e}"))?;
 
-            let consumed = (self.decoder.total_in() - input_before) as usize;
-            let produced = (self.decoder.total_out() - output_before) as usize;
+            let consumed = byte_delta(self.decoder.total_in(), input_before)?;
+            let produced = byte_delta(self.decoder.total_out(), output_before)?;
             self.pending.extend_from_slice(&output[..produced]);
 
             if consumed == 0 && produced == 0 {

@@ -209,7 +209,7 @@ pub(crate) fn percent_encode_component(value: &str) -> String {
             | b'*'
             | b'\''
             | b'('
-            | b')' => encoded.push(byte as char),
+            | b')' => encoded.push(char::from(byte)),
             _ => {
                 encoded.push('%');
                 encoded.push_str(&format!("{byte:02X}"));

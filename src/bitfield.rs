@@ -262,7 +262,9 @@ impl<'de, T: BitFieldFlags> Deserialize<'de> for BitField<T> {
             where
                 E: de::Error,
             {
-                Ok(BitField::from_bits(value as u64))
+                // A negative value keeps its two's-complement bits, so a set
+                // with bit 63 stored as a signed BIGINT still round-trips.
+                Ok(BitField::from_bits(value.cast_unsigned()))
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>

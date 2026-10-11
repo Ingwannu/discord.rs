@@ -825,8 +825,18 @@ fn is_connect_failure(error: &DiscordError) -> bool {
     matches!(error, DiscordError::Http(http_error) if http_error.is_connect())
 }
 
+/// Delay before the first retry of a 5xx response, in seconds; each later
+/// retry doubles it.
+const SERVER_ERROR_BACKOFF_BASE_SECS: f64 = 0.5;
+/// Doublings stop here: 0.5 s * 2^8 = 128 s.
+const SERVER_ERROR_BACKOFF_MAX_DOUBLINGS: u32 = 8;
+
 fn server_error_backoff(attempt: usize) -> f64 {
-    0.5 * f64::from(1u32 << attempt.saturating_sub(1).min(8) as u32)
+    let doublings = u32::try_from(attempt.saturating_sub(1))
+        .map_or(SERVER_ERROR_BACKOFF_MAX_DOUBLINGS, |doublings| {
+            doublings.min(SERVER_ERROR_BACKOFF_MAX_DOUBLINGS)
+        });
+    SERVER_ERROR_BACKOFF_BASE_SECS * f64::from(1u32 << doublings)
 }
 
 /// Percent-encodes an audit-log reason the way discord.js does

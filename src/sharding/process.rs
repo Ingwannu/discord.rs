@@ -282,6 +282,11 @@ fn deadline_after(duration: Duration) -> Instant {
     now.checked_add(duration.min(FAR_FUTURE)).unwrap_or(now)
 }
 
+/// Milliseconds for a log field, saturating where `as u64` would truncate.
+fn log_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 fn lock_or_recover<T>(mutex: &StdMutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -892,9 +897,7 @@ impl SessionBudget {
             };
             if !logged {
                 warn!(
-                    wait_ms = reset_at
-                        .saturating_duration_since(Instant::now())
-                        .as_millis() as u64,
+                    wait_ms = log_millis(reset_at.saturating_duration_since(Instant::now())),
                     "session start budget exhausted; holding IDENTIFY grants until a refund \
                      or the reset"
                 );
@@ -943,7 +946,7 @@ impl SessionBudget {
                 state.refresh_failures = state.refresh_failures.saturating_add(1);
                 state.reset_at = deadline_after(delay);
                 warn!(
-                    retry_ms = delay.as_millis() as u64,
+                    retry_ms = log_millis(delay),
                     "refreshing the session start limit failed: {error}; keeping IDENTIFY \
                      grants paused"
                 );
@@ -1035,7 +1038,8 @@ impl IdentifyScheduler {
         let max_concurrency = max_concurrency.max(1);
         // `shard_id % max_concurrency` never exceeds the shard count, so
         // allocating more buckets than shards would be wasted.
-        let bucket_count = max_concurrency.min(total_shards.max(1)) as usize;
+        let bucket_count =
+            usize::try_from(max_concurrency.min(total_shards.max(1))).unwrap_or(usize::MAX);
         let now = Instant::now();
         let buckets = (0..bucket_count)
             .map(|_| Arc::new(AsyncMutex::new(BucketState { available_at: now })))
@@ -1051,7 +1055,7 @@ impl IdentifyScheduler {
     fn bucket_of(&self, shard_id: u32) -> usize {
         // The outer modulo is a no-op for valid shard ids and keeps the
         // index in range for invalid ones; `buckets` is never empty.
-        (shard_id % self.max_concurrency) as usize % self.buckets.len()
+        usize::try_from(shard_id % self.max_concurrency).unwrap_or(0) % self.buckets.len()
     }
 
     async fn acquire(&self, shard_id: u32) -> BucketLease {
@@ -1331,7 +1335,8 @@ impl ProcessShardManager {
             Some(path) => path.clone(),
             None => std::env::current_exe()?,
         };
-        let shards_per_process = config.shards_per_process.max(1) as usize;
+        let shards_per_process =
+            usize::try_from(config.shards_per_process.max(1)).unwrap_or(usize::MAX);
         let max_concurrency = config.max_concurrency.unwrap_or(1).max(1);
         let max_frame = config.max_ipc_frame_bytes.max(MIN_IPC_FRAME_BYTES);
         let scheduler = Arc::new(IdentifyScheduler::new(
@@ -1770,7 +1775,7 @@ async fn run_child_monitor(
             child = context.index,
             shard_ids = ?context.shard_ids,
             respawn = respawns,
-            delay_ms = delay.as_millis() as u64,
+            delay_ms = log_millis(delay),
             "respawning shard child after backoff"
         );
         if !idle_until(deadline_after(delay), &mut shutdown_rx, &mut command_rx).await {
@@ -2333,7 +2338,7 @@ async fn graceful_stop(
         Err(_) => {
             warn!(
                 child = context.index,
-                timeout_ms = context.shutdown_timeout.as_millis() as u64,
+                timeout_ms = log_millis(context.shutdown_timeout),
                 "shard child did not exit before the shutdown deadline; killing it"
             );
             kill_and_confirm(context, child, session.take_held_leases()).await

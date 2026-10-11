@@ -193,7 +193,7 @@ impl MemberChunkProgress {
         if self.seen.insert(chunk.chunk_index) {
             self.members.extend(chunk.members);
         }
-        if self.seen.len() as u64 >= count {
+        if u64::try_from(self.seen.len()).unwrap_or(u64::MAX) >= count {
             return Ok(Some(std::mem::take(&mut self.members)));
         }
         Ok(None)
@@ -2283,7 +2283,7 @@ async fn spawn_shard_supervisor(
     )));
     // Everything fallible happens before the first task is spawned, so an
     // error cannot leave already-started shards without an owner.
-    let mut prepared = Vec::with_capacity(total_shards as usize);
+    let mut prepared = Vec::with_capacity(usize::try_from(total_shards).unwrap_or(0));
     for shard_id in 0..total_shards {
         prepared.push((
             shard_id,
@@ -2326,7 +2326,7 @@ async fn spawn_shard_supervisor(
 
     let boot_scheduler = tokio::spawn(release_boot_waves(
         boot_gates,
-        boot_window_size.max(1) as usize,
+        usize::try_from(boot_window_size.max(1)).unwrap_or(usize::MAX),
         boot_delay,
         failures.subscribe(),
     ));

@@ -150,7 +150,9 @@ struct EventJournal {
 #[cfg(feature = "collectors")]
 impl EventJournal {
     fn end(&self) -> u64 {
-        self.first_seq + self.events.len() as u64
+        // usize -> u64 cannot fail on a supported target (usize <= 64 bits).
+        let len = u64::try_from(self.events.len()).unwrap_or(u64::MAX);
+        self.first_seq.saturating_add(len)
     }
 }
 
@@ -392,9 +394,11 @@ impl EventSubscription {
                     self.next = journal.first_seq;
                     return Err(broadcast::error::RecvError::Lagged(skipped));
                 }
-                if self.next < journal.end() {
-                    let index = (self.next - journal.first_seq) as usize;
-                    let event = journal.events[index].clone();
+                // `next >= first_seq` here, and an offset past the end is
+                // simply not published yet.
+                let offset = usize::try_from(self.next - journal.first_seq).ok();
+                if let Some(event) = offset.and_then(|offset| journal.events.get(offset)) {
+                    let event = event.clone();
                     self.next += 1;
                     return Ok(event);
                 }

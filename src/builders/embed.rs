@@ -280,20 +280,20 @@ fn format_unix_timestamp(timestamp: Duration) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milliseconds:03}Z")
 }
 
-fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
+fn civil_from_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
     let z = days_since_unix_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
     let year_of_era =
         (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let year = year_of_era as i32 + era as i32 * 400;
+    let year = year_of_era + era * 400;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_phase = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_phase + 2) / 5 + 1;
     let month = month_phase + if month_phase < 10 { 3 } else { -9 };
     let year = year + if month <= 2 { 1 } else { 0 };
 
-    (year, month as u32, day as u32)
+    (year, month, day)
 }
 
 #[cfg(test)]

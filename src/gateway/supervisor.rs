@@ -133,10 +133,10 @@ impl ShardSet {
         let mut aborts = HashMap::with_capacity(tasks.len());
         let running = tasks
             .into_iter()
-            .map(|(shard_id, task)| {
+            .map(|(shard_id, task)| -> ShardTaskFuture {
                 aborts.insert(shard_id, task.abort_handle());
                 let mut task = AbortOnDrop(task);
-                Box::pin(async move { (shard_id, (&mut task.0).await) }) as ShardTaskFuture
+                Box::pin(async move { (shard_id, (&mut task.0).await) })
             })
             .collect();
         Self { running, aborts }

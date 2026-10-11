@@ -834,7 +834,8 @@ pub(crate) fn request_channel_info_payload(request: RequestChannelInfo) -> Value
 fn rand_jitter() -> f64 {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
+        // Saturating only from the year 2554 on; any value seeds the mix.
+        .map(|duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     let counter = JITTER_COUNTER.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
     let pid = u64::from(std::process::id());
@@ -846,12 +847,22 @@ fn rand_jitter() -> f64 {
     mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
     mixed ^= mixed >> 31;
 
-    ((mixed >> 11) as f64) / ((1_u64 << 53) as f64)
+    // The top 52 bits become the mantissa of a float in [1, 2), so the
+    // result is uniform over [0, 1) without an integer-to-float cast.
+    f64::from_bits(ONE_F64_BITS | (mixed >> 12)) - 1.0
 }
 
+/// Bit pattern of `1.0_f64`: sign 0, biased exponent 1023, zero mantissa.
+const ONE_F64_BITS: u64 = 0x3ff0_0000_0000_0000;
+
 fn initial_heartbeat_delay(heartbeat_interval_ms: u64, jitter_factor: f64) -> Duration {
-    let clamped = jitter_factor.clamp(0.0, 1.0);
-    Duration::from_millis((heartbeat_interval_ms as f64 * clamped) as u64)
+    // `clamp` passes NaN through and `mul_f64` panics on it.
+    let clamped = if jitter_factor.is_nan() {
+        0.0
+    } else {
+        jitter_factor.clamp(0.0, 1.0)
+    };
+    Duration::from_millis(heartbeat_interval_ms).mul_f64(clamped)
 }
 
 fn resume_payload(token: &str, session_id: &str, seq: u64) -> Value {
@@ -997,7 +1008,7 @@ mod tests {
 
     #[cfg(feature = "zstd-stream")]
     use super::super::compression::GatewayCompressionDecoder;
-    use super::super::compression::{GatewayZlibStream, ZLIB_SUFFIX};
+    use super::super::compression::{byte_delta, GatewayZlibStream, ZLIB_SUFFIX};
     use super::super::outbound::{
         classify_gateway_command, run_gateway_outbound_worker, GatewayCommandClass,
         GatewayOutboundLimiter, GatewayOutboundMessage, GATEWAY_COMMAND_MIN_SPACING,
@@ -1262,6 +1273,12 @@ mod tests {
     }
 
     #[test]
+    fn zlib_byte_delta_rejects_a_counter_that_moved_backwards() {
+        assert_eq!(byte_delta(10, 4), Ok(6));
+        assert!(byte_delta(4, 10).is_err());
+    }
+
+    #[test]
     fn zlib_stream_decoder_keeps_state_across_payloads() {
         let payloads = compress_gateway_payloads(&[
             r#"{"op":0,"t":"READY","s":1,"d":{}}"#,
@@ -1322,6 +1339,7 @@ mod tests {
             initial_heartbeat_delay(1_000, 1.5),
             Duration::from_millis(1_000)
         );
+        assert_eq!(initial_heartbeat_delay(1_000, f64::NAN), Duration::ZERO);
     }
 
     #[test]

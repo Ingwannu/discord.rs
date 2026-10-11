@@ -431,7 +431,7 @@ fn percent_encode(value: &str) -> String {
     for byte in value.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char)
+                encoded.push(char::from(byte))
             }
             b' ' => encoded.push('+'),
             byte => encoded.push_str(&format!("%{byte:02X}")),

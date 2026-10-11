@@ -1170,8 +1170,10 @@ pub(crate) fn parse_timestamp(value: &str) -> Option<SystemTime> {
         if end == start {
             return None;
         }
-        for (position, digit) in bytes[start..end].iter().take(9).enumerate() {
-            nanos += u32::from(digit - b'0') * 10u32.pow(8 - position as u32);
+        let mut scale = 100_000_000u32;
+        for digit in bytes[start..end].iter().take(9) {
+            nanos += u32::from(digit - b'0') * scale;
+            scale /= 10;
         }
         index = end;
     }

@@ -520,7 +520,7 @@ impl VoiceOpusEncoder {
     /// Creates a `new` value.
     pub fn new(bitrate_bps: i32, use_cbr: bool) -> Result<Self, DiscordError> {
         let mut encoder = RawOpusEncoder::new(
-            DISCORD_OPUS_SAMPLE_RATE as i32,
+            DISCORD_OPUS_SAMPLE_RATE.cast_signed(), // 48 000 fits an i32
             DISCORD_OPUS_CHANNELS,
             OpusApplication::Audio,
         )
@@ -643,7 +643,7 @@ impl VoiceOutboundRtpState {
         Self {
             sequence: 0,
             timestamp: 0,
-            nonce_suffix: initial_voice_heartbeat_nonce() as u32,
+            nonce_suffix: low_32_bits(initial_voice_heartbeat_nonce()),
             ssrc,
             payload_type: RTP_PAYLOAD_TYPE_OPUS,
             sample_rate: DISCORD_OPUS_SAMPLE_RATE,
@@ -1670,7 +1670,10 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                                 let user_id = user
                                                     .get("user_id")
                                                     .and_then(|value| serde_json::from_value(value.clone()).ok())?;
-                                                let ssrc = user.get("ssrc").and_then(Value::as_u64)? as u32;
+                                                let ssrc = user
+                                                    .get("ssrc")
+                                                    .and_then(Value::as_u64)
+                                                    .and_then(|ssrc| u32::try_from(ssrc).ok())?;
                                                 Some((ssrc, user_id))
                                             })
                                             .collect::<Vec<_>>();
@@ -1801,8 +1804,16 @@ fn build_heartbeat_payload(heartbeat_nonce: u64, seq_ack: Option<i64>) -> Value 
 fn initial_voice_heartbeat_nonce() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
+        // Saturating only from the year 2554 on.
+        .map(|duration| u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// The low 32 bits, wrapping like an `as` cast but explicit about it: the
+/// RTP nonce suffix starts from a time-derived value, not a saturated one.
+fn low_32_bits(value: u64) -> u32 {
+    let [b0, b1, b2, b3, ..] = value.to_le_bytes();
+    u32::from_le_bytes([b0, b1, b2, b3])
 }
 
 fn next_voice_heartbeat_nonce(current: &mut u64) -> u64 {
@@ -1933,7 +1944,7 @@ fn gap_increment(sample_rate: u32, gap: Duration) -> u32 {
 fn timestamp_increment(sample_rate: u32, duration: Duration) -> u32 {
     let nanos = duration.as_nanos();
     let samples = (u128::from(sample_rate) * nanos) / 1_000_000_000;
-    samples.max(1).min(u128::from(u32::MAX)) as u32
+    u32::try_from(samples.max(1)).unwrap_or(u32::MAX)
 }
 
 fn read_hello_interval(payload: &Value) -> Result<u64, DiscordError> {
