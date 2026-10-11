@@ -1333,6 +1333,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
                     component_type: ComponentType::BUTTON,
+                    id: None,
                     values: vec![],
                     resolved: None,
                 },
@@ -2147,6 +2148,7 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
                 data: ComponentInteractionData {
                     custom_id: "button".to_string(),
                     component_type: ComponentType::BUTTON,
+                    id: None,
                     values: vec![],
                     resolved: None,
                 },

@@ -706,6 +706,53 @@ fn unknown_discriminants_survive_and_wide_ones_fail() {
     );
 }
 
+/// Keys of Discord's interaction examples the typed models do not keep, each
+/// with the reason. [`assert_keys_kept`] fails on any other dropped key.
+const KEYS_NOT_KEPT: &[(&str, &str)] = &[
+    (
+        "is_pending",
+        "undocumented legacy member key (`pending` is kept)",
+    ),
+    (
+        "display_name_styles",
+        "user display name styles: not in the User model yet",
+    ),
+    (
+        "burst_colors",
+        "super reaction colors: not in the Reaction model yet",
+    ),
+    (
+        "me_burst",
+        "super reaction flag: not in the Reaction model yet",
+    ),
+];
+
+/// The other direction of [`compare`]: every key of `original` is written
+/// back, except `null` values (the models read `null` and an absent key
+/// alike and write neither) and [`KEYS_NOT_KEPT`].
+fn assert_keys_kept(name: &str, path: &str, written: &Value, original: &Value) {
+    match (written, original) {
+        (Value::Object(written), Value::Object(original)) => {
+            for (key, value) in original {
+                let at = format!("{path}.{key}");
+                if value.is_null() || KEYS_NOT_KEPT.iter().any(|(kept, _)| kept == key) {
+                    continue;
+                }
+                match written.get(key) {
+                    Some(written) => assert_keys_kept(name, &at, written, value),
+                    None => panic!("{name}: drops {at} = {value}"),
+                }
+            }
+        }
+        (Value::Array(written), Value::Array(original)) => {
+            for (index, (written, original)) in written.iter().zip(original).enumerate() {
+                assert_keys_kept(name, &format!("{path}[{index}]"), written, original);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// A documented `data` object wrapped in the interaction fields Discord's
 /// component examples leave out (`...additionalInteractionFields`).
 fn interaction_with(kind: u8, data: &str) -> Value {
@@ -787,6 +834,7 @@ fn documented_command_interactions_round_trip_through_the_decoder() {
         }
         let (interaction, written) = decode_every_way(name, &payload);
         compare(name, "$", &written, &payload);
+        assert_keys_kept(name, "$", &written, &payload);
         // The invoker is read from `member.user` but not written twice.
         assert!(written.get("user").is_none(), "{name}: writes user");
         assert!(interaction.context().user.is_some(), "{name}: invoker");
@@ -830,6 +878,7 @@ fn documented_component_interactions_round_trip_through_the_decoder() {
         let payload = interaction_with(3, data);
         let (interaction, written) = decode_every_way(section, &payload);
         compare(section, "$", &written, &payload);
+        assert_keys_kept(section, "$", &written, &payload);
         let Interaction::Component(component) = interaction else {
             panic!("{section}: decoded as {interaction:?}");
         };
@@ -899,6 +948,7 @@ fn documented_modal_submit_interactions_keep_resolved_data() {
         let mut original = payload.clone();
         original["data"]["components"] = json!(null);
         compare(section, "$", &without_components, &original);
+        assert_keys_kept(section, "$", &without_components, &original);
         let from_parser = match parse_modal_submission(&parse(section, data)) {
             Ok(submission) => submission,
             Err(error) => panic!("{section}: {error}"),
@@ -953,6 +1003,7 @@ fn documented_interaction_fields_round_trip() {
     payload["message"] = parse("message", payloads::MESSAGE);
     let mut channel = parse("channel", payloads::GUILD_TEXT_CHANNEL);
     channel["permissions"] = json!("2251799813685247");
+    channel["app_permissions"] = json!("8");
     payload["channel"] = channel;
     payload["guild"] = json!({
         "id": "290926798626357999",
@@ -968,6 +1019,7 @@ fn documented_interaction_fields_round_trip() {
         object.remove("entitlement_sku_ids");
     }
     compare("component interaction", "$", &written, &expected);
+    assert_keys_kept("component interaction", "$", &written, &expected);
     for key in [
         "message",
         "channel",
@@ -987,13 +1039,20 @@ fn documented_interaction_fields_round_trip() {
         .as_deref()
         .map(|guild| (guild.id.get(), guild.features.len()));
     assert_eq!(guild, Some((290_926_798_626_357_999, 2)));
+    let channel = context.channel.as_deref();
     assert_eq!(
-        context
-            .channel
-            .as_deref()
-            .and_then(|channel| channel.name.as_deref()),
+        channel.and_then(|channel| channel.name.as_deref()),
         Some("general")
     );
+    let masks = channel.map(|channel| {
+        (
+            channel.permissions.map(|set| set.bits()),
+            channel.app_permissions.map(|set| set.bits()),
+        )
+    });
+    assert_eq!(masks, Some((Some(2_251_799_813_685_247), Some(8))));
+    assert_eq!(written["channel"]["permissions"], json!("2251799813685247"));
+    assert_eq!(written["channel"]["app_permissions"], json!("8"));
     let message = context.message.as_deref().map(|message| message.kind);
     assert_eq!(message, Some(Some(MessageType::DEFAULT)));
 }
@@ -1008,6 +1067,7 @@ fn entry_point_command_interactions_decode_typed() {
     let payload = interaction_with(2, data);
     let (interaction, written) = decode_every_way("entry point interaction", &payload);
     compare("entry point interaction", "$", &written, &payload);
+    assert_keys_kept("entry point interaction", "$", &written, &payload);
     let Interaction::PrimaryEntryPoint(entry_point) = interaction else {
         panic!("decoded as {interaction:?}");
     };

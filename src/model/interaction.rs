@@ -9,7 +9,7 @@ use crate::parsers::{V2ModalComponent, V2ModalSubmission};
 
 use super::{
     ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, CommandOptionType,
-    CommandOptionValue, CommandType, ComponentType, Entitlement, GenericId, GuildId,
+    CommandOptionValue, CommandType, ComponentId, ComponentType, Entitlement, GenericId, GuildId,
     GuildInstallOwner, Id, IdMarker, InteractionContextType, InteractionId,
     InteractionResponseState, InteractionResponseType, InteractionType, Member, MentionableId,
     Message, MessageId, Permissions, Role, RoleId, User, UserId,
@@ -366,6 +366,10 @@ pub struct CommandInteractionData {
 pub struct ComponentInteractionData {
     pub custom_id: String,
     pub component_type: ComponentType,
+    /// The component's numeric `id` within its message (Discord sends it
+    /// in its examples, though the data table does not list it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<ComponentId>,
     /// Selected values of a select menu; empty for buttons.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,

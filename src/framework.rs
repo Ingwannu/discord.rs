@@ -532,6 +532,7 @@ mod tests {
                     data: ComponentInteractionData {
                         custom_id: "button:ok".to_string(),
                         component_type: ComponentType::BUTTON,
+                        id: None,
                         values: Vec::new(),
                         resolved: None,
                     },

@@ -1019,6 +1019,7 @@ fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
         data: ComponentInteractionData {
             custom_id: "button".to_string(),
             component_type: ComponentType::BUTTON,
+            id: None,
             values: vec!["x".to_string()],
             resolved: None,
         },

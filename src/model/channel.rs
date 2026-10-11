@@ -21,10 +21,19 @@ pub struct Attachment {
     pub size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Proxied URL of the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u64>,
+    /// Thumbhash placeholder of an image or video.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    /// Version of the placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_version: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ephemeral: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -293,6 +302,15 @@ pub struct Channel {
     pub position: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_overwrites: Option<Vec<PermissionOverwrite>>,
+    /// The invoking user's computed permissions in the channel, overwrites
+    /// included but not implicit permissions. Discord sends it only on the
+    /// channels of an interaction (its `channel` and resolved channels).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Permissions>,
+    /// The app's bot user's computed permissions in the channel, under the
+    /// same rules as [`Self::permissions`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -355,6 +373,8 @@ impl Channel {
             application_id: None,
             position: None,
             permission_overwrites: None,
+            permissions: None,
+            app_permissions: None,
             icon: None,
             rtc_region: None,
             video_quality_mode: None,
