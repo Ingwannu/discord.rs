@@ -645,6 +645,14 @@ impl Context {
             .message_collector_from(self.collector_start())
     }
 
+    /// Like [`Context::message_collector`], for message updates
+    /// (partial messages; see [`MessageUpdate`](crate::model::MessageUpdate)).
+    #[cfg(feature = "collectors")]
+    pub fn message_update_collector(&self) -> crate::collector::MessageUpdateCollector {
+        self.collectors
+            .message_update_collector_from(self.collector_start())
+    }
+
     /// Like [`Context::message_collector`], for interactions.
     #[cfg(feature = "collectors")]
     pub fn interaction_collector(&self) -> crate::collector::InteractionCollector {

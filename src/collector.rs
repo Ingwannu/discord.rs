@@ -15,7 +15,7 @@ use crate::event::{Event, EventKind, ReactionEvent};
 #[cfg(feature = "collectors")]
 use crate::model::{
     Channel, ChannelId, ComponentInteraction, EmojiId, GuildId, Interaction, Message, MessageId,
-    ModalSubmitInteraction, ReactionType, UserId,
+    MessageUpdate, ModalSubmitInteraction, ReactionType, UserId,
 };
 #[cfg(feature = "collectors")]
 use crate::types::Emoji;
@@ -199,7 +199,10 @@ impl Drop for HubPublisher {
 /// The client publishes every dispatched [`Event`] here (after the cache is
 /// updated) and each collector reads it through its own subscription. The
 /// hub keeps the last `capacity` events (256 by default, see
-/// [`with_capacity`](Self::with_capacity)) in one sequence-numbered journal:
+/// [`with_capacity`](Self::with_capacity)) in one sequence-numbered journal
+/// of the same `Arc<Event>`s the handler receives — publishing, replaying,
+/// and filtering never copy a payload; only an item a collector yields from
+/// `next()` is copied out (`next_event()` returns the shared event):
 ///
 /// - **From now, or from a cursor.** `message_collector()` and friends only
 ///   see events published after they were created. The `*_from(cursor)`
@@ -303,6 +306,16 @@ impl CollectorHub {
     /// Collects messages published at or after `cursor`.
     pub fn message_collector_from(&self, cursor: EventCursor) -> MessageCollector {
         MessageCollector::new(self.subscribe_from(cursor))
+    }
+
+    /// Collects message updates published from now on.
+    pub fn message_update_collector(&self) -> MessageUpdateCollector {
+        MessageUpdateCollector::new(self.subscribe())
+    }
+
+    /// Collects message updates published at or after `cursor`.
+    pub fn message_update_collector_from(&self, cursor: EventCursor) -> MessageUpdateCollector {
+        MessageUpdateCollector::new(self.subscribe_from(cursor))
     }
 
     /// Collects interactions published from now on.
@@ -439,9 +452,10 @@ impl EventSubscription {
 
 #[cfg(feature = "collectors")]
 /// What a collector's logic decided about one gateway event.
-enum Step<T> {
-    /// Hand `T` to the caller: counts as received and restarts the idle window.
-    Collect(T),
+enum Step {
+    /// Hand the event to the caller: counts as received and restarts the
+    /// idle window.
+    Collect,
     /// Nothing to yield: an unrelated event, a filtered-out item, or a pure
     /// state change such as a disposed reaction.
     Skip,
@@ -458,9 +472,13 @@ enum Step<T> {
 trait CollectorLogic: Send {
     type Item;
 
-    /// Decides about one event by reference; only an item it collects is
-    /// copied out of the shared event.
-    fn handle(&mut self, event: &Event) -> Step<Self::Item>;
+    /// Decides about one event by reference (filters see the shared
+    /// payload), updating any tallies. Nothing is copied here.
+    fn handle(&mut self, event: &Event) -> Step;
+
+    /// Copies the item out of an event [`handle`](Self::handle) collected;
+    /// the only payload copy a collected event costs, and only for `next()`.
+    fn item(&self, event: &Event) -> Option<Self::Item>;
 
     /// Limit-based end reason, if one is reached. `received` is the number of
     /// items yielded so far; logics with their own tallies may ignore it.
@@ -492,15 +510,15 @@ impl<T> Extracting<T> {
 impl<T: Clone + Send> CollectorLogic for Extracting<T> {
     type Item = T;
 
-    fn handle(&mut self, event: &Event) -> Step<T> {
-        let Some(item) = (self.extract)(event) else {
-            return Step::Skip;
-        };
-        if passes(self.filter.as_ref(), item) {
-            Step::Collect(item.clone())
-        } else {
-            Step::Skip
+    fn handle(&mut self, event: &Event) -> Step {
+        match (self.extract)(event) {
+            Some(item) if passes(self.filter.as_ref(), item) => Step::Collect,
+            _ => Step::Skip,
         }
+    }
+
+    fn item(&self, event: &Event) -> Option<T> {
+        (self.extract)(event).cloned()
     }
 
     fn limit_reached(&self, received: usize) -> Option<CollectorEndReason> {
@@ -520,8 +538,8 @@ fn reached(limit: Option<usize>, actual: usize) -> bool {
 
 #[cfg(feature = "collectors")]
 /// Outcome of racing the receive loop against the stop signal and timers.
-enum NextOutcome<T> {
-    Item(T),
+enum NextOutcome {
+    Collected(Arc<Event>),
     Ended(CollectorEndReason),
 }
 
@@ -587,7 +605,19 @@ impl<L: CollectorLogic> CollectorCore<L> {
         }
     }
 
+    /// Waits for the next collected item, copied out of its event.
     async fn next(&mut self) -> Option<L::Item> {
+        loop {
+            let event = self.next_event().await?;
+            if let Some(item) = self.logic.item(&event) {
+                return Some(item);
+            }
+        }
+    }
+
+    /// Waits for the next collected event, shared with the journal and the
+    /// handler instead of copied.
+    async fn next_event(&mut self) -> Option<Arc<Event>> {
         if self.end_reason.is_some() {
             return None;
         }
@@ -643,13 +673,13 @@ impl<L: CollectorLogic> CollectorCore<L> {
         };
 
         match outcome {
-            NextOutcome::Item(item) => {
+            NextOutcome::Collected(event) => {
                 self.received = self.received.saturating_add(1);
                 self.end_reason = self.logic.limit_reached(self.received);
                 if let Some(idle) = self.idle {
                     self.idle_deadline = Some(time::Instant::now() + idle);
                 }
-                Some(item)
+                Some(event)
             }
             NextOutcome::Ended(reason) => {
                 self.end_reason = Some(reason);
@@ -667,11 +697,11 @@ async fn recv_next<L: CollectorLogic>(
     receiver: &mut EventSubscription,
     logic: &mut L,
     lagged_events: &mut u64,
-) -> NextOutcome<L::Item> {
+) -> NextOutcome {
     loop {
         match receiver.recv().await {
             Ok(event) => match logic.handle(&event) {
-                Step::Collect(item) => return NextOutcome::Item(item),
+                Step::Collect => return NextOutcome::Collected(event),
                 Step::Skip => {}
                 Step::End(reason) => return NextOutcome::Ended(reason),
             },
@@ -781,11 +811,19 @@ macro_rules! impl_collector_controls {
                 self.core.reset_timer();
             }
 
-            /// Waits for the next matching item. Returns `None` once
-            /// collection has ended; consult
+            /// Waits for the next matching item, copied out of its
+            /// event. Returns `None` once collection has ended; consult
             /// [`end_reason`](Self::end_reason) to learn why.
             pub async fn next(&mut self) -> Option<$item> {
                 self.core.next().await
+            }
+
+            /// Like [`next`](Self::next), but returns the whole matching
+            /// event as the runtime shares it — the same `Arc<Event>` the
+            /// handler receives — instead of copying the item out. Counts
+            /// toward the limits exactly like `next()`.
+            pub async fn next_event(&mut self) -> Option<Arc<Event>> {
+                self.core.next_event().await
             }
         }
     };
@@ -847,6 +885,14 @@ fn extract_message(event: &Event) -> Option<&Message> {
 }
 
 #[cfg(feature = "collectors")]
+fn extract_message_update(event: &Event) -> Option<&MessageUpdate> {
+    match event.kind() {
+        EventKind::MessageUpdate(update) => Some(update),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "collectors")]
 fn extract_interaction(event: &Event) -> Option<&Interaction> {
     match event.kind() {
         EventKind::InteractionCreate(interaction) => Some(interaction),
@@ -879,6 +925,21 @@ pub struct MessageCollector {
 
 #[cfg(feature = "collectors")]
 impl_extracting_collector!(MessageCollector, Message, extract_message);
+
+#[cfg(feature = "collectors")]
+/// Collects `MESSAGE_UPDATE` payloads: partial messages whose fields say
+/// what changed (see [`MessageUpdate`]). Apply one to a message you hold
+/// with [`MessageUpdate::apply_to`].
+pub struct MessageUpdateCollector {
+    core: CollectorCore<Extracting<MessageUpdate>>,
+}
+
+#[cfg(feature = "collectors")]
+impl_extracting_collector!(
+    MessageUpdateCollector,
+    MessageUpdate,
+    extract_message_update
+);
 
 #[cfg(feature = "collectors")]
 /// Collects every `INTERACTION_CREATE` interaction.
@@ -1248,7 +1309,7 @@ impl ReactionLogic {
         self.targets(reaction.message_id, reaction.channel_id, reaction.guild_id)
     }
 
-    fn end_if(condition: bool, reason: CollectorEndReason) -> Step<ReactionEvent> {
+    fn end_if(condition: bool, reason: CollectorEndReason) -> Step {
         if condition {
             Step::End(reason)
         } else {
@@ -1272,7 +1333,7 @@ fn reaction_identity(reaction: &ReactionEvent) -> Option<(EmojiKey, UserId, bool
 impl CollectorLogic for ReactionLogic {
     type Item = ReactionEvent;
 
-    fn handle(&mut self, event: &Event) -> Step<ReactionEvent> {
+    fn handle(&mut self, event: &Event) -> Step {
         match event.kind() {
             EventKind::MessageReactionAdd(reaction) => {
                 if !self.targets_reaction(reaction) || !passes(self.filter.as_ref(), reaction) {
@@ -1283,7 +1344,7 @@ impl CollectorLogic for ReactionLogic {
                 };
                 let emoji = reaction.emoji.clone().unwrap_or_default();
                 self.collected.insert(key, emoji, user_id, burst);
-                Step::Collect((**reaction).clone())
+                Step::Collect
             }
             // discord.js also runs the filter on disposals, so a filter that
             // scopes collection (for example to one user) scopes removal too.
@@ -1343,6 +1404,13 @@ impl CollectorLogic for ReactionLogic {
                 CollectorEndReason::GuildDelete,
             ),
             _ => Step::Skip,
+        }
+    }
+
+    fn item(&self, event: &Event) -> Option<ReactionEvent> {
+        match event.kind() {
+            EventKind::MessageReactionAdd(reaction) => Some((**reaction).clone()),
+            _ => None,
         }
     }
 
@@ -1507,9 +1575,11 @@ mod tests {
     use serde_json::Value;
     use tokio::time;
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use crate::event::Event;
+    use crate::event::{Event, EventKind};
+    use crate::model::Patch;
     use crate::model::{Id, IdMarker, Interaction, Message};
 
     /// Decodes a dispatch the way the gateway pipeline does and wraps it in
@@ -1599,6 +1669,105 @@ mod tests {
 
         let messages = collector.collect().await;
         assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn message_collectors_keep_creates_and_updates_apart() {
+        let hub = CollectorHub::new();
+        let mut created = hub.message_collector().timeout(Duration::from_secs(1));
+        let mut updated = hub
+            .message_update_collector()
+            .filter(|update| update.content == Patch::Value("edited".to_string()))
+            .timeout(Duration::from_secs(1));
+
+        hub.publish(
+            decode_event(
+                "MESSAGE_UPDATE",
+                json!({ "id": "2", "channel_id": "1", "content": "edited" }),
+            )
+            .unwrap(),
+        );
+        hub.publish(
+            decode_event(
+                "MESSAGE_CREATE",
+                json!({ "id": "3", "channel_id": "1", "content": "new" }),
+            )
+            .unwrap(),
+        );
+
+        let message = created.next().await.expect("the create");
+        assert_eq!(message.id.get(), 3);
+        let update = updated.next().await.expect("the update");
+        assert_eq!(update.id.get(), 2);
+        // Omitted fields stay omitted: an update never poses as a message.
+        assert!(update.embeds.is_missing());
+        assert!(created.next().await.is_none());
+        assert_eq!(created.end_reason(), Some(CollectorEndReason::Time));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_event_shares_the_journaled_event_and_filters_see_the_shared_payload() {
+        let hub = CollectorHub::new();
+        let published = decode_event(
+            "MESSAGE_CREATE",
+            json!({ "id": "7", "channel_id": "1", "content": "shared" }),
+        )
+        .unwrap();
+        let EventKind::MessageCreate(payload) = published.kind() else {
+            panic!("unexpected {published:?}");
+        };
+        let expected = Arc::clone(payload);
+        let shared_views = Arc::new(AtomicUsize::new(0));
+        let views = Arc::clone(&shared_views);
+        let mut matching = hub
+            .message_collector()
+            .filter(move |message| {
+                // The filter reads the event's own payload, not a copy.
+                if std::ptr::eq(message, &*expected) {
+                    views.fetch_add(1, Ordering::SeqCst);
+                }
+                true
+            })
+            .max_items(1);
+        let mut others: Vec<_> = (0..8)
+            .map(|_| {
+                hub.message_collector()
+                    .filter(|message| message.content == "never")
+                    .timeout(Duration::from_secs(1))
+            })
+            .collect();
+
+        hub.publish(Arc::clone(&published));
+
+        let event = matching.next_event().await.expect("the matching event");
+        assert!(Arc::ptr_eq(&event, &published));
+        assert_eq!(shared_views.load(Ordering::SeqCst), 1);
+        assert_eq!(matching.received_count(), 1);
+        assert_eq!(matching.end_reason(), Some(CollectorEndReason::Limit));
+        assert!(matching.next_event().await.is_none());
+        for other in &mut others {
+            assert!(other.next_event().await.is_none());
+            assert_eq!(other.received_count(), 0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn next_event_replays_from_a_cursor_and_counts_lag() {
+        let hub = CollectorHub::with_capacity(2);
+        let start = hub.cursor();
+        for id in ["2", "3", "4"] {
+            hub.publish(message_create(id, &format!("message-{id}")));
+        }
+        let mut lagging = hub
+            .message_collector_from(start)
+            .timeout(Duration::from_secs(1));
+        let first = lagging.next_event().await.expect("oldest kept event");
+        assert!(matches!(first.kind(), EventKind::MessageCreate(message) if message.id.get() == 3));
+        assert_eq!(lagging.lagged_events(), 1);
+        assert_eq!(
+            lagging.next().await.map(|message| message.id.get()),
+            Some(4)
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -2247,6 +2416,23 @@ mod tests {
             .expect("custom emoji keyed by id");
         assert_eq!(party.emoji().name.as_deref(), Some("party"));
         assert_eq!(party.count(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reaction_collector_next_event_shares_the_add_and_still_tallies() {
+        let hub = CollectorHub::new();
+        let mut collector = hub
+            .reaction_collector(id(MESSAGE))
+            .max_items(1)
+            .timeout(Duration::from_secs(30));
+        let add = reaction_add(MESSAGE, "1", unicode("✅"));
+        hub.publish(reaction_add("999", "1", unicode("✅")));
+        hub.publish(Arc::clone(&add));
+
+        let event = collector.next_event().await.expect("the add");
+        assert!(Arc::ptr_eq(&event, &add));
+        assert_eq!(collector.collected().total(), 1);
+        assert_eq!(collector.end_reason(), Some(CollectorEndReason::Limit));
     }
 
     #[tokio::test(start_paused = true)]

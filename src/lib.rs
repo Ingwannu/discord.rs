@@ -330,5 +330,6 @@ pub use interactions::{interactions_endpoint, typed_interactions_endpoint};
 #[cfg(feature = "collectors")]
 pub use collector::{
     CollectorHub, ComponentCollector, EmojiKey, EventCursor, EventSubscription,
-    InteractionCollector, MessageCollector, ModalCollector, ReactionCollector,
+    InteractionCollector, MessageCollector, MessageUpdateCollector, ModalCollector,
+    ReactionCollector,
 };
