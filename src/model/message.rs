@@ -381,10 +381,19 @@ pub struct ReactionCountDetails {
 pub struct CreateMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Components as the JSON the [`crate::builders`] produce. Stays JSON
+    /// until the typed request models (3.0 design §4, series 6), where
+    /// outgoing components become their own data enums rather than the
+    /// received [`MessageComponent`](super::MessageComponent) and the
+    /// builders stop producing intermediate JSON.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
+    /// Embeds as the JSON [`EmbedBuilder`](crate::builders::EmbedBuilder)
+    /// produces. Stays JSON until the typed request models (3.0 design §4,
+    /// series 6) move the builders and interaction replies off
+    /// intermediate JSON together.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub embeds: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
