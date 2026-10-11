@@ -13,7 +13,9 @@ use futures_util::{SinkExt, StreamExt};
 use opus_decoder::OpusDecoder;
 #[cfg(feature = "voice-encode")]
 use opus_rs::{Application as OpusApplication, OpusEncoder as RawOpusEncoder};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::Value;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
@@ -22,6 +24,7 @@ use tokio::time::{interval, sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::error::DiscordError;
+use crate::event::Lenient;
 use crate::model::{GuildId, UserId};
 use crate::types::invalid_data_error;
 use crate::voice::{
@@ -1512,25 +1515,21 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
     let hello =
         voice_stage_timeout("hello", VOICE_HELLO_TIMEOUT, read_voice_payload(&mut read)).await?;
     let heartbeat_interval_ms = read_hello_interval(&hello)?;
+    let hello = VoiceEnvelope::parse(&hello)?;
 
     let identify = build_identify_payload(&config);
     write
         .send(WsMessage::Text(identify.to_string().into()))
         .await?;
 
-    let mut last_sequence = hello.get("seq").and_then(Value::as_i64);
+    let mut last_sequence = hello.seq.0;
     let ready_payload = voice_stage_timeout(
         "ready",
         VOICE_READY_TIMEOUT,
         wait_for_voice_opcode(&mut read, VOICE_OP_READY, &mut last_sequence),
     )
     .await?;
-    let ready: VoiceGatewayReady = serde_json::from_value(
-        ready_payload
-            .get("d")
-            .cloned()
-            .ok_or_else(|| invalid_data_error("missing ready data"))?,
-    )?;
+    let ready: VoiceGatewayReady = VoiceEnvelope::parse(&ready_payload)?.data("ready")?;
 
     let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:0").await?);
     udp_socket.connect((&*ready.ip, ready.port)).await?;
@@ -1565,12 +1564,8 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
         wait_for_voice_opcode(&mut read, VOICE_OP_SESSION_DESCRIPTION, &mut last_sequence),
     )
     .await?;
-    let session_description: VoiceSessionDescription = serde_json::from_value(
-        session_description_payload
-            .get("d")
-            .cloned()
-            .ok_or_else(|| invalid_data_error("missing session description data"))?,
-    )?;
+    let session_description: VoiceSessionDescription =
+        VoiceEnvelope::parse(&session_description_payload)?.data("session description")?;
     let dave_protocol_version = session_description.dave_protocol_version;
 
     let initial_state = VoiceRuntimeState {
@@ -1644,17 +1639,16 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                 message = read.next() => {
                     match message {
                         Some(Ok(WsMessage::Text(text))) => {
-                            let payload: Value = serde_json::from_str(&text)?;
-                            if let Some(seq) = payload.get("seq").and_then(Value::as_i64) {
+                            let payload = VoiceEnvelope::parse(text.as_str())?;
+                            if let Some(seq) = payload.seq.0 {
                                 seq_ack = Some(seq);
                                 update_state(&state_tx, |state| state.last_sequence = Some(seq))?;
                             }
 
-                            match payload.get("op").and_then(Value::as_u64) {
+                            match payload.op.0 {
                                 Some(VOICE_OP_SESSION_DESCRIPTION) => {
-                                    let description: VoiceSessionDescription = serde_json::from_value(
-                                        payload.get("d").cloned().ok_or_else(|| invalid_data_error("missing session description data"))?
-                                    )?;
+                                    let description: VoiceSessionDescription =
+                                        payload.data("session description")?;
                                     update_state(&state_tx, |state| {
                                         state.dave.protocol_version = description.dave_protocol_version;
                                         state.dave.passthrough = description.dave_protocol_version.unwrap_or(0) == 0;
@@ -1665,16 +1659,10 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                     update_state(&state_tx, |state| state.resumed = true)?;
                                 }
                                 Some(VOICE_OP_DAVE_PREPARE_TRANSITION) => {
-                                    if let Some(data) = payload.get("d") {
+                                    if let Some(data) = payload.lenient_data::<DaveTransitionData>() {
                                         update_state(&state_tx, |state| {
-                                            state.dave.transition_id = data
-                                                .get("transition_id")
-                                                .and_then(Value::as_u64);
-                                            if data
-                                                .get("protocol_version")
-                                                .and_then(Value::as_u64)
-                                                == Some(0)
-                                            {
+                                            state.dave.transition_id = data.transition_id.0;
+                                            if data.protocol_version.0 == Some(0) {
                                                 state.dave.passthrough = true;
                                             }
                                         })?;
@@ -1689,17 +1677,13 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                     })?;
                                 }
                                 Some(VOICE_OP_DAVE_PREPARE_EPOCH) => {
-                                    if let Some(data) = payload.get("d") {
+                                    if let Some(data) = payload.lenient_data::<DaveTransitionData>() {
                                         update_state(&state_tx, |state| {
-                                            state.dave.transition_id = data
-                                                .get("transition_id")
-                                                .and_then(Value::as_u64);
-                                            state.dave.epoch = data
-                                                .get("epoch")
-                                                .and_then(Value::as_u64);
+                                            state.dave.transition_id = data.transition_id.0;
+                                            state.dave.epoch = data.epoch.0;
                                             if let Some(protocol_version) = data
-                                                .get("protocol_version")
-                                                .and_then(Value::as_u64)
+                                                .protocol_version
+                                                .0
                                                 .and_then(|version| u8::try_from(version).ok())
                                             {
                                                 state.dave.protocol_version = Some(protocol_version);
@@ -1709,9 +1693,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                     }
                                 }
                                 Some(code) if code == u64::from(VoiceGatewayOpcode::SPEAKING.code()) => {
-                                    let update: VoiceSpeakingUpdate = serde_json::from_value(
-                                        payload.get("d").cloned().ok_or_else(|| invalid_data_error("missing speaking data"))?
-                                    )?;
+                                    let update: VoiceSpeakingUpdate = payload.data("speaking")?;
                                     update_state(&state_tx, |state| {
                                         if let Some(user_id) = update.user_id {
                                             state.ssrc_users.insert(update.ssrc, user_id);
@@ -1720,38 +1702,19 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                                     })?;
                                 }
                                 Some(VOICE_OP_CLIENTS_CONNECT) => {
-                                    if let Some(users) = payload
-                                        .get("d")
-                                        .and_then(|data| data.get("users"))
-                                        .and_then(Value::as_array)
-                                    {
-                                        let pairs = users
-                                            .iter()
-                                            .filter_map(|user| {
-                                                let user_id = user
-                                                    .get("user_id")
-                                                    .and_then(|value| serde_json::from_value(value.clone()).ok())?;
-                                                let ssrc = user
-                                                    .get("ssrc")
-                                                    .and_then(Value::as_u64)
-                                                    .and_then(|ssrc| u32::try_from(ssrc).ok())?;
-                                                Some((ssrc, user_id))
-                                            })
-                                            .collect::<Vec<_>>();
-                                        if !pairs.is_empty() {
-                                            update_state(&state_tx, |state| {
-                                                for (ssrc, user_id) in pairs {
-                                                    state.ssrc_users.insert(ssrc, user_id);
-                                                }
-                                            })?;
-                                        }
+                                    let pairs = payload.connected_clients();
+                                    if !pairs.is_empty() {
+                                        update_state(&state_tx, |state| {
+                                            for (ssrc, user_id) in pairs {
+                                                state.ssrc_users.insert(ssrc, user_id);
+                                            }
+                                        })?;
                                     }
                                 }
                                 Some(VOICE_OP_CLIENT_DISCONNECT) => {
                                     if let Some(user_id) = payload
-                                        .get("d")
-                                        .and_then(|data| data.get("user_id"))
-                                        .and_then(|value| serde_json::from_value(value.clone()).ok())
+                                        .lenient_data::<ClientDisconnectData>()
+                                        .and_then(|data| data.user_id.0)
                                     {
                                         update_state(&state_tx, |state| {
                                             state
@@ -2114,12 +2077,105 @@ fn timestamp_increment(sample_rate: u32, duration: Duration) -> u32 {
     u32::try_from(samples.max(1)).unwrap_or(u32::MAX)
 }
 
-fn read_hello_interval(payload: &Value) -> Result<u64, DiscordError> {
-    payload
-        .get("d")
-        .and_then(|data| data.get("heartbeat_interval"))
-        .and_then(Value::as_u64)
+fn read_hello_interval(payload: &str) -> Result<u64, DiscordError> {
+    #[derive(Deserialize)]
+    struct HelloData {
+        #[serde(default)]
+        heartbeat_interval: Lenient<u64>,
+    }
+    VoiceEnvelope::parse(payload)?
+        .lenient_data::<HelloData>()
+        .and_then(|hello| hello.heartbeat_interval.0)
         .ok_or_else(|| invalid_data_error("missing voice hello heartbeat interval"))
+}
+
+/// A voice gateway message as the runtime reads it: `op` and `seq` read
+/// leniently (a malformed one is `None`, as before), and `d` left as text
+/// borrowed from the frame.
+///
+/// Each payload is then decoded straight from that text with the reader the
+/// rest of the crate uses, instead of parsing the frame into a `Value` and
+/// decoding again from it.
+#[derive(Deserialize)]
+struct VoiceEnvelope<'a> {
+    #[serde(default)]
+    op: Lenient<u64>,
+    #[serde(default)]
+    seq: Lenient<i64>,
+    #[serde(default, borrow)]
+    d: Option<&'a RawValue>,
+}
+
+impl<'a> VoiceEnvelope<'a> {
+    fn parse(text: &'a str) -> Result<Self, DiscordError> {
+        Ok(serde_json::from_str(text)?)
+    }
+
+    /// Decodes the required `d` payload of a `what` message.
+    fn data<T: DeserializeOwned>(&self, what: &str) -> Result<T, DiscordError> {
+        let data = self
+            .d
+            .ok_or_else(|| invalid_data_error(format!("missing {what} data")))?;
+        Ok(serde_json::from_str(data.get())?)
+    }
+
+    /// Decodes `d` when present and well formed; `None` otherwise.
+    fn lenient_data<T: DeserializeOwned>(&self) -> Option<T> {
+        self.d
+            .and_then(|data| serde_json::from_str(data.get()).ok())
+    }
+
+    /// The `(ssrc, user_id)` pairs of a CLIENTS_CONNECT payload. Entries
+    /// without a valid user ID or a 32-bit SSRC are skipped, and a payload
+    /// without a `users` array yields nothing.
+    fn connected_clients(&self) -> Vec<(u32, UserId)> {
+        #[derive(Deserialize)]
+        struct Users<'a> {
+            #[serde(default, borrow)]
+            users: Option<&'a RawValue>,
+        }
+        #[derive(Deserialize)]
+        struct Client {
+            #[serde(default)]
+            user_id: Lenient<UserId>,
+            #[serde(default)]
+            ssrc: Lenient<u64>,
+        }
+        let Some(users) = self
+            .d
+            .and_then(|data| serde_json::from_str::<Users<'_>>(data.get()).ok())
+            .and_then(|users| users.users)
+        else {
+            return Vec::new();
+        };
+        let entries: Vec<&RawValue> = serde_json::from_str(users.get()).unwrap_or_default();
+        entries
+            .into_iter()
+            .filter_map(|entry| {
+                let client: Client = serde_json::from_str(entry.get()).ok()?;
+                let ssrc = u32::try_from(client.ssrc.0?).ok()?;
+                Some((ssrc, client.user_id.0?))
+            })
+            .collect()
+    }
+}
+
+/// DAVE prepare-transition / prepare-epoch fields, each read leniently.
+#[derive(Deserialize)]
+struct DaveTransitionData {
+    #[serde(default)]
+    transition_id: Lenient<u64>,
+    #[serde(default)]
+    epoch: Lenient<u64>,
+    #[serde(default)]
+    protocol_version: Lenient<u64>,
+}
+
+/// CLIENT_DISCONNECT's user, read leniently.
+#[derive(Deserialize)]
+struct ClientDisconnectData {
+    #[serde(default)]
+    user_id: Lenient<UserId>,
 }
 
 fn select_encryption_mode(
@@ -2165,16 +2221,17 @@ fn voice_heartbeat_ack_timeout(heartbeat_interval_ms: u64) -> Duration {
     doubled_interval.max(Duration::from_secs(1))
 }
 
+/// The next text message of the voice gateway.
 async fn read_voice_payload(
     read: &mut futures_util::stream::SplitStream<
         tokio_tungstenite::WebSocketStream<
             tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
         >,
     >,
-) -> Result<Value, DiscordError> {
+) -> Result<String, DiscordError> {
     loop {
         match read.next().await {
-            Some(Ok(WsMessage::Text(text))) => return Ok(serde_json::from_str(&text)?),
+            Some(Ok(WsMessage::Text(text))) => return Ok(text.as_str().to_owned()),
             Some(Ok(_)) => {}
             Some(Err(error)) => return Err(error.into()),
             None => return Err(invalid_data_error("voice websocket closed unexpectedly")),
@@ -2190,13 +2247,14 @@ async fn wait_for_voice_opcode(
     >,
     opcode: u64,
     last_sequence: &mut Option<i64>,
-) -> Result<Value, DiscordError> {
+) -> Result<String, DiscordError> {
     loop {
         let payload = read_voice_payload(read).await?;
-        if let Some(seq) = payload.get("seq").and_then(Value::as_i64) {
+        let envelope = VoiceEnvelope::parse(&payload)?;
+        if let Some(seq) = envelope.seq.0 {
             *last_sequence = Some(seq);
         }
-        if payload.get("op").and_then(Value::as_u64) == Some(opcode) {
+        if envelope.op.0 == Some(opcode) {
             return Ok(payload);
         }
     }
@@ -2513,15 +2571,65 @@ mod tests {
     }
 
     #[test]
+    fn voice_envelope_reads_op_seq_and_payloads_from_text() {
+        use super::{ClientDisconnectData, DaveTransitionData, VoiceEnvelope};
+
+        let message = r#"{"op":5,"seq":"x","d":{"ssrc":7,"user_id":"9","speaking":1}}"#;
+        let envelope = VoiceEnvelope::parse(message).unwrap();
+        assert_eq!(envelope.op.0, Some(5));
+        assert_eq!(
+            envelope.seq.0, None,
+            "a malformed seq is ignored, as before"
+        );
+        let update: super::VoiceSpeakingUpdate = envelope.data("speaking").unwrap();
+        assert_eq!(update.ssrc, 7);
+
+        let missing = VoiceEnvelope::parse(r#"{"op":4,"seq":3,"d":null}"#).unwrap();
+        assert_eq!(missing.seq.0, Some(3));
+        let error = missing
+            .data::<super::VoiceSessionDescription>("session description")
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("missing session description data"));
+        assert!(missing.lenient_data::<DaveTransitionData>().is_none());
+
+        let transition =
+            VoiceEnvelope::parse(r#"{"op":21,"d":{"transition_id":"bad","protocol_version":0}}"#)
+                .unwrap()
+                .lenient_data::<DaveTransitionData>()
+                .unwrap();
+        assert_eq!(transition.transition_id.0, None);
+        assert_eq!(transition.protocol_version.0, Some(0));
+
+        let connect = VoiceEnvelope::parse(
+            r#"{"op":11,"d":{"users":[{"user_id":"5","ssrc":10},{"user_id":"bad","ssrc":11},{"user_id":"6","ssrc":5000000000},7]}}"#,
+        )
+        .unwrap();
+        assert_eq!(connect.connected_clients(), vec![(10, test_id(5))]);
+        assert!(VoiceEnvelope::parse(r#"{"op":11,"d":{"users":{}}}"#)
+            .unwrap()
+            .connected_clients()
+            .is_empty());
+
+        let disconnect = VoiceEnvelope::parse(r#"{"op":13,"d":{"user_id":"8"}}"#)
+            .unwrap()
+            .lenient_data::<ClientDisconnectData>()
+            .and_then(|data| data.user_id.0);
+        assert_eq!(disconnect, Some(test_id(8)));
+        assert!(VoiceEnvelope::parse("[").is_err());
+    }
+
+    #[test]
     fn voice_runtime_read_hello_interval_and_mode_selection_handle_edge_cases() {
         assert_eq!(
-            read_hello_interval(&serde_json::json!({
-                "d": { "heartbeat_interval": 250 }
-            }))
-            .unwrap(),
+            read_hello_interval(r#"{"op":8,"d":{"heartbeat_interval":250}}"#).unwrap(),
             250
         );
-        assert!(read_hello_interval(&serde_json::json!({ "d": {} }))
+        assert!(read_hello_interval(r#"{"d":{"heartbeat_interval":250.5}}"#).is_err());
+        assert!(read_hello_interval(r#"{"op":8}"#).is_err());
+        assert!(read_hello_interval("not json").is_err());
+        assert!(read_hello_interval(r#"{ "d": {} }"#)
             .unwrap_err()
             .to_string()
             .contains("missing voice hello heartbeat interval"));

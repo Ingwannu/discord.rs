@@ -897,6 +897,8 @@ pub fn decode_event(event_name: &str, data: &str) -> Result<Event, DiscordError>
 
 #[path = "event/decode.rs"]
 mod decode;
+#[cfg(feature = "voice")]
+pub(crate) use decode::Lenient;
 
 #[cfg(test)]
 #[path = "event/tests.rs"]

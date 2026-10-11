@@ -223,7 +223,7 @@ fn typed<'a, T: Deserialize<'a>>(data: &'a str) -> Result<T, serde_json::Error> 
 /// The value is skipped as a borrowed [`RawValue`] (no allocation) and then
 /// decoded on its own, so this only works for serde_json text input; the
 /// wire structs using it stay private for that reason.
-struct Lenient<T>(Option<T>);
+pub(crate) struct Lenient<T>(pub(crate) Option<T>);
 
 impl<T> Default for Lenient<T> {
     fn default() -> Self {
