@@ -3218,6 +3218,8 @@ struct RecordingBackend {
     epoch: std::sync::atomic::AtomicU64,
     /// Fence epoch of every applied write, in order.
     fences: std::sync::Mutex<Vec<u64>>,
+    /// Id and produced epoch of the last applied clear.
+    last_clear: std::sync::Mutex<Option<(crate::cache::CacheClearId, u64)>>,
 }
 
 #[cfg(feature = "cache")]
@@ -3234,6 +3236,7 @@ impl RecordingBackend {
     fn conditional_clear(
         &self,
         expected_epoch: u64,
+        clear_id: crate::cache::CacheClearId,
     ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
         if self
             .fail_clear_shard_cache
@@ -3248,11 +3251,18 @@ impl RecordingBackend {
             panic!("backend clear failure under test");
         }
         let current = self.epoch.load(std::sync::atomic::Ordering::SeqCst);
+        let mut last_clear = self.last_clear.lock().unwrap();
         if current != expected_epoch {
-            return Ok(crate::cache::CacheClear::Rejected(current));
+            return Ok(match *last_clear {
+                Some((last_id, produced)) if last_id == clear_id => {
+                    crate::cache::CacheClear::Applied(produced)
+                }
+                _ => crate::cache::CacheClear::Rejected(current),
+            });
         }
         self.epoch
             .store(current + 1, std::sync::atomic::Ordering::SeqCst);
+        *last_clear = Some((clear_id, current + 1));
         Ok(crate::cache::CacheClear::Applied(current + 1))
     }
 
@@ -3271,19 +3281,21 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn clear_cache(
         &self,
         expected_epoch: u64,
+        clear_id: crate::cache::CacheClearId,
     ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
         self.record("clear_cache".to_string());
-        self.conditional_clear(expected_epoch)
+        self.conditional_clear(expected_epoch, clear_id)
     }
 
     async fn clear_shard_cache(
         &self,
         expected_epoch: u64,
+        clear_id: crate::cache::CacheClearId,
         shard_id: u32,
         shard_count: u32,
     ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
         self.record(format!("clear_shard_cache:{shard_id}:{shard_count}"));
-        self.conditional_clear(expected_epoch)
+        self.conditional_clear(expected_epoch, clear_id)
     }
 
     async fn purge_expired_entries(&self) -> Result<(), crate::error::DiscordError> {
@@ -6502,10 +6514,42 @@ struct DelayedStore {
     clear_gate: Arc<tokio::sync::Semaphore>,
     /// Message ids whose `put_message` fails.
     fail_put: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The next this many clears commit but report a failure, as if the
+    /// response were lost.
+    lose_clear_responses: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(feature = "cache")]
 impl DelayedStore {
+    fn maybe_lose_response(
+        &self,
+        outcome: Result<crate::cache::CacheClear, crate::error::DiscordError>,
+    ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
+        // A compare-exchange loop rather than `fetch_update`, which newer
+        // toolchains deprecate and the MSRV's replacement lacks.
+        let mut remaining = self
+            .lose_clear_responses
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let lost = loop {
+            if remaining == 0 {
+                break false;
+            }
+            match self.lose_clear_responses.compare_exchange(
+                remaining,
+                remaining - 1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            ) {
+                Ok(_) => break true,
+                Err(actual) => remaining = actual,
+            }
+        };
+        if lost {
+            return Err(crate::error::DiscordError::model("clear response lost"));
+        }
+        outcome
+    }
+
     fn new(store: &crate::cache::CacheHandle, put_permits: usize) -> Self {
         Self::with_clear_permits(store, put_permits, tokio::sync::Semaphore::MAX_PERMITS)
     }
@@ -6520,6 +6564,7 @@ impl DelayedStore {
             put_gate: Arc::new(tokio::sync::Semaphore::new(put_permits)),
             clear_gate: Arc::new(tokio::sync::Semaphore::new(clear_permits)),
             fail_put: std::sync::Mutex::default(),
+            lose_clear_responses: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -6530,21 +6575,26 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn clear_cache(
         &self,
         expected_epoch: u64,
+        clear_id: crate::cache::CacheClearId,
     ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
         self.clear_gate.acquire().await.expect("gate open").forget();
-        self.store.clear_cache(expected_epoch).await
+        let outcome = self.store.clear_cache(expected_epoch, clear_id).await;
+        self.maybe_lose_response(outcome)
     }
 
     async fn clear_shard_cache(
         &self,
         expected_epoch: u64,
+        clear_id: crate::cache::CacheClearId,
         shard_id: u32,
         shard_count: u32,
     ) -> Result<crate::cache::CacheClear, crate::error::DiscordError> {
         self.clear_gate.acquire().await.expect("gate open").forget();
-        self.store
-            .clear_shard_cache(expected_epoch, shard_id, shard_count)
-            .await
+        let outcome = self
+            .store
+            .clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)
+            .await;
+        self.maybe_lose_response(outcome)
     }
 
     async fn purge_expired_entries(&self) -> Result<(), crate::error::DiscordError> {
@@ -7182,4 +7232,59 @@ async fn worker_shutdown_finishes_pending_recovery_within_its_bound() {
     let healed = health.health();
     assert!(healed.pending_resync_shards.is_empty());
     assert_eq!(healed.resyncs, 1);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn a_committed_clear_whose_response_was_lost_does_not_supersede_the_client() {
+    let store = crate::cache::CacheHandle::new();
+    let backend = Arc::new(DelayedStore::new(
+        &store,
+        tokio::sync::Semaphore::MAX_PERMITS,
+    ));
+    let (forwarder, worker) =
+        super::CacheBackendForwarder::spawn(Arc::clone(&backend) as _, 16, Duration::from_secs(5));
+    let health = forwarder.health_handle();
+    let lose_next_clear_response = || {
+        backend
+            .lose_clear_responses
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+    };
+
+    // The claiming full clear commits, but its response is lost.
+    lose_next_clear_response();
+    forwarder.forward((0, 1), super::BackendWrite::ClearShard);
+    forwarder.flush().await;
+    let after_claim = health.health();
+    assert!(
+        after_claim.healthy && !after_claim.superseded,
+        "the retried claim was recognized as this client's own commit: {after_claim:?}"
+    );
+    forwarder.forward((0, 1), put_message_write("1"));
+    forwarder.flush().await;
+    assert!(store_has_message(&store, "1").await);
+
+    // A shard clear (the shard reconnecting) commits, and its response is
+    // lost too.
+    lose_next_clear_response();
+    forwarder.forward((0, 1), super::BackendWrite::ClearShard);
+    forwarder.flush().await;
+    let after_shard_clear = health.health();
+    assert!(
+        after_shard_clear.healthy && !after_shard_clear.superseded,
+        "{after_shard_clear:?}"
+    );
+    assert!(
+        !store_has_message(&store, "1").await,
+        "the committed clear took effect"
+    );
+    assert_eq!(after_shard_clear.failed_writes, 2, "the two lost responses");
+    assert_eq!(after_shard_clear.resyncs, 2);
+
+    // Mirroring continues under the epoch the store actually holds.
+    forwarder.forward((0, 1), put_message_write("2"));
+    forwarder.flush().await;
+    assert!(store_has_message(&store, "2").await);
+    drop(forwarder);
+    worker.shutdown(Duration::from_secs(5)).await.unwrap();
 }

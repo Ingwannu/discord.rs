@@ -20,7 +20,7 @@ pub use config::CacheConfig;
 #[path = "cache/backend.rs"]
 mod backend;
 #[cfg(feature = "cache")]
-pub use backend::{CacheBackend, CacheClear};
+pub use backend::{CacheBackend, CacheClear, CacheClearId};
 
 #[cfg(feature = "cache")]
 #[path = "cache/store.rs"]
@@ -160,17 +160,23 @@ impl CacheHandle {
 
     /// The conditional clear of the [`CacheBackend`] epoch contract: clears
     /// everything (`scope: None`) or one shard's entries if the store-wide
-    /// epoch equals `expected_epoch`, then increments the epoch — all under
-    /// one lock, so no fenced write can interleave.
+    /// epoch equals `expected_epoch`, then increments the epoch and records
+    /// `clear_id` — all under one lock, so no fenced write can interleave.
     #[cfg(feature = "cache")]
     pub(crate) async fn clear_if_epoch(
         &self,
         expected_epoch: u64,
+        clear_id: CacheClearId,
         scope: Option<(u32, u32)>,
     ) -> CacheClear {
         let mut store = self.store.write().await;
         if store.backend_epoch != expected_epoch {
-            return CacheClear::Rejected(store.backend_epoch);
+            // A retry of the last applied clear (its response was lost)
+            // gets that clear's result again; anything else is stale.
+            return match store.backend_last_clear {
+                Some((last_id, produced)) if last_id == clear_id => CacheClear::Applied(produced),
+                _ => CacheClear::Rejected(store.backend_epoch),
+            };
         }
         match scope {
             Some((shard_id, shard_count)) if shard_count > 1 => {
@@ -179,6 +185,7 @@ impl CacheHandle {
             _ => clear_store(&mut store),
         }
         store.backend_epoch += 1;
+        store.backend_last_clear = Some((clear_id, store.backend_epoch));
         CacheClear::Applied(store.backend_epoch)
     }
 
@@ -1557,13 +1564,18 @@ mod tests {
     };
     use crate::types::Emoji;
 
-    use super::{CacheBackend, CacheClear, CacheConfig, CacheHandle};
+    use super::{CacheBackend, CacheClear, CacheClearId, CacheConfig, CacheHandle};
     #[cfg(feature = "gateway")]
     use super::{
         ChannelManager, GuildManager, MemberManager, MessageManager, RoleManager, UserManager,
     };
     #[cfg(feature = "gateway")]
     use crate::http::DiscordHttpClient;
+
+    /// A clear id of a test client.
+    fn clear_id(client: u64, sequence: u64) -> CacheClearId {
+        CacheClearId { client, sequence }
+    }
 
     /// Fills every guild-scoped store for `guild_id`, using IDs derived from
     /// `base` so several guilds can coexist.
@@ -1825,7 +1837,10 @@ mod tests {
         populate_guild_entries(&cache, &shard0_guild, 100).await;
         populate_guild_entries(&cache, &shard1_guild, 200).await;
         assert_eq!(
-            cache.clear_shard_cache(0, 0, 2).await.unwrap(),
+            cache
+                .clear_shard_cache(0, clear_id(9, 0), 0, 2)
+                .await
+                .unwrap(),
             CacheClear::Applied(1)
         );
         assert_guild_entries(&cache, &shard0_guild, 100, false).await;
@@ -1853,7 +1868,7 @@ mod tests {
         };
 
         // An old single-shard client claims the store and writes.
-        let old = match cache.clear_cache(0).await.unwrap() {
+        let old = match cache.clear_cache(0, clear_id(1, 0)).await.unwrap() {
             CacheClear::Applied(epoch) => epoch,
             other => panic!("{other:?}"),
         };
@@ -1862,7 +1877,7 @@ mod tests {
 
         // A replacement client with a different shard count takes over with
         // a full clear: the topology change invalidates every older epoch.
-        let new = match cache.clear_cache(old).await.unwrap() {
+        let new = match cache.clear_cache(old, clear_id(2, 0)).await.unwrap() {
             CacheClear::Applied(epoch) => epoch,
             other => panic!("{other:?}"),
         };
@@ -1908,18 +1923,31 @@ mod tests {
         // The old client's already-submitted clears are rejected: they
         // neither erase current data nor advance the epoch.
         assert_eq!(
-            cache.clear_shard_cache(old, 0, 1).await.unwrap(),
+            cache
+                .clear_shard_cache(old, clear_id(1, 1), 0, 1)
+                .await
+                .unwrap(),
+            CacheClear::Rejected(new)
+        );
+        // Re-sending the old client's own (applied) claim does not help it
+        // either: the last applied clear is the replacement's.
+        assert_eq!(
+            cache.clear_cache(0, clear_id(1, 0)).await.unwrap(),
             CacheClear::Rejected(new)
         );
         assert_eq!(
-            cache.clear_cache(old).await.unwrap(),
+            cache.clear_cache(old, clear_id(1, 2)).await.unwrap(),
             CacheClear::Rejected(new)
         );
         assert!(cached("new-1").await);
 
         // A per-shard clear by the current owner only removes that shard's
         // entries and still advances the store-wide epoch.
-        let after_shard_clear = match cache.clear_shard_cache(new, 1, 2).await.unwrap() {
+        let after_shard_clear = match cache
+            .clear_shard_cache(new, clear_id(2, 1), 1, 2)
+            .await
+            .unwrap()
+        {
             CacheClear::Applied(epoch) => epoch,
             other => panic!("{other:?}"),
         };
@@ -1935,6 +1963,16 @@ mod tests {
             .await
             .unwrap();
         assert!(cache.presence(&shard1_guild, &user).await.is_some());
+        // A retry of that clear (its response was lost) gets the epoch it
+        // produced and clears nothing again.
+        assert_eq!(
+            cache
+                .clear_shard_cache(new, clear_id(2, 1), 1, 2)
+                .await
+                .unwrap(),
+            CacheClear::Applied(after_shard_clear)
+        );
+        assert!(cache.presence(&shard1_guild, &user).await.is_some());
         cache
             .delete_presence(new, &shard1_guild, &user)
             .await
@@ -1947,7 +1985,10 @@ mod tests {
         // The in-memory full clear keeps the epoch growing.
         cache.clear().await;
         assert_eq!(
-            cache.clear_cache(after_shard_clear).await.unwrap(),
+            cache
+                .clear_cache(after_shard_clear, clear_id(2, 2))
+                .await
+                .unwrap(),
             CacheClear::Applied(after_shard_clear + 1)
         );
     }
@@ -2819,7 +2860,10 @@ mod tests {
         .await
         .unwrap();
         cache.purge_expired_entries().await.unwrap();
-        assert_eq!(cache.clear_cache(0).await.unwrap(), CacheClear::Applied(1));
+        assert_eq!(
+            cache.clear_cache(0, clear_id(9, 0)).await.unwrap(),
+            CacheClear::Applied(1)
+        );
         assert!(cache
             .message_arc(&Snowflake::from("10"), &Snowflake::from("31"))
             .await

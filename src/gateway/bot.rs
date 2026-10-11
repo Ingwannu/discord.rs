@@ -1262,10 +1262,18 @@ impl ClientBuilder {
     /// Writes go through one ordered worker per client, so a backend sees
     /// them in gateway order. The backend must implement the epoch contract
     /// documented on [`CacheBackend`]: one store-wide epoch, conditional
-    /// (compare-and-set) clears, and writes that carry their epoch. Only one
-    /// running client may mirror into a store: the client's first clear
-    /// claims it with a full clear, and a later rejected clear makes the
-    /// client stop mirroring (see [`Context::cache_backend_health`]).
+    /// (compare-and-set) clears identified by a [`CacheClearId`] so retries
+    /// are idempotent, and writes that carry their epoch.
+    ///
+    /// Only one running client may mirror into a store, and **you must
+    /// enforce that**: it is not detected when a client starts. A second
+    /// client's first clear simply claims the store; both clients then
+    /// report healthy while the first one's writes are silently ignored,
+    /// until its next clear is rejected and it reports `superseded` in
+    /// [`Context::cache_backend_health`], stops mirroring, and returns an
+    /// error on shutdown.
+    ///
+    /// [`CacheClearId`]: crate::cache::CacheClearId
     ///
     /// The queue holds 8,192 writes and never stalls gateway processing. A
     /// write that does not fit, or that the backend rejects or panics on,

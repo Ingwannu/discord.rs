@@ -25,6 +25,12 @@
 //!     epochs, which covers shard-count changes. A client's first clear is a
 //!     full clear that claims the store; a later rejected clear means another
 //!     client took over, and this client stops mirroring (superseded).
+//!   - Every clear carries a client-generated [`CacheClearId`]. A clear whose
+//!     call failed stays in doubt and is retried with the same id and
+//!     expected epoch before any other store operation; the store answers a
+//!     retry of its last applied clear with that clear's epoch, so a lost
+//!     response cannot make the sole writer look superseded, and no epoch is
+//!     adopted unless the store confirms this client's own clear.
 //!   - A write that does not fit, or that the backend rejects or panics on,
 //!     starts recovery for its shard: the boundary is frozen at the highest
 //!     admitted ticket, every queued write of that shard below it is
@@ -36,7 +42,9 @@
 //! - Why: one counter and one comparison give the store everything it needs
 //!   to reject every stale write or clear, and discard-before-clear means no
 //!   pre-recovery write can be replayed on top of the clear.
-//! - Trade-offs: only one client may mirror into a store; a recovering shard
+//! - Trade-offs: only one client may mirror into a store, and that must be
+//!   enforced by the deployment (a second client is not detected until the
+//!   first one's next clear is rejected); a recovering shard
 //!   loses the writes discarded during recovery until later events refill
 //!   it. Writes are serialized, so throughput is bound by backend latency,
 //!   and each MESSAGE_UPDATE costs one extra read.
@@ -52,7 +60,7 @@ use tracing::{error, warn};
 
 use super::pipeline::{AbortOnDrop, ABORT_CONFIRM_GRACE};
 use super::{merge_message_update, presence_from_update, MessageUpdateFields};
-use crate::cache::{CacheBackend, CacheClear, CacheHandle};
+use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::Event;
 use crate::model::Snowflake;
@@ -417,13 +425,126 @@ enum ClearFailure {
     Superseded(u64),
 }
 
-/// This client's view of the store: the epoch of its last applied clear,
-/// or `None` before it claimed the store.
+/// What a clear covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClearScope {
+    Store,
+    Shard(ShardPair),
+}
+
+impl ClearScope {
+    fn covers(self, shard: ShardPair) -> bool {
+        match self {
+            ClearScope::Store => true,
+            ClearScope::Shard(cleared) => cleared == shard,
+        }
+    }
+}
+
+/// A clear whose outcome is unknown: the call failed (an error, a panic, a
+/// lost response), so it may or may not have committed in the store.
+#[derive(Clone, Copy, Debug)]
+struct InDoubtClear {
+    id: CacheClearId,
+    expected: u64,
+    scope: ClearScope,
+}
+
+/// This client's view of the store.
+///
+/// A clear whose call failed stays in doubt and is resolved — retried with
+/// the same id and expected epoch — before any other clear or write. The
+/// store answers a retry of a clear that already committed with that
+/// clear's epoch (matched by id), so a lost response cannot make the sole
+/// writer look superseded, and no returned epoch is ever adopted on trust:
+/// only `Applied` for this client's own id moves the session forward.
 struct StoreSession {
+    /// Epoch of this client's last applied clear; `None` before it claimed
+    /// the store.
     epoch: Option<u64>,
+    /// Random per client instance, so ids of different clients never match.
+    client: u64,
+    next_sequence: u64,
+    in_doubt: Option<InDoubtClear>,
 }
 
 impl StoreSession {
+    fn new() -> Self {
+        use std::hash::BuildHasher;
+        // `RandomState` is seeded from OS randomness per process; mixing in
+        // the time and process id separates instances within a process too.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let client =
+            std::collections::hash_map::RandomState::new().hash_one((nanos, std::process::id()));
+        Self {
+            epoch: None,
+            client,
+            next_sequence: 0,
+            in_doubt: None,
+        }
+    }
+
+    fn next_id(&mut self) -> CacheClearId {
+        let id = CacheClearId {
+            client: self.client,
+            sequence: self.next_sequence,
+        };
+        self.next_sequence += 1;
+        id
+    }
+
+    /// Issues one clear attempt. A failed call leaves it in doubt.
+    async fn attempt(
+        &mut self,
+        backend: &dyn CacheBackend,
+        clear: InDoubtClear,
+    ) -> Result<CacheClear, ClearFailure> {
+        let call = match clear.scope {
+            ClearScope::Store => {
+                contained("clear_cache", backend.clear_cache(clear.expected, clear.id)).await
+            }
+            ClearScope::Shard(shard) => {
+                contained(
+                    "clear_shard_cache",
+                    backend.clear_shard_cache(clear.expected, clear.id, shard.0, shard.1),
+                )
+                .await
+            }
+        };
+        match call {
+            Ok(outcome) => {
+                self.in_doubt = None;
+                if let CacheClear::Applied(epoch) = outcome {
+                    self.epoch = Some(epoch);
+                }
+                Ok(outcome)
+            }
+            Err(error) => {
+                self.in_doubt = Some(clear);
+                Err(ClearFailure::Failed(error))
+            }
+        }
+    }
+
+    /// Settles an in-doubt clear by retrying it unchanged. Returns its scope
+    /// if it turned out applied.
+    async fn resolve_in_doubt(
+        &mut self,
+        backend: &dyn CacheBackend,
+    ) -> Result<Option<ClearScope>, ClearFailure> {
+        let Some(clear) = self.in_doubt else {
+            return Ok(None);
+        };
+        match self.attempt(backend, clear).await? {
+            CacheClear::Applied(_) => Ok(Some(clear.scope)),
+            // Not committed, and another client cleared since.
+            CacheClear::Rejected(current) => Err(ClearFailure::Superseded(current)),
+        }
+    }
+
     /// Clears `shard` (or claims the store with a full clear if this client
     /// has not cleared it yet) under the compare-and-set epoch contract.
     async fn clear(
@@ -431,46 +552,54 @@ impl StoreSession {
         backend: &dyn CacheBackend,
         shard: ShardPair,
     ) -> Result<u64, ClearFailure> {
+        if let Some(scope) = self.resolve_in_doubt(backend).await? {
+            if scope.covers(shard) {
+                return self
+                    .epoch
+                    .ok_or_else(|| ClearFailure::Failed("clear applied without an epoch".into()));
+            }
+        }
         let Some(expected) = self.epoch else {
             return self.claim(backend).await;
         };
-        let outcome = contained(
-            "clear_shard_cache",
-            backend.clear_shard_cache(expected, shard.0, shard.1),
-        )
-        .await
-        .map_err(ClearFailure::Failed)?;
-        match outcome {
-            CacheClear::Applied(epoch) => {
-                self.epoch = Some(epoch);
-                Ok(epoch)
-            }
+        let clear = InDoubtClear {
+            id: self.next_id(),
+            expected,
+            scope: ClearScope::Shard(shard),
+        };
+        match self.attempt(backend, clear).await? {
+            CacheClear::Applied(epoch) => Ok(epoch),
             CacheClear::Rejected(current) => Err(ClearFailure::Superseded(current)),
         }
     }
 
     /// The first clear of this client: a full clear, so a previous client's
     /// entries (possibly from another shard layout) cannot survive. Adopts
-    /// the store's epoch from a rejection and retries a few times.
+    /// the store's epoch from a rejection and retries a few times. This does
+    /// not make the claim exclusive: a second client starting meanwhile can
+    /// claim the store after it (see the [`CacheBackend`] docs).
     async fn claim(&mut self, backend: &dyn CacheBackend) -> Result<u64, ClearFailure> {
+        let id = self.next_id();
         let mut expected = 0;
         for _ in 0..CLAIM_ATTEMPTS {
-            let outcome = contained("clear_cache", backend.clear_cache(expected))
-                .await
-                .map_err(ClearFailure::Failed)?;
-            match outcome {
-                CacheClear::Applied(epoch) => {
-                    self.epoch = Some(epoch);
-                    return Ok(epoch);
-                }
+            let clear = InDoubtClear {
+                id,
+                expected,
+                scope: ClearScope::Store,
+            };
+            match self.attempt(backend, clear).await? {
+                CacheClear::Applied(epoch) => return Ok(epoch),
                 CacheClear::Rejected(current) => expected = current,
             }
         }
         Err(ClearFailure::Superseded(expected))
     }
 
-    /// The epoch to stamp writes with, claiming the store first if needed.
+    /// The epoch to stamp writes with: settles an in-doubt clear first (a
+    /// write stamped with a stale epoch would be ignored by the store) and
+    /// claims the store if needed.
     async fn write_epoch(&mut self, backend: &dyn CacheBackend) -> Result<u64, ClearFailure> {
+        self.resolve_in_doubt(backend).await?;
         match self.epoch {
             Some(epoch) => Ok(epoch),
             None => self.claim(backend).await,
@@ -505,7 +634,7 @@ async fn run_cache_backend_worker(
         shared: Arc::clone(&shared),
         completed: false,
     };
-    let mut session = StoreSession { epoch: None };
+    let mut session = StoreSession::new();
     let mut dequeued: Option<u64> = None;
     loop {
         let retry_at = next_retry(&shared);

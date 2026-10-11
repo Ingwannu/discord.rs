@@ -141,6 +141,9 @@ pub(super) struct CacheStore {
     /// Store-wide epoch of the [`super::CacheBackend`] contract. Never reset
     /// by `clear()`: it must only grow.
     pub(super) backend_epoch: u64,
+    /// Id and produced epoch of the last applied backend clear, so a retry
+    /// of a clear whose response was lost is recognized.
+    pub(super) backend_last_clear: Option<(super::CacheClearId, u64)>,
 }
 
 /// Thin wrapper kept for call-site compatibility: insert-or-move-to-back.
