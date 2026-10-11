@@ -1,0 +1,82 @@
+name: perf-report
+
+# Non-blocking: runs the performance report (tests/perf_report) for the PR
+# and for its base on the same runner, and posts the comparison as the job
+# summary. It never fails a PR because of numbers; do not make it a
+# required check. Why it does not gate (and how it could later) is in
+# docs/design/perf-baseline.md, "CI".
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-report-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Allocation counts move with the standard library, so base and head
+  # must use one toolchain. Keep this equal to RUST_TOOLCHAIN in ci.yml.
+  RUST_TOOLCHAIN: "1.99.0"
+  # The committed baseline shown for orientation; update it with the
+  # baseline section of docs/design/perf-baseline.md.
+  PERF_BASELINE: docs/design/perf/23775d1.json
+
+jobs:
+  perf-report:
+    name: perf-report (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The base commit is built from a worktree of the same clone.
+          fetch-depth: 0
+
+      - name: Setup Rust (pinned)
+        run: |
+          rustup set profile minimal
+          rustup toolchain install "$RUST_TOOLCHAIN" --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+
+      - name: Perf report (PR)
+        env:
+          DISCORDRS_PERF_REPORT: ${{ runner.temp }}/head.json
+        run: cargo test --release --all-features --locked --test perf_report -- --ignored --nocapture --test-threads=1
+
+      - name: Perf report (base)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DISCORDRS_PERF_REPORT: ${{ runner.temp }}/base.json
+          # Shares the dependency builds of the previous step.
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+          if [ ! -d "$RUNNER_TEMP/base/tests/perf_report" ]; then
+            echo "The base commit has no tests/perf_report; skipping the base run."
+            exit 0
+          fi
+          cd "$RUNNER_TEMP/base"
+          cargo test --release --all-features --locked --test perf_report -- --ignored --nocapture --test-threads=1
+
+      - name: Summary
+        if: always()
+        run: bash ci/perf_summary.sh "$RUNNER_TEMP/head.json" "$RUNNER_TEMP/base.json" "$PERF_BASELINE"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-report
+          path: |
+            ${{ runner.temp }}/head.json
+            ${{ runner.temp }}/base.json
+          if-no-files-found: ignore
