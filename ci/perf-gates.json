@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "source": "docs/design/3.0-types-events-requests.md, '4단계 실행 결정 (2026-10-11)', gate table",
+  "units": "bytes; MB and KB in the design table are decimal (1 MB = 1,000,000 B, 1 KB = 1,000 B), KiB is 1,024 B",
+  "usage": "python3 ci/perf_diff.py --gates ci/perf-gates.json --checkpoint B --strict target/perf-report.json",
+  "checkpoints": {
+    "B": {
+      "gates": [
+        {"scenario": "inbound.guild_create.large", "metric": "allocs", "max": 55000},
+        {"scenario": "inbound.guild_create.large", "metric": "alloc_bytes", "max": 12000000},
+        {"scenario": "inbound.guild_create.large", "metric": "peak_bytes", "max": 10000000},
+        {"scenario": "inbound.message_create.plain", "metric": "allocs", "max": 60},
+        {"scenario": "inbound.message_create.plain", "metric": "alloc_bytes", "max": 16000},
+        {"scenario": "inbound.guild_create.large", "metric": "steps.cache_apply.allocs", "max": 31291,
+         "note": "not above the baseline: main 23775d1 measured 31,291 (docs/design/perf/23775d1.json)"},
+        {"scenario": "layout.size_of", "metric": "event", "max": 192},
+        {"scenario": "layout.size_of", "metric": "event_kind", "max": 64,
+         "note": "reported once EventKind exists (tests/perf_report/main.rs layout scenario)"},
+        {"scenario": "layout.size_of", "metric": "empty_collector_hub_bytes", "max": 4096,
+         "note": "256-slot empty journal storage <= 4 KiB; measured as the heap of CollectorHub::new(), so the hub's fixed overhead (136 B at 23775d1) counts too"},
+        {"scenario": "collectors.payload_copies", "metric": "k64_minus_k1", "max": 0.25,
+         "note": "0 extra copies; the 0.25 margin absorbs end-to-end counting noise (one copy is tens of allocations)"},
+        {"scenario": "storm.guild_create_25", "metric": "retained_bytes", "max": 190000000}
+      ]
+    },
+    "C": {
+      "inherits": "B",
+      "gates": [
+        {"scenario": "inbound.guild_create.large", "metric": "allocs", "max": 30000},
+        {"scenario": "inbound.guild_create.large", "metric": "alloc_bytes", "max": 9000000},
+        {"scenario": "inbound.guild_create.large", "metric": "peak_bytes", "max": 8000000},
+        {"scenario": "inbound.message_create.plain", "metric": "allocs", "max": 40},
+        {"scenario": "inbound.message_create.plain", "metric": "alloc_bytes", "max": 12000},
+        {"scenario": "inbound.guild_create.large", "metric": "steps.cache_apply.allocs", "max": 12000},
+        {"scenario": "storm.guild_create_25", "metric": "retained_bytes", "max": 120000000}
+      ]
+    }
+  }
+}
