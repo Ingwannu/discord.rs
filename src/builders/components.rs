@@ -7,6 +7,7 @@ use crate::error::DiscordError;
 use crate::types::{to_json_value, Emoji, SelectOption};
 
 use super::container::{ContainerBuilder, SeparatorBuilder, TextDisplayBuilder};
+use super::limits;
 use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 use super::modal::TextInputBuilder;
 
@@ -114,10 +115,14 @@ impl ButtonBuilder {
     pub fn validate(&self) -> Result<(), DiscordError> {
         let normalized = self.clone().normalize();
         if let Some(custom_id) = &normalized.custom_id {
-            validation::ensure_max_len("button custom_id", custom_id, 100)?;
+            validation::ensure_max_len(
+                "button custom_id",
+                custom_id,
+                limits::MAX_CUSTOM_ID_LENGTH,
+            )?;
         }
         if let Some(label) = &normalized.label {
-            validation::ensure_max_len("button label", label, 80)?;
+            validation::ensure_max_len("button label", label, limits::MAX_BUTTON_LABEL_LENGTH)?;
         }
         let is_known_style =
             (button_style::PRIMARY..=button_style::LINK).contains(&normalized.style);
@@ -209,7 +214,12 @@ impl ActionRowBuilder {
     /// builder: 1-5 components per row, and a select menu or text input must
     /// be the only component in its row.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count("action row components", self.components.len(), 1, 5)?;
+        validation::ensure_count(
+            "action row components",
+            self.components.len(),
+            1,
+            limits::MAX_ACTION_ROW_COMPONENTS,
+        )?;
         const SOLO_TYPES: [u8; 6] = [
             component_type::STRING_SELECT,
             component_type::TEXT_INPUT,
@@ -487,46 +497,62 @@ impl SelectMenuBuilder {
     /// taken into account.
     pub fn validate(&self) -> Result<(), DiscordError> {
         let normalized = self.clone().normalize();
-        validation::ensure_len("select menu custom_id", &normalized.custom_id, 1, 100)?;
+        validation::ensure_len(
+            "select menu custom_id",
+            &normalized.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )?;
         if let Some(placeholder) = &normalized.placeholder {
-            validation::ensure_max_len("select menu placeholder", placeholder, 150)?;
+            validation::ensure_max_len(
+                "select menu placeholder",
+                placeholder,
+                limits::MAX_SELECT_PLACEHOLDER_LENGTH,
+            )?;
         }
         if normalized.component_type == component_type::STRING_SELECT {
-            validation::ensure_count("select menu options", normalized.options.len(), 1, 25)?;
+            validation::ensure_count(
+                "select menu options",
+                normalized.options.len(),
+                1,
+                limits::MAX_SELECT_OPTIONS,
+            )?;
             for option in &normalized.options {
                 let label = &option.label;
                 validation::ensure_len(
                     &format!("select menu option \"{label}\" label"),
                     label,
                     1,
-                    100,
+                    limits::MAX_SELECT_OPTION_TEXT_LENGTH,
                 )?;
                 validation::ensure_len(
                     &format!("select menu option \"{label}\" value"),
                     &option.value,
                     1,
-                    100,
+                    limits::MAX_SELECT_OPTION_TEXT_LENGTH,
                 )?;
                 if let Some(description) = &option.description {
                     validation::ensure_max_len(
                         &format!("select menu option \"{label}\" description"),
                         description,
-                        100,
+                        limits::MAX_SELECT_OPTION_TEXT_LENGTH,
                     )?;
                 }
             }
         }
         if let Some(min) = normalized.min_values {
-            if min > 25 {
+            if min > limits::MAX_SELECT_VALUES {
                 return Err(DiscordError::model(format!(
-                    "select menu min_values must be at most 25, got {min}"
+                    "select menu min_values must be at most {}, got {min}",
+                    limits::MAX_SELECT_VALUES
                 )));
             }
         }
         if let Some(max) = normalized.max_values {
-            if !(1..=25).contains(&max) {
+            if !(1..=limits::MAX_SELECT_VALUES).contains(&max) {
                 return Err(DiscordError::model(format!(
-                    "select menu max_values must be 1-25, got {max}"
+                    "select menu max_values must be 1-{}, got {max}",
+                    limits::MAX_SELECT_VALUES
                 )));
             }
         }
@@ -618,7 +644,7 @@ impl ComponentsV2Message {
         validation::ensure_max_count(
             "components v2 message components",
             self.components.len(),
-            40,
+            limits::MAX_COMPONENTS_V2_TOTAL,
         )
     }
 

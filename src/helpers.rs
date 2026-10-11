@@ -56,7 +56,7 @@ pub const INTERACTION_RESPONSE_LAUNCH_ACTIVITY: u8 = 12;
 fn components_v2_flags(ephemeral: bool) -> u64 {
     let mut flags = MESSAGE_FLAG_IS_COMPONENTS_V2;
     if ephemeral {
-        flags |= 1 << 6;
+        flags |= crate::response::EPHEMERAL_FLAG;
     }
     flags
 }
@@ -524,7 +524,7 @@ pub async fn defer_and_followup_container(
 ) -> Result<Value, DiscordError> {
     let mut flags: u64 = 0;
     if ephemeral {
-        flags |= 1 << 6;
+        flags |= crate::response::EPHEMERAL_FLAG;
     }
 
     let defer_data = serde_json::json!({

@@ -7,6 +7,7 @@ use crate::error::DiscordError;
 use crate::types::{to_json_value, SelectOption};
 
 use super::components::{ActionRowBuilder, SelectMenuBuilder};
+use super::limits;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `TextInputBuilder`.
@@ -86,25 +87,45 @@ impl TextInputBuilder {
     /// Validates the text input against Discord's limits without consuming
     /// the builder.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("text input custom_id", &self.custom_id, 1, 100)?;
-        validation::ensure_len("text input label", &self.label, 1, 45)?;
+        validation::ensure_len(
+            "text input custom_id",
+            &self.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )?;
+        validation::ensure_len(
+            "text input label",
+            &self.label,
+            1,
+            limits::MAX_TEXT_INPUT_LABEL_LENGTH,
+        )?;
         if let Some(placeholder) = &self.placeholder {
-            validation::ensure_max_len("text input placeholder", placeholder, 100)?;
+            validation::ensure_max_len(
+                "text input placeholder",
+                placeholder,
+                limits::MAX_TEXT_INPUT_PLACEHOLDER_LENGTH,
+            )?;
         }
         if let Some(value) = &self.value {
-            validation::ensure_max_len("text input value", value, 4000)?;
+            validation::ensure_max_len(
+                "text input value",
+                value,
+                usize::from(limits::MAX_TEXT_INPUT_LENGTH),
+            )?;
         }
         if let Some(min) = self.min_length {
-            if min > 4000 {
+            if min > limits::MAX_TEXT_INPUT_LENGTH {
                 return Err(DiscordError::model(format!(
-                    "text input min_length must be 0-4000, got {min}"
+                    "text input min_length must be 0-{}, got {min}",
+                    limits::MAX_TEXT_INPUT_LENGTH
                 )));
             }
         }
         if let Some(max) = self.max_length {
-            if !(1..=4000).contains(&max) {
+            if !(1..=limits::MAX_TEXT_INPUT_LENGTH).contains(&max) {
                 return Err(DiscordError::model(format!(
-                    "text input max_length must be 1-4000, got {max}"
+                    "text input max_length must be 1-{}, got {max}",
+                    limits::MAX_TEXT_INPUT_LENGTH
                 )));
             }
         }
@@ -614,9 +635,24 @@ impl ModalBuilder {
     /// builder: custom_id 1-100 characters, title 1-45 characters, and 1-5
     /// top-level components.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("modal custom_id", &self.custom_id, 1, 100)?;
-        validation::ensure_len("modal title", &self.title, 1, 45)?;
-        validation::ensure_count("modal components", self.components.len(), 1, 5)
+        validation::ensure_len(
+            "modal custom_id",
+            &self.custom_id,
+            1,
+            limits::MAX_CUSTOM_ID_LENGTH,
+        )?;
+        validation::ensure_len(
+            "modal title",
+            &self.title,
+            1,
+            limits::MAX_MODAL_TITLE_LENGTH,
+        )?;
+        validation::ensure_count(
+            "modal components",
+            self.components.len(),
+            1,
+            limits::MAX_MODAL_COMPONENTS,
+        )
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a

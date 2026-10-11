@@ -11,7 +11,8 @@ use tokio_tungstenite::tungstenite::{
 
 use super::client::{
     request_channel_info_payload, request_guild_members_payload, update_presence_payload,
-    GatewayCommand,
+    GatewayCommand, OP_GUILD_SUBSCRIPTIONS, OP_PRESENCE_UPDATE, OP_REQUEST_CHANNEL_INFO,
+    OP_REQUEST_GUILD_MEMBERS, OP_REQUEST_SOUNDBOARD_SOUNDS, OP_VOICE_STATE_UPDATE,
 };
 use crate::error::DiscordError;
 use crate::model::UpdatePresence;
@@ -83,8 +84,14 @@ pub(super) fn classify_gateway_command(command: &GatewayCommand) -> GatewayComma
             GatewayCommandClass::BurstSensitive
         }
         GatewayCommand::SendPayload(payload) => match payload.get("op").and_then(Value::as_u64) {
-            Some(3) => GatewayCommandClass::PresenceUpdate,
-            Some(4 | 8 | 14 | 31 | 43) => GatewayCommandClass::BurstSensitive,
+            Some(OP_PRESENCE_UPDATE) => GatewayCommandClass::PresenceUpdate,
+            Some(
+                OP_VOICE_STATE_UPDATE
+                | OP_REQUEST_GUILD_MEMBERS
+                | OP_GUILD_SUBSCRIPTIONS
+                | OP_REQUEST_SOUNDBOARD_SOUNDS
+                | OP_REQUEST_CHANNEL_INFO,
+            ) => GatewayCommandClass::BurstSensitive,
             _ => GatewayCommandClass::Other,
         },
         GatewayCommand::Shutdown | GatewayCommand::Reconnect => GatewayCommandClass::Other,

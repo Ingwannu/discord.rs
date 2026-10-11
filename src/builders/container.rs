@@ -7,6 +7,7 @@ use crate::error::DiscordError;
 use crate::types::{to_json_value, ButtonConfig, MediaGalleryItem};
 
 use super::components::{ActionRowBuilder, ButtonBuilder};
+use super::limits;
 use super::media::{FileBuilder, MediaGalleryBuilder, SectionBuilder};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -357,7 +358,12 @@ impl TextDisplayBuilder {
     /// Validates the text display against Discord's limits without consuming
     /// the builder: content must be 1-4000 characters.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len("text display content", &self.content, 1, 4000)
+        validation::ensure_len(
+            "text display content",
+            &self.content,
+            1,
+            limits::MAX_TEXT_DISPLAY_LENGTH,
+        )
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -496,7 +502,12 @@ impl ContainerBuilder {
     /// the builder: a container must hold at least one child component, and
     /// a components-V2 message allows at most 40 components in total.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count("container components", self.components.len(), 1, 40)
+        validation::ensure_count(
+            "container components",
+            self.components.len(),
+            1,
+            limits::MAX_COMPONENTS_V2_TOTAL,
+        )
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
@@ -545,7 +556,7 @@ pub fn create_container(
                 .spacing(separator_spacing::SMALL),
         );
 
-        for chunk in buttons.chunks(5) {
+        for chunk in buttons.chunks(limits::MAX_ACTION_ROW_COMPONENTS) {
             let mut row = ActionRowBuilder::new();
             for btn_config in chunk {
                 let mut button = ButtonBuilder::new()

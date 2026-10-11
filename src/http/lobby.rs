@@ -12,6 +12,10 @@ use crate::types::invalid_data_error;
 
 use super::{validate_authorization_token, RequestAuthorization, RestClient};
 
+/// Upper bound of `limit` on Get Lobby Messages, which accepts 1-200
+/// (Discord docs: Lobby › Get Lobby Messages).
+const MAX_LOBBY_MESSAGES_LIMIT: u8 = 200;
+
 impl RestClient {
     /// Creates a Discord lobby owned by the configured application.
     pub async fn create_lobby(&self, body: &CreateLobby) -> Result<Lobby, DiscordError> {
@@ -190,10 +194,11 @@ impl RestClient {
     ) -> Result<Vec<LobbyMessage>, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let query = match limit {
-            Some(limit @ 1..=200) => format!("?limit={limit}"),
+            Some(limit @ 1..=MAX_LOBBY_MESSAGES_LIMIT) => format!("?limit={limit}"),
             Some(limit) => {
                 return Err(invalid_data_error(format!(
-                    "lobby message limit must be between 1 and 200, got {limit}"
+                    "lobby message limit must be between 1 and {MAX_LOBBY_MESSAGES_LIMIT}, got \
+                     {limit}"
                 )))
             }
             None => String::new(),

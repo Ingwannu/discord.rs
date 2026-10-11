@@ -23,8 +23,9 @@ use crate::model::{
     UserContextMenuInteraction,
 };
 
-/// Discord message flag marking a response as ephemeral.
-const EPHEMERAL_FLAG: u64 = 1 << 6;
+/// Discord message flag marking a response as ephemeral, as raw bits for
+/// JSON bodies.
+pub(crate) const EPHEMERAL_FLAG: u64 = crate::bitfield::message_flags::EPHEMERAL.bits();
 
 /// Discord JSON error code for a second initial response: "Interaction has
 /// already been acknowledged".
@@ -65,7 +66,7 @@ impl MessageBuilder {
 
     pub fn ephemeral(mut self, ephemeral: bool) -> Self {
         if ephemeral {
-            self.inner.flags = Some(self.inner.flags.unwrap_or(0) | (1 << 6));
+            self.inner.flags = Some(self.inner.flags.unwrap_or(0) | EPHEMERAL_FLAG);
         }
         self
     }
@@ -96,7 +97,7 @@ impl InteractionResponseBuilder {
     pub fn deferred_channel_message(ephemeral: bool) -> Self {
         let mut flags = 0_u64;
         if ephemeral {
-            flags |= 1 << 6;
+            flags |= EPHEMERAL_FLAG;
         }
 
         Self {

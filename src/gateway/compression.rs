@@ -4,6 +4,9 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use crate::ws::GatewayCompression;
 
 pub(super) const ZLIB_SUFFIX: &[u8] = &[0x00, 0x00, 0xff, 0xff];
+/// Stack buffer each decompression step writes into before the output is
+/// appended to the message; a tuning value, not a protocol limit.
+const DECOMPRESS_CHUNK_BYTES: usize = 8192;
 
 pub(super) fn decode_gateway_message(
     message: WsMessage,
@@ -70,7 +73,7 @@ impl GatewayZstdStream {
         let mut input = bytes;
         let mut decompressed = Vec::new();
         while !input.is_empty() {
-            let mut output = [0_u8; 8192];
+            let mut output = [0_u8; DECOMPRESS_CHUNK_BYTES];
             let status = self
                 .decoder
                 .run_on_buffers(input, &mut output)
@@ -84,7 +87,7 @@ impl GatewayZstdStream {
         }
 
         loop {
-            let mut output = [0_u8; 8192];
+            let mut output = [0_u8; DECOMPRESS_CHUNK_BYTES];
             let mut output_buffer = OutBuffer::around(&mut output);
             let remaining = self
                 .decoder
@@ -129,7 +132,7 @@ impl GatewayZlibStream {
         loop {
             let input_before = self.decoder.total_in();
             let output_before = self.decoder.total_out();
-            let mut output = [0_u8; 8192];
+            let mut output = [0_u8; DECOMPRESS_CHUNK_BYTES];
             self.decoder
                 .decompress(input, &mut output, FlushDecompress::Sync)
                 .map_err(|e| format!("zlib-stream decompression failed: {e}"))?;

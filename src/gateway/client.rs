@@ -23,15 +23,40 @@ use crate::ws::{GatewayConnectionConfig, IdentifyOutcome, IdentifyPermit};
 use super::compression::{decode_gateway_message, GatewayCompressionDecoder};
 use super::outbound::{run_gateway_outbound_worker, send_gateway_outbound, GatewayOutboundMessage};
 
-// Gateway opcodes
+// Gateway opcodes (Discord docs: Opcodes and Status Codes › Gateway Opcodes).
 const OP_DISPATCH: u64 = 0;
 const OP_HEARTBEAT: u64 = 1;
 const OP_IDENTIFY: u64 = 2;
+pub(super) const OP_PRESENCE_UPDATE: u64 = 3;
+pub(super) const OP_VOICE_STATE_UPDATE: u64 = 4;
 const OP_RESUME: u64 = 6;
 const OP_RECONNECT: u64 = 7;
+pub(super) const OP_REQUEST_GUILD_MEMBERS: u64 = 8;
 const OP_INVALID_SESSION: u64 = 9;
 const OP_HELLO: u64 = 10;
 const OP_HEARTBEAT_ACK: u64 = 11;
+/// Not in Discord's public opcode table (lazy guild subscriptions); a raw
+/// payload sending it is paced like the other request opcodes.
+pub(super) const OP_GUILD_SUBSCRIPTIONS: u64 = 14;
+pub(super) const OP_REQUEST_SOUNDBOARD_SOUNDS: u64 = 31;
+pub(super) const OP_REQUEST_CHANNEL_INFO: u64 = 43;
+// Gateway close codes (Discord docs: Opcodes and Status Codes › Gateway
+// Close Event Codes).
+const CLOSE_AUTHENTICATION_FAILED: u16 = 4004;
+const CLOSE_INVALID_SEQ: u16 = 4007;
+const CLOSE_SESSION_TIMED_OUT: u16 = 4009;
+const CLOSE_INVALID_SHARD: u16 = 4010;
+const CLOSE_SHARDING_REQUIRED: u16 = 4011;
+const CLOSE_INVALID_API_VERSION: u16 = 4012;
+const CLOSE_INVALID_INTENTS: u16 = 4013;
+const CLOSE_DISALLOWED_INTENTS: u16 = 4014;
+/// First reconnect delay after an unhealthy session, in seconds; doubled on
+/// each further failure up to [`MAX_RECONNECT_BACKOFF_SECS`].
+const INITIAL_RECONNECT_BACKOFF_SECS: u64 = 1;
+const MAX_RECONNECT_BACKOFF_SECS: u64 = 300;
+/// Pause after INVALID_SESSION before resuming or identifying again. Discord
+/// asks for a random 1–5 s; a fixed value inside that range suffices.
+const INVALID_SESSION_DELAY: Duration = Duration::from_secs(2);
 pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Discord allows at most one IDENTIFY per shard per 5 seconds.
 const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
@@ -165,7 +190,7 @@ impl GatewayClient {
     /// Run the gateway connection loop. Reconnects automatically.
     /// `on_event` is called for every DISPATCH event with (event_name, data).
     pub async fn run(&mut self, on_event: EventCallback) -> Result<(), crate::error::DiscordError> {
-        let mut backoff = 1_u64;
+        let mut backoff = INITIAL_RECONNECT_BACKOFF_SECS;
         #[cfg(feature = "sharding")]
         self.publish_state(ShardRuntimeState::Starting);
         loop {
@@ -214,7 +239,7 @@ impl GatewayClient {
                     // connect/close loop against the gateway.
                     let server_directed = std::mem::take(&mut self.server_directed_reconnect);
                     if server_directed || connection_started.elapsed() >= SHORT_SESSION_THRESHOLD {
-                        backoff = 1;
+                        backoff = INITIAL_RECONNECT_BACKOFF_SECS;
                     } else {
                         warn!(
                             "Gateway session ended after {:?}, backing off {backoff}s before reconnecting",
@@ -228,7 +253,7 @@ impl GatewayClient {
                             self.publish_state(ShardRuntimeState::Stopped);
                             return Ok(());
                         }
-                        backoff = (backoff * 2).min(300);
+                        backoff = (backoff * 2).min(MAX_RECONNECT_BACKOFF_SECS);
                     }
                 }
                 Err(e) => {
@@ -236,14 +261,16 @@ impl GatewayClient {
                     self.publish_error(e.to_string());
                     error!("Gateway connection error: {e}");
                     if self
-                        .wait_for_backoff_command(Duration::from_secs(backoff.min(300)))
+                        .wait_for_backoff_command(Duration::from_secs(
+                            backoff.min(MAX_RECONNECT_BACKOFF_SECS),
+                        ))
                         .await?
                     {
                         #[cfg(feature = "sharding")]
                         self.publish_state(ShardRuntimeState::Stopped);
                         return Ok(());
                     }
-                    backoff = (backoff * 2).min(300);
+                    backoff = (backoff * 2).min(MAX_RECONNECT_BACKOFF_SECS);
                 }
             }
         }
@@ -626,7 +653,7 @@ impl GatewayClient {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             warn!("Invalid session, resumable={resumable}");
-                            sleep(Duration::from_secs(2)).await;
+                            sleep(INVALID_SESSION_DELAY).await;
                             self.server_directed_reconnect = true;
                             if resumable {
                                 break ReconnectAction::Resume;
@@ -749,7 +776,7 @@ fn close_frame_action(frame: Option<CloseFrame>) -> ReconnectAction {
         ReconnectAction::Fatal(crate::error::DiscordError::gateway(terminal_close_error(
             frame,
         )))
-    } else if matches!(code, Some(4007 | 4009)) {
+    } else if matches!(code, Some(CLOSE_INVALID_SEQ | CLOSE_SESSION_TIMED_OUT)) {
         ReconnectAction::Reconnect
     } else {
         ReconnectAction::Resume
@@ -797,7 +824,7 @@ pub(crate) fn voice_state_update_payload(
     self_deaf: bool,
 ) -> Value {
     serde_json::json!({
-        "op": 4,
+        "op": OP_VOICE_STATE_UPDATE,
         "d": {
             "guild_id": guild_id,
             "channel_id": channel_id,
@@ -809,14 +836,14 @@ pub(crate) fn voice_state_update_payload(
 
 pub(crate) fn update_presence_payload(presence: &UpdatePresence) -> Value {
     serde_json::json!({
-        "op": 3,
+        "op": OP_PRESENCE_UPDATE,
         "d": presence
     })
 }
 
 pub(crate) fn request_guild_members_payload(request: &RequestGuildMembers) -> Value {
     serde_json::json!({
-        "op": 8,
+        "op": OP_REQUEST_GUILD_MEMBERS,
         "d": request
     })
 }
@@ -826,7 +853,7 @@ pub(crate) fn request_soundboard_sounds_payload(
     channels: Option<HashMap<GenericId, Vec<GenericId>>>,
 ) -> Value {
     serde_json::json!({
-        "op": 31,
+        "op": OP_REQUEST_SOUNDBOARD_SOUNDS,
         "d": {
             "guild_ids": guild_ids,
             "channels": channels
@@ -836,7 +863,7 @@ pub(crate) fn request_soundboard_sounds_payload(
 
 pub(crate) fn request_channel_info_payload(request: &RequestChannelInfo) -> Value {
     serde_json::json!({
-        "op": 43,
+        "op": OP_REQUEST_CHANNEL_INFO,
         "d": request
     })
 }
@@ -928,7 +955,15 @@ fn is_terminal_close_frame(frame: Option<&CloseFrame>) -> bool {
 }
 
 fn is_terminal_close_code(code: u16) -> bool {
-    matches!(code, 4004 | 4010 | 4011 | 4012 | 4013 | 4014)
+    matches!(
+        code,
+        CLOSE_AUTHENTICATION_FAILED
+            | CLOSE_INVALID_SHARD
+            | CLOSE_SHARDING_REQUIRED
+            | CLOSE_INVALID_API_VERSION
+            | CLOSE_INVALID_INTENTS
+            | CLOSE_DISALLOWED_INTENTS
+    )
 }
 
 fn terminal_close_error(frame: Option<CloseFrame>) -> String {

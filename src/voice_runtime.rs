@@ -29,6 +29,8 @@ use crate::voice::{
     VoiceSelectProtocolCommand, VoiceSpeakingCommand, VoiceSpeakingFlags, VoiceUdpDiscoveryPacket,
 };
 
+// Voice opcodes (Discord docs: Opcodes and Status Codes › Voice).
+const VOICE_OP_IDENTIFY: u64 = 0;
 const VOICE_OP_READY: u64 = 2;
 const VOICE_OP_HEARTBEAT: u64 = 3;
 const VOICE_OP_SESSION_DESCRIPTION: u64 = 4;
@@ -53,8 +55,38 @@ const VOICE_SESSION_DESCRIPTION_TIMEOUT: Duration = Duration::from_secs(10);
 const DAVE_MAGIC_MARKER: [u8; 2] = [0xfa, 0xfa];
 const RTP_VERSION: u8 = 2;
 const RTP_PAYLOAD_TYPE_OPUS: u8 = 120;
+/// Fixed RTP header: flags, payload type, sequence, timestamp, SSRC
+/// (RFC 3550 §5.1).
+const RTP_HEADER_LEN: usize = 12;
+/// RTP counts in 32-bit words: one per CSRC, one for the extension header,
+/// and the extension's length field (RFC 3550 §5.1, §5.3.1).
+const RTP_WORD_LEN: usize = 4;
+/// Both rtpsize AEAD modes take the 256-bit `secret_key` from
+/// SESSION_DESCRIPTION (Discord docs: Voice Connections › Transport
+/// Encryption Modes).
+const VOICE_SECRET_KEY_LEN: usize = 32;
+/// The rtpsize modes append a 32-bit nonce counter to every packet; it is
+/// copied into the last four bytes of the zeroed AEAD nonce below.
+const RTPSIZE_NONCE_SUFFIX_LEN: usize = 4;
+/// AES-256-GCM nonce length.
+const AES_GCM_NONCE_LEN: usize = 12;
+/// XChaCha20-Poly1305 nonce length.
+const XCHACHA20_NONCE_LEN: usize = 24;
+/// DAVE frames end with an 8-byte truncated AES-GCM tag, a ULEB128 nonce and
+/// unencrypted ranges, a supplemental-size byte, and the magic marker (DAVE
+/// protocol, "Frame format": <https://daveprotocol.com/>).
+const DAVE_AUTH_TAG_LEN: usize = 8;
+/// The supplemental-size byte plus the magic marker.
+const DAVE_FOOTER_LEN: usize = 1 + DAVE_MAGIC_MARKER.len();
+/// Smallest supplemental section: the tag, a one-byte nonce, and the footer.
+const DAVE_MIN_SUPPLEMENTAL_LEN: usize = DAVE_AUTH_TAG_LEN + 1 + DAVE_FOOTER_LEN;
+/// Voice gateway version requested by default, the one Discord recommends
+/// (Discord docs: Voice Connections › Voice Gateway Versioning).
+const DEFAULT_VOICE_GATEWAY_VERSION: u8 = 8;
+/// Oldest version Discord lists as available (1–3 are deprecated); lower
+/// requests are raised to it.
+const MIN_VOICE_GATEWAY_VERSION: u8 = 4;
 const DISCORD_OPUS_SAMPLE_RATE: u32 = 48_000;
-#[cfg(feature = "voice-encode")]
 const DISCORD_OPUS_CHANNELS: usize = 2;
 #[cfg(feature = "voice-encode")]
 const DISCORD_OPUS_SAMPLES_PER_CHANNEL: usize = 960;
@@ -106,14 +138,14 @@ impl VoiceRuntimeConfig {
             session_id: session_id.into(),
             token: token.into(),
             endpoint: endpoint.into(),
-            gateway_version: 8,
+            gateway_version: DEFAULT_VOICE_GATEWAY_VERSION,
             preferred_mode: None,
             max_dave_protocol_version: Some(1),
         }
     }
 
     pub fn gateway_version(mut self, gateway_version: u8) -> Self {
-        self.gateway_version = gateway_version.max(4);
+        self.gateway_version = gateway_version.max(MIN_VOICE_GATEWAY_VERSION);
         self
     }
 
@@ -137,7 +169,10 @@ impl VoiceRuntimeConfig {
         if !endpoint.contains("?v=") {
             let separator = if endpoint.contains('?') { "&" } else { "/?" };
             endpoint.push_str(separator);
-            endpoint.push_str(&format!("v={}", self.gateway_version.max(4)));
+            endpoint.push_str(&format!(
+                "v={}",
+                self.gateway_version.max(MIN_VOICE_GATEWAY_VERSION)
+            ));
         }
 
         endpoint
@@ -244,7 +279,7 @@ pub struct VoiceRawUdpPacket {
 
 impl VoiceRawUdpPacket {
     fn from_bytes(bytes: Vec<u8>) -> Self {
-        let (version, payload_type, sequence, timestamp, ssrc) = if bytes.len() >= 12 {
+        let (version, payload_type, sequence, timestamp, ssrc) = if bytes.len() >= RTP_HEADER_LEN {
             (
                 Some(bytes[0] >> 6),
                 Some(bytes[1] & 0x7f),
@@ -756,7 +791,7 @@ impl VoiceOpusDecoder {
 
     /// Creates a `discord_default` value.
     pub fn discord_default() -> Result<Self, DiscordError> {
-        Self::new(48_000, 2)
+        Self::new(DISCORD_OPUS_SAMPLE_RATE, DISCORD_OPUS_CHANNELS)
     }
 
     pub fn sample_rate(&self) -> u32 {
@@ -965,7 +1000,7 @@ pub struct VoiceSpeakingUpdate {
 }
 
 fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
-    if bytes.len() < 12 {
+    if bytes.len() < RTP_HEADER_LEN {
         return Err(invalid_data_error(
             "voice RTP packet is shorter than 12 bytes",
         ));
@@ -981,7 +1016,7 @@ fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
     let timestamp = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
     let ssrc = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
 
-    let mut header_len = 12 + csrc_count * 4;
+    let mut header_len = RTP_HEADER_LEN + csrc_count * RTP_WORD_LEN;
     if bytes.len() < header_len {
         return Err(invalid_data_error(
             "voice RTP packet has truncated CSRC list",
@@ -989,7 +1024,7 @@ fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
     }
 
     if extension {
-        if bytes.len() < header_len + 4 {
+        if bytes.len() < header_len + RTP_WORD_LEN {
             return Err(invalid_data_error(
                 "voice RTP packet has truncated extension header",
             ));
@@ -998,7 +1033,7 @@ fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
             bytes[header_len + 2],
             bytes[header_len + 3],
         ]));
-        header_len += 4 + extension_words * 4;
+        header_len += RTP_WORD_LEN + extension_words * RTP_WORD_LEN;
         if bytes.len() < header_len {
             return Err(invalid_data_error(
                 "voice RTP packet has truncated extension payload",
@@ -1041,33 +1076,34 @@ fn parse_uleb128(bytes: &[u8]) -> Result<(u64, usize), DiscordError> {
 }
 
 fn parse_dave_frame(frame: &[u8]) -> Result<VoiceDaveFrame, DiscordError> {
-    if frame.len() < 12 {
+    if frame.len() < DAVE_MIN_SUPPLEMENTAL_LEN {
         return Err(invalid_data_error("DAVE frame is too short"));
     }
     if frame[frame.len() - 2..] != DAVE_MAGIC_MARKER {
         return Err(invalid_data_error("DAVE frame is missing magic marker"));
     }
 
-    let supplemental_size = frame[frame.len() - 3];
+    let supplemental_size = frame[frame.len() - DAVE_FOOTER_LEN];
     let supplemental_size_usize = usize::from(supplemental_size);
-    if supplemental_size_usize < 12 || supplemental_size_usize > frame.len() {
+    if supplemental_size_usize < DAVE_MIN_SUPPLEMENTAL_LEN || supplemental_size_usize > frame.len()
+    {
         return Err(invalid_data_error("invalid DAVE supplemental data size"));
     }
 
     let supplemental_start = frame.len() - supplemental_size_usize;
-    let supplemental = &frame[supplemental_start..frame.len() - 3];
-    if supplemental.len() < 9 {
+    let supplemental = &frame[supplemental_start..frame.len() - DAVE_FOOTER_LEN];
+    if supplemental.len() < DAVE_AUTH_TAG_LEN + 1 {
         return Err(invalid_data_error("DAVE supplemental data is truncated"));
     }
 
-    let mut auth_tag = [0_u8; 8];
-    auth_tag.copy_from_slice(&supplemental[..8]);
-    let (nonce, nonce_len) = parse_uleb128(&supplemental[8..])?;
+    let mut auth_tag = [0_u8; DAVE_AUTH_TAG_LEN];
+    auth_tag.copy_from_slice(&supplemental[..DAVE_AUTH_TAG_LEN]);
+    let (nonce, nonce_len) = parse_uleb128(&supplemental[DAVE_AUTH_TAG_LEN..])?;
     let nonce =
         u32::try_from(nonce).map_err(|_| invalid_data_error("DAVE frame nonce exceeds 32 bits"))?;
 
     let mut ranges = Vec::new();
-    let mut cursor = 8 + nonce_len;
+    let mut cursor = DAVE_AUTH_TAG_LEN + nonce_len;
     while cursor < supplemental.len() {
         let (offset, offset_len) = parse_uleb128(&supplemental[cursor..])?;
         cursor += offset_len;
@@ -1779,7 +1815,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
 
 fn build_identify_payload(config: &VoiceRuntimeConfig) -> Value {
     let mut payload = serde_json::json!({
-        "op": 0,
+        "op": VOICE_OP_IDENTIFY,
         "d": {
             "server_id": config.server_id,
             "user_id": config.user_id,
@@ -1831,16 +1867,16 @@ fn decrypt_transport_payload(
     mode: &VoiceEncryptionMode,
     secret_key: &[u8],
 ) -> Result<Vec<u8>, DiscordError> {
-    if secret_key.len() != 32 {
+    if secret_key.len() != VOICE_SECRET_KEY_LEN {
         return Err(invalid_data_error("voice secret_key must be 32 bytes"));
     }
-    if packet.len() < rtp.header_len + 4 {
+    if packet.len() < rtp.header_len + RTPSIZE_NONCE_SUFFIX_LEN {
         return Err(invalid_data_error(
             "voice RTP packet is missing the RTP-size nonce suffix",
         ));
     }
 
-    let nonce_suffix_offset = packet.len() - 4;
+    let nonce_suffix_offset = packet.len() - RTPSIZE_NONCE_SUFFIX_LEN;
     let nonce_suffix = &packet[nonce_suffix_offset..];
     let aad = &packet[..rtp.header_len];
     let mut encrypted = packet[rtp.header_len..nonce_suffix_offset].to_vec();
@@ -1848,8 +1884,8 @@ fn decrypt_transport_payload(
     if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
         let cipher = Aes256Gcm::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let mut nonce = [0_u8; 12];
-        nonce[8..12].copy_from_slice(nonce_suffix);
+        let mut nonce = [0_u8; AES_GCM_NONCE_LEN];
+        nonce[AES_GCM_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(nonce_suffix);
         cipher
             .decrypt_in_place(AesNonce::from_slice(&nonce), aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to decrypt AES-GCM voice packet"))?;
@@ -1859,8 +1895,8 @@ fn decrypt_transport_payload(
     if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
         let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let mut nonce = [0_u8; 24];
-        nonce[20..24].copy_from_slice(nonce_suffix);
+        let mut nonce = [0_u8; XCHACHA20_NONCE_LEN];
+        nonce[XCHACHA20_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(nonce_suffix);
         cipher
             .decrypt_in_place(XNonce::from_slice(&nonce), aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to decrypt XChaCha20-Poly1305 voice packet"))?;
@@ -1887,7 +1923,7 @@ fn encrypt_transport_payload(
     mode: &VoiceEncryptionMode,
     secret_key: &[u8],
 ) -> Result<Vec<u8>, DiscordError> {
-    if secret_key.len() != 32 {
+    if secret_key.len() != VOICE_SECRET_KEY_LEN {
         return Err(invalid_data_error("voice secret_key must be 32 bytes"));
     }
 
@@ -1903,16 +1939,17 @@ fn encrypt_transport_payload(
     if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
         let cipher = Aes256Gcm::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let mut nonce = [0_u8; 12];
-        nonce[8..12].copy_from_slice(&params.nonce_suffix);
+        let mut nonce = [0_u8; AES_GCM_NONCE_LEN];
+        nonce[AES_GCM_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..].copy_from_slice(&params.nonce_suffix);
         cipher
             .encrypt_in_place(AesNonce::from_slice(&nonce), &aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))?;
     } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
         let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
             .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let mut nonce = [0_u8; 24];
-        nonce[20..24].copy_from_slice(&params.nonce_suffix);
+        let mut nonce = [0_u8; XCHACHA20_NONCE_LEN];
+        nonce[XCHACHA20_NONCE_LEN - RTPSIZE_NONCE_SUFFIX_LEN..]
+            .copy_from_slice(&params.nonce_suffix);
         cipher
             .encrypt_in_place(XNonce::from_slice(&nonce), &aad, &mut encrypted)
             .map_err(|_| invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet"))?;

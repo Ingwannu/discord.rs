@@ -182,7 +182,7 @@ impl AppFramework {
             if elapsed < *cooldown {
                 return Some(InteractionResponse::ChannelMessage(json!({
                     "content": "This action is on cooldown.",
-                    "flags": 64
+                    "flags": crate::response::EPHEMERAL_FLAG
                 })));
             }
         }
@@ -277,7 +277,7 @@ impl AppFrameworkBuilder {
                 Arc::new(|_ctx: AppContext| async {
                     InteractionResponse::ChannelMessage(json!({
                         "content": "Unknown interaction.",
-                        "flags": 64
+                        "flags": crate::response::EPHEMERAL_FLAG
                     }))
                 })
             }),

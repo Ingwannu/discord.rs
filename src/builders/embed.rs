@@ -1,6 +1,7 @@
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::limits;
 use crate::command::validation;
 use crate::error::DiscordError;
 
@@ -161,17 +162,31 @@ impl EmbedBuilder {
         let mut total = 0usize;
 
         if let Some(title) = &self.title {
-            validation::ensure_max_len("embed title", title, 256)?;
+            validation::ensure_max_len("embed title", title, limits::MAX_EMBED_TITLE_LENGTH)?;
             total += validation::char_count(title);
         }
         if let Some(description) = &self.description {
-            validation::ensure_max_len("embed description", description, 4096)?;
+            validation::ensure_max_len(
+                "embed description",
+                description,
+                limits::MAX_EMBED_DESCRIPTION_LENGTH,
+            )?;
             total += validation::char_count(description);
         }
-        validation::ensure_max_count("embed fields", self.fields.len(), 25)?;
+        validation::ensure_max_count("embed fields", self.fields.len(), limits::MAX_EMBED_FIELDS)?;
         for (index, field) in self.fields.iter().enumerate() {
-            validation::ensure_len(&format!("embed field {index} name"), &field.name, 1, 256)?;
-            validation::ensure_len(&format!("embed field {index} value"), &field.value, 1, 1024)?;
+            validation::ensure_len(
+                &format!("embed field {index} name"),
+                &field.name,
+                1,
+                limits::MAX_EMBED_FIELD_NAME_LENGTH,
+            )?;
+            validation::ensure_len(
+                &format!("embed field {index} value"),
+                &field.value,
+                1,
+                limits::MAX_EMBED_FIELD_VALUE_LENGTH,
+            )?;
             total += validation::char_count(&field.name) + validation::char_count(&field.value);
         }
         if let Some(text) = self
@@ -180,7 +195,11 @@ impl EmbedBuilder {
             .and_then(|footer| footer.get("text"))
             .and_then(Value::as_str)
         {
-            validation::ensure_max_len("embed footer text", text, 2048)?;
+            validation::ensure_max_len(
+                "embed footer text",
+                text,
+                limits::MAX_EMBED_FOOTER_TEXT_LENGTH,
+            )?;
             total += validation::char_count(text);
         }
         if let Some(name) = self
@@ -189,12 +208,17 @@ impl EmbedBuilder {
             .and_then(|author| author.get("name"))
             .and_then(Value::as_str)
         {
-            validation::ensure_max_len("embed author name", name, 256)?;
+            validation::ensure_max_len(
+                "embed author name",
+                name,
+                limits::MAX_EMBED_AUTHOR_NAME_LENGTH,
+            )?;
             total += validation::char_count(name);
         }
-        if total > 6000 {
+        if total > limits::MAX_EMBED_TOTAL_LENGTH {
             return Err(DiscordError::model(format!(
-                "embed total length must be at most 6000 characters, got {total}"
+                "embed total length must be at most {} characters, got {total}",
+                limits::MAX_EMBED_TOTAL_LENGTH
             )));
         }
         Ok(())

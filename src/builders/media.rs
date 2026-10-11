@@ -8,6 +8,7 @@ use crate::types::{to_json_value, MediaGalleryItem, MediaInfo};
 
 use super::components::ButtonBuilder;
 use super::container::TextDisplayBuilder;
+use super::limits;
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MediaGalleryBuilder`.
@@ -51,13 +52,18 @@ impl MediaGalleryBuilder {
     /// Validates the gallery against Discord's limits without consuming the
     /// builder: 1-10 items, item descriptions at most 1024 characters.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count("media gallery items", self.items.len(), 1, 10)?;
+        validation::ensure_count(
+            "media gallery items",
+            self.items.len(),
+            1,
+            limits::MAX_MEDIA_GALLERY_ITEMS,
+        )?;
         for (index, item) in self.items.iter().enumerate() {
             if let Some(description) = &item.description {
                 validation::ensure_max_len(
                     &format!("media gallery item {index} description"),
                     description,
-                    1024,
+                    limits::MAX_MEDIA_DESCRIPTION_LENGTH,
                 )?;
             }
         }
@@ -123,7 +129,11 @@ impl ThumbnailBuilder {
     /// the builder: description at most 1024 characters.
     pub fn validate(&self) -> Result<(), DiscordError> {
         if let Some(description) = &self.description {
-            validation::ensure_max_len("thumbnail description", description, 1024)?;
+            validation::ensure_max_len(
+                "thumbnail description",
+                description,
+                limits::MAX_MEDIA_DESCRIPTION_LENGTH,
+            )?;
         }
         Ok(())
     }
@@ -226,7 +236,12 @@ impl SectionBuilder {
     /// Validates the section against Discord's limits without consuming the
     /// builder: 1-3 child components and a required accessory.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count("section components", self.components.len(), 1, 3)?;
+        validation::ensure_count(
+            "section components",
+            self.components.len(),
+            1,
+            limits::MAX_SECTION_COMPONENTS,
+        )?;
         if self.accessory.is_none() {
             return Err(DiscordError::model(
                 "section accessory is required (set a thumbnail or button accessory)",

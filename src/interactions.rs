@@ -271,28 +271,41 @@ pub fn verify_discord_signature(
 /// Builds the body of an inline answer; `None` for
 /// [`InteractionResponse::Accepted`], which has no body.
 fn interaction_response_payload(response: InteractionResponse) -> Option<Value> {
+    use crate::helpers::{
+        INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT, INTERACTION_RESPONSE_CHANNEL_MESSAGE,
+        INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE,
+        INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE, INTERACTION_RESPONSE_LAUNCH_ACTIVITY,
+        INTERACTION_RESPONSE_MODAL, INTERACTION_RESPONSE_PONG, INTERACTION_RESPONSE_UPDATE_MESSAGE,
+    };
+
     Some(match response {
         InteractionResponse::Accepted => return None,
-        InteractionResponse::Pong => serde_json::json!({ "type": 1 }),
+        InteractionResponse::Pong => serde_json::json!({ "type": INTERACTION_RESPONSE_PONG }),
         InteractionResponse::ChannelMessage(data) => serde_json::json!({
-            "type": 4,
+            "type": INTERACTION_RESPONSE_CHANNEL_MESSAGE,
             "data": data,
         }),
-        InteractionResponse::DeferredMessage => serde_json::json!({ "type": 5 }),
-        InteractionResponse::DeferredUpdate => serde_json::json!({ "type": 6 }),
+        InteractionResponse::DeferredMessage => {
+            serde_json::json!({ "type": INTERACTION_RESPONSE_DEFERRED_CHANNEL_MESSAGE })
+        }
+        InteractionResponse::DeferredUpdate => {
+            serde_json::json!({ "type": INTERACTION_RESPONSE_DEFERRED_UPDATE_MESSAGE })
+        }
         InteractionResponse::AutocompleteResult(choices) => serde_json::json!({
-            "type": 8,
+            "type": INTERACTION_RESPONSE_AUTOCOMPLETE_RESULT,
             "data": { "choices": choices },
         }),
         InteractionResponse::Modal(modal) => serde_json::json!({
-            "type": 9,
+            "type": INTERACTION_RESPONSE_MODAL,
             "data": modal.build(),
         }),
         InteractionResponse::UpdateMessage(data) => serde_json::json!({
-            "type": 7,
+            "type": INTERACTION_RESPONSE_UPDATE_MESSAGE,
             "data": data,
         }),
-        InteractionResponse::LaunchActivity => serde_json::json!({ "type": 12 }),
+        InteractionResponse::LaunchActivity => {
+            serde_json::json!({ "type": INTERACTION_RESPONSE_LAUNCH_ACTIVITY })
+        }
         InteractionResponse::Raw(data) => data,
     })
 }
@@ -358,8 +371,12 @@ where
         }
     };
 
-    if interaction_type == 1 {
-        return (StatusCode::OK, Json(serde_json::json!({ "type": 1 }))).into_response();
+    if interaction_type == crate::model::InteractionType::PING.get() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "type": crate::helpers::INTERACTION_RESPONSE_PONG })),
+        )
+            .into_response();
     }
 
     let context = match parse_interaction_context(&payload) {
@@ -465,8 +482,12 @@ where
         }
     };
 
-    if interaction_type == 1 {
-        return (StatusCode::OK, Json(serde_json::json!({ "type": 1 }))).into_response();
+    if interaction_type == crate::model::InteractionType::PING.get() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "type": crate::helpers::INTERACTION_RESPONSE_PONG })),
+        )
+            .into_response();
     }
 
     let interaction = match parse_interaction(&payload) {
