@@ -272,12 +272,14 @@ pub use helpers::{
     update_interaction_message,
 };
 
+#[cfg(all(feature = "gateway", feature = "cache"))]
+pub use gateway::CacheBackendHealth;
 #[cfg(all(feature = "gateway", feature = "sharding"))]
 pub use gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
 pub use gateway::{
     BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventDispatchMode, EventHandler,
-    ShardMessenger, TypeMap,
+    InteractionOverloadReason, OverloadedInteraction, ShardMessenger, TypeMap,
 };
 
 #[cfg(feature = "interactions")]
@@ -289,6 +291,6 @@ pub use interactions::{
 
 #[cfg(feature = "collectors")]
 pub use collector::{
-    CollectorHub, ComponentCollector, EmojiKey, InteractionCollector, MessageCollector,
-    ModalCollector, ReactionCollector,
+    CollectorHub, ComponentCollector, EmojiKey, EventCursor, EventSubscription,
+    InteractionCollector, MessageCollector, ModalCollector, ReactionCollector,
 };

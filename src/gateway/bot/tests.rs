@@ -754,6 +754,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
             },
             "resume_gateway_url": "wss://gateway.discord.gg"
         }),
+        received_at: tokio::time::Instant::now(),
     });
     ingress.push(super::GatewayDispatch {
         event_name: "MESSAGE_CREATE".to_string(),
@@ -764,6 +765,7 @@ async fn gateway_event_processor_preserves_order_and_sets_application_id() {
             "mentions": [],
             "attachments": []
         }),
+        received_at: tokio::time::Instant::now(),
     });
     drop(ingress);
     pipeline
@@ -1108,6 +1110,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                     "id": "42"
                 }
             }),
+            received_at: tokio::time::Instant::now(),
         },
         super::GatewayDispatch {
             event_name: "GUILD_MEMBER_ADD".to_string(),
@@ -1119,6 +1122,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
                     }
                 }
             }),
+            received_at: tokio::time::Instant::now(),
         },
     ] {
         let event = super::process_gateway_dispatch(
@@ -1128,7 +1132,7 @@ async fn process_gateway_dispatch_falls_back_to_raw_events_and_keeps_existing_ap
             dispatch,
         )
         .await;
-        handler.handle_event(context.clone(), event).await;
+        handler.handle_event(context.clone(), event.event).await;
     }
 
     assert_eq!(http.application_id(), 7);
@@ -2473,6 +2477,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                 "mentions": [],
                 "attachments": []
             }),
+            received_at: tokio::time::Instant::now(),
         },
         super::GatewayDispatch {
             event_name: "INTERACTION_CREATE".to_string(),
@@ -2489,6 +2494,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
                     "values": ["one"]
                 }
             }),
+            received_at: tokio::time::Instant::now(),
         },
     ] {
         let event = super::process_gateway_dispatch(
@@ -2498,7 +2504,7 @@ async fn process_gateway_dispatch_publishes_events_to_collectors() {
             dispatch,
         )
         .await;
-        handler.handle_event(context.clone(), event).await;
+        handler.handle_event(context.clone(), event.event).await;
     }
 
     assert_eq!(
@@ -2650,6 +2656,8 @@ async fn shard_supervisor_wait_for_shutdown_times_out() {
             }) as JoinHandle<Result<(), crate::error::DiscordError>>,
         )],
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     let error = supervisor
@@ -2677,6 +2685,8 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
             }),
         )],
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     let task_error = task_error_supervisor
@@ -2689,6 +2699,8 @@ async fn shard_supervisor_wait_propagates_task_and_join_errors() {
         manager,
         tasks: vec![(0, tokio::spawn(async move { panic!("boom") }))],
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     let join_error = join_error_supervisor
@@ -2711,6 +2723,8 @@ async fn shard_supervisor_shutdown_and_wait_broadcasts_shutdown() {
         manager,
         tasks: Vec::new(),
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     supervisor.shutdown_and_wait().await.unwrap();
@@ -2920,6 +2934,8 @@ async fn shard_supervisor_manager_send_drain_and_wait_success_paths_work() {
             tokio::spawn(async { Ok::<(), crate::error::DiscordError>(()) }),
         )],
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     assert!(Arc::ptr_eq(&supervisor.manager(), &manager));
@@ -2955,6 +2971,8 @@ fn shard_supervisor_helper_methods_forward_commands_to_runtime_handles() {
         manager: Arc::clone(&manager),
         tasks: Vec::new(),
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     supervisor.update_presence(1, "dnd").unwrap();
@@ -3181,6 +3199,10 @@ struct RecordingBackend {
     put_message_gate: Option<Arc<tokio::sync::Semaphore>>,
     /// When set, `get_message` fails like an unreachable store.
     fail_get_message: bool,
+    /// When set, `put_message` fails.
+    fail_put_message: bool,
+    /// While set, `clear_shard_cache` fails.
+    fail_clear_shard_cache: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(feature = "cache")]
@@ -3207,6 +3229,21 @@ impl RecordingBackend {
 impl crate::cache::CacheBackend for RecordingBackend {
     async fn clear_cache(&self) -> Result<(), crate::error::DiscordError> {
         self.record("clear_cache".to_string());
+        Ok(())
+    }
+
+    async fn clear_shard_cache(
+        &self,
+        shard_id: u32,
+        shard_count: u32,
+    ) -> Result<(), crate::error::DiscordError> {
+        self.record(format!("clear_shard_cache:{shard_id}:{shard_count}"));
+        if self
+            .fail_clear_shard_cache
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(crate::error::DiscordError::model("clear refused"));
+        }
         Ok(())
     }
 
@@ -3254,6 +3291,9 @@ impl crate::cache::CacheBackend for RecordingBackend {
             gate.acquire().await.expect("gate open").forget();
         }
         self.record(format!("put_message:{}:{}", message.channel_id, message.id));
+        if self.fail_put_message {
+            return Err(crate::error::DiscordError::model("put refused"));
+        }
         self.messages
             .lock()
             .expect("recorder mutex")
@@ -3390,7 +3430,7 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         raw: json!({}),
     });
 
-    let forwarder = super::CacheBackendForwarder::spawn(backend, 16);
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(backend, 16);
     for event in [
         &member_event,
         &message_event,
@@ -3484,22 +3524,22 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
     });
 
     let cache = crate::cache::CacheHandle::new();
-    let forwarder = super::CacheBackendForwarder::spawn(backend, 16);
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(backend, 16);
     for event in [&ready_event, &chunk_event] {
         super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
     }
-    // The default `clear_shard_cache` keeps entries for multi-shard bots:
-    // wiping the store would erase every other shard's data.
+    // READY invalidates only the shard that received it.
     super::forward_cache_backend_updates(&forwarder, &cache, (1, 2), &ready_event).await;
     forwarder.flush().await;
 
     assert_eq!(
         recorder.calls(),
         vec![
-            "clear_cache".to_string(),
+            "clear_shard_cache:0:1".to_string(),
             "put_member:1:2".to_string(),
             "put_member:1:3".to_string(),
             "put_presence:1:2:idle".to_string(),
+            "clear_shard_cache:1:2".to_string(),
         ]
     );
 }
@@ -3594,16 +3634,16 @@ fn attach_test_messenger(
 }
 
 fn message_create_dispatch(id: &str, content: &str) -> super::GatewayDispatch {
-    super::GatewayDispatch {
-        event_name: "MESSAGE_CREATE".to_string(),
-        data: json!({
+    super::GatewayDispatch::new(
+        "MESSAGE_CREATE".to_string(),
+        json!({
             "id": id,
             "channel_id": "500",
             "content": content,
             "mentions": [],
             "attachments": []
         }),
-    }
+    )
 }
 
 fn members_chunk_dispatch(
@@ -3613,16 +3653,16 @@ fn members_chunk_dispatch(
     chunk_count: u64,
     user_id: &str,
 ) -> super::GatewayDispatch {
-    super::GatewayDispatch {
-        event_name: "GUILD_MEMBERS_CHUNK".to_string(),
-        data: json!({
+    super::GatewayDispatch::new(
+        "GUILD_MEMBERS_CHUNK".to_string(),
+        json!({
             "guild_id": guild_id,
             "members": [{ "user": { "id": user_id, "username": format!("user-{user_id}") } }],
             "chunk_index": chunk_index,
             "chunk_count": chunk_count,
             "nonce": nonce
         }),
-    }
+    )
 }
 
 /// Waits (bounded) until the internal processor cached message `id` from
@@ -3976,7 +4016,7 @@ async fn full_handler_queue_drops_deliveries_but_keeps_internal_state_current() 
 }
 
 #[tokio::test]
-async fn gateway_callback_drops_instead_of_waiting_when_the_event_queue_is_full() {
+async fn ingress_overflow_raises_a_shard_fault_without_waiting() {
     let probe = Arc::new(HandlerProbe::default());
     let (started_tx, _started_rx) = mpsc::unbounded_channel();
     let context = pipeline_test_context((0, 1));
@@ -3995,17 +4035,32 @@ async fn gateway_callback_drops_instead_of_waiting_when_the_event_queue_is_full(
             ..super::DispatchConfig::default()
         },
     );
+    let fault = pipeline.fault();
     let ingress = pipeline.ingress();
     // This current-thread test never yields here, so the processor cannot
     // drain: pushes past the capacity must return immediately (the gateway
-    // read loop also handles heartbeats) and drop the event.
+    // read loop also handles heartbeats). The first lost dispatch is a gap
+    // the gateway can no longer replay, so it faults the shard; everything
+    // after it is dropped too, leaving a consistent prefix.
     for id in 1..=10 {
         ingress.push(message_create_dispatch(&id.to_string(), &format!("m{id}")));
     }
-    assert_eq!(ingress.overflow.dropped(), 6);
+    assert!(fault.is_raised());
+    assert!(
+        fault.reason().is_some_and(
+            |reason| reason.contains("overflowed") && reason.contains("MESSAGE_CREATE")
+        ),
+        "{:?}",
+        fault.reason()
+    );
+    assert_eq!(
+        ingress.dropped.load(std::sync::atomic::Ordering::Relaxed),
+        6
+    );
 
     drop(ingress);
     pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+    // The prefix before the gap was still processed and delivered.
     assert_eq!(probe.finished(), vec!["m1", "m2", "m3", "m4"]);
     assert!(context
         .cache
@@ -4098,14 +4153,11 @@ async fn pipeline_shutdown_aborts_handlers_that_outlive_the_timeout() {
     .await
     .expect("shutdown returns once the timeout expires")
     .unwrap();
-    // Aborting is asynchronous; give the runtime a moment to drop the task.
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !dropped.load(std::sync::atomic::Ordering::SeqCst) {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the stuck handler was aborted, not detached");
+    // Shutdown aborts and joins handler tasks before returning.
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "the stuck handler was aborted and joined, not detached"
+    );
 }
 
 #[tokio::test]
@@ -4313,7 +4365,7 @@ async fn cache_backend_writes_keep_gateway_order_when_a_put_is_slow() {
         put_message_gate: Some(Arc::clone(&gate)),
         ..RecordingBackend::default()
     });
-    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
     let cache = crate::cache::CacheHandle::new();
     let create = decode_event(
         "MESSAGE_CREATE",
@@ -4349,34 +4401,61 @@ async fn cache_backend_writes_keep_gateway_order_when_a_put_is_slow() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
-async fn full_cache_backend_queue_drops_new_writes_without_blocking() {
+async fn full_cache_backend_queue_schedules_an_ordered_shard_resync() {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let recorder = Arc::new(RecordingBackend {
         put_message_gate: Some(Arc::clone(&gate)),
         ..RecordingBackend::default()
     });
-    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 1);
-    // Current-thread test without yields: the worker cannot drain between
-    // these calls, so only the first write fits.
-    for id in ["1", "2", "3"] {
-        forwarder.forward(super::BackendWrite::PutMessage(Box::new(Message {
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 1);
+    let health = forwarder.health_handle();
+    let message = |id: &str| {
+        super::BackendWrite::PutMessage(Box::new(Message {
             id: Snowflake::from(id),
             channel_id: Snowflake::from("10"),
             ..Message::default()
-        })));
-    }
-    assert_eq!(forwarder.overflow.dropped(), 2);
+        }))
+    };
+    // Current-thread test without yields: the worker cannot drain between
+    // these calls, so only the first write fits. The dropped delete must not
+    // be lost: it turns into a resync of shard 1/2 queued behind the put.
+    forwarder.forward((1, 2), message("1"));
+    forwarder.forward(
+        (1, 2),
+        super::BackendWrite::DeleteMessages {
+            channel_id: Snowflake::from("10"),
+            message_ids: vec![Snowflake::from("1")],
+        },
+    );
+    forwarder.forward((0, 2), message("3"));
+    let unhealthy = health.health();
+    assert!(!unhealthy.healthy);
+    assert_eq!(unhealthy.dropped_writes, 2);
+    assert_eq!(unhealthy.pending_resync_shards, vec![(0, 2), (1, 2)]);
 
     gate.add_permits(1);
     forwarder.flush().await;
-    assert_eq!(recorder.calls(), vec!["put_message:10:1".to_string()]);
+    // The put that was queued before the loss lands first, then both
+    // shards are cleared: message 1 cannot survive its dropped delete.
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "put_message:10:1".to_string(),
+            "clear_shard_cache:0:2".to_string(),
+            "clear_shard_cache:1:2".to_string(),
+        ]
+    );
+    let healed = health.health();
+    assert!(healed.healthy);
+    assert_eq!(healed.resyncs, 2);
+    assert!(healed.pending_resync_shards.is_empty());
 }
 
 #[cfg(feature = "cache")]
 #[tokio::test]
 async fn cache_backend_message_update_merges_instead_of_overwriting_with_a_partial() {
     let recorder = Arc::new(RecordingBackend::default());
-    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
     // The in-memory cache never saw these messages: the backend's stored
     // copy is the merge base.
     let cache = crate::cache::CacheHandle::new();
@@ -4583,16 +4662,23 @@ fn dispatch_config_maps_modes_to_handler_permits_and_warning_thresholds() {
         .event_dispatch(super::EventDispatchMode::Concurrent)
         .event_queue_capacity(0)
         .max_concurrent_handlers(0)
-        .handler_shutdown_timeout(Duration::from_millis(250));
+        .handler_shutdown_timeout(Duration::from_millis(250))
+        .interaction_queue_capacity(0)
+        .max_concurrent_interactions(0)
+        .interaction_admission_timeout(Duration::from_millis(1500))
+        .on_interaction_overload(|_| {});
+    let dispatch = builder.dispatch;
+    assert_eq!(dispatch.mode, super::EventDispatchMode::Concurrent);
+    assert_eq!(dispatch.queue_capacity, 1);
+    assert_eq!(dispatch.max_concurrent_handlers, 1);
+    assert_eq!(dispatch.shutdown_timeout, Duration::from_millis(250));
+    assert_eq!(dispatch.interaction_queue_capacity, 1);
+    assert_eq!(dispatch.max_concurrent_interactions, 1);
     assert_eq!(
-        builder.dispatch,
-        super::DispatchConfig {
-            mode: super::EventDispatchMode::Concurrent,
-            queue_capacity: 1,
-            max_concurrent_handlers: 1,
-            shutdown_timeout: Duration::from_millis(250),
-        }
+        dispatch.interaction_admission_timeout,
+        Duration::from_millis(1500)
     );
+    assert!(dispatch.interaction_overload.is_some());
 }
 
 #[test]
@@ -4785,7 +4871,10 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
         .expect_err("a terminal close code is an error for the caller");
 
     assert!(error.to_string().contains("4004"), "{error}");
-    wait_for_flag(&dropped, "the stuck handler was aborted, not detached").await;
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "the stuck handler was aborted and joined before start returned"
+    );
     assert!(super::read_gateway_commands(&runtime.gateway_commands).is_empty());
     server.abort();
 }
@@ -4832,12 +4921,14 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
         gateway_config: crate::ws::GatewayConnectionConfig::new(url),
         total_shards: 2,
         boot_window_size: 2,
+        boot_delay: super::SHARD_BOOT_DELAY,
         initial_delay: None,
         presence: None,
         dispatch: super::DispatchConfig {
             shutdown_timeout: Duration::from_millis(50),
             ..super::DispatchConfig::default()
         },
+        background: None,
     })
     .await
     .unwrap();
@@ -4894,6 +4985,8 @@ async fn shard_supervisor_wait_surfaces_a_later_failure_and_aborts_unresponsive_
             ),
         ],
         stop_timeout: Duration::from_millis(20),
+        boot_scheduler: None,
+        background: None,
     };
 
     let error = tokio::time::timeout(Duration::from_secs(5), supervisor.wait())
@@ -4905,7 +4998,10 @@ async fn shard_supervisor_wait_surfaces_a_later_failure_and_aborts_unresponsive_
         runtime0.command_rx.try_recv().unwrap(),
         crate::sharding::ShardIpcMessage::Shutdown
     );
-    wait_for_flag(&dropped, "shard 0 was aborted after the stop timeout").await;
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "shard 0 was aborted and joined after the stop timeout"
+    );
 }
 
 #[cfg(feature = "sharding")]
@@ -4924,6 +5020,8 @@ async fn cancelling_shard_supervisor_wait_aborts_the_running_shards() {
             }),
         )],
         stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
     };
 
     assert!(
@@ -4976,7 +5074,7 @@ async fn cache_backend_message_update_falls_back_to_memory_when_the_backend_read
         fail_get_message: true,
         ..RecordingBackend::default()
     });
-    let forwarder = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
     let cache = crate::cache::CacheHandle::new();
     let create = decode_event(
         "MESSAGE_CREATE",
@@ -5007,7 +5105,7 @@ async fn cache_backend_message_update_falls_back_to_memory_when_the_backend_read
 }
 
 #[tokio::test]
-async fn ingress_counts_events_that_arrive_after_the_processor_stopped() {
+async fn processor_death_raises_a_shard_fault_and_later_dispatches_are_dropped() {
     let pipeline = super::spawn_event_pipeline(
         Arc::new(NoopEventHandler),
         pipeline_test_context((0, 1)),
@@ -5015,21 +5113,26 @@ async fn ingress_counts_events_that_arrive_after_the_processor_stopped() {
         None,
         super::DispatchConfig::default(),
     );
+    let fault = pipeline.fault();
     let ingress = pipeline.ingress();
-    // Dropping the pipeline aborts its tasks, closing the queue.
+    // Let the pipeline tasks start, then drop the pipeline outside shutdown:
+    // that aborts its tasks exactly like a processor that died while the
+    // gateway kept running.
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
     drop(pipeline);
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while !ingress.events.is_closed() {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("aborted processor closes the ingress queue");
+    let reason = tokio::time::timeout(Duration::from_secs(5), fault.raised())
+        .await
+        .expect("the processor's death is propagated promptly");
+    assert!(reason.contains("stopped unexpectedly"), "{reason}");
 
     ingress.push(message_create_dispatch("1", "late"));
     ingress.push(message_create_dispatch("2", "late"));
-    assert_eq!(ingress.closed.dropped(), 2);
-    assert_eq!(ingress.overflow.dropped(), 0);
+    assert_eq!(
+        ingress.dropped.load(std::sync::atomic::Ordering::Relaxed),
+        2
+    );
 }
 
 #[cfg(feature = "cache")]
@@ -5065,14 +5168,1052 @@ async fn client_builder_start_returns_the_gateway_error_to_its_caller() {
     assert!(error.to_string().contains("4014"), "{error}");
     server.abort();
 
-    // The READY reached the backend worker before the shard stopped; the
-    // worker flushes queued writes in the background.
+    // start() joins the backend worker before returning: the READY
+    // invalidation is already applied and no write can arrive later.
+    assert_eq!(recorder.calls(), vec!["clear_shard_cache:0:1".to_string()]);
+}
+
+// ---------------------------------------------------------------------------
+// Review round 2: shard consistency faults, cursor collectors, the
+// interaction lane, backend resync barriers, and supervised startup.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn member_chunk_progress_requires_every_chunk_index() {
+    fn chunk(index: u64, count: u64, user_id: &str) -> crate::event::GuildMembersChunkPayload {
+        crate::event::GuildMembersChunkPayload {
+            guild_id: Snowflake::from("42"),
+            members: vec![Member {
+                user: Some(User {
+                    id: Snowflake::from(user_id),
+                    ..User::default()
+                }),
+                ..Member::default()
+            }],
+            chunk_index: index,
+            chunk_count: count,
+            not_found: Vec::new(),
+            presences: None,
+            nonce: Some("n".to_string()),
+        }
+    }
+
+    // The last index arriving early is not completion.
+    let mut progress = super::MemberChunkProgress::default();
+    assert!(progress.add(chunk(2, 3, "c")).unwrap().is_none());
+    assert!(progress.add(chunk(0, 3, "a")).unwrap().is_none());
+    // A repeated chunk does not add its members twice.
+    assert!(progress.add(chunk(0, 3, "a")).unwrap().is_none());
+    assert_eq!(progress.describe(), "received 2 of 3 chunks");
+    let members = progress.add(chunk(1, 3, "b")).unwrap().expect("complete");
+    let ids: Vec<_> = members
+        .iter()
+        .filter_map(|member| member.user.as_ref().map(|user| user.id.to_string()))
+        .collect();
+    assert_eq!(ids, vec!["c", "a", "b"]);
+
+    let mut inconsistent = super::MemberChunkProgress::default();
+    assert!(inconsistent.add(chunk(0, 2, "a")).unwrap().is_none());
+    assert!(inconsistent
+        .add(chunk(1, 3, "b"))
+        .unwrap_err()
+        .to_string()
+        .contains("chunk_count changed"));
+    let mut out_of_range = super::MemberChunkProgress::default();
+    assert!(out_of_range
+        .add(chunk(5, 2, "a"))
+        .unwrap_err()
+        .to_string()
+        .contains("out of range"));
+    assert_eq!(
+        super::MemberChunkProgress::default().describe(),
+        "no chunks received"
+    );
+}
+
+#[tokio::test]
+async fn fetch_members_fails_instead_of_returning_a_list_with_a_missing_chunk() {
+    let context = pipeline_test_context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let pending = tokio::spawn({
+        let context = context.clone();
+        async move {
+            context
+                .fetch_members_with_timeout("42", None, None, Duration::from_millis(200))
+                .await
+        }
+    });
+    let nonce = match commands.recv().await {
+        Some(GatewayCommand::RequestGuildMembers(request)) => request.nonce.unwrap(),
+        other => panic!("expected a member request, got {other:?}"),
+    };
+    // Chunk 1 of 3 is lost; the final index arrives anyway.
+    for (index, user) in [(0, "7"), (2, "9")] {
+        super::process_gateway_dispatch(
+            &context,
+            #[cfg(feature = "cache")]
+            None,
+            members_chunk_dispatch("42", &nonce, index, 3, user),
+        )
+        .await;
+    }
+    let error = pending.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("received 2 of 3 chunks"),
+        "{error}"
+    );
+}
+
+#[cfg(all(feature = "voice", feature = "sharding"))]
+#[tokio::test]
+async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetches() {
+    let stall = Arc::new(tokio::sync::Notify::new());
+    let server_stall = Arc::clone(&stall);
+    let (url, server) = spawn_fake_gateway(move |mut socket, _identify| {
+        let stall = Arc::clone(&server_stall);
+        async move {
+            use futures_util::StreamExt;
+            send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+            send_dispatch(
+                &mut socket,
+                2,
+                "GUILD_CREATE",
+                json!({ "id": "77", "name": "cached", "channels": [{ "id": "78", "type": 0 }] }),
+            )
+            .await;
+            // The test holds the voice lock now: the processor blocks on
+            // the voice update while more dispatches pour in.
+            stall.notified().await;
+            send_dispatch(
+                &mut socket,
+                3,
+                "VOICE_STATE_UPDATE",
+                json!({ "guild_id": "77", "channel_id": "78", "user_id": "5", "session_id": "s" }),
+            )
+            .await;
+            for sequence in 4..12 {
+                send_dispatch(
+                    &mut socket,
+                    sequence,
+                    "MESSAGE_CREATE",
+                    json!({ "id": sequence.to_string(), "channel_id": "78", "guild_id": "77", "content": "x" }),
+                )
+                .await;
+            }
+            while let Some(Ok(_)) = socket.next().await {}
+        }
+    })
+    .await;
+
+    let runtime = super::SharedRuntime::new(
+        "token",
+        0,
+        super::TypeMap::new(),
+        CacheConfig::default(),
+        None,
+    );
+    let shard = tokio::spawn(super::start_gateway_shard(
+        super::ShardLaunch {
+            token: "token".to_string(),
+            intents: 0,
+            handler: Arc::new(NoopEventHandler),
+            runtime: runtime.clone(),
+            gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+            shard: (0, 1),
+            presence: None,
+            dispatch: super::DispatchConfig {
+                queue_capacity: 2,
+                shutdown_timeout: Duration::from_millis(50),
+                ..super::DispatchConfig::default()
+            },
+        },
+        super::ShardStartControl {
+            supervisor_channels: None,
+            boot_gate: None,
+        },
+    ));
+
     tokio::time::timeout(Duration::from_secs(5), async {
-        while recorder.calls().is_empty() {
+        while runtime.cache.guild(&Snowflake::from("77")).await.is_none() {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("backend saw the READY invalidation");
-    assert_eq!(recorder.calls(), vec!["clear_cache".to_string()]);
+    .expect("GUILD_CREATE was cached");
+    let fetch = tokio::spawn({
+        let context = runtime.context((0, 1));
+        async move { context.fetch_members("77", None, None).await }
+    });
+    // Let the member request reach the (silent) gateway.
+    tokio::task::yield_now().await;
+
+    let voice = Arc::clone(&runtime.voice);
+    let voice_guard = voice.write().await;
+    stall.notify_one();
+
+    let error = tokio::time::timeout(Duration::from_secs(10), shard)
+        .await
+        .expect("the overflowing shard stops instead of continuing with a gap")
+        .unwrap()
+        .expect_err("the overflow is reported to the caller");
+    drop(voice_guard);
+    assert!(error.to_string().contains("overflowed"), "{error}");
+
+    let fetch_error = tokio::time::timeout(Duration::from_secs(5), fetch)
+        .await
+        .expect("pending fetches fail promptly")
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        fetch_error.to_string().contains("shard stopped"),
+        "{fetch_error}"
+    );
+    assert!(
+        runtime.cache.guild(&Snowflake::from("77")).await.is_none(),
+        "the shard's cache generation was invalidated"
+    );
+    server.abort();
+}
+
+#[cfg(feature = "collectors")]
+#[tokio::test]
+async fn collectors_created_by_a_queued_handler_replay_events_published_before_it_ran() {
+    struct LateCollectingHandler {
+        cache: crate::cache::CacheHandle,
+        results: mpsc::UnboundedSender<(Option<String>, Option<String>)>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for LateCollectingHandler {
+        async fn message_create(&self, ctx: super::Context, message: Message) {
+            if message.content != "first" {
+                return;
+            }
+            // Reproduce the race deterministically: the processor already
+            // published B before this handler creates its collectors.
+            while self
+                .cache
+                .message(&Snowflake::from("500"), &Snowflake::from("2"))
+                .await
+                .is_none()
+            {
+                tokio::task::yield_now().await;
+            }
+            let mut from_cursor = ctx
+                .message_collector()
+                .timeout(std::time::Duration::from_secs(5));
+            let mut from_now = ctx
+                .collectors()
+                .message_collector()
+                .timeout(std::time::Duration::from_millis(50));
+            let replayed = from_cursor.next().await.map(|message| message.content);
+            let live = from_now.next().await.map(|message| message.content);
+            let _ = self.results.send((replayed, live));
+        }
+    }
+
+    let context = pipeline_test_context((0, 1));
+    let (results_tx, mut results_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LateCollectingHandler {
+            cache: context.cache.clone(),
+            results: results_tx,
+        }),
+        context,
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    // A is published and its handler queued, then B is published, all
+    // before A's handler runs.
+    ingress.push(message_create_dispatch("1", "first"));
+    ingress.push(message_create_dispatch("2", "second"));
+
+    let (replayed, live) = tokio::time::timeout(Duration::from_secs(10), results_rx.recv())
+        .await
+        .expect("handler finished")
+        .expect("handler reported");
+    assert_eq!(replayed.as_deref(), Some("second"));
+    assert_eq!(
+        live, None,
+        "a from-now subscription intentionally starts after B"
+    );
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[cfg(feature = "collectors")]
+#[tokio::test]
+async fn collector_hub_replays_from_a_cursor_and_reports_journal_eviction_as_lag() {
+    let hub = crate::collector::CollectorHub::with_capacity(2);
+    let message = |id: &str| {
+        Event::MessageCreate(MessageEvent {
+            message: Message {
+                id: Snowflake::from(id),
+                channel_id: Snowflake::from("1"),
+                content: id.to_string(),
+                ..Message::default()
+            },
+            raw: json!({}),
+        })
+    };
+
+    let start = hub.cursor();
+    let after_first = hub.publish(message("a"));
+    assert_eq!(after_first.sequence(), start.sequence() + 1);
+    hub.publish(message("b"));
+    // The replay switches to live events without a gap or duplicate.
+    let mut subscription = hub.subscribe_from(after_first);
+    assert!(matches!(
+        subscription.recv().await,
+        Ok(Event::MessageCreate(event)) if event.message.content == "b"
+    ));
+    hub.publish(message("c"));
+    assert!(matches!(
+        subscription.recv().await,
+        Ok(Event::MessageCreate(event)) if event.message.content == "c"
+    ));
+
+    // `start` points at "a", which the two-event journal has evicted.
+    let mut lagging = hub
+        .message_collector_from(start)
+        .timeout(std::time::Duration::from_secs(1));
+    assert_eq!(lagging.next().await.unwrap().content, "b");
+    assert_eq!(lagging.lagged_events(), 1);
+
+    // Reaction collectors replay from a cursor too.
+    let reaction_start = hub.cursor();
+    hub.publish(Event::MessageReactionAdd(ReactionEvent {
+        user_id: Some(Snowflake::from("7")),
+        message_id: Some(Snowflake::from("99")),
+        channel_id: Some(Snowflake::from("1")),
+        emoji: Some(Emoji::unicode("👍")),
+        raw: json!({}),
+        ..ReactionEvent::default()
+    }));
+    {
+        let mut handler_ctx = pipeline_test_context((0, 1));
+        handler_ctx.collectors = hub.clone();
+        handler_ctx.event_cursor = Some(reaction_start);
+        let mut reactions = handler_ctx
+            .reaction_collector("99")
+            .timeout(std::time::Duration::from_secs(1));
+        assert!(reactions.next().await.is_some());
+    }
+
+    let mut from_now = hub.subscribe();
+    drop(hub);
+    assert!(matches!(
+        from_now.recv().await,
+        Err(tokio::sync::broadcast::error::RecvError::Closed)
+    ));
+}
+
+fn interaction_dispatch(id: &str) -> super::GatewayDispatch {
+    super::GatewayDispatch::new(
+        "INTERACTION_CREATE".to_string(),
+        json!({
+            "id": "900",
+            "application_id": "204",
+            "token": "token",
+            "channel_id": "205",
+            "guild_id": "206",
+            "type": 3,
+            "data": { "custom_id": id, "component_type": 2 }
+        }),
+    )
+}
+
+fn interaction_custom_id(interaction: &Interaction) -> String {
+    match interaction {
+        Interaction::Component(component) => component.data.custom_id.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Reports started interaction calls; blocks interactions listed in `gated`
+/// and any message with content "stuck".
+struct LaneHandler {
+    started: mpsc::UnboundedSender<String>,
+    gate: Arc<tokio::sync::Semaphore>,
+    gated: Vec<&'static str>,
+}
+
+#[async_trait]
+impl super::EventHandler for LaneHandler {
+    async fn interaction_create(&self, ctx: super::Context, interaction: Interaction) {
+        let id = interaction_custom_id(&interaction);
+        assert!(ctx.event_received_at().is_some());
+        let _ = self.started.send(id.clone());
+        if self.gated.contains(&id.as_str()) {
+            self.gate.acquire().await.expect("gate open").forget();
+        }
+    }
+
+    async fn message_create(&self, _ctx: super::Context, message: Message) {
+        let _ = self.started.send(format!("message:{}", message.content));
+        if message.content == "stuck" {
+            self.gate.acquire().await.expect("gate open").forget();
+        }
+    }
+}
+
+type OverloadLog = Arc<std::sync::Mutex<Vec<(String, super::InteractionOverloadReason, Duration)>>>;
+
+fn recording_overload_hook(log: &OverloadLog) -> super::InteractionOverloadHook {
+    let log = Arc::clone(log);
+    Arc::new(move |overloaded: super::OverloadedInteraction| {
+        log.lock().unwrap().push((
+            interaction_custom_id(&overloaded.interaction),
+            overloaded.reason,
+            overloaded.waited,
+        ));
+    })
+}
+
+#[tokio::test]
+async fn interactions_have_reserved_slots_while_a_serial_handler_is_stuck() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: Vec::new(),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "stuck"));
+    assert_eq!(next_started(&mut started_rx).await, "message:stuck");
+    // The Serial handler is blocked; the interaction must not wait for it.
+    ingress.push(interaction_dispatch("urgent"));
+    assert_eq!(next_started(&mut started_rx).await, "urgent");
+
+    gate.add_permits(1);
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn interaction_without_a_slot_goes_to_the_overload_hook_at_its_admission_deadline() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let overloads: OverloadLog = Arc::default();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::clone(&gate),
+            gated: vec!["slow"],
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            max_concurrent_interactions: 1,
+            interaction_admission_timeout: Duration::from_secs(2),
+            interaction_overload: Some(recording_overload_hook(&overloads)),
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    let started_at = tokio::time::Instant::now();
+    ingress.push(interaction_dispatch("slow"));
+    assert_eq!(next_started(&mut started_rx).await, "slow");
+    ingress.push(interaction_dispatch("waiting"));
+    ingress.push(interaction_dispatch("also-waiting"));
+
+    // Paused time auto-advances to each admission deadline while every task
+    // is idle (a yield loop would keep the clock frozen).
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while overloads.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both waiting interactions reached the hook");
+    let overloads = overloads.lock().unwrap().clone();
+    assert_eq!(overloads[0].0, "waiting");
+    assert_eq!(overloads[1].0, "also-waiting");
+    for (_, reason, waited) in &overloads {
+        assert_eq!(*reason, super::InteractionOverloadReason::AdmissionTimeout);
+        assert!(*waited >= Duration::from_secs(2), "{waited:?}");
+    }
+    assert!(started_at.elapsed() < Duration::from_secs(3));
+    assert!(started_rx.try_recv().is_err(), "no handler ran for them");
+
+    gate.add_permits(1);
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[tokio::test]
+async fn full_interaction_queue_goes_to_the_overload_hook_and_hook_panics_are_contained() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let overloads: OverloadLog = Arc::default();
+    let recorder = recording_overload_hook(&overloads);
+    let hook: super::InteractionOverloadHook = Arc::new(move |overloaded| {
+        let panics = interaction_custom_id(&overloaded.interaction) == "i3";
+        recorder(overloaded);
+        if panics {
+            panic!("overload hook failure under test");
+        }
+    });
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            gated: Vec::new(),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            interaction_queue_capacity: 1,
+            interaction_overload: Some(hook),
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    // Current-thread test: the processor handles all four before the
+    // interaction dispatcher runs, so only the first fits in the queue.
+    for id in ["i1", "i2", "i3", "i4"] {
+        ingress.push(interaction_dispatch(id));
+    }
+    assert_eq!(next_started(&mut started_rx).await, "i1");
+    // Later interactions are still processed after the panicking hook.
+    ingress.push(interaction_dispatch("i5"));
+    assert_eq!(next_started(&mut started_rx).await, "i5");
+
+    let overloads = overloads.lock().unwrap().clone();
+    let ids: Vec<_> = overloads.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(ids, vec!["i2", "i3", "i4"]);
+    assert!(overloads
+        .iter()
+        .all(|(_, reason, _)| *reason == super::InteractionOverloadReason::QueueFull));
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[tokio::test]
+async fn interactions_start_in_arrival_order() {
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(LaneHandler {
+            started: started_tx,
+            gate: Arc::new(tokio::sync::Semaphore::new(0)),
+            gated: Vec::new(),
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig {
+            max_concurrent_interactions: 1,
+            ..super::DispatchConfig::default()
+        },
+    );
+    let ingress = pipeline.ingress();
+    for id in ["a", "b", "c"] {
+        ingress.push(interaction_dispatch(id));
+    }
+    for expected in ["a", "b", "c"] {
+        assert_eq!(next_started(&mut started_rx).await, expected);
+    }
+    drop(ingress);
+    pipeline.shutdown(Duration::from_secs(5)).await.unwrap();
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn failed_backend_writes_schedule_a_resync_that_is_retried_until_it_succeeds() {
+    let recorder = Arc::new(RecordingBackend {
+        fail_put_message: true,
+        fail_clear_shard_cache: std::sync::atomic::AtomicBool::new(true),
+        ..RecordingBackend::default()
+    });
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let health = forwarder.health_handle();
+    forwarder.forward(
+        (0, 1),
+        super::BackendWrite::PutMessage(Box::new(Message {
+            id: Snowflake::from("1"),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        })),
+    );
+    forwarder.flush().await;
+    let failing = health.health();
+    assert!(!failing.healthy);
+    assert_eq!(failing.failed_writes, 2, "the put and the first resync");
+    assert_eq!(failing.pending_resync_shards, vec![(0, 1)]);
+    assert!(failing
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("clear_shard_cache")));
+
+    recorder
+        .fail_clear_shard_cache
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    forwarder.forward(
+        (0, 1),
+        super::BackendWrite::DeleteMember {
+            guild_id: Snowflake::from("1"),
+            user_id: Snowflake::from("2"),
+        },
+    );
+    forwarder.flush().await;
+    assert!(health.health().healthy);
+    assert_eq!(health.health().resyncs, 1);
+    assert_eq!(
+        recorder.calls(),
+        vec![
+            "put_message:10:1".to_string(),
+            "clear_shard_cache:0:1".to_string(),
+            "delete_member:1:2".to_string(),
+            "clear_shard_cache:0:1".to_string(),
+        ]
+    );
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn unmergeable_message_update_after_a_backend_read_error_resyncs_the_shard() {
+    let recorder = Arc::new(RecordingBackend {
+        fail_get_message: true,
+        ..RecordingBackend::default()
+    });
+    let (forwarder, _worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    let update = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "content": "after" }),
+    )
+    .unwrap();
+    // The in-memory cache does not know the message either.
+    super::forward_cache_backend_updates(
+        &forwarder,
+        &crate::cache::CacheHandle::new(),
+        (1, 2),
+        &update,
+    )
+    .await;
+    forwarder.flush().await;
+    assert_eq!(recorder.calls(), vec!["clear_shard_cache:1:2".to_string()]);
+    assert_eq!(forwarder.health_handle().health().failed_writes, 1);
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn backend_worker_shutdown_aborts_a_hung_call_so_no_write_lands_afterwards() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let recorder = Arc::new(RecordingBackend {
+        put_message_gate: Some(Arc::clone(&gate)),
+        ..RecordingBackend::default()
+    });
+    let (forwarder, worker) = super::CacheBackendForwarder::spawn(recorder.clone(), 16);
+    forwarder.forward(
+        (0, 1),
+        super::BackendWrite::PutMessage(Box::new(Message {
+            id: Snowflake::from("1"),
+            channel_id: Snowflake::from("10"),
+            ..Message::default()
+        })),
+    );
+    drop(forwarder);
+    let error = worker
+        .shutdown(Duration::from_millis(20))
+        .await
+        .expect_err("a hung backend call cannot finish in time");
+    assert!(error.contains("aborted"), "{error}");
+
+    // The backend call was cancelled, not merely detached.
+    gate.add_permits(1);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(recorder.calls().is_empty());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn dm_messages_are_tied_to_shard_zero_and_cleared_by_its_ready() {
+    let cache = crate::cache::CacheHandle::new();
+    let dm = decode_event(
+        "MESSAGE_CREATE",
+        json!({ "id": "31", "channel_id": "30", "content": "hi" }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, (0, 2), &dm).await;
+    assert_eq!(cache.channel(&Snowflake::from("30")).await.unwrap().kind, 1);
+
+    super::apply_cache_updates(&cache, (1, 2), &ready_dispatch_event()).await;
+    assert!(cache
+        .message(&Snowflake::from("30"), &Snowflake::from("31"))
+        .await
+        .is_some());
+    super::apply_cache_updates(&cache, (0, 2), &ready_dispatch_event()).await;
+    assert!(cache
+        .message(&Snowflake::from("30"), &Snowflake::from("31"))
+        .await
+        .is_none());
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test(start_paused = true)]
+async fn shutdown_and_wait_cleans_up_even_when_sending_shutdown_fails() {
+    let manager = Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(2))));
+    // Shard 0 already stopped: its command channel is closed.
+    drop(
+        manager
+            .lock()
+            .expect("manager mutex poisoned")
+            .prepare_runtime(0)
+            .unwrap(),
+    );
+    let _runtime1 = manager
+        .lock()
+        .expect("manager mutex poisoned")
+        .prepare_runtime(1)
+        .unwrap();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&dropped));
+    let supervisor = ShardSupervisor {
+        manager,
+        tasks: vec![
+            (0, tokio::spawn(async { Ok(()) })),
+            (
+                1,
+                tokio::spawn(async move {
+                    let _flag = flag;
+                    // Ignores Shutdown.
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }),
+            ),
+        ],
+        stop_timeout: Duration::from_secs(1),
+        boot_scheduler: None,
+        background: None,
+    };
+
+    let error = supervisor
+        .shutdown_and_wait()
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("timed out waiting for shard 1"), "{error}");
+    assert!(error.contains("sending shutdown also failed"), "{error}");
+    // Cleanup ran and was confirmed before returning.
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test(start_paused = true)]
+async fn wait_for_shutdown_never_exceeds_its_deadline_after_a_shard_error() {
+    let manager = Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(2))));
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&dropped));
+    let supervisor = ShardSupervisor {
+        manager,
+        tasks: vec![
+            (
+                0,
+                tokio::spawn(async move {
+                    let _flag = flag;
+                    std::future::pending::<()>().await;
+                    Ok(())
+                }),
+            ),
+            (
+                1,
+                tokio::spawn(async { Err(crate::error::DiscordError::gateway("4004")) }),
+            ),
+        ],
+        // Far longer than the caller's deadline.
+        stop_timeout: Duration::from_secs(600),
+        boot_scheduler: None,
+        background: None,
+    };
+
+    let started = tokio::time::Instant::now();
+    let error = supervisor
+        .wait_for_shutdown(Duration::from_millis(100))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("4004"), "{error}");
+    assert!(
+        started.elapsed() <= Duration::from_millis(100) + super::pipeline::ABORT_CONFIRM_GRACE,
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// Records which shards identified, keeps healthy shards connected, and
+/// rejects the shards in `reject` with 4004.
+async fn spawn_recording_gateway(
+    reject: Vec<u64>,
+) -> (
+    String,
+    JoinHandleUnit,
+    Arc<std::sync::Mutex<Vec<u64>>>,
+    mpsc::UnboundedReceiver<u64>,
+) {
+    let identified = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (closed_tx, closed_rx) = mpsc::unbounded_channel();
+    let seen = Arc::clone(&identified);
+    let (url, server) = spawn_fake_gateway(move |mut socket, identify| {
+        let seen = Arc::clone(&seen);
+        let reject = reject.clone();
+        let closed_tx = closed_tx.clone();
+        async move {
+            use futures_util::StreamExt;
+            let shard = identify["d"]["shard"][0].as_u64().unwrap_or(0);
+            seen.lock().unwrap().push(shard);
+            if reject.contains(&shard) {
+                send_close(&mut socket, 4004).await;
+                return;
+            }
+            send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, tokio_tungstenite::tungstenite::Message::Close(_)) {
+                    break;
+                }
+            }
+            let _ = closed_tx.send(shard);
+        }
+    })
+    .await;
+    (url, server, identified, closed_rx)
+}
+
+#[cfg(feature = "sharding")]
+async fn spawn_test_supervisor(
+    url: String,
+    total_shards: u32,
+    boot_delay: Duration,
+) -> ShardSupervisor {
+    super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(NoopEventHandler),
+        runtime: super::SharedRuntime::new(
+            "token",
+            0,
+            super::TypeMap::new(),
+            CacheConfig::default(),
+            None,
+        ),
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards,
+        boot_window_size: 1,
+        boot_delay,
+        initial_delay: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            shutdown_timeout: Duration::from_millis(50),
+            ..super::DispatchConfig::default()
+        },
+        background: None,
+    })
+    .await
+    .unwrap()
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn first_wave_failure_is_supervised_before_later_waves_launch() {
+    let (url, server, identified, _closed) = spawn_recording_gateway(vec![0]).await;
+    let supervisor = spawn_test_supervisor(url, 3, Duration::from_secs(5)).await;
+    let manager = supervisor.manager();
+
+    let error = tokio::time::timeout(Duration::from_secs(3), supervisor.wait())
+        .await
+        .expect("the wave-1 failure surfaces during the 5s boot delay")
+        .unwrap_err();
+    assert!(error.to_string().contains("4004"), "{error}");
+    assert_eq!(*identified.lock().unwrap(), vec![0]);
+    let manager = super::lock_sharding_manager(&manager);
+    for status in manager.statuses() {
+        assert_eq!(
+            status.state,
+            crate::sharding::ShardRuntimeState::Stopped,
+            "shard {} must not be left queued or running",
+            status.info.id
+        );
+    }
+    server.abort();
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn cancelling_the_wait_between_boot_waves_stops_started_and_queued_shards() {
+    let (url, server, identified, mut closed) = spawn_recording_gateway(Vec::new()).await;
+    let boot_delay = Duration::from_millis(300);
+    let supervisor = spawn_test_supervisor(url, 3, boot_delay).await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while identified.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("wave 1 connected");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), supervisor.wait())
+            .await
+            .is_err()
+    );
+
+    // The started shard's connection is dropped...
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), closed.recv())
+            .await
+            .expect("shard 0 was stopped"),
+        Some(0)
+    );
+    // ...and later waves never launch.
+    tokio::time::sleep(boot_delay * 3).await;
+    assert_eq!(*identified.lock().unwrap(), vec![0]);
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_shutdown_reports_handlers_that_cannot_be_cancelled() {
+    struct BlockingHandler {
+        started: mpsc::UnboundedSender<()>,
+    }
+
+    #[async_trait]
+    impl super::EventHandler for BlockingHandler {
+        async fn message_create(&self, _ctx: super::Context, _message: Message) {
+            let _ = self.started.send(());
+            // Blocks the thread without ever yielding, so abort cannot land.
+            std::thread::sleep(std::time::Duration::from_millis(1_500));
+        }
+    }
+
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let pipeline = super::spawn_event_pipeline(
+        Arc::new(BlockingHandler {
+            started: started_tx,
+        }),
+        pipeline_test_context((0, 1)),
+        #[cfg(feature = "cache")]
+        None,
+        super::DispatchConfig::default(),
+    );
+    let ingress = pipeline.ingress();
+    ingress.push(message_create_dispatch("1", "block"));
+    started_rx.recv().await.expect("handler started");
+    drop(ingress);
+
+    let error = pipeline
+        .shutdown(Duration::from_millis(20))
+        .await
+        .expect_err("an uncancellable handler is reported, not claimed stopped");
+    assert!(error.contains("did not confirm cancellation"), "{error}");
+}
+
+#[cfg(feature = "sharding")]
+fn supervisor_with(
+    tasks: Vec<(u32, JoinHandle<Result<(), crate::error::DiscordError>>)>,
+    boot_scheduler: Option<JoinHandle<()>>,
+    background: Option<JoinHandle<()>>,
+) -> ShardSupervisor {
+    ShardSupervisor {
+        manager: Arc::new(StdMutex::new(ShardingManager::new(ShardConfig::new(2)))),
+        tasks,
+        stop_timeout: Duration::from_secs(1),
+        boot_scheduler,
+        background,
+    }
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test(start_paused = true)]
+async fn shard_supervisor_wait_drains_background_work_within_the_stop_window() {
+    let flushed = supervisor_with(
+        vec![(0, tokio::spawn(async { Ok(()) }))],
+        None,
+        Some(tokio::spawn(async {
+            sleep(Duration::from_millis(100)).await;
+        })),
+    );
+    flushed.wait().await.unwrap();
+
+    let hung = supervisor_with(
+        vec![(0, tokio::spawn(async { Ok(()) }))],
+        None,
+        Some(tokio::spawn(std::future::pending::<()>())),
+    );
+    let error = hung.wait().await.unwrap_err().to_string();
+    assert!(error.contains("did not flush"), "{error}");
+
+    let panicked = supervisor_with(
+        vec![(0, tokio::spawn(async { Ok(()) }))],
+        None,
+        Some(tokio::spawn(async {
+            panic!("backend worker failure under test")
+        })),
+    );
+    let error = panicked.wait().await.unwrap_err().to_string();
+    assert!(error.contains("panicked"), "{error}");
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test(start_paused = true)]
+async fn shard_error_stops_the_boot_schedule_and_reports_cleanup_problems() {
+    let boot_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&boot_stopped));
+    let supervisor = supervisor_with(
+        vec![
+            (
+                0,
+                tokio::spawn(async { Err(crate::error::DiscordError::gateway("4004")) }),
+            ),
+            (
+                1,
+                tokio::spawn(async {
+                    sleep(Duration::from_millis(10)).await;
+                    Err(crate::error::DiscordError::gateway("late failure"))
+                }),
+            ),
+        ],
+        Some(tokio::spawn(async move {
+            let _flag = flag;
+            std::future::pending::<()>().await;
+        })),
+        Some(tokio::spawn(std::future::pending::<()>())),
+    );
+
+    let error = supervisor.wait().await.unwrap_err().to_string();
+    assert!(error.contains("4004"), "{error}");
+    assert!(error.contains("did not flush"), "{error}");
+    // The pending boot waves were cancelled.
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(boot_stopped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn shard_supervisor_shutdown_cancels_pending_boot_waves() {
+    let boot_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = TaskDropFlag(Arc::clone(&boot_stopped));
+    let supervisor = supervisor_with(
+        Vec::new(),
+        Some(tokio::spawn(async move {
+            let _flag = flag;
+            std::future::pending::<()>().await;
+        })),
+        None,
+    );
+    supervisor.shutdown().unwrap();
+    wait_for_flag(&boot_stopped, "shutdown aborts the boot scheduler").await;
+    supervisor.wait().await.unwrap();
 }

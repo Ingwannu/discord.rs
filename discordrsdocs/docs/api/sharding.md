@@ -6,7 +6,7 @@ Sharding is provided behind the `sharding` feature on top of the `gateway` runti
 
 - the base runtime tracks shard info in `Context`
 - `start_shards(count)` spawns shards in this process and waits for them (`spawn_shards(count)` + `ShardSupervisor::wait()`)
-- `spawn_shards(count)` returns a `ShardSupervisor` for status inspection and shard control
+- `spawn_shards(count)` returns a `ShardSupervisor` for status inspection and shard control; since 3.0 it returns as soon as the shard tasks exist, while later identify waves are still queued, so the supervisor owns and supervises every shard from the start
 - since `2.1`, `spawn_shards(...)` fetches `/gateway/bot` and uses the account's real `max_concurrency` for identify wave sizing (previously hardcoded to 1), and each shard's IDENTIFY is paced to Discord's 1-per-5s-per-shard limit
 
 ## Primary Types
@@ -70,14 +70,15 @@ async fn main() -> Result<(), discordrs::DiscordError> {
 
 ### Waiting and Failures (3.0)
 
-`ShardSupervisor::wait()` (and therefore `start_shards` / `start_auto_shards`) watches every shard at once:
+`ShardSupervisor::wait()` (and therefore `start_shards` / `start_auto_shards`) watches every shard at once, including while later identify waves are still queued:
 
-- The first shard that fails — for example with `DiscordError::Gateway` for a non-reconnectable close code such as 4004 (authentication failed) or 4011 (sharding required) — makes the supervisor send `Shutdown` to the remaining shards, wait up to the handler shutdown timeout plus two seconds, abort whatever is still running, and return that first error. Before 3.0 shards were awaited in order, so a later shard's failure stayed hidden while an earlier shard kept running, and an early error dropped the other handles without stopping them.
-- A shard that stops cleanly (`Ok`) does not affect the others; `wait()` returns `Ok(())` once all have stopped.
-- `wait_for_shutdown(timeout)` aborts every shard still running when the timeout passes. Cancelling a `wait*` future also aborts the running shards; dropping the `ShardSupervisor` without waiting leaves them running.
-- Each shard stops promptly after its gateway exits: queued events are delivered and running handlers may finish for up to `ClientBuilder::handler_shutdown_timeout` (default 5 seconds), then they are aborted.
+- The first shard that fails — for example with `DiscordError::Gateway` for a non-reconnectable close code such as 4004 (authentication failed) or 4011 (sharding required), or an event queue overflow — stops the boot schedule (shards not released yet never connect), sends `Shutdown` to the running shards, waits up to the handler shutdown timeout plus two seconds (never past the caller's `wait_for_shutdown` deadline), then aborts and joins whatever is still running and returns that first error. Before 3.0 shards were awaited in order, so a later shard's failure stayed hidden while an earlier shard kept running, failures during the boot waves were not acted on until every wave had launched, and an early error dropped the other handles without stopping them.
+- A shard that stops cleanly (`Ok`) does not affect the others; `wait()` returns `Ok(())` once all have stopped and the external cache backend worker has flushed.
+- `wait_for_shutdown(timeout)` aborts and joins every shard still running when the deadline passes. Aborted tasks are joined for up to one second; a task that cannot confirm cancellation (for example one blocking its thread) is named in the returned error instead of being claimed stopped. Cancelling a `wait*` future aborts the running shards (without joining them); dropping the `ShardSupervisor` without waiting leaves them running.
+- `shutdown()` stops the boot schedule and sends `Shutdown` to every shard. `shutdown_and_wait()` always runs the bounded wait-and-abort cleanup, even when sending `Shutdown` failed for a shard whose channel was already closed, and returns that send error afterwards.
+- Each shard stops promptly after its gateway exits: queued events are delivered and running handlers may finish for up to `ClientBuilder::handler_shutdown_timeout` (default 5 seconds, counted from the gateway's exit, not from the shutdown request), then they are aborted and joined.
 - `ShardingManager::broadcast` tries every shard even if one shard's command channel is already closed, and the per-shard command bridge waits for queue space instead of giving up, so `Shutdown` reaches every running shard.
 
 ### Shared State Across In-Process Shards
 
-All shards started by one `ClientBuilder` share the cache, the `TypeMap`, the collector hub, and the external cache backend worker. A READY only invalidates the cache entries of the shard that received it (see [Cache and Collectors](cache-and-collectors.md)), and guild-scoped gateway commands from any shard's `Context` (`fetch_members`, `request_guild_members`, `update_voice_state`, `join_voice`, `leave_voice`) are sent on the shard that owns the guild.
+All shards started by one `ClientBuilder` share the cache, the `TypeMap`, the collector hub, and the external cache backend worker (owned by the supervisor and drained when `wait` finishes). A READY only invalidates the cache entries of the shard that received it (see [Cache and Collectors](cache-and-collectors.md)), and guild-scoped gateway commands from any shard's `Context` (`fetch_members`, `request_guild_members`, `update_voice_state`, `join_voice`, `leave_voice`) are sent on the shard that owns the guild.

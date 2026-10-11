@@ -1,5 +1,5 @@
 use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
@@ -7,12 +7,11 @@ use async_trait::async_trait;
 use serde_json::Value;
 #[cfg(feature = "sharding")]
 use tokio::sync::watch;
-use tokio::sync::{mpsc, RwLock, Semaphore};
-use tokio::task::{JoinError, JoinSet};
+use tokio::sync::{mpsc, RwLock};
 #[cfg(feature = "sharding")]
 use tokio::time::sleep;
 use tokio::time::Duration;
-use tracing::{error, info, warn};
+use tracing::warn;
 
 #[cfg(feature = "cache")]
 use crate::cache::CacheBackend;
@@ -23,7 +22,7 @@ use crate::cache::{
 #[cfg(feature = "collectors")]
 use crate::collector::CollectorHub;
 use crate::error::DiscordError;
-use crate::event::{decode_event, Event};
+use crate::event::Event;
 use crate::http::DiscordHttpClient;
 use crate::model::{Interaction, Snowflake};
 #[cfg(feature = "sharding")]
@@ -48,6 +47,22 @@ use super::client::{EventCallback, GatewayClient, GATEWAY_COMMAND_QUEUE_CAPACITY
 use super::messenger::ShardMessenger;
 #[cfg(feature = "sharding")]
 use super::supervisor::{lock_sharding_manager, ShardSupervisor};
+
+#[cfg(feature = "cache")]
+#[path = "bot/backend.rs"]
+mod backend;
+#[path = "bot/pipeline.rs"]
+mod pipeline;
+
+#[cfg(all(test, feature = "cache"))]
+use backend::forward_cache_backend_updates;
+#[cfg(feature = "cache")]
+pub use backend::CacheBackendHealth;
+#[cfg(feature = "cache")]
+use backend::{BackendWrite, CacheBackendForwarder, CacheBackendWorker, ForwarderShared};
+#[cfg(test)]
+use pipeline::{process_gateway_dispatch, BacklogWarning, OverflowLog};
+use pipeline::{spawn_event_pipeline, GatewayDispatch};
 
 /// Typed Discord API object for `TypeMap`.
 pub struct TypeMap(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
@@ -144,6 +159,51 @@ impl Drop for MemberChunkWaiterGuard {
     }
 }
 
+/// Chunks received so far for one [`Context::fetch_members`] request.
+#[derive(Default)]
+struct MemberChunkProgress {
+    expected: Option<u64>,
+    seen: HashSet<u64>,
+    members: Vec<crate::model::Member>,
+}
+
+impl MemberChunkProgress {
+    /// Adds a chunk; returns the members once every chunk arrived.
+    fn add(
+        &mut self,
+        chunk: crate::event::GuildMembersChunkPayload,
+    ) -> Result<Option<Vec<crate::model::Member>>, DiscordError> {
+        let count = *self.expected.get_or_insert(chunk.chunk_count);
+        if chunk.chunk_count != count {
+            return Err(DiscordError::gateway(format!(
+                "GUILD_MEMBERS_CHUNK chunk_count changed from {count} to {}",
+                chunk.chunk_count
+            )));
+        }
+        if count > 0 && chunk.chunk_index >= count {
+            return Err(DiscordError::gateway(format!(
+                "GUILD_MEMBERS_CHUNK chunk_index {} is out of range for chunk_count {count}",
+                chunk.chunk_index
+            )));
+        }
+        // A repeated index must not add its members twice.
+        if self.seen.insert(chunk.chunk_index) {
+            self.members.extend(chunk.members);
+        }
+        if self.seen.len() as u64 >= count {
+            return Ok(Some(std::mem::take(&mut self.members)));
+        }
+        Ok(None)
+    }
+
+    fn describe(&self) -> String {
+        match self.expected {
+            Some(count) => format!("received {} of {count} chunks", self.seen.len()),
+            None => "no chunks received".to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
 /// Typed Discord API object for `Context`.
 pub struct Context {
@@ -159,6 +219,14 @@ pub struct Context {
     voice: Arc<RwLock<VoiceManager>>,
     #[cfg(feature = "collectors")]
     collectors: CollectorHub,
+    /// When the shard received the event this handler call is handling.
+    event_received_at: Option<tokio::time::Instant>,
+    /// Collector hub position just after the event this handler call is
+    /// handling; see [`Context::message_collector`].
+    #[cfg(feature = "collectors")]
+    event_cursor: Option<crate::collector::EventCursor>,
+    #[cfg(feature = "cache")]
+    cache_backend_health: Option<Arc<ForwarderShared>>,
 }
 
 impl Context {
@@ -177,7 +245,29 @@ impl Context {
             voice: Arc::new(RwLock::new(VoiceManager::new())),
             #[cfg(feature = "collectors")]
             collectors: CollectorHub::new(),
+            event_received_at: None,
+            #[cfg(feature = "collectors")]
+            event_cursor: None,
+            #[cfg(feature = "cache")]
+            cache_backend_health: None,
         }
+    }
+
+    /// When this shard received the event the current handler call is
+    /// handling (`None` outside handler calls). Interaction handlers can use
+    /// it to see how much of Discord's three-second response window is
+    /// left.
+    pub fn event_received_at(&self) -> Option<tokio::time::Instant> {
+        self.event_received_at
+    }
+
+    /// Health of the external cache backend mirror registered with
+    /// [`ClientBuilder::cache_backend`], or `None` without one.
+    #[cfg(feature = "cache")]
+    pub fn cache_backend_health(&self) -> Option<CacheBackendHealth> {
+        self.cache_backend_health
+            .as_ref()
+            .map(|shared| shared.health())
     }
 
     /// Allowed-mentions configured via
@@ -364,26 +454,28 @@ impl Context {
             nonce: Some(nonce),
         })?;
 
-        let collect = async move {
-            let mut members = Vec::new();
+        // Complete only once every chunk index 0..chunk_count arrived:
+        // returning on the last index alone would report a list with a
+        // missing middle chunk as success.
+        let mut chunks = MemberChunkProgress::default();
+        let collect = async {
             while let Some(chunk) = chunk_rx.recv().await {
-                let last_chunk = chunk.chunk_index + 1 >= chunk.chunk_count;
-                members.extend(chunk.members);
-                if last_chunk {
+                if let Some(members) = chunks.add(chunk)? {
                     return Ok(members);
                 }
             }
-            Err(DiscordError::gateway(
-                "shard stopped while collecting member chunks",
-            ))
+            Err(DiscordError::gateway(format!(
+                "shard stopped while collecting member chunks ({})",
+                chunks.describe()
+            )))
         };
-        tokio::time::timeout(timeout, collect)
-            .await
-            .unwrap_or_else(|_| {
-                Err(DiscordError::gateway(
-                    "timed out waiting for GUILD_MEMBERS_CHUNK",
-                ))
-            })
+        match tokio::time::timeout(timeout, collect).await {
+            Ok(result) => result,
+            Err(_) => Err(DiscordError::gateway(format!(
+                "timed out waiting for GUILD_MEMBERS_CHUNK ({})",
+                chunks.describe()
+            ))),
+        }
     }
 
     /// Requests ephemeral channel metadata through the active shard.
@@ -518,9 +610,71 @@ impl Context {
         connect_voice_runtime_impl(config).await
     }
 
+    /// The runtime's collector hub. Collectors created from it directly
+    /// start "from now": they only see events published after they were
+    /// created. Inside a handler, prefer [`Context::message_collector`] and
+    /// friends, which also see events that arrived while the handler call
+    /// was queued.
     #[cfg(feature = "collectors")]
     pub fn collectors(&self) -> &CollectorHub {
         &self.collectors
+    }
+
+    /// Hub position just after the event the current handler call is
+    /// handling, captured when that event was published (before its handler
+    /// call was queued). `None` outside handler calls.
+    #[cfg(feature = "collectors")]
+    pub fn event_cursor(&self) -> Option<crate::collector::EventCursor> {
+        self.event_cursor
+    }
+
+    /// The hub position collectors created from this context start at.
+    #[cfg(feature = "collectors")]
+    fn collector_start(&self) -> crate::collector::EventCursor {
+        self.event_cursor
+            .unwrap_or_else(|| self.collectors.cursor())
+    }
+
+    /// Collects messages published after the event this handler call is
+    /// handling — including ones published while the call waited in the
+    /// queue, before this collector existed. Outside handler calls it starts
+    /// from now. If more events than the hub keeps (256 by default) passed
+    /// in between, the oldest are skipped and counted in
+    /// `lagged_events()`.
+    #[cfg(feature = "collectors")]
+    pub fn message_collector(&self) -> crate::collector::MessageCollector {
+        self.collectors
+            .message_collector_from(self.collector_start())
+    }
+
+    /// Like [`Context::message_collector`], for interactions.
+    #[cfg(feature = "collectors")]
+    pub fn interaction_collector(&self) -> crate::collector::InteractionCollector {
+        self.collectors
+            .interaction_collector_from(self.collector_start())
+    }
+
+    /// Like [`Context::message_collector`], for component interactions.
+    #[cfg(feature = "collectors")]
+    pub fn component_collector(&self) -> crate::collector::ComponentCollector {
+        self.collectors
+            .component_collector_from(self.collector_start())
+    }
+
+    /// Like [`Context::message_collector`], for modal submissions.
+    #[cfg(feature = "collectors")]
+    pub fn modal_collector(&self) -> crate::collector::ModalCollector {
+        self.collectors.modal_collector_from(self.collector_start())
+    }
+
+    /// Like [`Context::message_collector`], for reactions on one message.
+    #[cfg(feature = "collectors")]
+    pub fn reaction_collector(
+        &self,
+        message_id: impl Into<Snowflake>,
+    ) -> crate::collector::ReactionCollector {
+        self.collectors
+            .reaction_collector_from(self.collector_start(), message_id)
     }
 }
 
@@ -952,11 +1106,16 @@ pub trait EventHandler: Send + Sync + 'static {
 /// Because the processor never waits for handlers, a handler may await
 /// `fetch_members` or a collector without stalling its own shard, and the
 /// cache a handler reads may already include later events.
+///
+/// The mode applies to every event except INTERACTION_CREATE, which uses a
+/// separate interaction lane with its own execution slots and admission
+/// deadline (see [`ClientBuilder::max_concurrent_interactions`]), so an
+/// interaction never waits behind other handler calls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EventDispatchMode {
     /// Handler calls on a shard run one at a time, in gateway order (the
     /// default). A slow handler delays the next handler call, but not
-    /// internal processing.
+    /// internal processing or interactions.
     #[default]
     Serial,
     /// Handler calls run as concurrent tasks, at most
@@ -981,14 +1140,55 @@ const EVENT_BACKLOG_WARN_THRESHOLD: usize = 5_000;
 /// Minimum interval between repeated backlog and overflow warnings, so an
 /// overloaded shard does not also flood the log.
 const OVERLOAD_WARNING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+/// Default per-shard capacity of the interaction queue.
+const DEFAULT_INTERACTION_QUEUE_CAPACITY: usize = 256;
+/// Default execution slots reserved for interaction handlers per shard.
+const DEFAULT_MAX_CONCURRENT_INTERACTIONS: usize = 32;
+/// Default time an interaction may wait for a slot. Discord requires the
+/// initial response within three seconds of sending the interaction; this
+/// leaves the handler (or the overload hook) about a second to respond.
+const DEFAULT_INTERACTION_ADMISSION_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Why an interaction was handed to the overload hook instead of the
+/// [`EventHandler`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InteractionOverloadReason {
+    /// The shard's interaction queue was full when the interaction was
+    /// processed.
+    QueueFull,
+    /// No interaction slot freed up within the admission timeout.
+    AdmissionTimeout,
+}
+
+/// An interaction the runtime could not hand to the [`EventHandler`] in
+/// time; see [`ClientBuilder::on_interaction_overload`].
+#[non_exhaustive]
+pub struct OverloadedInteraction {
+    /// The context the handler call would have received.
+    pub ctx: Context,
+    /// The interaction, still unacknowledged by this runtime.
+    pub interaction: Interaction,
+    /// Why it was not admitted.
+    pub reason: InteractionOverloadReason,
+    /// How long ago the shard received it, so the hook can tell how much of
+    /// Discord's three-second window is left.
+    pub waited: Duration,
+}
+
+type InteractionOverloadHook = Arc<dyn Fn(OverloadedInteraction) + Send + Sync>;
 
 /// Per-shard event pipeline settings collected by [`ClientBuilder`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 struct DispatchConfig {
     mode: EventDispatchMode,
     queue_capacity: usize,
     max_concurrent_handlers: usize,
     shutdown_timeout: Duration,
+    interaction_queue_capacity: usize,
+    max_concurrent_interactions: usize,
+    interaction_admission_timeout: Duration,
+    interaction_overload: Option<InteractionOverloadHook>,
 }
 
 impl Default for DispatchConfig {
@@ -998,6 +1198,10 @@ impl Default for DispatchConfig {
             queue_capacity: DEFAULT_EVENT_QUEUE_CAPACITY,
             max_concurrent_handlers: DEFAULT_MAX_CONCURRENT_HANDLERS,
             shutdown_timeout: DEFAULT_HANDLER_SHUTDOWN_TIMEOUT,
+            interaction_queue_capacity: DEFAULT_INTERACTION_QUEUE_CAPACITY,
+            max_concurrent_interactions: DEFAULT_MAX_CONCURRENT_INTERACTIONS,
+            interaction_admission_timeout: DEFAULT_INTERACTION_ADMISSION_TIMEOUT,
+            interaction_overload: None,
         }
     }
 }
@@ -1120,12 +1324,62 @@ impl ClientBuilder {
     }
 
     /// Sets how long handler calls may keep running after a shard's gateway
-    /// connection ends (default 5 seconds). Queued events keep being
-    /// delivered within this window; when it expires, the remaining handler
-    /// tasks are aborted so [`ClientBuilder::start`] and
-    /// `ShardSupervisor::wait` return promptly.
+    /// connection has ended (default 5 seconds). The window starts when the
+    /// gateway exits, not when shutdown is requested. Queued events keep
+    /// being delivered within it; when it expires, the remaining handler
+    /// tasks are aborted and joined so [`ClientBuilder::start`] and
+    /// `ShardSupervisor::wait` return promptly. The same bound applies to
+    /// flushing an external cache backend's queued writes.
     pub fn handler_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.dispatch.shutdown_timeout = timeout;
+        self
+    }
+
+    /// Sets how many INTERACTION_CREATE events each shard buffers for the
+    /// interaction lane (default 256, minimum 1). An interaction that does
+    /// not fit goes to the overload hook.
+    pub fn interaction_queue_capacity(mut self, capacity: usize) -> Self {
+        self.dispatch.interaction_queue_capacity = capacity.max(1);
+        self
+    }
+
+    /// Reserves execution slots for interaction handlers per shard (default
+    /// 32, minimum 1), separate from regular handler calls.
+    ///
+    /// Interactions are admitted in arrival order. Admitted interactions run
+    /// concurrently with each other (up to this limit) and with regular
+    /// handler calls, even in [`EventDispatchMode::Serial`], because Discord
+    /// requires an initial response within three seconds.
+    pub fn max_concurrent_interactions(mut self, limit: usize) -> Self {
+        self.dispatch.max_concurrent_interactions = limit.max(1);
+        self
+    }
+
+    /// Sets how long an interaction may wait for a slot, measured from when
+    /// the shard received it (default 2 seconds). An interaction that cannot
+    /// be admitted in time goes to the overload hook instead of the handler.
+    pub fn interaction_admission_timeout(mut self, timeout: Duration) -> Self {
+        self.dispatch.interaction_admission_timeout = timeout;
+        self
+    }
+
+    /// Registers a hook for interactions that cannot be handed to the event
+    /// handler in time (full interaction queue, or no slot within the
+    /// admission timeout), so the application can still reply or defer —
+    /// for example with an ephemeral "busy, try again" message. Without a
+    /// hook such interactions are logged and dropped, and Discord shows the
+    /// user "This interaction failed".
+    ///
+    /// The runtime never acknowledges interactions on its own: autocomplete,
+    /// modal, and component interactions need different responses, so the
+    /// hook decides. It runs synchronously on the shard's event pipeline and
+    /// must return quickly; spawn a task for the REST call. Panics in the
+    /// hook are caught and logged.
+    pub fn on_interaction_overload<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(OverloadedInteraction) + Send + Sync + 'static,
+    {
+        self.dispatch.interaction_overload = Some(Arc::new(hook));
         self
     }
 
@@ -1211,8 +1465,10 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let runtime = runtime.with_cache_backend(cache_backend);
-        start_gateway_shard(
+        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
+        #[cfg(feature = "cache")]
+        let backend_flush_timeout = dispatch.shutdown_timeout;
+        let result = start_gateway_shard(
             ShardLaunch {
                 token,
                 intents,
@@ -1229,7 +1485,20 @@ impl ClientBuilder {
                 boot_gate: None,
             },
         )
-        .await
+        .await;
+        // The shard's forwarders are gone, so the worker drains what is
+        // queued and exits; it is joined (or aborted) before returning so no
+        // backend write from this client can land after start() returned.
+        #[cfg(feature = "cache")]
+        if let Some(worker) = backend_worker {
+            if let Err(error) = worker.shutdown(backend_flush_timeout).await {
+                if result.is_ok() {
+                    return Err(DiscordError::gateway(error));
+                }
+                warn!("{error}");
+            }
+        }
+        result
     }
 
     /// Starts `shard_count` shards in this process and waits for them; the
@@ -1302,7 +1571,7 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let runtime = runtime.with_cache_backend(cache_backend);
+        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
             token,
             intents,
@@ -1311,9 +1580,14 @@ impl ClientBuilder {
             gateway_config,
             total_shards,
             boot_window_size,
+            boot_delay: SHARD_BOOT_DELAY,
             initial_delay: None,
             presence,
             dispatch,
+            #[cfg(feature = "cache")]
+            background: backend_worker.and_then(CacheBackendWorker::into_task),
+            #[cfg(not(feature = "cache"))]
+            background: None,
         })
         .await
     }
@@ -1349,7 +1623,7 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let runtime = runtime.with_cache_backend(cache_backend);
+        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
         let gateway_config = gateway_config.with_base_url(gateway_bot.url);
 
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
@@ -1360,9 +1634,14 @@ impl ClientBuilder {
             gateway_config,
             total_shards: auto_shard_plan.total_shards,
             boot_window_size: auto_shard_plan.boot_window_size,
+            boot_delay: SHARD_BOOT_DELAY,
             initial_delay: auto_shard_plan.initial_delay,
             presence,
             dispatch,
+            #[cfg(feature = "cache")]
+            background: backend_worker.and_then(CacheBackendWorker::into_task),
+            #[cfg(not(feature = "cache"))]
+            background: None,
         })
         .await
     }
@@ -1457,13 +1736,21 @@ impl SharedRuntime {
         }
     }
 
-    /// Starts the client's single ordered backend worker. Must run inside a
-    /// Tokio runtime (it is only called from the async start paths).
+    /// Starts the client's single ordered backend worker and returns its
+    /// owner. Must run inside a Tokio runtime (it is only called from the
+    /// async start paths).
     #[cfg(feature = "cache")]
-    fn with_cache_backend(mut self, cache_backend: Option<Arc<dyn CacheBackend>>) -> Self {
-        self.cache_backend = cache_backend
-            .map(|backend| CacheBackendForwarder::spawn(backend, CACHE_BACKEND_QUEUE_CAPACITY));
-        self
+    fn with_cache_backend(
+        mut self,
+        cache_backend: Option<Arc<dyn CacheBackend>>,
+    ) -> (Self, Option<CacheBackendWorker>) {
+        let Some(backend) = cache_backend else {
+            return (self, None);
+        };
+        let (forwarder, worker) =
+            CacheBackendForwarder::spawn(backend, backend::CACHE_BACKEND_QUEUE_CAPACITY);
+        self.cache_backend = Some(forwarder);
+        (self, Some(worker))
     }
 
     fn context(&self, shard: (u32, u32)) -> Context {
@@ -1481,6 +1768,13 @@ impl SharedRuntime {
         #[cfg(feature = "collectors")]
         {
             context.collectors = self.collectors.clone();
+        }
+        #[cfg(feature = "cache")]
+        {
+            context.cache_backend_health = self
+                .cache_backend
+                .as_ref()
+                .map(CacheBackendForwarder::health_handle);
         }
         context
     }
@@ -1501,9 +1795,13 @@ struct SpawnShardSupervisorConfig {
     gateway_config: GatewayConnectionConfig,
     total_shards: u32,
     boot_window_size: u32,
+    /// Pause between identify waves ([`SHARD_BOOT_DELAY`] outside tests).
+    boot_delay: Duration,
     initial_delay: Option<Duration>,
     presence: Option<crate::model::UpdatePresence>,
     dispatch: DispatchConfig,
+    /// The client's cache backend worker, handed to the supervisor.
+    background: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[cfg(feature = "sharding")]
@@ -1542,9 +1840,11 @@ async fn spawn_shard_supervisor(
         gateway_config,
         total_shards,
         boot_window_size,
+        boot_delay,
         initial_delay,
         presence,
         dispatch,
+        background,
     } = config;
 
     if let Some(initial_delay) = initial_delay {
@@ -1554,52 +1854,52 @@ async fn spawn_shard_supervisor(
     let manager = Arc::new(StdMutex::new(ShardingManager::new(
         crate::sharding::ShardConfig::new(total_shards).gateway(gateway_config.clone()),
     )));
-    let mut tasks = Vec::new();
-    let mut queued_shards = Vec::new();
-
+    // Everything fallible happens before the first task is spawned, so an
+    // error cannot leave already-started shards without an owner.
+    let mut prepared = Vec::with_capacity(total_shards as usize);
     for shard_id in 0..total_shards {
-        let handler = Arc::clone(&handler);
-        let runtime = runtime.clone();
-        let token = token.clone();
-        let gateway_config = gateway_config.clone().shard(shard_id, total_shards);
-        let supervisor_channels = lock_sharding_manager(&manager).prepare_runtime(shard_id)?;
-        let (boot_tx, boot_rx) = watch::channel(false);
-        let presence = presence.clone();
+        prepared.push((
+            shard_id,
+            lock_sharding_manager(&manager).prepare_runtime(shard_id)?,
+        ));
+    }
 
+    // From here on nothing awaits until the supervisor is returned: the
+    // supervisor owns the shard tasks immediately and supervises failures
+    // while the boot scheduler releases later identify waves.
+    let mut tasks = Vec::with_capacity(prepared.len());
+    let mut boot_gates = Vec::with_capacity(prepared.len());
+    for (shard_id, supervisor_channels) in prepared {
+        let (boot_tx, boot_rx) = watch::channel(false);
+        let launch = ShardLaunch {
+            token: token.clone(),
+            intents,
+            handler: Arc::clone(&handler),
+            runtime: runtime.clone(),
+            gateway_config: gateway_config.clone().shard(shard_id, total_shards),
+            shard: (shard_id, total_shards),
+            presence: presence.clone(),
+            dispatch: dispatch.clone(),
+        };
         tasks.push((
             shard_id,
-            tokio::spawn(async move {
-                start_gateway_shard(
-                    ShardLaunch {
-                        token,
-                        intents,
-                        handler,
-                        runtime,
-                        gateway_config,
-                        shard: (shard_id, total_shards),
-                        presence,
-                        dispatch,
-                    },
-                    ShardStartControl {
-                        supervisor_channels: Some(supervisor_channels),
-                        boot_gate: Some(boot_rx),
-                    },
-                )
-                .await
-            }),
+            tokio::spawn(start_gateway_shard(
+                launch,
+                ShardStartControl {
+                    supervisor_channels: Some(supervisor_channels),
+                    boot_gate: Some(boot_rx),
+                },
+            )),
         ));
-        queued_shards.push((shard_id, boot_tx));
+        boot_gates.push(boot_tx);
     }
+    drop(runtime);
 
-    let wave_size = boot_window_size.max(1) as usize;
-    for (wave_index, wave) in queued_shards.chunks(wave_size).enumerate() {
-        for (_, boot_tx) in wave {
-            let _ = boot_tx.send(true);
-        }
-        if wave_index + 1 < queued_shards.len().div_ceil(wave_size) {
-            sleep(SHARD_BOOT_DELAY).await;
-        }
-    }
+    let boot_scheduler = tokio::spawn(release_boot_waves(
+        boot_gates,
+        boot_window_size.max(1) as usize,
+        boot_delay,
+    ));
 
     Ok(ShardSupervisor {
         manager,
@@ -1607,7 +1907,33 @@ async fn spawn_shard_supervisor(
         stop_timeout: dispatch
             .shutdown_timeout
             .saturating_add(SHARD_STOP_ALLOWANCE),
+        boot_scheduler: Some(boot_scheduler),
+        background,
     })
+}
+
+/// Opens the boot gates wave by wave, `boot_delay` apart, so at most
+/// `max_concurrency` shards IDENTIFY at once.
+///
+/// Owned by the [`ShardSupervisor`]: aborting this task drops the remaining
+/// gates, and every shard still queued then stops without connecting. A
+/// shard that fails in an early wave therefore keeps later waves from
+/// launching at all.
+#[cfg(feature = "sharding")]
+async fn release_boot_waves(
+    boot_gates: Vec<watch::Sender<bool>>,
+    wave_size: usize,
+    boot_delay: Duration,
+) {
+    let wave_count = boot_gates.len().div_ceil(wave_size);
+    for (wave_index, wave) in boot_gates.chunks(wave_size).enumerate() {
+        for boot_gate in wave {
+            let _ = boot_gate.send(true);
+        }
+        if wave_index + 1 < wave_count {
+            sleep(boot_delay).await;
+        }
+    }
 }
 
 /// Everything one shard runtime needs, bundled so the start paths and tests
@@ -1645,42 +1971,48 @@ impl Drop for ShardRegistration {
 }
 
 /// Runs one shard: gateway connection, internal event processor, and
-/// handler dispatcher.
+/// handler lanes.
 ///
 /// Decision log:
 /// - Purpose: separate handler execution from internal processing (cache,
 ///   member-chunk waiters, collectors, voice) so a Serial handler awaiting
 ///   `fetch_members` cannot deadlock its shard; bound queues and handler
-///   tasks; return from `start()` promptly once the gateway exits.
+///   tasks; keep runtime state consistent with the gateway stream; meet
+///   Discord's interaction deadline; return from `start()` promptly and
+///   verifiably once the gateway exits.
 /// - Previous design and constraints: one unbounded queue ran internal
 ///   processing and the handler call back to back, and Concurrent mode
 ///   spawned an untracked task per event. The gateway read loop in
 ///   `client.rs` (outside this module) calls the event callback
-///   synchronously and handles heartbeat ACKs on the same loop, so the
-///   callback must never wait.
+///   synchronously, handles heartbeat ACKs on the same loop, and advances
+///   the sequence number before the callback, so the callback must never
+///   wait and a dispatch it loses can never be replayed by a RESUME.
 /// - Alternatives considered: (1) stop reading the socket when full — the
-///   heartbeat stalls and Discord drops the zombie connection; (2) reconnect
-///   and RESUME when full — the sequence number already advanced, so the
-///   lost events are not replayed; (3) keep the unbounded queue — a slow
-///   handler grows memory without limit; (4) two bounded stages with a drop
-///   policy per stage.
-/// - Chosen: (4). Stage one (gateway → internal processor) uses `try_send`
-///   and drops the whole event with an error log when full; since the
-///   processor never waits for handlers, it fills only if internal
-///   processing itself stalls. Stage two (processor → handlers) drops only
-///   the handler delivery when full; the cache, collectors, and chunk
-///   waiters have already seen the event. Handlers run under a semaphore
-///   (one permit in Serial mode) in a `JoinSet`, so limits, panic isolation,
-///   and abort-on-shutdown share one path.
-/// - Why: it is the only option that bounds memory without blocking
-///   heartbeats, and under overload it loses handler deliveries rather than
-///   internal state.
-/// - Trade-offs: awaiting `fetch_members` or a collector in a handler no
-///   longer deadlocks. A Serial handler may read cache state that already
-///   includes later events, and handlers more than `event_queue_capacity`
-///   events behind miss deliveries (reported with a running count). After
-///   the gateway exits, queued events are delivered only within
-///   `handler_shutdown_timeout`; remaining handlers are aborted.
+///   heartbeat stalls and Discord drops the zombie connection; (2) RESUME
+///   when full — the lost events are not replayed; (3) keep the unbounded
+///   queue — a slow handler grows memory without limit; (4) drop and
+///   continue — the cache, collectors, and member fetches silently diverge;
+///   (5) two bounded stages where losing internal input stops the shard.
+/// - Chosen: (5). Stage one (gateway → processor) uses `try_send`; a full or
+///   closed queue, or a processor/dispatcher that dies, raises a
+///   `PipelineFault` that is raced against the gateway: the connection is
+///   dropped, the shard's cache (and backend mirror) is invalidated, its
+///   pending member fetches fail, and the error is returned. Stage two only
+///   drops handler deliveries; internal state already saw the event.
+///   Regular handlers run under a semaphore (one permit in Serial mode);
+///   INTERACTION_CREATE uses a separate lane with reserved slots and an
+///   admission deadline that hands late interactions to an application
+///   hook. Shutdown drains within `handler_shutdown_timeout`, then aborts
+///   and joins every task and reports any that does not confirm.
+/// - Why: it bounds memory without blocking heartbeats, never presents
+///   state with a gap as current, and confines overload losses to handler
+///   deliveries (or to the hook, for interactions).
+/// - Trade-offs: a stalled processor stops the shard (a fresh IDENTIFY is
+///   left to the caller, so session-start pacing stays in one place). A
+///   Serial handler may read cache state that already includes later
+///   events; interactions run concurrently with other handlers even in
+///   Serial mode; handlers more than `event_queue_capacity` events behind
+///   miss deliveries (reported with a running count).
 async fn start_gateway_shard(
     launch: ShardLaunch,
     #[cfg(feature = "sharding")] shard_control: ShardStartControl,
@@ -1732,6 +2064,7 @@ async fn start_gateway_shard(
         member_chunk_waiters: Arc::clone(&runtime.member_chunk_waiters),
     };
 
+    let shutdown_timeout = dispatch.shutdown_timeout;
     let pipeline = spawn_event_pipeline(
         handler,
         runtime.context(shard),
@@ -1739,9 +2072,10 @@ async fn start_gateway_shard(
         runtime.cache_backend.clone(),
         dispatch,
     );
+    let fault = pipeline.fault();
     let ingress = pipeline.ingress();
     let callback: EventCallback = Arc::new(move |event_name: String, data: Value| {
-        ingress.push(GatewayDispatch { event_name, data });
+        ingress.push(GatewayDispatch::new(event_name, data));
     });
 
     let mut gateway = GatewayClient::new(token, intents)
@@ -1752,400 +2086,62 @@ async fn start_gateway_shard(
         gateway = gateway.shard(shard.0, shard.1);
     }
     #[cfg(feature = "sharding")]
+    let mut fault_publisher = None;
+    #[cfg(feature = "sharding")]
     if let Some(supervisor_channels) = shard_control.supervisor_channels {
         let (command_rx, publisher) = supervisor_channels.split();
         forward_shard_commands(command_rx, gateway_command_tx);
+        fault_publisher = Some(publisher.clone());
         gateway = gateway.supervisor(shard_supervisor_callback(publisher));
     }
-    let result = gateway.run(callback).await;
+    // A pipeline fault means a dispatch was lost after the gateway already
+    // advanced its sequence, so neither continuing nor RESUMEing can repair
+    // the stream: stop the connection (dropping the run future closes it).
+    let result = tokio::select! {
+        result = gateway.run(callback) => result,
+        reason = fault.raised() => {
+            #[cfg(feature = "sharding")]
+            if let Some(publisher) = fault_publisher.as_ref() {
+                let _ = publisher.publish(ShardSupervisorEvent::GatewayError {
+                    shard_id: shard.0,
+                    message: reason.clone(),
+                });
+                let _ = publisher.publish(ShardSupervisorEvent::StateChanged {
+                    shard_id: shard.0,
+                    state: ShardRuntimeState::Stopped,
+                });
+            }
+            Err(DiscordError::gateway(reason))
+        }
+    };
     drop(gateway);
     drop(registration);
 
-    match pipeline.shutdown(dispatch.shutdown_timeout).await {
+    let pipeline_result = pipeline.shutdown(shutdown_timeout).await;
+    let result = match (result, fault.reason()) {
+        (Ok(()), Some(reason)) => Err(DiscordError::gateway(reason)),
+        (result, _) => result,
+    };
+    if fault.is_raised() {
+        // The shard's cached state no longer matches Discord: drop it (and
+        // the backend mirror's copy) rather than serve it as current. The
+        // pipeline has stopped, so nothing can re-insert stale entries.
+        runtime.cache.clear_shard(shard.0, shard.1).await;
+        #[cfg(feature = "cache")]
+        if let Some(forwarder) = runtime.cache_backend.as_ref() {
+            forwarder.forward(shard, BackendWrite::ClearShard);
+        }
+    }
+
+    match pipeline_result {
         Err(error) if result.is_ok() => Err(invalid_data_error(format!(
-            "gateway event pipeline task failed: {error}"
+            "gateway event pipeline did not stop cleanly: {error}"
         ))),
         Err(error) => {
-            warn!("gateway event pipeline task failed after gateway exit: {error}");
+            warn!("gateway event pipeline did not stop cleanly after gateway exit: {error}");
             result
         }
         Ok(()) => result,
-    }
-}
-
-#[derive(Debug)]
-struct GatewayDispatch {
-    event_name: String,
-    data: Value,
-}
-
-/// Counts items dropped by an overflow policy and decides when to log.
-///
-/// Shared by the gateway callback (which runs synchronously on the read
-/// loop) and the async stages, hence atomics and a std mutex rather than
-/// task-local state.
-#[derive(Default)]
-struct OverflowLog {
-    dropped: AtomicU64,
-    last_report: StdMutex<Option<std::time::Instant>>,
-}
-
-impl OverflowLog {
-    /// Records one dropped item. Returns the running total when a warning
-    /// is due: on the first drop and then at most every
-    /// [`OVERLOAD_WARNING_INTERVAL`].
-    fn record(&self) -> Option<u64> {
-        let total = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
-        let mut last_report = self
-            .last_report
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let now = std::time::Instant::now();
-        if last_report.is_some_and(|last| now.duration_since(last) < OVERLOAD_WARNING_INTERVAL) {
-            return None;
-        }
-        *last_report = Some(now);
-        Some(total)
-    }
-
-    #[cfg(test)]
-    fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
-    }
-}
-
-/// Rate limiter for backlog warnings owned by a single task.
-#[derive(Default)]
-struct BacklogWarning {
-    last: Option<std::time::Instant>,
-}
-
-impl BacklogWarning {
-    fn due(&mut self) -> bool {
-        let now = std::time::Instant::now();
-        if self
-            .last
-            .is_some_and(|last| now.duration_since(last) < OVERLOAD_WARNING_INTERVAL)
-        {
-            return false;
-        }
-        self.last = Some(now);
-        true
-    }
-}
-
-/// The gateway-facing end of a shard's event pipeline.
-struct EventIngress {
-    shard_id: u32,
-    events: mpsc::Sender<GatewayDispatch>,
-    overflow: OverflowLog,
-    /// Events that arrived after the processor stopped (it only stops early
-    /// if it panicked); counted so the log is not flooded per event.
-    closed: OverflowLog,
-}
-
-impl EventIngress {
-    /// Queues a dispatch without ever waiting: this runs inside the gateway
-    /// read loop, which must keep processing heartbeats. A full queue drops
-    /// the event (see [`ClientBuilder::event_queue_capacity`]).
-    fn push(&self, dispatch: GatewayDispatch) {
-        match self.events.try_send(dispatch) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(dispatch)) => {
-                if let Some(total) = self.overflow.record() {
-                    error!(
-                        "shard {}: gateway event queue is full ({} events); dropped {total} event(s) \
-                         so far, latest {}. Internal event processing has stalled, so the cache \
-                         and handlers miss these events",
-                        self.shard_id,
-                        self.events.max_capacity(),
-                        dispatch.event_name
-                    );
-                }
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                if let Some(total) = self.closed.record() {
-                    warn!(
-                        "shard {}: gateway event processor stopped before dispatch could be \
-                         queued ({total} event(s) lost so far)",
-                        self.shard_id
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// Aborts a pipeline task when dropped.
-///
-/// Cancelling the shard future (for example `start()` inside `select!`) or
-/// giving up on a slow drain must not leave the processor, the dispatcher,
-/// or handler tasks running detached. Await through [`AbortOnDrop::join`]
-/// so the guard stays armed during the wait.
-struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
-
-impl<T> AbortOnDrop<T> {
-    async fn join(&mut self) -> Result<T, JoinError> {
-        (&mut self.0).await
-    }
-}
-
-impl<T> Drop for AbortOnDrop<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-/// A running per-shard event pipeline: ingress queue, internal processor,
-/// handler queue, and handler dispatcher.
-struct EventPipeline {
-    ingress: Arc<EventIngress>,
-    processor: AbortOnDrop<()>,
-    dispatcher: AbortOnDrop<()>,
-    #[cfg(test)]
-    handler_drops: Arc<OverflowLog>,
-}
-
-impl EventPipeline {
-    fn ingress(&self) -> Arc<EventIngress> {
-        Arc::clone(&self.ingress)
-    }
-
-    /// Drains and stops the pipeline once no more events can arrive.
-    ///
-    /// Callers must drop every other [`EventIngress`] reference first (the
-    /// gateway callback), so the processor sees its queue close after
-    /// finishing the queued events. The dispatcher then delivers what is
-    /// left in the handler queue and waits for running handlers. Everything
-    /// still running after `timeout` is aborted.
-    async fn shutdown(self, timeout: Duration) -> Result<(), JoinError> {
-        let EventPipeline {
-            ingress,
-            mut processor,
-            mut dispatcher,
-            ..
-        } = self;
-        drop(ingress);
-        let drained = tokio::time::timeout(timeout, async {
-            let processor_result = processor.join().await;
-            let dispatcher_result = dispatcher.join().await;
-            processor_result.and(dispatcher_result)
-        })
-        .await;
-        match drained {
-            Ok(result) => result,
-            Err(_) => {
-                warn!(
-                    "event handlers still running {timeout:?} after the gateway stopped; aborting them"
-                );
-                Ok(())
-            }
-        }
-    }
-}
-
-fn spawn_event_pipeline(
-    handler: Arc<dyn EventHandler>,
-    ctx: Context,
-    #[cfg(feature = "cache")] cache_backend: Option<CacheBackendForwarder>,
-    dispatch: DispatchConfig,
-) -> EventPipeline {
-    let (ingress_tx, ingress_rx) = mpsc::channel(dispatch.queue_capacity.max(1));
-    let (handler_tx, handler_rx) = mpsc::channel(dispatch.queue_capacity.max(1));
-    let handler_drops = Arc::new(OverflowLog::default());
-    let ingress = Arc::new(EventIngress {
-        shard_id: ctx.shard_id,
-        events: ingress_tx,
-        overflow: OverflowLog::default(),
-        closed: OverflowLog::default(),
-    });
-    let processor = tokio::spawn(run_event_processor(
-        ctx.clone(),
-        #[cfg(feature = "cache")]
-        cache_backend,
-        ingress_rx,
-        handler_tx,
-        Arc::clone(&handler_drops),
-        dispatch,
-    ));
-    let dispatcher = tokio::spawn(run_handler_dispatcher(handler, ctx, handler_rx, dispatch));
-    EventPipeline {
-        ingress,
-        processor: AbortOnDrop(processor),
-        dispatcher: AbortOnDrop(dispatcher),
-        #[cfg(test)]
-        handler_drops,
-    }
-}
-
-/// Internal stage: applies every event to runtime state in gateway order and
-/// hands it to the dispatcher without waiting for handlers.
-async fn run_event_processor(
-    ctx: Context,
-    #[cfg(feature = "cache")] cache_backend: Option<CacheBackendForwarder>,
-    mut ingress: mpsc::Receiver<GatewayDispatch>,
-    handlers: mpsc::Sender<Event>,
-    handler_drops: Arc<OverflowLog>,
-    dispatch: DispatchConfig,
-) {
-    let warn_at = dispatch.backlog_warn_threshold();
-    let mut ingress_backlog = BacklogWarning::default();
-    let mut handler_backlog = BacklogWarning::default();
-    while let Some(next) = ingress.recv().await {
-        let backlog = ingress.len();
-        if backlog >= warn_at && ingress_backlog.due() {
-            warn!(
-                "shard {}: gateway event backlog is {backlog} events; internal event processing \
-                 (cache, voice, collectors) is not keeping up",
-                ctx.shard_id
-            );
-        }
-
-        let event = process_gateway_dispatch(
-            &ctx,
-            #[cfg(feature = "cache")]
-            cache_backend.as_ref(),
-            next,
-        )
-        .await;
-
-        match handlers.try_send(event) {
-            Ok(()) => {
-                let queued = handlers.max_capacity() - handlers.capacity();
-                if queued >= warn_at && handler_backlog.due() {
-                    warn!(
-                        "shard {}: event handler backlog is {queued} events; the event handler is \
-                         not keeping up (consider EventDispatchMode::Concurrent or faster \
-                         handlers). Deliveries beyond {} queued events are dropped",
-                        ctx.shard_id,
-                        handlers.max_capacity()
-                    );
-                }
-            }
-            Err(mpsc::error::TrySendError::Full(event)) => {
-                if let Some(total) = handler_drops.record() {
-                    warn!(
-                        "shard {}: event handler queue is full ({} events); dropped {total} \
-                         handler call(s) so far, latest {}. The cache, collectors, and \
-                         fetch_members still received these events",
-                        ctx.shard_id,
-                        handlers.max_capacity(),
-                        event.kind()
-                    );
-                }
-            }
-            // The dispatcher only stops when the pipeline is torn down.
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
-        }
-    }
-}
-
-/// Handler stage: runs handler calls with at most
-/// [`DispatchConfig::handler_permits`] in flight.
-async fn run_handler_dispatcher(
-    handler: Arc<dyn EventHandler>,
-    ctx: Context,
-    mut events: mpsc::Receiver<Event>,
-    dispatch: DispatchConfig,
-) {
-    let permits = Arc::new(Semaphore::new(dispatch.handler_permits()));
-    let mut running = JoinSet::new();
-    loop {
-        // Take the permit before dequeuing, so an event waiting for a slot
-        // stays in (and is bounded by) the queue, and in Serial mode the
-        // next call cannot start before the previous one finished.
-        let Ok(permit) = Arc::clone(&permits).acquire_owned().await else {
-            break;
-        };
-        let next = loop {
-            tokio::select! {
-                next = events.recv() => break next,
-                Some(outcome) = running.join_next(), if !running.is_empty() => {
-                    report_handler_outcome(ctx.shard_id, outcome);
-                }
-            }
-        };
-        let Some(event) = next else {
-            break;
-        };
-        let handler = Arc::clone(&handler);
-        let ctx = ctx.clone();
-        running.spawn(async move {
-            let _permit = permit;
-            handler.handle_event(ctx, event).await;
-        });
-    }
-    // The queue closed: the gateway is gone and the backlog was delivered.
-    // Running handlers may finish; the caller bounds this wait and aborts
-    // the JoinSet (by dropping this task) when it expires.
-    while let Some(outcome) = running.join_next().await {
-        report_handler_outcome(ctx.shard_id, outcome);
-    }
-}
-
-fn report_handler_outcome(shard_id: u32, outcome: Result<(), JoinError>) {
-    if let Err(error) = outcome {
-        if error.is_panic() {
-            error!("shard {shard_id}: event handler panicked: {error}");
-        }
-    }
-}
-
-/// Runs the ordered internal processing for one dispatch and returns the
-/// decoded event for handler delivery.
-async fn process_gateway_dispatch(
-    ctx: &Context,
-    #[cfg(feature = "cache")] cache_backend: Option<&CacheBackendForwarder>,
-    dispatch: GatewayDispatch,
-) -> Event {
-    let GatewayDispatch { event_name, data } = dispatch;
-
-    if event_name == "READY" && ctx.http.application_id() == 0 {
-        if let Some(app_id) = data
-            .pointer("/application/id")
-            .and_then(|value| value.as_str())
-            .and_then(|value| value.parse::<u64>().ok())
-        {
-            ctx.http.set_application_id(app_id);
-            info!("Set application_id from READY: {app_id}");
-        }
-    }
-
-    let event = match decode_event(&event_name, data.clone()) {
-        Ok(event) => event,
-        Err(error) => {
-            warn!("Failed to decode event {event_name}: {error}");
-            Event::Unknown {
-                kind: event_name,
-                raw: data,
-            }
-        }
-    };
-
-    apply_cache_updates(&ctx.cache, ctx.shard_pair(), &event).await;
-    #[cfg(feature = "cache")]
-    if let Some(cache_backend) = cache_backend {
-        forward_cache_backend_updates(cache_backend, &ctx.cache, ctx.shard_pair(), &event).await;
-    }
-    #[cfg(feature = "voice")]
-    apply_voice_updates(&ctx.voice, &event).await;
-    route_member_chunk(&ctx.member_chunk_waiters, &event);
-    #[cfg(feature = "collectors")]
-    ctx.collectors.publish(event.clone());
-    event
-}
-
-/// Hands a GUILD_MEMBERS_CHUNK to the [`Context::fetch_members`] call
-/// awaiting its nonce, if any.
-fn route_member_chunk(waiters: &MemberChunkWaiters, event: &Event) {
-    let Event::GuildMembersChunk(chunk) = event else {
-        return;
-    };
-    let Some(nonce) = chunk.data.nonce.as_ref() else {
-        return;
-    };
-    if let Some(waiter) = lock_member_chunk_waiters(waiters).get(nonce) {
-        let _ = waiter.chunks.send(chunk.data.clone());
     }
 }
 
@@ -2225,6 +2221,19 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         Event::MessageCreate(event) => {
             if let Some(author) = event.message.author.as_ref() {
                 cache.upsert_user(author.clone()).await;
+            }
+            // Gateway messages without a guild are DMs. Recording the DM
+            // channel ties the message to shard 0 (the only shard Discord
+            // sends DMs to), so that shard's READY invalidates it instead of
+            // leaving an orphan whose owner cannot be determined.
+            if event.message.guild_id.is_none() {
+                cache
+                    .upsert_channel_if_absent(crate::model::Channel {
+                        id: event.message.channel_id.clone(),
+                        kind: 1,
+                        ..crate::model::Channel::default()
+                    })
+                    .await;
             }
             cache.upsert_message(event.message.clone()).await;
         }
@@ -2384,10 +2393,6 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
     }
 }
 
-/// Capacity of the client-wide external cache backend write queue.
-#[cfg(feature = "cache")]
-const CACHE_BACKEND_QUEUE_CAPACITY: usize = 8_192;
-
 /// Which top-level keys a MESSAGE_UPDATE payload carried.
 ///
 /// Discord may send MESSAGE_UPDATE with only some message fields; omitted
@@ -2515,345 +2520,6 @@ fn merge_message_update(
     );
 
     cached
-}
-
-/// One write for the external cache backend, applied in queue order.
-#[cfg(feature = "cache")]
-#[derive(Debug)]
-enum BackendWrite {
-    ClearShard {
-        shard_id: u32,
-        shard_count: u32,
-    },
-    PutMember {
-        guild_id: Snowflake,
-        user_id: Snowflake,
-        member: Box<crate::model::Member>,
-    },
-    DeleteMember {
-        guild_id: Snowflake,
-        user_id: Snowflake,
-    },
-    PutMembersChunk {
-        guild_id: Snowflake,
-        members: Vec<crate::model::Member>,
-        presences: Vec<crate::model::Presence>,
-    },
-    PutMessage(Box<crate::model::Message>),
-    UpdateMessage(Box<BackendMessageUpdate>),
-    DeleteMessages {
-        channel_id: Snowflake,
-        message_ids: Vec<Snowflake>,
-    },
-    PutPresence {
-        guild_id: Snowflake,
-        user_id: Snowflake,
-        presence: Box<crate::model::Presence>,
-    },
-    /// Test hook: acknowledges once every earlier write was applied.
-    #[cfg(test)]
-    Flush(tokio::sync::oneshot::Sender<()>),
-}
-
-#[cfg(feature = "cache")]
-#[derive(Debug)]
-struct BackendMessageUpdate {
-    partial: crate::model::Message,
-    fields: MessageUpdateFields,
-    /// The in-memory cache's merged copy, used when the backend does not
-    /// hold the message.
-    in_memory: Option<crate::model::Message>,
-}
-
-/// Client-wide, ordered forwarder of cache writes to an external
-/// [`CacheBackend`].
-///
-/// Decision log:
-/// - Purpose: deliver external backend writes in gateway order and stop
-///   partial MESSAGE_UPDATE payloads from overwriting complete messages.
-/// - Previous design and constraints: each write ran in its own task, so a
-///   delayed put could land after a later delete and resurrect the entry.
-///   Gateway processing must not stall behind a slow backend.
-/// - Alternatives considered: (1) await backend calls inside the internal
-///   processor — a slow backend would stall the cache, handlers, and member
-///   chunks; (2) per-key ordered queues — heavier, and ordering against the
-///   shard-wide READY invalidation gets complicated; (3) one bounded
-///   sequential worker per client that drops new writes when full.
-/// - Chosen: (3). All shards share the worker, so a READY invalidation is
-///   also ordered against later writes. For MESSAGE_UPDATE the worker reads
-///   the backend's stored copy and merges into it, falls back to the
-///   in-memory merged copy, and skips the write when neither exists.
-/// - Why: the simplest structure that is both ordered and non-blocking for
-///   the gateway; the external store is secondary, so losing backend writes
-///   under overload is preferable to losing in-memory state or handler
-///   deliveries.
-/// - Trade-offs: deletes can no longer be overtaken and partial updates no
-///   longer corrupt stored messages. Writes are serialized, so throughput is
-///   bound by backend latency; a write dropped on overflow only heals on the
-///   next write or TTL expiry (reported in a warning); each MESSAGE_UPDATE
-///   costs one extra backend read.
-#[cfg(feature = "cache")]
-#[derive(Clone)]
-struct CacheBackendForwarder {
-    writes: mpsc::Sender<BackendWrite>,
-    overflow: Arc<OverflowLog>,
-}
-
-#[cfg(feature = "cache")]
-impl CacheBackendForwarder {
-    /// Spawns the worker. It exits after draining the queue once every
-    /// forwarder clone (one per shard runtime) is gone.
-    fn spawn(backend: Arc<dyn CacheBackend>, capacity: usize) -> Self {
-        let (writes, queued) = mpsc::channel(capacity.max(1));
-        tokio::spawn(run_cache_backend_worker(backend, queued));
-        Self {
-            writes,
-            overflow: Arc::new(OverflowLog::default()),
-        }
-    }
-
-    fn forward(&self, write: BackendWrite) {
-        match self.writes.try_send(write) {
-            Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                if let Some(total) = self.overflow.record() {
-                    warn!(
-                        "cache backend write queue is full ({} writes); dropped {total} write(s) \
-                         so far. The backend is slower than gateway traffic and may hold stale \
-                         entries until they are rewritten or expire",
-                        self.writes.max_capacity()
-                    );
-                }
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {}
-        }
-    }
-
-    /// Waits until every write queued before this call was applied.
-    #[cfg(test)]
-    async fn flush(&self) {
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-        if self.writes.send(BackendWrite::Flush(done_tx)).await.is_ok() {
-            let _ = done_rx.await;
-        }
-    }
-}
-
-#[cfg(feature = "cache")]
-async fn run_cache_backend_worker(
-    backend: Arc<dyn CacheBackend>,
-    mut writes: mpsc::Receiver<BackendWrite>,
-) {
-    while let Some(write) = writes.recv().await {
-        apply_backend_write(backend.as_ref(), write).await;
-    }
-}
-
-#[cfg(feature = "cache")]
-async fn apply_backend_write(backend: &dyn CacheBackend, write: BackendWrite) {
-    fn log_backend_error(operation: &str, result: Result<(), DiscordError>) {
-        if let Err(error) = result {
-            warn!("cache backend {operation} failed: {error}");
-        }
-    }
-
-    match write {
-        BackendWrite::ClearShard {
-            shard_id,
-            shard_count,
-        } => log_backend_error(
-            "clear_shard_cache",
-            backend.clear_shard_cache(shard_id, shard_count).await,
-        ),
-        BackendWrite::PutMember {
-            guild_id,
-            user_id,
-            member,
-        } => log_backend_error(
-            "put_member",
-            backend.put_member(guild_id, user_id, *member).await,
-        ),
-        BackendWrite::DeleteMember { guild_id, user_id } => log_backend_error(
-            "delete_member",
-            backend.delete_member(&guild_id, &user_id).await,
-        ),
-        BackendWrite::PutMembersChunk {
-            guild_id,
-            members,
-            presences,
-        } => {
-            for member in members {
-                let Some(user_id) = member.user.as_ref().map(|user| user.id.clone()) else {
-                    continue;
-                };
-                log_backend_error(
-                    "put_member",
-                    backend.put_member(guild_id.clone(), user_id, member).await,
-                );
-            }
-            for mut presence in presences {
-                let user_id = presence
-                    .user_id
-                    .clone()
-                    .or_else(|| presence.user.as_ref().map(|user| user.id.clone()));
-                let Some(user_id) = user_id else {
-                    continue;
-                };
-                presence.user_id = Some(user_id.clone());
-                log_backend_error(
-                    "put_presence",
-                    backend
-                        .put_presence(guild_id.clone(), user_id, presence)
-                        .await,
-                );
-            }
-        }
-        BackendWrite::PutMessage(message) => {
-            log_backend_error("put_message", backend.put_message(*message).await)
-        }
-        BackendWrite::UpdateMessage(update) => {
-            let BackendMessageUpdate {
-                partial,
-                fields,
-                in_memory,
-            } = *update;
-            let stored = match backend.get_message(&partial.channel_id, &partial.id).await {
-                Ok(stored) => stored,
-                Err(error) => {
-                    warn!("cache backend get_message failed: {error}");
-                    None
-                }
-            };
-            let merged = match stored {
-                Some(stored) => Some(merge_message_update(
-                    stored.as_ref().clone(),
-                    partial,
-                    &fields,
-                )),
-                None => in_memory,
-            };
-            match merged {
-                Some(message) => {
-                    log_backend_error("put_message", backend.put_message(message).await)
-                }
-                None => tracing::debug!(
-                    "skipping cache backend MESSAGE_UPDATE for an unknown message; the payload \
-                     may be partial"
-                ),
-            }
-        }
-        BackendWrite::DeleteMessages {
-            channel_id,
-            message_ids,
-        } => {
-            for message_id in &message_ids {
-                log_backend_error(
-                    "delete_message",
-                    backend.delete_message(&channel_id, message_id).await,
-                );
-            }
-        }
-        BackendWrite::PutPresence {
-            guild_id,
-            user_id,
-            presence,
-        } => log_backend_error(
-            "put_presence",
-            backend.put_presence(guild_id, user_id, *presence).await,
-        ),
-        #[cfg(test)]
-        BackendWrite::Flush(done) => {
-            let _ = done.send(());
-        }
-    }
-}
-
-/// Translates an event into the external backend write that mirrors what
-/// [`apply_cache_updates`] did in memory (members, messages, presences), and
-/// queues it. Runs after the in-memory update so a MESSAGE_UPDATE can carry
-/// the in-memory merged copy as a fallback.
-#[cfg(feature = "cache")]
-async fn forward_cache_backend_updates(
-    forwarder: &CacheBackendForwarder,
-    cache: &CacheHandle,
-    shard: (u32, u32),
-    event: &Event,
-) {
-    let write = match event {
-        Event::Ready(_) => Some(BackendWrite::ClearShard {
-            shard_id: shard.0,
-            shard_count: shard.1,
-        }),
-        Event::MemberAdd(event) | Event::MemberUpdate(event) => {
-            event
-                .member
-                .user
-                .as_ref()
-                .map(|user| BackendWrite::PutMember {
-                    guild_id: event.guild_id.clone(),
-                    user_id: user.id.clone(),
-                    member: Box::new(event.member.clone()),
-                })
-        }
-        Event::MemberRemove(event) => Some(BackendWrite::DeleteMember {
-            guild_id: event.data.guild_id.clone(),
-            user_id: event.data.user.id.clone(),
-        }),
-        Event::GuildMembersChunk(event) => Some(BackendWrite::PutMembersChunk {
-            guild_id: event.data.guild_id.clone(),
-            members: event.data.members.clone(),
-            presences: event.data.presences.clone().unwrap_or_default(),
-        }),
-        Event::MessageCreate(event) => {
-            Some(BackendWrite::PutMessage(Box::new(event.message.clone())))
-        }
-        Event::MessageUpdate(event) => {
-            let in_memory = cache
-                .message(&event.message.channel_id, &event.message.id)
-                .await;
-            Some(BackendWrite::UpdateMessage(Box::new(
-                BackendMessageUpdate {
-                    partial: event.message.clone(),
-                    fields: MessageUpdateFields::from_raw(&event.raw),
-                    in_memory,
-                },
-            )))
-        }
-        Event::MessageDelete(event) => Some(BackendWrite::DeleteMessages {
-            channel_id: event.data.channel_id.clone(),
-            message_ids: vec![event.data.id.clone()],
-        }),
-        Event::MessageDeleteBulk(event) => Some(BackendWrite::DeleteMessages {
-            channel_id: event.channel_id.clone(),
-            message_ids: event.ids.clone(),
-        }),
-        Event::PresenceUpdate(event) => match (event.guild_id.clone(), event.user_id.clone()) {
-            (Some(guild_id), Some(user_id)) => Some(BackendWrite::PutPresence {
-                presence: Box::new(presence_from_update(event, &user_id)),
-                guild_id,
-                user_id,
-            }),
-            _ => None,
-        },
-        Event::VoiceStateUpdate(event) => {
-            let member = event.state.member.as_ref();
-            match (
-                event.state.guild_id.clone(),
-                member.and_then(|member| member.user.as_ref()),
-            ) {
-                (Some(guild_id), Some(user)) => Some(BackendWrite::PutMember {
-                    guild_id,
-                    user_id: user.id.clone(),
-                    member: Box::new(member.cloned().unwrap_or_default()),
-                }),
-                _ => None,
-            }
-        }
-        _ => None,
-    };
-    if let Some(write) = write {
-        forwarder.forward(write);
-    }
 }
 
 /// The cached presence shape for a PRESENCE_UPDATE, shared by the in-memory

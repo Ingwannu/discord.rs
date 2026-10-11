@@ -41,7 +41,7 @@ Client::builder(&token, intents)
     .await?;
 ```
 
-- `EventDispatchMode::Serial`(기본): 샤드의 핸들러 호출을 게이트웨이 순서대로 하나씩 실행합니다.
+- `EventDispatchMode::Serial`(기본): 샤드의 핸들러 호출을 게이트웨이 순서대로 하나씩 실행합니다. INTERACTION_CREATE는 전용 레인을 씁니다(아래 인터랙션 레인 참고).
 - `EventDispatchMode::Concurrent`: 핸들러 호출을 동시 태스크로 실행하되 샤드당 최대 `max_concurrent_handlers`개(기본 256)까지만 돌립니다. 느린 핸들러 하나가 다른 핸들러를 늦추지 않습니다.
 
 ### 이벤트 파이프라인 (3.0)
@@ -56,7 +56,7 @@ Client::builder(&token, intents)
 
 | 큐 | 가득 찼을 때 |
 |---|---|
-| 게이트웨이 → 내부 처리기 | 이벤트를 캐시까지 포함해 통째로 버리고 오류 로그를 남깁니다. 게이트웨이 읽기 루프는 하트비트도 처리하므로 절대 기다리지 않습니다. 내부 처리 자체가 멈출 때만 생깁니다(예: 어떤 태스크가 `ctx.voice()` 쓰기 잠금을 계속 쥐고 있는 경우). |
+| 게이트웨이 → 내부 처리기 | 샤드를 **멈추고** `DiscordError::Gateway`("gateway event queue overflowed")를 돌려주며, 그 샤드의 캐시 항목을 무효화하고(`CacheHandle::clear_shard`, 외부 백엔드에는 `clear_shard_cache`) 대기 중인 `fetch_members`를 실패시킵니다. 게이트웨이 클라이언트는 이미 시퀀스 번호를 올렸으므로 잃은 디스패치는 RESUME으로도 다시 받을 수 없고, 계속 돌리면 빈틈이 있는 캐시를 그대로 쓰게 됩니다. 읽기 루프는 하트비트도 처리하므로 자리가 날 때까지 기다리지 않습니다. 내부 처리 자체가 멈출 때만 생깁니다(예: 어떤 태스크가 `ctx.voice()` 쓰기 잠금을 계속 쥐고 있는 경우, `fetch_members().await` 동안 쥐는 경우 포함). 내부 처리기가 다른 이유로 죽어도 같은 방식으로 샤드를 멈춥니다. |
 | 내부 처리기 → 핸들러 | 핸들러에만 전달하지 않습니다. 캐시·컬렉터·`fetch_members`는 이미 이벤트를 받았습니다. 버린 개수는 주기 제한된 경고로 보고합니다. |
 
 어느 큐든 절반이 차면 백로그 경고가 남습니다(샤드당 최대 30초에 한 번).
@@ -75,9 +75,24 @@ Client::builder(&token, intents)
     .await?;
 ```
 
+### 인터랙션 레인 (3.0)
+
+INTERACTION_CREATE는 일반 핸들러 큐를 거치지 않습니다. 샤드마다 전용 유한 큐(`interaction_queue_capacity`, 기본 256)와 예약된 실행 슬롯(`max_concurrent_interactions`, 기본 32)을 가진 인터랙션 레인이 있어, 느린 일반 핸들러 때문에 Discord의 3초 최초 응답 시한을 놓치지 않습니다.
+
+- **순서:** 인터랙션은 도착 순서대로 들여보냅니다. 들어간 인터랙션은 서로(슬롯 수까지), 그리고 일반 핸들러 호출과 동시에 실행됩니다. `EventDispatchMode::Serial`에서도 마찬가지입니다.
+- **수락 시한:** 인터랙션은 샤드가 받은 시점부터 `interaction_admission_timeout`(기본 2초)까지만 슬롯을 기다립니다. 그때까지 들어가지 못하거나 큐에 자리가 없으면 핸들러 대신 과부하 훅으로 갑니다.
+- **과부하 훅:** `on_interaction_overload(...)`는 `OverloadedInteraction`(`ctx`, `interaction`, `reason`, `waited`)을 받아 앱이 응답하거나 지연(defer)할 수 있게 합니다. 자동완성·모달·컴포넌트마다 맞는 응답이 다르므로 런타임은 스스로 응답하지 않습니다. 훅은 파이프라인에서 동기로 실행되므로 REST 호출은 태스크로 띄웁니다. 훅이 없으면 로그만 남고 Discord는 사용자에게 "상호작용 실패"를 보여 줍니다.
+- `Context::event_received_at()`으로 이벤트가 도착한 시각을 알 수 있어, 인터랙션 핸들러가 남은 시간을 판단할 수 있습니다.
+
+### 핸들러 안의 컬렉터 (3.0)
+
+내부 처리기는 이벤트를 컬렉터 허브에 발행한 다음 핸들러 호출을 큐에 넣으므로, 핸들러가 실행될 즈음에는 이후 이벤트가 이미 발행됐을 수 있습니다. `Context::message_collector()`, `component_collector()`, `interaction_collector()`, `modal_collector()`는 핸들러가 처리 중인 이벤트 위치(`Context::event_cursor()`)에서 시작해 그 사이 발행된 이벤트를 다시 보여 주고, 빈틈 없이 실시간 이벤트로 이어집니다. 허브는 최근 256개 이벤트를 보관하며, 그보다 오래된 것은 건너뛰고 컬렉터의 `lagged_events()`에 셉니다. `ctx.collectors().message_collector()` 등은 여전히 "지금부터" 시작합니다.
+
 ### 종료와 오류 (3.0)
 
-`ClientBuilder::start()`는 샤드의 게이트웨이 연결이 끝나면 최대 `handler_shutdown_timeout`(기본 5초) 안에 돌아옵니다. 그 사이 큐에 남은 이벤트는 계속 전달되고 실행 중인 핸들러는 마무리할 수 있으며, 그 뒤에도 남은 작업은 중단됩니다. 반환값은 게이트웨이의 결과이므로 4004(인증 실패), 4014(허용되지 않은 인텐트) 같은 재접속 불가 close code는 `DiscordError::Gateway`로 호출자에게 전달됩니다. `start()` future를 취소해도 샤드의 처리기·핸들러 작업이 함께 멈춥니다. 다중 샤드는 [샤딩](../../docs/api/sharding.md) 문서를 참고합니다.
+`ClientBuilder::start()`는 샤드의 게이트웨이 연결이 끝난 뒤 최대 `handler_shutdown_timeout`(기본 5초) 안에 돌아옵니다. 이 시간은 종료를 요청한 시점이 아니라 게이트웨이가 끝난 시점부터 셉니다. 그 사이 큐에 남은 이벤트는 계속 전달되고 실행 중인 핸들러는 마무리할 수 있으며, 그 뒤에도 남은 핸들러 작업은 중단하고 **끝날 때까지 기다립니다(join)**. 외부 캐시 백엔드에 쌓인 쓰기도 같은 시간 안에 비우고 워커를 join하므로, `start()`가 돌아온 뒤 이 클라이언트의 쓰기가 늦게 도착하지 않습니다. 중단한 작업이 1초 안에 멈췄음을 확인하지 못하면(예: 스레드를 막는 핸들러) 멈췄다고 주장하지 않고 그 사실을 오류로 돌려줍니다.
+
+반환값은 게이트웨이의 결과이므로 4004(인증 실패), 4014(허용되지 않은 인텐트) 같은 재접속 불가 close code나 이벤트 큐 넘침은 `DiscordError::Gateway`로 호출자에게 전달됩니다. `start()` future를 취소해도 샤드의 처리기·핸들러 작업이 함께 멈춥니다. 다중 샤드는 [샤딩](../../docs/api/sharding.md) 문서를 참고합니다.
 
 ## 기본 Allowed Mentions와 캐시 백엔드 (2.2.0)
 
@@ -100,7 +115,7 @@ fn configure(token: &str, intents: u64, backend: Arc<dyn CacheBackend>) {
 }
 ```
 
-3.0부터 백엔드는 쓰기를 게이트웨이 순서대로 받고(늦은 put이 뒤의 delete보다 나중에 적용되지 않습니다), READY는 받은 샤드에 대해서만 `CacheBackend::clear_shard_cache`를 호출하며, 부분 MESSAGE_UPDATE는 완전한 메시지로 저장하지 않고 병합합니다. 큐가 가득 찼을 때의 동작은 [캐시와 컬렉터](../../docs/api/cache-and-collectors.md) 문서의 External Cache Backend 절을 참고합니다.
+3.0부터 백엔드는 쓰기를 게이트웨이 순서대로 받습니다. `CacheBackend::clear_shard_cache`는 기본 구현이 없는 필수 메서드이며 READY(와 모든 재동기화)는 한 샤드에 대해서만 이를 호출합니다. 큐에 못 들어가거나 실패한 쓰기는 버려지는 대신 그 샤드의 순서 보장 재동기화를 예약하므로 미러가 낡은 상태로 남지 않고, `Context::cache_backend_health()`로 상태를 볼 수 있습니다. 부분 MESSAGE_UPDATE는 완전한 메시지로 저장하지 않고 병합합니다. 자세한 내용은 [캐시와 컬렉터](../../docs/api/cache-and-collectors.md) 문서의 External Cache Backend 절을 참고합니다.
 
 REST 쪽에는 같은 기본값이 `RestClient::builder().default_allowed_mentions(...)`로 존재하며, 핸들러 안에서는 `Context::default_allowed_mentions()`로 구성된 값을 확인할 수 있습니다.
 
@@ -138,12 +153,12 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 
 기본 전체 시한은 60초이며 `Context::fetch_members_with_timeout(...)`으로 조정할 수 있습니다. raw 청크 처리가 필요하면 저수준 `ctx.request_guild_members(...)`를 그대로 사용할 수 있습니다.
 
-3.0부터 `fetch_members`는 어떤 핸들러 안에서든 기다려도 안전하고(위 이벤트 파이프라인 참고), 호출이 끝나거나 타임아웃되거나 취소되면 청크 대기 항목이 지워지며, 샤드가 멈추면 즉시 실패합니다. 길드 단위 게이트웨이 명령(`request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice`)은 그 길드를 맡은 샤드(`(guild_id >> 22) % shard_count`)가 같은 프로세스에 있으면 그 샤드로 보내므로, 어느 샤드의 `Context`에서든 쓸 수 있습니다.
+3.0부터 `fetch_members`는 어떤 핸들러 안에서든 기다려도 안전하고(위 이벤트 파이프라인 참고), 청크 번호 `0..chunk_count`가 모두 도착해야만 돌아오며(빠진 청크가 있으면 받은 개수를 밝힌 타임아웃 오류이지, 조용히 모자란 목록이 아닙니다), 호출이 끝나거나 타임아웃되거나 취소되면 청크 대기 항목이 지워지고, 샤드가 멈추면 즉시 실패합니다. 길드 단위 게이트웨이 명령(`request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice`)은 그 길드를 맡은 샤드(`(guild_id >> 22) % shard_count`)가 같은 프로세스에 있으면 그 샤드로 보내므로, 어느 샤드의 `Context`에서든 쓸 수 있습니다.
 
 ## 운영 노트
 
 - 핸들러는 스레드를 막지 말고 `await`하도록 작성합니다. 무거운 작업은 백그라운드 태스크로 넘기거나 `EventDispatchMode::Concurrent`를 씁니다. Serial 모드에서 느린 핸들러는 다음 핸들러 호출(캐시 갱신은 아님)을 늦추고, `event_queue_capacity`만큼 밀리면 전달을 버리기 시작합니다.
-- 3.0부터 내부 이벤트 처리와 핸들러 호출을 분리하고, 샤드별 두 큐와 동시 핸들러 수에 상한을 두며, READY 캐시 무효화를 받은 샤드로 한정하고, 게이트웨이가 멈추면 `start()`/`ShardSupervisor::wait()`가 곧바로 돌아옵니다(위 참고).
+- 3.0부터 내부 이벤트 처리와 핸들러 호출을 분리하고, 샤드별 두 큐와 동시 핸들러 수에 상한을 두며, 인터랙션에 수락 시한이 있는 전용 레인을 주고, 이벤트 흐름에 빈틈이 생길 상황이면 샤드를 멈추고 캐시를 무효화하며, READY 캐시 무효화를 받은 샤드로 한정하고, 게이트웨이가 멈추면 `start()`/`ShardSupervisor::wait()`가 곧바로 돌아옵니다(위 참고).
 - 2.1부터 IDENTIFY는 Discord의 샤드당 5초 1회 제한에 맞춰 페이싱되고, 30초 미만의 짧은 세션은 즉시 재접속하는 대신 점증 백오프로 재접속하므로 INVALID_SESSION 반복 시의 재접속 루프를 방지합니다.
 - 게이트웨이 프로토콜 실패(누락된 Hello, 디코드 오류, 종료 close code, 명령 큐 오버플로)는 `DiscordError::Model`이 아니라 `DiscordError::Gateway`로 표면화됩니다.
 - 3.0부터 재접속해도 소용없는 close code(4004 인증 실패, 4010 잘못된 샤드, 4011 샤딩 필요, 4012 잘못된 API 버전, 4013 잘못된 인텐트, 4014 허용되지 않은 인텐트)를 받으면 `GatewayClient::run`이 백오프 재접속을 반복하지 않고 `DiscordError::Gateway`를 돌려주며 샤드를 멈춥니다. 4007(잘못된 시퀀스)과 4009(세션 만료)는 Discord가 거부할 RESUME 대신 새 세션으로 접속합니다. 연결별 하트비트·송신 작업은 어느 경로로 끝나든 정리됩니다.

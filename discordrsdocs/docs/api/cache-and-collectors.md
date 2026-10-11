@@ -30,7 +30,9 @@ All shards of a process share one cache, so a READY (a new session, not a RESUME
 - single-shard bots (`shard_count <= 1`): everything, as before (`CacheHandle::clear()`)
 - otherwise: every guild-scoped entry whose guild maps to the shard by `(guild_id >> 22) % shard_count` — the guild, its channels and threads, members, roles, presences, voice states, emojis, stickers, soundboard sounds, scheduled events, stage instances, and messages of those guilds
 - shard 0 also drops DM channels and their messages, because Discord delivers DMs only to shard 0
-- users are kept: they are shared by every shard a user has guilds on, and `max_users` bounds what is left behind; messages without a guild in an uncached channel are kept too, since their owner is unknown, and age out through TTL and size caps
+- users are kept: they are shared by every shard a user has guilds on, and `max_users` bounds what is left behind
+- a gateway MESSAGE_CREATE without `guild_id` (a DM) also records its DM channel, so shard 0's READY removes it; messages inserted only through REST without a guild in an uncached channel are kept, since their owner cannot be determined, and age out through TTL and size caps
+- `VoiceManager` state is not reset by READY; voice connections are managed through `ctx.voice()`
 
 Before 3.0 every READY cleared the whole cache, so a later shard's READY wiped the guilds of shards that were already running.
 
@@ -64,12 +66,14 @@ Hot member, message, and presence reads have `Arc` variants (`member_arc`, `mess
 
 ### External Cache Backend
 
-Since `2.2.0`, `ClientBuilder::cache_backend(...)` registers an external `CacheBackend` (Redis, Valkey, ...) that receives the member, message, and presence writes the in-memory cache applies for gateway events. Since 3.0:
+Since `2.2.0`, `ClientBuilder::cache_backend(...)` registers an external `CacheBackend` (Redis, Valkey, ...) that receives the member, message, and presence writes the in-memory cache applies for gateway events. Since 3.0 the mirror is ordered and never silently stale:
 
 - **Ordered writes.** All shards of a client share one worker that applies writes one at a time in gateway order. (Before, each write ran in its own task, so a delayed put could land after a later delete and resurrect the entry.)
-- **Overload policy.** The worker queue holds 8,192 writes. While it is full, new writes are dropped and counted in a rate-limited warning instead of stalling gateway processing; a dropped write leaves the backend stale until the entry is written again, so give backend entries a TTL. Writes still queued when the client stops are flushed in the background.
-- **READY.** The runtime calls `CacheBackend::clear_shard_cache(shard_id, shard_count)` instead of `clear_cache()`. The default implementation clears everything only when `shard_count <= 1` and otherwise keeps entries (stale data is a smaller failure than wiping every other shard's live data); multi-shard deployments should override it with the ownership rules above. `CacheHandle` implements it with `clear_shard`.
-- **MESSAGE_UPDATE.** Discord may send partial payloads. The worker merges the fields present in the payload into the backend's stored copy (`get_message`); if the backend has none it stores the in-memory cache's merged copy, and if neither knows the message it skips the write rather than storing a partial message as complete. The in-memory merge covers every message field, including `components`, `poll`, `call`, `message_snapshots`, and `sticker_items`; an explicit `null` clears a field.
+- **Shard invalidation is required.** `CacheBackend::clear_shard_cache(shard_id, shard_count)` has no default implementation: it must delete the members, presences, and messages of the shard's guilds (and DM messages on shard 0), following the ownership rules above; with `shard_count <= 1` it may clear everything. The runtime calls it on READY, when a shard is stopped after losing events, and for every resync below. `CacheHandle` implements it with `clear_shard`.
+- **Overload and errors: ordered resync.** The worker queue holds 8,192 writes. A write that does not fit, or that the backend rejects, is never just dropped: its shard is marked for a resync (`clear_shard_cache`) that runs once every write queued before the loss has been applied. A dropped delete or READY invalidation is therefore covered by a later clear of the same shard, and writes queued after the loss can only be cleared, never left stale. The mirror may be temporarily incomplete and refills from later events. A failed resync stays pending and is retried after the next applied write.
+- **Health.** `Context::cache_backend_health()` returns a `CacheBackendHealth` snapshot: `healthy` (no resync pending), `dropped_writes`, `failed_writes`, `resyncs`, `pending_resync_shards`, and `last_error`.
+- **Bounded shutdown.** When the client stops, the worker flushes queued writes for up to `handler_shutdown_timeout` and is then aborted and joined, so a restarted client against the same store never interleaves with late writes from the previous one.
+- **MESSAGE_UPDATE.** Discord may send partial payloads. The worker merges the fields present in the payload into the backend's stored copy (`get_message`); if the backend has none it stores the in-memory cache's merged copy, and if neither knows the message it skips the write rather than storing a partial message as complete. If `get_message` fails and no in-memory copy exists, the shard is resynced. The in-memory merge covers every message field, including `components`, `poll`, `call`, `message_snapshots`, and `sticker_items`; an explicit `null` clears a field.
 
 ```rust
 use std::sync::Arc;
@@ -127,7 +131,7 @@ All collector types share the same control surface, mirroring discord.js's `Coll
 - `reset_timer()` — restarts the overall timeout and idle windows
 - `end_reason()` — why collection ended (`Limit` / `Time` / `Idle` / `User` / `ChannelDropped`, plus the reaction-only reasons below)
 - `received_count()` — how many items were collected so far
-- `lagged_events()` — how many events this collector lost to broadcast lag (see below)
+- `lagged_events()` — how many events this collector lost to journal lag (see below)
 - `collect()` — drives the collector to the end and returns the results; it consumes the collector, so loop over `next()` instead when you also need `end_reason()` or `lagged_events()` afterwards
 
 When several outcomes are ready at once, the precedence is fixed since 3.0: stop, then the overall timeout, then idle, then events. A window that expired while `next()` was not being polled ends collection before any event buffered in the meantime is delivered, so a late event can neither be returned after the deadline nor restart an expired idle window.
@@ -212,10 +216,10 @@ Reactions need the `GUILD_MESSAGE_REACTIONS` (or `DIRECT_MESSAGE_REACTIONS`) int
 
 ### Delivery, Lag, and Loss
 
-`CollectorHub` is a `tokio::sync::broadcast` channel. The client publishes every dispatched event to it after updating the cache, and each collector has its own subscription:
+`CollectorHub` keeps the most recent events in a sequence-numbered journal (since 3.0; it was a `tokio::sync::broadcast` channel before). The client publishes every dispatched event to it after updating the cache, and each collector reads it through its own subscription:
 
-- **No history.** A collector sees only events published after it was created. Reactions or messages that arrived earlier are not replayed; fetch them over REST if you need them.
-- **Bounded, lossy buffer.** Each subscriber can fall at most `capacity` events behind (256 by default, `CollectorHub::with_capacity(...)` to change it). The buffer holds every event type, not only the ones a collector wants, and a collector drains it only while `next()` / `collect()` is being awaited. When it falls further behind, the oldest events are dropped for that collector, the drop is added to `lagged_events()`, and collection continues from the oldest event still buffered. Publishing never blocks the gateway.
+- **From now, or from the handled event.** Collectors created from the hub (`ctx.collectors().message_collector()`, `reaction_collector(...)`, ...) see only events published after they were created. Inside a handler, `ctx.message_collector()`, `ctx.reaction_collector(...)`, and the other `Context` collector methods start at the event the handler is handling: events published while the handler call was queued are replayed first, then live events follow without a gap (the hub's `*_collector_from(cursor)` methods do the same for any `EventCursor`). Older history is not kept; fetch it over REST if you need it.
+- **Bounded, lossy journal.** The journal keeps the last `capacity` events (256 by default, `CollectorHub::with_capacity(...)` to change it). It holds every event type, not only the ones a collector wants, and a collector reads it only while `next()` / `collect()` is being awaited. A collector that falls more than `capacity` events behind, or starts from a cursor older than the journal, skips the evicted events, adds them to `lagged_events()`, and continues from the oldest event still kept. Publishing never blocks the gateway.
 - **Consequences for reactions.** A reaction collector that lagged may have missed adds (undercount), removals with `dispose(true)` (overcount), or the deletion event that should have ended it (it then runs until its timers or a stop). When exact numbers matter, drive `next()` yourself so you can check `lagged_events() == 0` at the end, or re-read the message's reactions over REST.
 
 ## Typical Use
