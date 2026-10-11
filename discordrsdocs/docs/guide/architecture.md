@@ -52,7 +52,7 @@ flowchart LR
 
 ## Module Layout
 
-- `src/builders/`: fluent payload builders for Components V2 + modals
+- `src/builders/`: fluent payload builders for Components V2 + modals; `limits.rs` holds the component, modal, and embed limits their `validate()` methods check (crate-private, like the public `command::limits` for commands)
 - `src/model.rs`: thin facade over `src/model/`. It only declares the private domain modules and re-exports their types, so `discordrs::model::X` (and the crate-root re-exports) stay the one public path no matter which file a type lives in
 - `src/model/` domain files (one domain per file, each well under 800 lines):
   - `guild.rs` (guild, preview, guild queries and request bodies), `guild_aux.rs` (vanity URL, prune, integrations, widget, welcome screen, templates, onboarding), `member.rs`, `role.rs`
@@ -89,3 +89,40 @@ flowchart LR
 - Public async traits (`EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, `CachedManager`) declare `fn ... -> impl Future + Send`, so users implement them with plain `async fn` and no proc-macro dependency. Such traits are not object safe, so the gateway runtime shares the handler and the cache backend through private object-safe traits (`ErasedEventHandler` in `src/gateway/bot.rs`, `ErasedCacheBackend` in `src/gateway/bot/backend.rs`) with a blanket impl that boxes each call once. The interactions endpoint is generic over the handler and needs no erasure.
 - Sharding and voice are dedicated feature-gated layers above the base `Client`.
 - Add new endpoints to the matching `src/http/<domain>.rs` `impl RestClient` block and new model types to the matching `src/model/<domain>.rs` plus one re-export line in `src/model.rs`; route construction stays in `src/http/paths.rs`, body encoding in `src/http/body.rs`, and rate-limit bookkeeping in `src/http/rate_limit.rs`. Endpoints call the existing typed shims (or `execute` for a custom `RequestBody`) instead of adding another generic `async fn` around the transport.
+
+## Code rules
+
+Library code follows these rules, and the `[lints]` table in `Cargo.toml` makes clippy reject a violation on every target (CI runs `cargo clippy --all-targets -- -D warnings` for all and default features on the pinned toolchain, and `cargo doc` with `RUSTDOCFLAGS="-D warnings"`).
+
+| Rule | Enforced by |
+| --- | --- |
+| No `unsafe` | `#![forbid(unsafe_code)]` in `src/lib.rs`; `unsafe_code = "deny"` for other targets |
+| No `unwrap()` / `expect()`; return the error or handle it | `clippy::unwrap_used`, `clippy::expect_used` |
+| No `panic!`, `todo!`, `unimplemented!`, `dbg!` | `clippy::panic`, `clippy::todo`, `clippy::unimplemented`, `clippy::dbg_macro` |
+| No `as` conversions: `From` / `TryFrom` (saturating where the value cannot exceed the target), or a named helper where wrapping is the point | `clippy::as_conversions` |
+| No silent `let _ = ...` of a `#[must_use]` value or a future: handle or log the error, or discard explicitly with `.ok()` and a comment saying why the failure is expected | `clippy::let_underscore_must_use`, `clippy::let_underscore_future` |
+| Every lint suppression states why: `#[expect(lint, reason = "...")]` at the site where it fires, `allow` only when the lint does not fire on every supported toolchain | `clippy::allow_attributes_without_reason` |
+| No std lock or `RefCell` guard across an `.await`; each shared mutable field carries a one-line comment saying who shares it | `clippy::await_holding_lock`, `clippy::await_holding_refcell_ref` |
+| `Arc::clone(&x)` for reference-counted pointers, so a pointer copy reads differently from a deep clone | `clippy::clone_on_ref_ptr` |
+| No `mem::forget` | `clippy::mem_forget` |
+| Discord limits, opcodes, close codes, and protocol sizes are named constants with a doc comment citing the source (`command::limits`, `builders/limits.rs`, the `OP_*` / `CLOSE_*` / `VOICE_OP_*` / RTP and DAVE constants) | review |
+| Intra-doc links resolve | `cargo doc` with `-D warnings` in CI |
+
+Unit tests (through `cfg_attr(test, allow(...))` in `src/lib.rs`), integration tests, and examples may unwrap, panic, cast, and discard, each opt-out with a reason: a failure there fails the test or stops the demo, not a user's bot. Library code has no such blanket opt-out. The two remaining `panic!` sites are the deprecated `interactions_endpoint` / `typed_interactions_endpoint`, each under `#[expect(clippy::panic, reason = ...)]` until they are removed.
+
+```text
+[Decision Log]
+- 목적과 의도: unwrap·panic·as·let _ 같은 습관이 라이브러리 코드에 다시 들어오지 않게
+  리뷰가 아니라 빌드가 막게 한다.
+- 기존 구현 및 제약 조건: 2026-10-11 감사 시점에 라이브러리에는 unsafe/unwrap/expect가
+  없었지만 as 34곳, must-use 값을 버리는 let _ 22곳(전체 26곳), 이유 없는 allow 9곳,
+  panic 2곳이 남아 있었다. 테스트는 unwrap을 1,700곳 넘게 쓴다. MSRV 1.88, CI 고정 1.99.
+- 검토한 주요 대안: (1) lib.rs의 #![deny(...)], (2) CI 명령줄의 -D clippy::..., (3) Cargo.toml [lints].
+- 선택한 방식: (3) + lib.rs의 #![forbid(unsafe_code)] + 테스트·예제의 이유 있는 범위 지정 allow.
+- 다른 대안 대신 이 방식을 선택한 이유: (1)은 통합 테스트·예제에 닿지 않고, (2)는 로컬
+  cargo clippy와 CI가 달라진다. [lints]는 Rust 1.74부터 안정이라 MSRV에서도 읽히고,
+  모든 타깃과 모든 실행 경로가 같은 규칙을 본다.
+- 장점, 단점 및 영향: 위반은 PR 전에 로컬에서 바로 실패한다. 대신 테스트·예제마다 허용
+  목록과 이유를 유지해야 하고, 라이브러리의 예외는 사이트별 #[expect]로만 둘 수 있다.
+  공개 API 서명(create_container, authorization_url, broadcast)의 값 전달은 호환성 때문에 남겼다.
+```
