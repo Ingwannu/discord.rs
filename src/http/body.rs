@@ -2,6 +2,7 @@ use reqwest::{
     header::HeaderValue,
     multipart::{Form, Part},
 };
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -54,6 +55,17 @@ pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(
     body: &T,
 ) -> Result<Value, DiscordError> {
     serde_json::to_value(body).map_err(Into::into)
+}
+
+/// Encodes an optional JSON request body for the transport. Returns the
+/// `Result` instead of using `?` so the typed shims in `http.rs` hand it to
+/// `RestClient::execute` without an early-return branch of their own.
+pub(crate) fn json_body<T: serde::Serialize + ?Sized>(
+    body: Option<&T>,
+) -> Result<Option<RequestBody>, DiscordError> {
+    body.map(serialize_body)
+        .transpose()
+        .map(|body| body.map(RequestBody::Json))
 }
 
 pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
@@ -169,6 +181,48 @@ pub(crate) fn parse_body_value(response_text: String) -> Value {
         Value::Null
     } else {
         serde_json::from_str(&response_text).unwrap_or(Value::String(response_text))
+    }
+}
+
+/// Decodes a response body into `T`.
+///
+/// [Decision Log] Response decoding
+/// - Purpose: one decoder for every typed REST response, without the old
+///   bytes -> lossy `String` copy -> [`parse_body_value`] -> `T` detour.
+/// - Constraint: `T`'s `Deserialize` impl is compiled once per deserializer
+///   type. Gateway events decode the same models (`Message`, `Guild`,
+///   `Member`, ...) from a `Value` (`event::decode_event`), and debug builds
+///   of downstream crates reuse those instances from this crate.
+/// - Alternatives: (1) `serde_json::from_slice::<T>` on the bytes, with a
+///   non-generic fallback for non-JSON bodies; (2) parse the bytes into a
+///   `Value` and decode `T` from it.
+/// - Chosen: (2). Measured on the all-features lib test build, (1) added
+///   about 300k LLVM IR lines of `SliceRead` deserializers and removed only
+///   63k of `Value` ones (+5.4% total), because every model the gateway
+///   also decodes was instantiated twice. (2) only drops the `String` copy.
+/// - Trade-offs: responses still build a `Value` tree. When gateway decoding
+///   moves off `Value` (3.0 step 4, `RawValue` envelopes), move this function
+///   and the gateway to the same text deserializer in one change, so each
+///   model stays instantiated once; then the tree goes away here too.
+pub(crate) fn decode_json_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, DiscordError> {
+    // A `match` instead of `map_err`, which would be one more instance per `T`.
+    match serde_json::from_value(parse_body_bytes(body)) {
+        Ok(value) => Ok(value),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// [`parse_body_value`] for raw bytes, without copying valid UTF-8 into a
+/// new `String` first: empty is `Null`, JSON is parsed, other text becomes a
+/// `Value::String`, and invalid UTF-8 is replaced before parsing, exactly as
+/// before. It parses through `from_str`, the `&str` parser this crate already
+/// compiles, because `from_slice` would add a second copy of the JSON parser
+/// (about 3,500 LLVM IR lines) to builds without the gateway.
+pub(crate) fn parse_body_bytes(body: &[u8]) -> Value {
+    match std::str::from_utf8(body) {
+        Ok("") => Value::Null,
+        Ok(text) => serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned())),
+        Err(_) => parse_body_value(String::from_utf8_lossy(body).into_owned()),
     }
 }
 

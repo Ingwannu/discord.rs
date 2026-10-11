@@ -56,7 +56,8 @@ use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
     build_multipart_form, build_named_file_form, build_sticker_form, clone_json_body,
-    multipart_body, parse_body_value, serialize_body, RequestBody,
+    decode_json_body, json_body, multipart_body, parse_body_bytes, parse_body_value,
+    serialize_body, RequestBody,
 };
 pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use paths::{
@@ -214,20 +215,51 @@ impl RestClient {
         self.application_id.store(application_id, Ordering::Relaxed);
     }
 
+    // [Decision Log] Shim plus erased transport core
+    // - Purpose: keep the per-type cost of the typed REST helpers minimal,
+    //   since every `(T, B)` pair an endpoint uses instantiates one, and stop
+    //   copying each response body into a `String` before parsing it.
+    // - Before: each helper was a generic `async fn` that serialized with
+    //   `?`, awaited three nested non-generic wrappers (`request_with_headers`
+    //   -> `request_with_headers_authorized` -> the loop), then decoded with
+    //   `from_utf8_lossy` -> `parse_body_value` -> `from_value::<T>`. The loop
+    //   was already compiled once; the per-pair cost was the shim's own state
+    //   machine with its early-return paths, about 275 LLVM IR lines (141
+    //   pairs in the all-features lib test build).
+    // - Alternatives: (1) keep the shape and only drop the wrapper layers;
+    //   (2) return hand-written `Future` types from non-async shims, which
+    //   would turn the public `async fn request_typed` family into
+    //   `fn -> impl Future`, a signature change; (3) box the core future.
+    // - Chosen: the generic shims do only generic work: encode the body into
+    //   a `Result<Option<RequestBody>, _>` before the single await, and hand
+    //   the awaited `Result` to `decode_response`. No `?` runs inside a shim,
+    //   so its state machine has one suspend point and no early returns.
+    //   `execute` is the only implementation of gating, rate limits, replay,
+    //   and token scrubbing, and it starts by returning a body-encoding error
+    //   before anything is sent, exactly as the shims used to.
+    // - Why: (2) changes public signatures and (3) adds an allocation per
+    //   request; this shape keeps every signature and behaviour. Measured
+    //   (2026-10-11): a shim is about 160 IR lines with its drop glue, and a
+    //   crate calling 150 endpoints compiles 2.6% less IR and links a 2.6%
+    //   smaller stripped release binary. Build times of this crate do not
+    //   move: the lib instantiates almost no shims, and its time is mostly
+    //   type checking and borrow checking (see "Build Time" in
+    //   discordrsdocs/docs/guide/testing-and-coverage.md).
+    // - Trade-offs: `execute` takes an already-failed body as an argument,
+    //   which reads oddly but is what keeps the shims branch-free. New
+    //   endpoints must call these shims (or `execute`) rather than adding
+    //   another generic `async fn` that wraps the loop.
+
     pub async fn request(
         &self,
         method: Method,
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, DiscordError> {
-        let response = self
-            .request_with_headers(
-                method,
-                path,
-                body.map(clone_json_body).map(RequestBody::Json),
-            )
-            .await?;
-        Ok(parse_body_value(response.body))
+        let body = Ok(body.map(clone_json_body).map(RequestBody::Json));
+        self.execute(RequestAuthorization::Auto, method, path, body)
+            .await
+            .map(RawResponse::into_value)
     }
 
     pub async fn request_multipart<B>(
@@ -240,10 +272,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        let response = self
-            .request_with_headers(method, path, Some(multipart_body(body, files)?))
-            .await?;
-        Ok(parse_body_value(response.body))
+        let body = multipart_body(body, files).map(Some);
+        self.execute(RequestAuthorization::Auto, method, path, body)
+            .await
+            .map(RawResponse::into_value)
     }
 
     async fn request_bytes_with_authorization(
@@ -252,10 +284,9 @@ impl RestClient {
         method: Method,
         path: &str,
     ) -> Result<Vec<u8>, DiscordError> {
-        let response = self
-            .request_bytes_with_headers_authorized(authorization, method, path, None)
-            .await?;
-        Ok(response.body)
+        self.execute(authorization, method, path, Ok(None))
+            .await
+            .map(|response| response.body)
     }
 
     pub async fn request_typed<T, B>(
@@ -268,10 +299,10 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
-        let response = self.request_with_headers(method, path, body).await?;
-        let value = parse_body_value(response.body);
-        serde_json::from_value(value).map_err(Into::into)
+        decode_response(
+            self.execute(RequestAuthorization::Auto, method, path, json_body(body))
+                .await,
+        )
     }
 
     async fn request_optional_typed_no_content<T, B>(
@@ -284,14 +315,10 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
-        let response = self.request_with_headers(method, path, body).await?;
-        if response.status == StatusCode::NO_CONTENT {
-            return Ok(None);
-        }
-
-        let value = parse_body_value(response.body);
-        serde_json::from_value(value).map(Some).map_err(Into::into)
+        decode_optional_response(
+            self.execute(RequestAuthorization::Auto, method, path, json_body(body))
+                .await,
+        )
     }
 
     async fn request_typed_with_authorization<T, B>(
@@ -305,12 +332,10 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
-        let response = self
-            .request_with_headers_authorized(authorization, method, path, body)
-            .await?;
-        let value = parse_body_value(response.body);
-        serde_json::from_value(value).map_err(Into::into)
+        decode_response(
+            self.execute(authorization, method, path, json_body(body))
+                .await,
+        )
     }
 
     pub async fn request_typed_multipart<T, B>(
@@ -324,11 +349,11 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let response = self
-            .request_with_headers(method, path, Some(multipart_body(body, files)?))
-            .await?;
-        let value = parse_body_value(response.body);
-        serde_json::from_value(value).map_err(Into::into)
+        let body = multipart_body(body, files).map(Some);
+        decode_response(
+            self.execute(RequestAuthorization::Auto, method, path, body)
+                .await,
+        )
     }
 
     async fn request_no_content<B>(
@@ -340,9 +365,9 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        let body = body.map(serialize_body).transpose()?.map(RequestBody::Json);
-        self.request_with_headers(method, path, body).await?;
-        Ok(())
+        self.execute(RequestAuthorization::Auto, method, path, json_body(body))
+            .await
+            .map(RawResponse::discard)
     }
 
     async fn request_multipart_no_content<B>(
@@ -355,18 +380,21 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_with_headers(method, path, Some(multipart_body(body, files)?))
-            .await?;
-        Ok(())
+        let body = multipart_body(body, files).map(Some);
+        self.execute(RequestAuthorization::Auto, method, path, body)
+            .await
+            .map(RawResponse::discard)
     }
 
+    /// For endpoints that build their own [`RequestBody`] (named-file and
+    /// sticker multipart forms) and decode the response themselves.
     async fn request_with_headers(
         &self,
         method: Method,
         path: &str,
         body: Option<RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
-        self.request_with_headers_authorized(RequestAuthorization::Auto, method, path, body)
+        self.execute(RequestAuthorization::Auto, method, path, Ok(body))
             .await
     }
 
@@ -377,27 +405,26 @@ impl RestClient {
         path: &str,
         body: Option<RequestBody>,
     ) -> Result<RawResponse, DiscordError> {
-        let response = self
-            .request_bytes_with_headers_authorized(authorization, method, path, body)
-            .await?;
-        Ok(RawResponse {
-            status: response.status,
-            headers: response.headers,
-            body: String::from_utf8_lossy(&response.body).into_owned(),
-        })
+        self.execute(authorization, method, path, Ok(body)).await
     }
 
     /// Single transport entry point: serializes same-bucket requests behind
     /// a per-bucket gate, waits out known rate-limit windows, and retries
     /// 429s plus — when [`ReplayPolicy`] allows it — 5xx responses and
     /// transient transport failures.
-    async fn request_bytes_with_headers_authorized(
+    ///
+    /// This is the only non-trivial `async fn` in the request path and it is
+    /// not generic, so it is compiled once. `body` arrives already encoded;
+    /// an encoding error is returned before anything is sent. See the
+    /// Decision Log above `request`.
+    async fn execute(
         &self,
         authorization: RequestAuthorization<'_>,
         method: Method,
         path: &str,
-        body: Option<RequestBody>,
-    ) -> Result<RawBytesResponse, DiscordError> {
+        body: Result<Option<RequestBody>, DiscordError>,
+    ) -> Result<RawResponse, DiscordError> {
+        let body = body?;
         let route = RequestRoute::new(&method, path);
         let route_key = route.key.as_str();
         let token = route_token(path);
@@ -572,7 +599,7 @@ impl RestClient {
         method: Method,
         path: &str,
         body: Option<&RequestBody>,
-    ) -> Result<RawBytesResponse, DiscordError> {
+    ) -> Result<RawResponse, DiscordError> {
         let normalized_path = if path.starts_with('/') {
             path.to_string()
         } else {
@@ -646,7 +673,7 @@ impl RestClient {
         let headers = response.headers().clone();
         let body = response.bytes().await?.to_vec();
 
-        Ok(RawBytesResponse {
+        Ok(RawResponse {
             status,
             headers,
             body,
@@ -823,17 +850,47 @@ fn validate_authorization_token<'a>(name: &str, value: &'a str) -> Result<&'a st
     Ok(value)
 }
 
+/// A successful (2xx) response as the transport received it.
 struct RawResponse {
-    status: StatusCode,
-    #[allow(dead_code)]
-    headers: HeaderMap,
-    body: String,
-}
-
-struct RawBytesResponse {
     status: StatusCode,
     headers: HeaderMap,
     body: Vec<u8>,
+}
+
+impl RawResponse {
+    /// The untyped `Value` view used by [`RestClient::request`]: empty is
+    /// `Null`, non-JSON text is a `Value::String`.
+    fn into_value(self) -> Value {
+        parse_body_bytes(&self.body)
+    }
+
+    fn discard(self) {}
+}
+
+/// Decodes the transport result into `T`; see `body::decode_json_body` for
+/// how empty and non-JSON bodies are read. Taking the `Result` keeps each
+/// shim a single expression. The plain `match` (rather than `?` or
+/// `and_then`) adds no `Try`/`FromResidual`/closure instance per `T`
+/// (measured: the decode glue went from about 110 to 70 LLVM IR lines per
+/// response type).
+fn decode_response<T: DeserializeOwned>(
+    response: Result<RawResponse, DiscordError>,
+) -> Result<T, DiscordError> {
+    match response {
+        Ok(response) => decode_json_body(&response.body),
+        Err(error) => Err(error),
+    }
+}
+
+/// `None` for `204 No Content`, otherwise the decoded body.
+fn decode_optional_response<T: DeserializeOwned>(
+    response: Result<RawResponse, DiscordError>,
+) -> Result<Option<T>, DiscordError> {
+    match response {
+        Ok(response) if response.status == StatusCode::NO_CONTENT => Ok(None),
+        Ok(response) => decode_json_body(&response.body).map(Some),
+        Err(error) => Err(error),
+    }
 }
 
 fn discord_api_error(status: StatusCode, body: &str) -> DiscordError {

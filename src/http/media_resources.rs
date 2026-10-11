@@ -7,7 +7,7 @@ use crate::model::{
     Sticker, StickerPack, StickerPackList,
 };
 
-use super::{parse_body_value, serialize_body, FileAttachment, RequestBody, RestClient};
+use super::{decode_response, serialize_body, FileAttachment, RequestBody, RestClient};
 
 impl RestClient {
     pub async fn get_sticker(
@@ -71,8 +71,8 @@ impl RestClient {
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
         let path = format!("/guilds/{}/stickers", guild_id.into());
-        let response = self
-            .request_with_headers(
+        decode_response(
+            self.request_with_headers(
                 Method::POST,
                 &path,
                 Some(RequestBody::StickerMultipart {
@@ -80,8 +80,8 @@ impl RestClient {
                     file,
                 }),
             )
-            .await?;
-        serde_json::from_value(parse_body_value(response.body)).map_err(Into::into)
+            .await,
+        )
     }
 
     pub async fn create_guild_sticker_typed<B>(
@@ -94,8 +94,8 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let path = format!("/guilds/{}/stickers", guild_id.into());
-        let response = self
-            .request_with_headers(
+        decode_response(
+            self.request_with_headers(
                 Method::POST,
                 &path,
                 Some(RequestBody::StickerMultipart {
@@ -103,8 +103,8 @@ impl RestClient {
                     file,
                 }),
             )
-            .await?;
-        serde_json::from_value(parse_body_value(response.body)).map_err(Into::into)
+            .await,
+        )
     }
 
     pub async fn create_guild_sticker_from_request(

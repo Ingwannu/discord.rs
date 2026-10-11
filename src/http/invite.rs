@@ -9,9 +9,9 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-use super::body::{named_file_multipart_body, parse_body_value, payload_named_file_multipart_body};
+use super::body::{named_file_multipart_body, payload_named_file_multipart_body};
 use super::paths::{invite_query, validate_token_path_segment};
-use super::{FileAttachment, RequestAuthorization, RestClient};
+use super::{decode_response, FileAttachment, RequestAuthorization, RestClient};
 
 /// Discord's per-request cap for invite target-user bulk add/delete.
 const MAX_INVITE_TARGET_USERS: usize = 1000;
@@ -244,8 +244,8 @@ impl RestClient {
         body: &CreateChannelInvite,
         target_users_file: &FileAttachment,
     ) -> Result<Invite, DiscordError> {
-        let response = self
-            .request_with_headers(
+        decode_response(
+            self.request_with_headers(
                 Method::POST,
                 &format!("/channels/{}/invites", channel_id.into()),
                 Some(payload_named_file_multipart_body(
@@ -254,8 +254,7 @@ impl RestClient {
                     target_users_file,
                 )?),
             )
-            .await?;
-        let value = parse_body_value(response.body);
-        serde_json::from_value(value).map_err(Into::into)
+            .await,
+        )
     }
 }

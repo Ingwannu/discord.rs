@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::body::{header_string, parse_body_value};
+use super::body::{decode_json_body, header_string, parse_body_bytes, parse_body_value};
 use super::client_config::default_http_client;
 use super::paths::RequestRoute;
 use super::paths::{
@@ -1002,6 +1002,194 @@ fn parse_helpers_handle_empty_invalid_and_string_body_shapes() {
     let header = HeaderValue::from_static("bucket-1");
     assert_eq!(header_string(Some(&header)), Some(String::from("bucket-1")));
     assert_eq!(header_string(None), None);
+}
+
+/// Bodies the transport can hand to the decoder: Discord JSON, the shapes a
+/// proxy or an outage produces, invalid UTF-8, and JSON edge cases where a
+/// typed parse and a `Value` parse differ (duplicate keys, numbers outside
+/// `f64`).
+const DECODE_CORPUS: &[&[u8]] = &[
+    b"",
+    b" ",
+    b"null",
+    b"{}",
+    b"[]",
+    b"42",
+    b"\"just a string\"",
+    br#"{"id":"1","name":"general"}"#,
+    br#"[{"id":"1"},{"id":"2","name":null}]"#,
+    br#"{"id":"1","id":"2"}"#,
+    br#"{"id":"1","extra":1e400}"#,
+    b"{\"id\":\"caf\xc3\xa9\"}",
+    b"{\"id\":\"\xff\"}",
+    b"\xff\xfe",
+    b"\xffnot json",
+    b"plain text",
+    b"<html><body>502 Bad Gateway</body></html>",
+    b"{\"truncated\":",
+    b"[1,2,3] trailing",
+];
+
+/// The decoder before 3.0: copy into a lossy `String`, parse it into a
+/// `Value`, then decode `T` from the `Value`.
+fn decode_like_before<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, DiscordError> {
+    serde_json::from_value(parse_body_value(String::from_utf8_lossy(body).into_owned()))
+        .map_err(Into::into)
+}
+
+fn assert_decodes_like_before<T>(body: &[u8])
+where
+    T: serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let shown = String::from_utf8_lossy(body);
+    match (decode_like_before::<T>(body), decode_json_body::<T>(body)) {
+        (Ok(before), Ok(now)) => assert_eq!(before, now, "body {shown:?}"),
+        (Err(before), Err(now)) => {
+            assert_eq!(before.to_string(), now.to_string(), "body {shown:?}")
+        }
+        (before, now) => panic!("body {shown:?}: before {before:?}, now {now:?}"),
+    }
+}
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct DecodeProbe {
+    id: String,
+    name: Option<String>,
+}
+
+#[test]
+fn parse_body_bytes_matches_the_lossy_string_parser() {
+    for body in DECODE_CORPUS {
+        assert_eq!(
+            parse_body_bytes(body),
+            parse_body_value(String::from_utf8_lossy(body).into_owned()),
+            "body {:?}",
+            String::from_utf8_lossy(body)
+        );
+    }
+}
+
+#[test]
+fn decode_json_body_matches_the_previous_decoder_values_and_errors() {
+    for body in DECODE_CORPUS {
+        assert_decodes_like_before::<serde_json::Value>(body);
+        assert_decodes_like_before::<Option<serde_json::Value>>(body);
+        assert_decodes_like_before::<()>(body);
+        assert_decodes_like_before::<String>(body);
+        assert_decodes_like_before::<DecodeProbe>(body);
+        assert_decodes_like_before::<Vec<DecodeProbe>>(body);
+        assert_decodes_like_before::<Option<DecodeProbe>>(body);
+    }
+    // The cases the corpus exists for, spelled out.
+    assert_eq!(
+        decode_json_body::<serde_json::Value>(b"").unwrap(),
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        decode_json_body::<String>(b"plain text").unwrap(),
+        "plain text"
+    );
+    assert_eq!(
+        decode_json_body::<DecodeProbe>(br#"{"id":"1","id":"2"}"#).unwrap(),
+        DecodeProbe {
+            id: String::from("2"),
+            name: None
+        }
+    );
+    assert_eq!(
+        decode_json_body::<DecodeProbe>(b"{\"id\":\"\xff\"}").unwrap(),
+        DecodeProbe {
+            id: String::from("\u{fffd}"),
+            name: None
+        }
+    );
+    assert!(matches!(
+        decode_json_body::<DecodeProbe>(b"<html>"),
+        Err(DiscordError::Json(_))
+    ));
+}
+
+#[tokio::test]
+async fn typed_shims_decode_text_empty_and_no_content_success_bodies_like_before() {
+    let (base_url, requests, server) = spawn_test_server(vec![
+        PlannedResponse::text(StatusCode::OK, "plain text"),
+        PlannedResponse::empty(StatusCode::OK),
+        PlannedResponse::text(StatusCode::OK, "<html>proxy page</html>"),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::CREATED, json!({ "id": "7", "name": null })),
+        PlannedResponse::text(StatusCode::OK, "plain text"),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("decode-token", 123, base_url);
+    let none = Option::<&serde_json::Value>::None;
+
+    let text: serde_json::Value = client
+        .request_typed(Method::GET, "/users/@me", none)
+        .await
+        .unwrap();
+    assert_eq!(text, json!("plain text"));
+    let empty: serde_json::Value = client
+        .request_typed(Method::GET, "/users/@me", none)
+        .await
+        .unwrap();
+    assert_eq!(empty, serde_json::Value::Null);
+    let error = client
+        .request_typed::<DecodeProbe, serde_json::Value>(Method::GET, "/users/@me", none)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        decode_like_before::<DecodeProbe>(b"<html>proxy page</html>")
+            .unwrap_err()
+            .to_string()
+    );
+    let no_content: Option<DecodeProbe> = client
+        .request_optional_typed_no_content(Method::PUT, "/guilds/1/members/2", Some(&json!({})))
+        .await
+        .unwrap();
+    assert_eq!(no_content, None);
+    let created: Option<DecodeProbe> = client
+        .request_optional_typed_no_content(Method::PUT, "/guilds/1/members/2", Some(&json!({})))
+        .await
+        .unwrap();
+    assert_eq!(
+        created,
+        Some(DecodeProbe {
+            id: String::from("7"),
+            name: None
+        })
+    );
+    let untyped = client
+        .request(Method::GET, "/users/@me", None)
+        .await
+        .unwrap();
+    assert_eq!(untyped, json!("plain text"));
+
+    server.await.unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn multipart_shim_serialization_errors_return_before_network() {
+    let client = RestClient::new_with_base_url("serialize-token", 123, "http://127.0.0.1:9");
+    let body = InvalidJsonBody {
+        map: HashMap::from([(vec![1, 2, 3], "bad".to_string())]),
+    };
+    let files = [FileAttachment::new("a.txt", b"a".to_vec())];
+
+    let error = client
+        .request_typed_multipart::<serde_json::Value, _>(
+            Method::POST,
+            "/channels/1/messages",
+            &body,
+            &files,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, DiscordError::Json(message) if message.contains("key must be a string")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
