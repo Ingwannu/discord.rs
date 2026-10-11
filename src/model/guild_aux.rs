@@ -4,7 +4,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationId, ChannelId, EmojiId, GuildId, IntegrationId, RoleId, User, UserId, WidgetUserId,
+    ApplicationId, ChannelId, EmojiId, GuildId, IntegrationExpireBehavior, IntegrationId,
+    OnboardingMode, RoleId, User, UserId, WidgetUserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -79,7 +80,7 @@ pub struct Integration {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_emoticons: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub expire_behavior: Option<u64>,
+    pub expire_behavior: Option<IntegrationExpireBehavior>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expire_grace_period: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,7 +246,7 @@ pub struct GuildOnboarding {
     pub default_channel_ids: Vec<ChannelId>,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<u8>,
+    pub mode: Option<OnboardingMode>,
 }
 
 /// Request body for modifying guild onboarding.
@@ -258,5 +259,5 @@ pub struct ModifyGuildOnboarding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<u8>,
+    pub mode: Option<OnboardingMode>,
 }

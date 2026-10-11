@@ -164,18 +164,21 @@ pub use webhook::{
 // `discriminant` (the canonical module, also public). `Option<Option<T>>`
 // stays until series 4 migrates it.
 pub use discriminant::{
-    ActivityType, ApplicationCommandHandlerType, ApplicationIntegrationType, AuditLogActionType,
-    AutoModerationActionType, AutoModerationEventType, AutoModerationTriggerType, ButtonStyle,
-    ChannelType, CommandOptionType, CommandPermissionType, CommandType, ComponentType,
-    ConnectionVisibility, DefaultMessageNotificationLevel, EntitlementOwnerType, EntitlementType,
+    ActivityType, ApplicationCommandHandlerType, ApplicationEventWebhookStatus,
+    ApplicationIntegrationType, AuditLogActionType, AutoModerationActionType,
+    AutoModerationEventType, AutoModerationTriggerType, BaseTheme, ButtonStyle, ChannelType,
+    CommandOptionType, CommandPermissionType, CommandType, ComponentType, ConnectionVisibility,
+    DefaultMessageNotificationLevel, EntitlementOwnerType, EntitlementType,
     ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
-    InteractionContextType, InteractionResponseType, InteractionType, InviteTargetType,
-    InviteTargetUsersJobStatusType, InviteType, KeywordPresetType, MessageActivityType,
-    MessageReferenceType, MessageType, MfaLevel, OverwriteType, PollLayoutType, PremiumTier,
-    ReactionType, RoleConnectionMetadataType, ScheduledEventEntityType, ScheduledEventPrivacyLevel,
-    ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuType, StageInstancePrivacyLevel,
-    StickerFormatType, StickerType, SubscriptionStatus, TextInputStyle, UserPremiumType,
-    VerificationLevel, VideoQualityMode, WebhookPayloadType, WebhookType,
+    IntegrationExpireBehavior, InteractionContextType, InteractionResponseType, InteractionType,
+    InviteTargetType, InviteTargetUsersJobStatusType, InviteType, KeywordPresetType,
+    MessageActivityType, MessageReferenceType, MessageType, MfaLevel, OnboardingMode,
+    OverwriteType, PollLayoutType, PremiumTier, ReactionType, RecurrenceRuleFrequency,
+    RecurrenceRuleMonth, RecurrenceRuleWeekday, RoleConnectionMetadataType,
+    ScheduledEventEntityType, ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing,
+    SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerType,
+    SubscriptionStatus, TextInputStyle, UserPremiumType, VerificationLevel, VideoQualityMode,
+    VoiceChannelEffectAnimationType, WebhookPayloadType, WebhookType,
 };
 pub use id::{
     marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,

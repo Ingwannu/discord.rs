@@ -472,6 +472,23 @@ open_discriminant! {
     }
 }
 
+open_discriminant! {
+    /// Shared client theme `base_theme` (Discord docs: Message › Base Theme
+    /// Types). Added in series 3; not on the design's series 1 list.
+    pub struct BaseTheme(u8) {
+        /// No base theme; Discord treats it like `DARK`.
+        UNSET = 0,
+        /// Dark.
+        DARK = 1,
+        /// Light.
+        LIGHT = 2,
+        /// Darker.
+        DARKER = 3,
+        /// Midnight.
+        MIDNIGHT = 4,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Interactions and application commands
 // ---------------------------------------------------------------------------
@@ -632,6 +649,20 @@ open_discriminant! {
     }
 }
 
+open_discriminant! {
+    /// Application `event_webhooks_status` (Discord docs: Application Event
+    /// Webhook Status). Added in series 3; not on the design's series 1
+    /// list.
+    pub struct ApplicationEventWebhookStatus(u8) {
+        /// Webhook events are disabled by the developer.
+        DISABLED = 1,
+        /// Webhook events are enabled by the developer.
+        ENABLED = 2,
+        /// Webhook events are disabled by Discord, usually after inactivity.
+        DISABLED_BY_DISCORD = 3,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Guilds
 // ---------------------------------------------------------------------------
@@ -715,6 +746,30 @@ open_discriminant! {
     }
 }
 
+open_discriminant! {
+    /// Guild onboarding `mode` (Discord docs: Onboarding Mode). Added in
+    /// series 3; not on the design's series 1 list.
+    pub struct OnboardingMode(u8) {
+        /// Only default channels count towards the constraints.
+        ONBOARDING_DEFAULT = 0,
+        /// Default channels and questions count towards the constraints.
+        ONBOARDING_ADVANCED = 1,
+    }
+}
+
+open_discriminant! {
+    /// Integration `expire_behavior` (Discord docs: Integration Expire
+    /// Behaviors). Discord gives the names as prose ("Remove role",
+    /// "Kick"); the constant spelling is discord.rs's. Added in series 3;
+    /// not on the design's series 1 list.
+    pub struct IntegrationExpireBehavior(u8) {
+        /// Remove the subscriber role.
+        REMOVE_ROLE = 0,
+        /// Kick the member.
+        KICK = 1,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scheduled events and stage instances
 // ---------------------------------------------------------------------------
@@ -754,6 +809,76 @@ open_discriminant! {
     pub struct ScheduledEventPrivacyLevel(u8) {
         /// Only accessible to guild members.
         GUILD_ONLY = 2,
+    }
+}
+
+open_discriminant! {
+    /// Recurrence rule `frequency` (Discord docs: Guild Scheduled Event
+    /// Recurrence Rule - Frequency). Added in series 3; not on the design's
+    /// series 1 list.
+    pub struct RecurrenceRuleFrequency(u8) {
+        /// Every year.
+        YEARLY = 0,
+        /// Every month.
+        MONTHLY = 1,
+        /// Every week.
+        WEEKLY = 2,
+        /// Every day.
+        DAILY = 3,
+    }
+}
+
+open_discriminant! {
+    /// Recurrence rule weekday (`by_weekday`, `by_n_weekday[].day`; Discord
+    /// docs: Guild Scheduled Event Recurrence Rule - Weekday). Monday is
+    /// `0`. Added in series 3; not on the design's series 1 list.
+    pub struct RecurrenceRuleWeekday(u8) {
+        /// Monday.
+        MONDAY = 0,
+        /// Tuesday.
+        TUESDAY = 1,
+        /// Wednesday.
+        WEDNESDAY = 2,
+        /// Thursday.
+        THURSDAY = 3,
+        /// Friday.
+        FRIDAY = 4,
+        /// Saturday.
+        SATURDAY = 5,
+        /// Sunday.
+        SUNDAY = 6,
+    }
+}
+
+open_discriminant! {
+    /// Recurrence rule month (`by_month`; Discord docs: Guild Scheduled
+    /// Event Recurrence Rule - Month). January is `1`. Added in series 3;
+    /// not on the design's series 1 list.
+    pub struct RecurrenceRuleMonth(u8) {
+        /// January.
+        JANUARY = 1,
+        /// February.
+        FEBRUARY = 2,
+        /// March.
+        MARCH = 3,
+        /// April.
+        APRIL = 4,
+        /// May.
+        MAY = 5,
+        /// June.
+        JUNE = 6,
+        /// July.
+        JULY = 7,
+        /// August.
+        AUGUST = 8,
+        /// September.
+        SEPTEMBER = 9,
+        /// October.
+        OCTOBER = 10,
+        /// November.
+        NOVEMBER = 11,
+        /// December.
+        DECEMBER = 12,
     }
 }
 
@@ -1133,6 +1258,22 @@ open_discriminant! {
 }
 
 // ---------------------------------------------------------------------------
+// Voice
+// ---------------------------------------------------------------------------
+
+open_discriminant! {
+    /// Voice channel effect `animation_type` (Discord docs: Gateway Events ›
+    /// Voice Channel Effect Send › Animation Types). Added in series 3; not
+    /// on the design's series 1 list.
+    pub struct VoiceChannelEffectAnimationType(u8) {
+        /// A fun animation, sent by a Nitro subscriber.
+        PREMIUM = 0,
+        /// The standard animation.
+        BASIC = 1,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Users and presence
 // ---------------------------------------------------------------------------
 
@@ -1245,6 +1386,10 @@ mod tests {
             StickerType: u8, StickerFormatType: u8, SkuType: u8, SkuAccessType: u8,
             EntitlementType: u8, EntitlementOwnerType: u8, SubscriptionStatus: u8,
             UserPremiumType: u8, ConnectionVisibility: u8, ActivityType: u8,
+            BaseTheme: u8, ApplicationEventWebhookStatus: u8, OnboardingMode: u8,
+            IntegrationExpireBehavior: u8, RecurrenceRuleFrequency: u8,
+            RecurrenceRuleWeekday: u8, RecurrenceRuleMonth: u8,
+            VoiceChannelEffectAnimationType: u8,
         }
     }
 

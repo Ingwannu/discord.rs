@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::Emoji;
 
 use super::{
-    is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, Channel, ChannelId,
-    ChannelType, CreatePoll, Embed, GuildId, InteractionId, InteractionType, Member,
+    is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, BaseTheme, Channel,
+    ChannelId, ChannelType, CreatePoll, Embed, GuildId, InteractionId, InteractionType, Member,
     MessageActivityType, MessageComponent, MessageId, MessageReferenceType, MessageType,
     PartialApplication, Poll, ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId,
     Sticker, StickerId, StickerItem, ThreadMember, User, UserId, WebhookId,
@@ -160,7 +160,7 @@ pub struct SharedClientTheme {
     pub gradient_angle: u64,
     pub base_mix: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_theme: Option<u8>,
+    pub base_theme: Option<BaseTheme>,
 }
 
 /// Metadata about the interaction that caused a message

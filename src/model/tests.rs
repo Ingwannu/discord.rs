@@ -4,29 +4,30 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use super::{
-    AllowedMentions, ApplicationCommand, ApplicationCommandOptionChoice, ApplicationInstallParams,
-    ApplicationIntegrationTypeConfig, Attachment, AuthorizingIntegrationOwners,
-    AutocompleteInteraction, BeginGuildPruneRequest, Channel, ChannelType,
-    ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption, ComponentId,
-    ComponentInteraction, ComponentInteractionData, ComponentType, CreateChannelInvite,
-    CreateDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker,
-    CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
-    Embed, EmbedField, Entitlement, EntitlementType, ForumTag, GatewayBot, GenericId, Guild,
-    GuildId, GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
-    InteractionCallbackResponse, InteractionContextData, InteractionResponseType, InteractionType,
-    Invite, InviteTargetUsersJobStatus, InviteTargetUsersJobStatusType, InviteType, Member,
-    Message, MessageComponent, MessageContextMenuInteraction, MessageReferenceType,
-    ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
-    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
-    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
-    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
-    ModifyWebhookWithToken, OverwriteType, PermissionOverwrite, PermissionsBitField,
-    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollLayoutType,
-    PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SeparatorSpacing,
-    SessionStartLimit, Sku, SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType,
-    StickerItem, Subscription, SubscriptionStatus, ThreadListResponse, ThreadMember,
-    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreenChannel,
+    AllowedMentions, ApplicationCommand, ApplicationCommandOptionChoice,
+    ApplicationEventWebhookStatus, ApplicationInstallParams, ApplicationIntegrationTypeConfig,
+    Attachment, AuthorizingIntegrationOwners, AutocompleteInteraction, BeginGuildPruneRequest,
+    Channel, ChannelType, ChatInputCommandInteraction, CommandInteractionData,
+    CommandInteractionOption, ComponentId, ComponentInteraction, ComponentInteractionData,
+    ComponentType, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
+    CreateGuildRole, CreateGuildSticker, CreateMessage, CreatePoll, CreateStageInstance,
+    CreateWebhook, DefaultReaction, DiscordModel, Embed, EmbedField, Entitlement, EntitlementType,
+    ForumTag, GatewayBot, GenericId, Guild, GuildId, GuildInstallOwner, GuildScheduledEvent,
+    GuildWidget, Integration, Interaction, InteractionCallbackResponse, InteractionContextData,
+    InteractionResponseType, InteractionType, Invite, InviteTargetUsersJobStatus,
+    InviteTargetUsersJobStatusType, InviteType, Member, Message, MessageComponent,
+    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
+    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
+    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OnboardingMode, OverwriteType,
+    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
+    PollAnswerId, PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
+    RecurrenceRuleWeekday, ResolvedData, Role, RoleColors, SeparatorSpacing, SessionStartLimit,
+    Sku, SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerItem,
+    Subscription, SubscriptionStatus, ThreadListResponse, ThreadMember, ThreadMetadata, User,
+    UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
@@ -597,7 +598,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
         prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
         default_channel_ids: Some(vec![test_id(202)]),
         enabled: Some(true),
-        mode: Some(0),
+        mode: Some(OnboardingMode::ONBOARDING_DEFAULT),
     };
     assert_eq!(
         serde_json::to_value(&onboarding).unwrap(),
@@ -1269,7 +1270,7 @@ fn current_application_request_body_keeps_wire_shape() {
         interactions_endpoint_url: Some(Some("https://example.com/interactions".to_string())),
         tags: Some(vec!["utility".to_string()]),
         event_webhooks_url: Some(None),
-        event_webhooks_status: Some(2),
+        event_webhooks_status: Some(ApplicationEventWebhookStatus::ENABLED),
         event_webhooks_types: Some(vec!["APPLICATION_AUTHORIZED".to_string()]),
         ..ModifyCurrentApplication::default()
     };
@@ -1411,7 +1412,7 @@ fn scheduled_event_recurrence_and_reaction_emoji_are_typed() {
             .and_then(|rule| rule.by_n_weekday.as_ref())
             .and_then(|weekdays| weekdays.first())
             .map(|weekday| weekday.day),
-        Some(1)
+        Some(RecurrenceRuleWeekday::TUESDAY)
     );
     assert_eq!(
         reaction

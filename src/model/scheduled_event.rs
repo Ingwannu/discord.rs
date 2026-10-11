@@ -3,8 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ChannelId, GenericId, GuildId, Member, ScheduledEventEntityType, ScheduledEventId,
-    ScheduledEventPrivacyLevel, ScheduledEventStatus, User, UserId,
+    ChannelId, GenericId, GuildId, Member, RecurrenceRuleFrequency, RecurrenceRuleMonth,
+    RecurrenceRuleWeekday, ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel,
+    ScheduledEventStatus, User, UserId,
 };
 
 /// Query options for `GET /guilds/{id}/scheduled-events`.
@@ -63,27 +64,30 @@ pub struct GuildScheduledEventEntityMetadata {
     pub location: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `GuildScheduledEventRecurrenceRuleNWeekday`.
+/// "The `n`th `day` of the month" entry of a recurrence rule. No
+/// `Default`: both fields are required.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GuildScheduledEventRecurrenceRuleNWeekday {
+    /// The week to reoccur on, 1-5.
     pub n: i8,
-    pub day: u8,
+    pub day: RecurrenceRuleWeekday,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `GuildScheduledEventRecurrenceRule`.
+/// How a scheduled event repeats. No `Default`: `start`, `frequency`, and
+/// `interval` are required and `frequency` has no default.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GuildScheduledEventRecurrenceRule {
     pub start: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<String>,
-    pub frequency: u8,
+    pub frequency: RecurrenceRuleFrequency,
     pub interval: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub by_weekday: Option<Vec<u8>>,
+    pub by_weekday: Option<Vec<RecurrenceRuleWeekday>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by_n_weekday: Option<Vec<GuildScheduledEventRecurrenceRuleNWeekday>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub by_month: Option<Vec<u8>>,
+    pub by_month: Option<Vec<RecurrenceRuleMonth>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub by_month_day: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]

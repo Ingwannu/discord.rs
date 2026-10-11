@@ -2073,7 +2073,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                 guild_id: Some(snowflake("142")),
                 user_id: Some(snowflake("143")),
                 emoji: Some(Emoji::unicode("wave")),
-                animation_type: Some(1),
+                animation_type: Some(VoiceChannelEffectAnimationType::BASIC),
                 animation_id: Some(2),
                 sound_id: Some(snowflake("144")),
                 sound_volume: Some(0.5),

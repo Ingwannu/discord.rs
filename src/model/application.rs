@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ActivityLaunchId, ApplicationId, ChannelId, GuildId, PermissionsBitField,
-    RoleConnectionMetadataType, SkuId, User, UserId,
+    ActivityLaunchId, ApplicationEventWebhookStatus, ApplicationId, ChannelId, GuildId,
+    PermissionsBitField, RoleConnectionMetadataType, SkuId, User, UserId,
 };
 
 /// Partial application object attached to messages sent by an app
@@ -109,7 +109,7 @@ pub struct Application {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_webhooks_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_webhooks_status: Option<u8>,
+    pub event_webhooks_status: Option<ApplicationEventWebhookStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_webhooks_types: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -162,7 +162,7 @@ pub struct ModifyCurrentApplication {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_webhooks_url: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_webhooks_status: Option<u8>,
+    pub event_webhooks_status: Option<ApplicationEventWebhookStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event_webhooks_types: Option<Vec<String>>,
 }

@@ -10,7 +10,7 @@ use crate::model::{
     Member, Message, MessageId, PollAnswerId, Presence, PresenceStatus, ReactionType, Role, RoleId,
     ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel, ScheduledEventStatus,
     SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User,
-    UserId, VoiceServerUpdate, VoiceState,
+    UserId, VoiceChannelEffectAnimationType, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -516,7 +516,7 @@ pub struct VoiceChannelEffectEvent {
     pub guild_id: Option<GuildId>,
     pub user_id: Option<UserId>,
     pub emoji: Option<Emoji>,
-    pub animation_type: Option<u64>,
+    pub animation_type: Option<VoiceChannelEffectAnimationType>,
     pub animation_id: Option<u64>,
     pub sound_id: Option<SoundboardSoundId>,
     pub sound_volume: Option<f64>,

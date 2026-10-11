@@ -1,6 +1,6 @@
 use crate::model::{
     test_id, AuditLogActionType, ChannelType, CommandType, InteractionResponseType, MfaLevel,
-    OverwriteType, RoleConnectionMetadataType, ScheduledEventStatus, SkuAccessType,
+    OnboardingMode, OverwriteType, RoleConnectionMetadataType, ScheduledEventStatus, SkuAccessType,
     StageInstancePrivacyLevel,
 };
 use std::collections::HashMap;
@@ -6261,7 +6261,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
                 prompts: Some(vec![json!({ "id": "1", "title": "Pick a topic" })]),
                 default_channel_ids: Some(vec![test_id(202)]),
                 enabled: Some(true),
-                mode: Some(0),
+                mode: Some(OnboardingMode::ONBOARDING_DEFAULT),
             },
         )
         .await

@@ -584,7 +584,7 @@ fn decode_voice_channel_effect_event(data: Value) -> VoiceChannelEffectEvent {
             .get("emoji")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok()),
-        animation_type: read_optional_u64(&data, "animation_type"),
+        animation_type: read_optional_discriminant(&data, "animation_type"),
         animation_id: read_optional_u64(&data, "animation_id"),
         sound_id: read_optional_snowflake(&data, "sound_id"),
         sound_volume: data.get("sound_volume").and_then(Value::as_f64),
