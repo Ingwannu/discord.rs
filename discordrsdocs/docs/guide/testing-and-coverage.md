@@ -241,10 +241,12 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
   `llvm-tools-preview`) explicitly. Locally, `cargo +1.99.0 clippy` fails the same way if rustup
   auto-installed a bare `1.99.0`; use `rustup component add clippy --toolchain 1.99.0`.
 - The `msrv` job is separate and follows `rust-version`, not the pin.
-- `feature-isolation` runs `clippy --lib --no-default-features --features <f>` for each feature
-  alone (and for no features). The other jobs build only the default and the full set, where a
-  missing `cfg` or an import used by one feature can hide. It checks library code only; tests are
-  written against the default and full sets.
+- `feature-isolation` runs `clippy --all-targets --no-default-features --features <f>` for each
+  feature alone (and for no features). The other jobs build only the default and the full set,
+  where a missing `cfg` or an import used by one feature can hide. It covers every target, so test
+  helpers and imports must carry the same `cfg` as the tests that use them (for example the
+  gateway tests' fake-gateway helpers are `cfg(any(feature = "cache", feature = "sharding"))`);
+  examples are skipped when their `required-features` are off.
 
 ## Compile-Fail Tests (trybuild)
 
