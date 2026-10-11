@@ -29,7 +29,7 @@ if let RawInteraction::Command { name, .. } = parse_raw_interaction(payload)? {
 
 ## 4. Modal 제출 처리
 
-`RawInteraction::ModalSubmit`에서 `V2ModalSubmission`을 받아 Radio/Checkbox 값을 그대로 읽을 수 있습니다.
+`RawInteraction::ModalSubmit`에서 `V2ModalSubmission`을 받아 Radio/Checkbox 값을 그대로 읽을 수 있습니다(라디오는 `get_radio_value`, 선택이 없으면 `None`; 체크박스는 `get_checkbox`로 `bool`).
 
 ## 4.5 2.1 주요 추가 기능
 

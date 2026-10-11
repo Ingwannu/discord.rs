@@ -24,6 +24,7 @@ These types are designed to replace mixed `String` / `u64` IDs and raw `Value` r
 - `Embed::components`, `Embed::flags`, `Embed::KIND_COMPONENTS`, and `Embed::is_component_embed()` for link previews rendered from a website's Component Embed.
 - Application Identity Profile models: `ApplicationIdentity`, `ApplicationIdentities`, `ApplicationIdentityProfile`, `ApplicationIdentityProfileData`, `PrimaryProfileData`, `DynamicProfileField` (unknown field types are kept verbatim), `ProfileMedia`, `UpdateApplicationIdentityProfile` (with `validate()` for the documented limits), and `ApplicationIdentityProviderId`.
 - `CurrentUserGuildsQuery::shard`, `CreateChannelInvite::target_user_ids`, and `InviteTargetUserIds`.
+- Submitted modal values keep Discord's JSON types: `MessageComponent::value` is a `MessageComponentValue` (`String` for text inputs and radio groups, `Bool` for checkboxes, `Other` for anything else; `value_str()` / `value_bool()`), `MessageComponent::values` holds select, checkbox group, and file upload lists, and `MessageComponent::default` is a checkbox's initial state. 2.x read `value` as a string, so a payload with a submitted checkbox failed to decode.
 
 ### Permission computation (`discordrs::permissions`)
 

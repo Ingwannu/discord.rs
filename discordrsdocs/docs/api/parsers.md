@@ -51,11 +51,15 @@ Function:
 
 `V2ModalSubmission` preserves V2 component fidelity, including:
 
-- `Label`
-- `RadioGroup`
-- `CheckboxGroup`
-- `Checkbox`
-- text/select variants
+- `Label` (its child component is read; action rows still work for older modals)
+- `RadioGroup { value: Option<String> }`: `None` when nothing is selected (Discord sends `null`)
+- `CheckboxGroup { values }`: empty when nothing is checked
+- `Checkbox { checked: bool }`: read from Discord's `value` boolean
+- text input (`value`), string/user/role/mentionable/channel selects and file uploads (`values`)
+
+Lookup helpers: `get_text`, `get_select_values` (selects and checkbox groups), `get_file_values`, `get_radio_value` (`None` also when nothing was selected), and `get_checkbox`.
+
+The same submitted values are typed on `MessageComponent` when you decode a component tree yourself: `value` is a `MessageComponentValue` (`String`, `Bool`, or `Other` for a JSON type this version does not know; read it with `value_str()` / `value_bool()`), `values` holds the lists, and `default` is a checkbox's initial state in create payloads.
 
 ## Example
 
@@ -66,7 +70,8 @@ match parse_interaction(payload)? {
             .submission
             .get_radio_value("theme")
             .unwrap_or("Not selected");
-        println!("Theme = {value}");
+        let agreed = modal.submission.get_checkbox("updates").unwrap_or(false);
+        println!("Theme = {value}, updates = {agreed}");
     }
     _ => {}
 }

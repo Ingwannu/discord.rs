@@ -20,6 +20,7 @@
 - 웹사이트 Component Embed로 만든 링크 미리보기용 `Embed::components`, `Embed::flags`, `Embed::KIND_COMPONENTS`, `Embed::is_component_embed()`.
 - Application Identity Profile 모델: `ApplicationIdentity`, `ApplicationIdentities`, `ApplicationIdentityProfile`, `ApplicationIdentityProfileData`, `PrimaryProfileData`, `DynamicProfileField`(모르는 필드 타입은 그대로 보존), `ProfileMedia`, `UpdateApplicationIdentityProfile`(문서화된 한도 검사용 `validate()` 포함), `ApplicationIdentityProviderId`.
 - `CurrentUserGuildsQuery::shard`, `CreateChannelInvite::target_user_ids`, `InviteTargetUserIds`.
+- 제출된 모달 값은 Discord의 JSON 타입을 따릅니다. `MessageComponent::value`는 `MessageComponentValue`(텍스트 입력·라디오 그룹은 `String`, 체크박스는 `Bool`, 그 밖은 `Other`; `value_str()` / `value_bool()`)이고, `MessageComponent::values`는 선택 메뉴·체크박스 그룹·파일 업로드 목록, `MessageComponent::default`는 체크박스의 초기 상태입니다. 2.x는 `value`를 문자열로 읽어 체크박스 제출이 든 페이로드가 디코딩에 실패했습니다.
 
 ### 권한 계산 (`discordrs::permissions`)
 

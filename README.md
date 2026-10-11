@@ -253,10 +253,12 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
             .min_values(0)
             .max_values(2),
     )
+    // A checkbox cannot be required; for a box the user must tick, use a
+    // one-option CheckboxGroupBuilder with `.required(true)`.
     .add_checkbox(
-        "Agree to Terms",
+        "Send me updates",
         None,
-        CheckboxBuilder::new("agree_terms").required(true),
+        CheckboxBuilder::new("updates").default_checked(true),
     )
     .add_file_upload(
         "Screenshot",

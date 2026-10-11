@@ -1809,7 +1809,7 @@ DISCORD_TOKEN=... MUSIC_GUILD_ID=... MUSIC_CHANNEL_ID=... MUSIC_INPUT=... \
 
 ## 12. Modal and Components V2 Helpers
 
-V2 modal parsing still preserves Discord-specific component types such as `FileUpload`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`.
+V2 modal parsing still preserves Discord-specific component types such as `FileUpload`, `RadioGroup`, `CheckboxGroup`, and `Checkbox`. Submitted values keep Discord's types: a text input or radio group gives a string (a radio group with nothing selected gives `None`), a checkbox gives a `bool` (`get_checkbox`), and selects, checkbox groups, and file uploads give a list (empty when nothing was picked).
 
 ```rust
 use discordrs::{
@@ -1820,6 +1820,7 @@ use serde_json::Value;
 
 fn summarize(submission: &V2ModalSubmission) -> String {
     let theme = submission.get_radio_value("theme").unwrap_or("Not selected");
+    let updates = submission.get_checkbox("updates").unwrap_or(false);
     let channels = submission
         .get_select_values("notify_channels")
         .map(|v| v.join(", "))
@@ -1829,7 +1830,7 @@ fn summarize(submission: &V2ModalSubmission) -> String {
         .map(|v| v.join(", "))
         .unwrap_or_else(|| "No files".to_string());
 
-    format!("Theme: {theme}, Notifications: {channels}, Files: {files}")
+    format!("Theme: {theme}, Updates: {updates}, Notifications: {channels}, Files: {files}")
 }
 
 async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), discordrs::DiscordError> {
