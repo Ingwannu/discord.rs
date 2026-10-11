@@ -109,6 +109,21 @@ cargo test --release --all-features --locked --test id_footprint -- --ignored --
 
 The payloads only use fields that exist before and after a model change, so checking out the previous commit and running the same command gives the comparison. Allocation counts and bytes are deterministic; timings are indicative only. The phase 3 series 2 step A numbers are in `docs/design/3.0-types-events-requests.md` §1 (step B left them unchanged: markers add no bytes); the series 3 numbers (discriminants as `u8` newtypes, the interned presence status) are in §2 "시리즈 3 결과".
 
+## Performance Report
+
+`tests/perf_report/` measures the paths that decide RAM and speed: the gateway inbound pipeline from frame text to the `Event` a handler receives, the in-memory cache, collector fan-out, and outbound request bodies. For every scenario it reports allocations, bytes allocated, bytes retained, peak live heap, and the median time, and it records the RSS of a bot process around a storm of large `GUILD_CREATE`s. Like the footprint report it is `#[ignore]`d and needs a release build (about 20 s):
+
+```text
+cargo test --release --all-features --locked --test perf_report -- --ignored --nocapture --test-threads=1
+python3 ci/perf_diff.py before.json after.json            # change per metric; ~ marks noisy metrics
+python3 ci/perf_diff.py before.json after.json --fail-on-regression 2
+```
+
+- Each scenario prints a `perf-report: {json}` line, and the run is written to `target/perf-report.json` (`DISCORDRS_PERF_REPORT=path` overrides). `ci/perf_diff.py` (standard library only, tested in `ci/tests/test_perf_diff.py`) reads either form.
+- `inbound.*` replays the private pipeline steps with public API (`decode_event`, `CacheHandle`, `Event::clone`), step by step; `e2e.*` runs the real `Client` in a child process against a fake gateway in another, so its counts and RSS belong to the bot alone. In every event type the two differ by exactly the 3 allocations the handler lane adds, which is how the replica is checked against the private code. When you change `gateway/client.rs`, `gateway/bot/pipeline.rs`, `apply_cache_updates`, or collector publishing, update the matching step in `tests/perf_report/inbound.rs`.
+- Allocation counts, bytes, retained, and peak are deterministic for the replica, cache, fan-out, and outbound scenarios; times, RSS, and end-to-end numbers are not. Timed iterations run with counting switched off, because counting costs about 65 ns per allocation.
+- The baseline for `main` at `706b7ae` (the last commit before phase 4), the metric definitions, and the hot spots phase 4 targets are in `docs/design/perf-baseline.md`.
+
 In unit tests, models without `Default` are built with `T::fixture()` (`src/model/fixtures.rs`, `#[cfg(test)]`) and IDs with `crate::model::test_id(n)`, which infers the marker from context. Integration tests and examples use the public API instead (`"1".parse()?`, `GuildId::try_from(1)?`, or JSON).
 
 ## Documented Example Payloads
