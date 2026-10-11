@@ -893,13 +893,12 @@ fn rand_jitter() -> f64 {
 const ONE_F64_BITS: u64 = 0x3ff0_0000_0000_0000;
 
 fn initial_heartbeat_delay(heartbeat_interval_ms: u64, jitter_factor: f64) -> Duration {
-    // `clamp` passes NaN through and `mul_f64` panics on it.
-    let clamped = if jitter_factor.is_nan() {
-        0.0
-    } else {
-        jitter_factor.clamp(0.0, 1.0)
-    };
-    Duration::from_millis(heartbeat_interval_ms).mul_f64(clamped)
+    // `mul_f64` panics on NaN and negative factors; `clamp` would pass NaN
+    // through.
+    if jitter_factor.is_nan() || jitter_factor <= 0.0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis(heartbeat_interval_ms).mul_f64(jitter_factor.min(1.0))
 }
 
 fn resume_payload(token: &str, session_id: &str, seq: u64) -> Value {
@@ -1385,6 +1384,7 @@ mod tests {
             Duration::from_millis(1_000)
         );
         assert_eq!(initial_heartbeat_delay(1_000, f64::NAN), Duration::ZERO);
+        assert_eq!(initial_heartbeat_delay(1_000, -0.5), Duration::ZERO);
     }
 
     #[test]
