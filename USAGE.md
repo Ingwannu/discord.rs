@@ -1530,7 +1530,7 @@ Useful supervisor APIs:
 
 ## 10.5 Multi-Process Sharding (`ProcessShardManager`)
 
-`discordrs::sharding::process` is the discord.js `ShardingManager` equivalent: one parent process spawns one child process per shard group, respawns crashed children with exponential backoff, and exchanges JSON-lines IPC over child stdio. One binary serves as both parent and child — `ShardChildProcess::from_env()` returns `Some` only in child mode:
+`discordrs::sharding::process` is the discord.js `ShardingManager` equivalent: one parent process spawns one child process per shard group, respawns crashed children with exponential backoff, exchanges prefixed, size-bounded IPC frames over child stdio, and grants every IDENTIFY per concurrency bucket (pass `child.identify_gate()` to `ClientBuilder::identify_gate(...)` in the child). One binary serves as both parent and child — `ShardChildProcess::from_env()` returns `Some` only in child mode:
 
 ```rust
 use discordrs::sharding::process::{
@@ -1560,7 +1560,7 @@ async fn main() -> Result<(), discordrs::DiscordError> {
     }
 
     // Parent mode: fetch the recommended shard count from /gateway/bot and
-    // spawn one child per shard, staggered for identify rate limits.
+    // spawn one child per shard; IDENTIFY pacing comes from the parent's permits.
     let manager = ProcessShardManager::spawn_auto(
         token,
         ProcessShardManagerConfig {

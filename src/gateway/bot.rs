@@ -1435,6 +1435,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Routes every IDENTIFY of this client through `gate` (for example
+    /// `ShardChildProcess::identify_gate()` in multi-process sharding), so a
+    /// coordinator outside this process paces session starts per
+    /// `shard_id % max_concurrency` bucket. RESUME is never gated.
+    ///
+    /// This is a shorthand for setting the gate on the gateway connection
+    /// config, which already reaches every shard, reconnect, and resume path.
+    pub fn identify_gate(mut self, gate: Arc<dyn crate::ws::IdentifyGate>) -> Self {
+        self.gateway_config = self.gateway_config.identify_gate(gate);
+        self
+    }
+
     pub fn cache_config(mut self, cache_config: CacheConfig) -> Self {
         self.cache_config = cache_config;
         self

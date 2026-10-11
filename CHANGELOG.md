@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audio playback no longer blocks on stalled inputs or connections.** `AudioPlayer` reads each resource and drives each connection on separate tasks and handles commands immediately. Stop, pause, and replacement flush every connection before `TrackEnd`/`Paused` is published, so a sink honouring the `VoiceFrameSink` contract transmits no old-track audio afterwards. Every connection gets five silence frames and then speaking off when its audio stops, even after lagging; re-subscribing a sink hands the connection over serially.
 - **Real-time voice delivery.** A frame must start sending within 60 ms and a send stalled for 60 ms is cancelled (audio is at most 120 ms late); a full queue drops the oldest frame; a recovering connection catches up at about twice real time. Untransmitted media becomes an RTP timestamp gap: `VoiceRuntimeHandle` advances sequence and timestamp only after a datagram is sent and never reuses a nonce (DAVE included). Underruns rebuffer, `unpause()` follows the same 60 ms rule, `AudioResource::next_pcm_frame` is cancel-safe, and panicking sinks/inputs are contained.
 
+- **Multi-process sharding is bounded and IDENTIFY-coordinated.** Each child has its own bounded IPC writer with control-message priority on both sides, so a child that stops reading or writing no longer hides shutdown or grants; one deadline covers the whole shutdown (op → close stdin → keep reading → kill → confirmed reap); `wait()`/`shutdown()` agree and return every terminal failure (respawn exhaustion, spawn failure, unconfirmed kill, monitor panic). The parent grants every IDENTIFY — first connect, INVALID_SESSION, 4007/4009, reconnects before READY — per `shard_id % max_concurrency` bucket, keeps a bucket until the holder releases or its exit is confirmed, and enforces the daily session-start budget across refreshes. IPC frames carry an `@discordrs-ipc/1 ` prefix and a size cap, so stray stdout no longer corrupts the protocol; child request handlers are capped and cancellable. Commands queued while disconnected are kept in one bounded backlog (newest presence wins, at most 32 others, drops logged by kind only).
+
 ### Added
 - `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
 - **Channel obfuscation readiness** (mandatory for all bots from 2026-11-16): `ChannelFlags` with `CHANNEL_OBFUSCATED` and the other documented channel flags, `Channel::channel_flags()` / `Channel::is_obfuscated()`, and IDENTIFY `capabilities` via `GatewayCapabilities`, `GatewayConnectionConfig::capabilities(...)`, and `ClientBuilder::gateway_capabilities(...)` for Discord's temporary early opt-in.
@@ -59,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `AudioPlayer::shutdown().await`, `VoiceFrameTiming`, `VoiceRuntimeHandle::send_opus_frame_after_gap` / `send_opus_frame_with_dave_after_gap`.
 
+- `IdentifyGate` / `IdentifyPermit` / `IdentifyOutcome` with `GatewayConnectionConfig::identify_gate` and `ClientBuilder::identify_gate`; `ShardChildProcess::{identify_gate, acquire_identify, notify_shard_ready}`; `ProcessShardManagerConfig::{max_concurrency, identify_interval, identify_permit_timeout, broadcast_timeout, shutdown_timeout, max_ipc_frame_bytes, session_start_budget}`.
+
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
 - CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
@@ -72,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CacheBackend` (breaking): clears are `clear_cache(expected_epoch, clear_id)` / `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` returning `CacheClear::{Applied, Rejected}`, and every write takes the epoch it was issued under. In Serial mode the cache a handler reads may already include later events.
 
 - Voice (breaking): `VoiceFrameSink::send_opus_packet` takes `VoiceFrameTiming` and has a documented cancellation contract; without `voice-encode`, `AudioPlayer::play` returns `DiscordError::Voice` instead of silently advancing; `Buffering` also covers rebuffering and unpausing; subscribing an already-subscribed sink replaces the earlier subscription.
+
+- Process sharding (breaking): the IPC wire format requires the frame prefix (2.x parents and children cannot talk to 3.0 ones); `ParentMessage`/`ChildMessage` are `#[non_exhaustive]` with identify variants; `ShardChildProcess::serve` returns `Result`; the `spawn_stagger` default is 0 (pacing comes from permits); `broadcast` errors when a payload exceeds the frame cap; `wait()`/`shutdown()` return errors for respawn exhaustion and unsuccessful exits.
 
 ### Deprecated
 - `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.

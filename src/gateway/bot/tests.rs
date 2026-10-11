@@ -7346,3 +7346,21 @@ async fn a_lost_rejection_of_the_initial_claim_is_epoch_discovery_not_a_takeover
     drop(forwarder);
     worker.shutdown(Duration::from_secs(5)).await.unwrap();
 }
+
+#[test]
+fn client_builder_identify_gate_reaches_the_connection_config() {
+    struct NeverGate;
+    impl crate::ws::IdentifyGate for NeverGate {
+        fn acquire(
+            &self,
+            _shard_id: u32,
+            _shard_count: u32,
+        ) -> crate::ws::IdentifyPermitFuture<'_> {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    let builder =
+        super::Client::builder("token", Intents::from_bits(0)).identify_gate(Arc::new(NeverGate));
+    assert!(builder.gateway_config.identify_gate_ref().is_some());
+}
