@@ -162,6 +162,31 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
   auto-installed a bare `1.99.0`; use `rustup component add clippy --toolchain 1.99.0`.
 - The `msrv` job is separate and follows `rust-version`, not the pin.
 
+## Compile-Fail Tests (trybuild)
+
+`tests/compile_fail.rs` checks that misuse of the 3.0 typed primitives stays a compile error:
+
+- passing a `ChannelId` where a `GuildId` is required;
+- implicit `u64` → ID conversion;
+- `GuildId::default()`, or `#[derive(Default)]` on a struct that stores an ID;
+- `Patch::null()` on a non-nullable `Patch<bool>`.
+
+Each case is a file in `tests/ui/` with an expected `.stderr` that holds rustc's diagnostic text. That text changes between Rust releases, so the snapshots are kept for one toolchain only, the pinned `RUST_TOOLCHAIN` (currently 1.99.0). The test does nothing unless `DISCORDRS_TRYBUILD=1` is set. CI sets it only in the `rust-check` job (step "Compile-fail snapshots"). The `msrv` and `stable-canary` jobs still compile the test file, and the test then skips itself.
+
+```bash
+# Run locally, as CI does:
+DISCORDRS_TRYBUILD=1 cargo +1.99.0 test --locked --test compile_fail
+```
+
+Regenerate the snapshots when `RUST_TOOLCHAIN` is bumped (the step fails with a diff), or after adding a case:
+
+```bash
+DISCORDRS_TRYBUILD=1 TRYBUILD=overwrite cargo +<pinned version> test --locked --test compile_fail
+git diff tests/ui/   # review: each case must still fail for the intended reason
+```
+
+Review the regenerated `.stderr` files before committing. A snapshot that now shows a different error, such as a typo in the case file or a missing import, means the case no longer tests what its comment says.
+
 ## Discord API Drift Report
 
 `ci/api_drift.py` compares the official

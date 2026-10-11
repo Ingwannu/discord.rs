@@ -58,6 +58,17 @@ jobs:
       - name: Cargo test (default features)
         run: cargo test --locked
 
+      # trybuild compares rustc diagnostics against tests/ui/*.stderr, whose
+      # wording changes between Rust releases, so the snapshots match this
+      # pinned toolchain only. The msrv and stable-canary jobs still compile
+      # tests/compile_fail.rs but skip it (no DISCORDRS_TRYBUILD). After
+      # bumping RUST_TOOLCHAIN, regenerate the snapshots (see
+      # discordrsdocs/docs/guide/testing-and-coverage.md).
+      - name: Compile-fail snapshots (pinned toolchain only)
+        env:
+          DISCORDRS_TRYBUILD: "1"
+        run: cargo test --locked --test compile_fail
+
       - name: Cargo clippy (all features)
         run: cargo clippy --all-features --all-targets --locked -- -D warnings
 

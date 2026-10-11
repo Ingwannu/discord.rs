@@ -12,7 +12,9 @@
 //! DISCORDRS_TRYBUILD=1 cargo +1.99.0 test --locked --test compile_fail
 //! ```
 //!
-//! After bumping the pinned toolchain, regenerate and review the snapshots:
+//! CI runs it in the `rust-check` job. After bumping the pinned toolchain,
+//! regenerate and review the snapshots (details in
+//! `discordrsdocs/docs/guide/testing-and-coverage.md`):
 //!
 //! ```text
 //! DISCORDRS_TRYBUILD=1 TRYBUILD=overwrite cargo +<new> test --locked --test compile_fail
@@ -32,8 +34,10 @@
 //!   다른 테스트까지 함께 돌린다. (2)는 버전 문자열 파싱이 필요하고 의도가 숨는다. (4)는 "어떤
 //!   오류로" 실패하는지 확인하지 않아 오타로 실패해도 통과한다. 환경 변수는 CI가 고정
 //!   툴체인 작업에서만 켜면 된다.
-//! - 장점, 단점 및 영향: 기본 cargo test에서는 건너뛰므로 로컬에서 놓치기 쉽다. CI의 고정
-//!   툴체인 작업에 이 테스트 단계를 추가해야 효과가 있다. 툴체인을 올릴 때 스냅샷도 갱신한다.
+//! - 장점, 단점 및 영향: 기본 cargo test에서는 건너뛰므로 로컬에서 놓치기 쉽다. 그래서 CI
+//!   rust-check 작업(고정 툴체인)의 "Compile-fail snapshots" 단계가 환경 변수를 켜서 항상
+//!   돌린다. msrv·stable-canary는 파일만 컴파일하고 건너뛴다. 툴체인을 올릴 때 스냅샷도
+//!   갱신한다(discordrsdocs/docs/guide/testing-and-coverage.md).
 //! ```
 
 #[test]
