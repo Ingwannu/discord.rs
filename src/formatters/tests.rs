@@ -721,6 +721,19 @@ fn clean_content_borrows_when_nothing_resolves() {
 }
 
 #[test]
+fn mention_targets_report_their_kind_and_erased_id() {
+    let targets = [
+        (MentionTarget::User(test_id(1)), MentionKind::User),
+        (MentionTarget::Role(test_id(2)), MentionKind::Role),
+        (MentionTarget::Channel(test_id(3)), MentionKind::Channel),
+    ];
+    for (index, (target, kind)) in (1_u64..).zip(targets) {
+        assert_eq!(target.kind(), kind);
+        assert_eq!(target.id(), test_id::<crate::model::marker::Generic>(index));
+    }
+}
+
+#[test]
 fn clean_content_with_closures_and_default_resolvers() {
     let closure = |target: MentionTarget| match target {
         MentionTarget::User(id) => Some(format!("user{id}")),

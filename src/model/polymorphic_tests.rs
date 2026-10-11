@@ -519,3 +519,31 @@ fn context_menu_interactions_type_their_target_by_command_kind() {
         Some("some message")
     );
 }
+
+#[test]
+fn constructors_build_the_matching_variants() {
+    assert_eq!(
+        SelectDefaultValue::role(test_id(1)),
+        SelectDefaultValue::Role(test_id(1))
+    );
+    assert_eq!(
+        SelectDefaultValue::channel(test_id(2)),
+        SelectDefaultValue::Channel(test_id(2))
+    );
+    assert_eq!(
+        SelectDefaultValue::from(MentionableId::from(test_id::<super::marker::User>(3))),
+        SelectDefaultValue::user(test_id(3))
+    );
+    assert_eq!(
+        MentionableId::User(test_id(3)).id(),
+        test_id::<super::marker::Generic>(3)
+    );
+    assert_eq!(
+        ApplicationCommandPermission::channel(test_id(4), false).target,
+        CommandPermissionTarget::Channel(test_id(4))
+    );
+    assert_eq!(
+        ApplicationCommandPermission::user(test_id(5), true),
+        ApplicationCommandPermission::new(CommandPermissionTarget::User(test_id(5)), true)
+    );
+}
