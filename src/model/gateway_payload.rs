@@ -332,78 +332,248 @@ impl<'de, T: Deserialize<'de>> Visitor<'de> for ArcSeq<T> {
 pub struct MessageUpdate {
     pub id: MessageId,
     pub channel_id: ChannelId,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub guild_id: NullablePatch<GuildId>,
     /// The author, merged field by field into the cached author with the
     /// same id (see [`PartialUser`]).
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub author: NullablePatch<PartialUser>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub member: NullablePatch<Member>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub content: Patch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub timestamp: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub edited_timestamp: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub mentions: Patch<Vec<User>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub mention_roles: Patch<Vec<RoleId>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub attachments: Patch<Vec<Attachment>>,
-    #[serde(rename = "type", default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        rename = "type",
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub kind: NullablePatch<MessageType>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub pinned: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub tts: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub flags: NullablePatch<u64>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub webhook_id: NullablePatch<WebhookId>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub application_id: NullablePatch<ApplicationId>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub application: NullablePatch<PartialApplication>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub embeds: Patch<Vec<Embed>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub reactions: Patch<Vec<Reaction>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub activity: NullablePatch<MessageActivity>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub mention_everyone: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub mention_channels: NullablePatch<Vec<ChannelMention>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub sticker_items: Patch<Vec<StickerItem>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub stickers: Patch<Vec<Sticker>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub position: NullablePatch<u64>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub role_subscription_data: NullablePatch<RoleSubscriptionData>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub message_reference: NullablePatch<MessageReference>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub message_snapshots: Patch<Vec<MessageSnapshot>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub referenced_message: NullablePatch<Box<Message>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub interaction_metadata: NullablePatch<MessageInteractionMetadata>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub interaction: NullablePatch<MessageInteraction>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub resolved: NullablePatch<ResolvedData>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub components: NullablePatch<Vec<MessageComponent>>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub poll: NullablePatch<Poll>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub call: NullablePatch<MessageCall>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub shared_client_theme: NullablePatch<SharedClientTheme>,
+}
+
+/// `deserialize_with` for a [`Patch`] field: a present key is read as `T`
+/// (so `null` is an error unless `T` accepts it); an omitted key falls back
+/// to the field's `#[serde(default)]`, which is `Missing`.
+///
+/// The same semantics as `Patch`'s own `Deserialize`, but `T` is read
+/// directly instead of through `deserialize_newtype_struct`. With
+/// serde_json's `raw_value` feature (which the gateway needs) that newtype
+/// path also compiles a raw-value branch and the `Patch` fallback visitors
+/// for every field type, about 56k LLVM IR lines of code that never runs
+/// for these two types.
+fn present<'de, D, T>(deserializer: D) -> Result<Patch<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Patch::Value)
+}
+
+/// `deserialize_with` for a [`NullablePatch`] field: `null` is
+/// `Value(Null)`, a value is `Value(Value(_))`, an omitted key is `Missing`
+/// (from `#[serde(default)]`). See [`present`].
+fn present_nullable<'de, D, T>(deserializer: D) -> Result<NullablePatch<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(|value| Patch::Value(Nullable::from(value)))
 }
 
 /// Replaces `target` with a clone of a present value.
@@ -626,41 +796,113 @@ impl MessageUpdate {
 #[non_exhaustive]
 pub struct PartialUser {
     pub id: UserId,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
     pub username: Patch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub global_name: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub discriminator: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub avatar: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub bot: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub system: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub mfa_enabled: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub banner: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub accent_color: NullablePatch<u64>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub locale: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub verified: NullablePatch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub email: NullablePatch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub flags: NullablePatch<u64>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub premium_type: NullablePatch<UserPremiumType>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub public_flags: NullablePatch<u64>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub avatar_decoration_data: NullablePatch<AvatarDecorationData>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub collectibles: NullablePatch<UserCollectibles>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
     pub primary_guild: NullablePatch<UserPrimaryGuild>,
 }
 
