@@ -545,18 +545,36 @@ impl<'de> Visitor<'de> for NodeSeed<'_> {
         let mut values = None;
         let mut children_array = None;
         let mut has_child = false;
+        // A repeated key is an error, as in the rest of the decoder; only
+        // unknown keys are skipped unchecked.
         while let Some(field) = map.next_key::<NodeField>()? {
             match field {
-                NodeField::Type => kind = Some(map.next_value::<LenientU8>()?.0),
-                NodeField::CustomId => custom_id = Some(map.next_value::<LeafValue>()?),
-                NodeField::Value => value = Some(map.next_value::<LeafValue>()?),
-                NodeField::Values => values = Some(map.next_value::<LeafValues>()?),
+                NodeField::Type => {
+                    reject_duplicate(&kind, "type")?;
+                    kind = Some(map.next_value::<LenientU8>()?.0);
+                }
+                NodeField::CustomId => {
+                    reject_duplicate(&custom_id, "custom_id")?;
+                    custom_id = Some(map.next_value::<LeafValue>()?);
+                }
+                NodeField::Value => {
+                    reject_duplicate(&value, "value")?;
+                    value = Some(map.next_value::<LeafValue>()?);
+                }
+                NodeField::Values => {
+                    reject_duplicate(&values, "values")?;
+                    values = Some(map.next_value::<LeafValues>()?);
+                }
                 NodeField::Components => {
+                    reject_duplicate(&children_array, "components")?;
                     children_array = Some(map.next_value_seed(ChildrenSeed {
                         leaves: &mut *self.leaves,
                     })?);
                 }
                 NodeField::Component => {
+                    if has_child {
+                        return Err(de::Error::duplicate_field("component"));
+                    }
                     map.next_value_seed(NodeSeed {
                         leaves: &mut *self.leaves,
                     })?;
@@ -1308,6 +1326,31 @@ mod tests {
         assert!(error
             .to_string()
             .contains("missing or invalid user_select.values"));
+    }
+
+    #[test]
+    fn repeated_component_keys_are_errors() {
+        for node in [
+            r#"{"type":4,"type":4,"custom_id":"a","value":"x"}"#,
+            r#"{"type":4,"custom_id":"a","custom_id":"b","value":"x"}"#,
+            r#"{"type":4,"custom_id":"a","value":"x","value":"y"}"#,
+            r#"{"type":3,"custom_id":"a","values":[],"values":["x"]}"#,
+            r#"{"type":1,"components":[],"components":[]}"#,
+            r#"{"type":18,"component":{"type":4,"custom_id":"a","value":"x"},"component":{"type":4,"custom_id":"b","value":"y"}}"#,
+        ] {
+            let data = format!(r#"{{"custom_id":"m","components":[{node}]}}"#);
+            let error = serde_json::from_str::<V2ModalSubmission>(&data).unwrap_err();
+            assert!(
+                error.to_string().contains("duplicate field"),
+                "{node}: {error}"
+            );
+        }
+        // Unknown keys are skipped, repeated or not.
+        let submission: V2ModalSubmission = serde_json::from_str(
+            r#"{"custom_id":"m","components":[{"type":4,"id":1,"id":2,"custom_id":"a","value":"x"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(submission.get_text("a"), Some("x"));
     }
 
     #[test]
