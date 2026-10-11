@@ -226,12 +226,27 @@ fn describe(channel: &Channel) -> &'static str {
 | `AuthorizingIntegrationOwners::other: Map<String, Value>`, 파생 `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq`는 모르는 항목을 JSON 텍스트로 비교 |
 | `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>`(`{ id }`) |
 | `MessageComponentValue::Other(Box<Value>)` | `Other(Box<RawValue>)`(JSON 텍스트로 비교) |
+| `Embed::provider: Option<Value>` | `Option<EmbedProvider>`(`name`, `url`) |
+| `AuditLogEntry::changes: Option<Vec<Value>>` | `Option<Vec<AuditLogChange>>`: `key: String`, `new_value` / `old_value`는 `Option<Box<RawValue>>`(타입이 `key`에 따라 다름); `new_value_as::<T>()` / `old_value_as::<T>()`로 디코딩, 멤버 역할 변경은 `AuditLogChange::ROLE_ADD` / `ROLE_REMOVE`와 `AuditLogPartialRole` |
+| `AuditLogEntry::options: Option<Value>` | `Option<Box<AuditLogEntryOptions>>`; 숫자 문자열(`count`, `delete_member_days`, `members_removed`, 덮어쓰기 `type`)은 문자열 유지, `overwrite_target()`이 덮어쓴 역할·멤버를 읽음 |
+| `Application::team: Option<Value>` | `Option<Team>`(`TeamMember`, `TeamMembershipState`) |
+| `Application::install_params: Option<Value>`, `integration_types_config: Option<HashMap<String, Value>>` | `Option<ApplicationInstallParams>`, `Option<HashMap<ApplicationIntegrationType, ApplicationIntegrationTypeConfig>>` |
+| `AuthorizationInformation::application: Value`, `Default` | `Application`; `Default` 없음(`application`, `expires` 필수) |
+| `ApplicationIdentityProfile::metadata: Option<Value>`, 파생 `PartialEq` | `Option<Box<RawValue>>`(게임 정의), `metadata_as::<T>()`; `PartialEq` 없음 |
+| `DynamicProfileField::Unknown(Value)`, `name() -> Option<&str>` | `Unknown(Box<RawValue>)`; `name() -> Option<Cow<str>>`; `PartialEq`는 모르는 필드를 JSON 텍스트로 비교 |
+| `GuildTemplate::serialized_source_guild: Option<Value>` | `Option<Box<RawValue>>`(자리표시 ID를 쓰는 길드 스냅샷이라 `Guild`가 아님) |
+| `GuildOnboarding::prompts` / `ModifyGuildOnboarding::prompts: Vec<Value>` | `Vec<OnboardingPrompt>`(`OnboardingPromptOption`, `OnboardingPromptType`) |
+| `Guild::guild_scheduled_events: Vec<Value>` | `Vec<GuildScheduledEvent>` |
+| `Invite::{guild, channel, target_application, guild_scheduled_event}: Option<Value>` | `Option<Box<Guild>>`, `Option<Box<Channel>>`, `Option<Box<PartialApplication>>`, `Option<Box<GuildScheduledEvent>>` |
+| `UserConnection::integrations: Vec<Value>` | `Vec<PartialIntegration>` |
+| `Sku::manifest_labels: Option<Value>`, `features: Vec<Value>` | `Option<Box<RawValue>>`, `Vec<Box<RawValue>>`(문서에 없는 필드) |
 
 그 밖의 변경:
 
 - 잘못된 인터랙션은 `decode_interaction`에서 `DiscordError::Json`, `parse_interaction`에서 `DiscordError::Model`입니다. 메시지에 필드 이름이 들어갑니다(`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). 중복 키는 거부합니다. 인터랙션 `type`은 JSON 숫자여야 합니다(`Value` 파서는 `"2"`도 받았음).
 - 타입 인터랙션 엔드포인트는 요청 본문을 바로 디코딩하고, 완전히 디코딩하지 못한 PING에도 PONG으로 답합니다.
-- `InteractionCallbackResponse::data`는 5단계 요청 모델이 이 송신 본문을 바꿀 때까지 `Value`로 둡니다.
+- JSON 텍스트로 남는 필드는 애플리케이션이 정하거나 본래 이질적인 값(`ApplicationIdentityProfile::metadata`, 감사 로그 변경 값, 템플릿 스냅샷, 모르는 동적 프로필 필드, 모르는 통합 소유자)이거나 문서에 없는 값(`Sku::manifest_labels`, `Sku::features`)입니다. `Box<RawValue>`는 받은 텍스트를 트리 대신 할당 한 번으로 보관합니다. `serde_json::from_str(raw.get())`이나 타입 지정 접근자로 디코딩하세요. serde의 버퍼링 컨테이너(`#[serde(flatten)]`, `#[serde(untagged)]`)는 통과하지 못하므로 이 모델을 그 안에 넣지 마세요.
+- `InteractionCallbackResponse::data`와 `CreateMessage::{components, embeds}`는 5단계 요청 모델이 송신 본문을 바꿀 때까지 `Value`로 둡니다.
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 

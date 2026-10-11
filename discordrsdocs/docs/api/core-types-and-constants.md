@@ -230,12 +230,27 @@ Interactions decode straight from JSON text (`decode_interaction`, or `Interacti
 | `AuthorizingIntegrationOwners::other: Map<String, Value>`, derived `PartialEq` | `BTreeMap<String, Box<RawValue>>`; `PartialEq` compares unknown entries by JSON text |
 | `InteractionCallbackResource::activity_instance: Option<Value>` | `Option<InteractionCallbackActivityInstance>` (`{ id }`) |
 | `MessageComponentValue::Other(Box<Value>)` | `Other(Box<RawValue>)` (compared by JSON text) |
+| `Embed::provider: Option<Value>` | `Option<EmbedProvider>` (`name`, `url`) |
+| `AuditLogEntry::changes: Option<Vec<Value>>` | `Option<Vec<AuditLogChange>>`: `key: String` and `new_value` / `old_value` as `Option<Box<RawValue>>` (their type depends on `key`); `new_value_as::<T>()` / `old_value_as::<T>()` decode them, `AuditLogChange::ROLE_ADD` / `ROLE_REMOVE` with `AuditLogPartialRole` for member role changes |
+| `AuditLogEntry::options: Option<Value>` | `Option<Box<AuditLogEntryOptions>>`; the digit strings (`count`, `delete_member_days`, `members_removed`, overwrite `type`) stay strings, `overwrite_target()` reads the overwritten role or member |
+| `Application::team: Option<Value>` | `Option<Team>` (`TeamMember`, `TeamMembershipState`) |
+| `Application::install_params: Option<Value>`, `integration_types_config: Option<HashMap<String, Value>>` | `Option<ApplicationInstallParams>`, `Option<HashMap<ApplicationIntegrationType, ApplicationIntegrationTypeConfig>>` |
+| `AuthorizationInformation::application: Value`, `Default` | `Application`; no `Default` (`application` and `expires` are required) |
+| `ApplicationIdentityProfile::metadata: Option<Value>`, derived `PartialEq` | `Option<Box<RawValue>>` (game-defined), `metadata_as::<T>()`; no `PartialEq` |
+| `DynamicProfileField::Unknown(Value)`, `name() -> Option<&str>` | `Unknown(Box<RawValue>)`; `name() -> Option<Cow<str>>`; `PartialEq` compares unknown fields by JSON text |
+| `GuildTemplate::serialized_source_guild: Option<Value>` | `Option<Box<RawValue>>` (a guild snapshot with placeholder IDs, not a `Guild`) |
+| `GuildOnboarding::prompts` / `ModifyGuildOnboarding::prompts: Vec<Value>` | `Vec<OnboardingPrompt>` (`OnboardingPromptOption`, `OnboardingPromptType`) |
+| `Guild::guild_scheduled_events: Vec<Value>` | `Vec<GuildScheduledEvent>` |
+| `Invite::{guild, channel, target_application, guild_scheduled_event}: Option<Value>` | `Option<Box<Guild>>`, `Option<Box<Channel>>`, `Option<Box<PartialApplication>>`, `Option<Box<GuildScheduledEvent>>` |
+| `UserConnection::integrations: Vec<Value>` | `Vec<PartialIntegration>` |
+| `Sku::manifest_labels: Option<Value>`, `features: Vec<Value>` | `Option<Box<RawValue>>`, `Vec<Box<RawValue>>` (undocumented fields) |
 
 Also changed:
 
 - A malformed interaction is a `DiscordError::Json` from `decode_interaction` and a `DiscordError::Model` from `parse_interaction`; messages name the field (`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). Duplicate keys are rejected. The interaction `type` must be a JSON number (the `Value` parser accepted `"2"`).
 - The typed interactions endpoint decodes the request body directly and still answers a PING it cannot fully decode with PONG.
-- `InteractionCallbackResponse::data` stays a `Value` until the request models of step 5 replace that outgoing body.
+- Fields that stay JSON text are application-defined or heterogeneous by design (`ApplicationIdentityProfile::metadata`, audit log change values, the template snapshot, unknown dynamic profile fields, unknown integration owners) or undocumented (`Sku::manifest_labels`, `Sku::features`). `Box<RawValue>` keeps the text as received with one allocation instead of a tree; decode it with `serde_json::from_str(raw.get())` or the typed accessors. It cannot pass through serde's buffered containers (`#[serde(flatten)]`, `#[serde(untagged)]`), so do not wrap these models in one.
+- `InteractionCallbackResponse::data` and `CreateMessage::{components, embeds}` stay `Value` until the request models of step 5 replace those outgoing bodies.
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 
