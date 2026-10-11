@@ -1,0 +1,31 @@
+error[E0308]: mismatched types
+  --> tests/ui/user_id_as_role_overwrite.rs:11:39
+   |
+11 |     let _role = OverwriteTarget::Role(user_id);
+   |                 --------------------- ^^^^^^^ expected `Id<Role>`, found `Id<User>`
+   |                 |
+   |                 arguments to this enum variant are incorrect
+   |
+   = note: expected struct `Id<discordrs::model::marker::Role>`
+              found struct `Id<discordrs::model::marker::User>`
+note: tuple variant defined here
+  --> src/model/channel.rs
+   |
+   |     Role(RoleId),
+   |     ^^^^
+
+error[E0308]: mismatched types
+  --> tests/ui/user_id_as_role_overwrite.rs:12:43
+   |
+12 |     let _member = OverwriteTarget::Member(role_id);
+   |                   ----------------------- ^^^^^^^ expected `Id<User>`, found `Id<Role>`
+   |                   |
+   |                   arguments to this enum variant are incorrect
+   |
+   = note: expected struct `Id<discordrs::model::marker::User>`
+              found struct `Id<discordrs::model::marker::Role>`
+note: tuple variant defined here
+  --> src/model/channel.rs
+   |
+   |     Member(UserId),
+   |     ^^^^^^

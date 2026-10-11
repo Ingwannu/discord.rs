@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/ui/channel_id_for_get_guild.rs:9:33
+  |
+9 |     let _guild = http.get_guild(channel_id);
+  |                       --------- ^^^^^^^^^^ expected `Id<Guild>`, found `Id<Channel>`
+  |                       |
+  |                       arguments to this method are incorrect
+  |
+  = note: expected struct `Id<discordrs::model::marker::Guild>`
+             found struct `Id<discordrs::model::marker::Channel>`
+note: method defined here
+ --> src/http/guild.rs
+  |
+  |     pub async fn get_guild(&self, guild_id: GuildId) -> Result<Guild, DiscordError> {
+  |                  ^^^^^^^^^

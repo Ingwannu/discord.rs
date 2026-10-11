@@ -1,6 +1,8 @@
 //! Compile-fail contract tests (trybuild) for the phase 3 primitives: typed
 //! IDs and patch fields must turn misuse into compile errors
-//! (docs/design/3.0-types-events-requests.md §5 "필수 테스트"). The public
+//! (docs/design/3.0-types-events-requests.md §5 "필수 테스트"), including
+//! the endpoint and polymorphic-target cases of series 2 step B
+//! (`channel_id_for_get_guild.rs`, `user_id_as_role_overwrite.rs`). The public
 //! async traits' `Send` contract is pinned the same way: an `async fn` impl
 //! whose future is not `Send` must fail at the impl
 //! (`cache_backend_future_not_send.rs`; `CacheBackend` is the async trait
@@ -26,8 +28,9 @@
 //!
 //! ```text
 //! [Decision Log]
-//! - 목적과 의도: 채널 ID를 길드 자리에 넘기기, u64 암시 변환, ID Default, 비-null 패치에
-//!   null 같은 오용이 계속 컴파일 오류로 남는지 고정한다.
+//! - 목적과 의도: 채널 ID를 길드 자리(엔드포인트 포함)에 넘기기, 사용자 ID로 역할 덮어쓰기
+//!   만들기, u64 암시 변환, ID Default, 비-null 패치에 null 같은 오용이 계속 컴파일 오류로
+//!   남는지 고정한다.
 //! - 기존 구현 및 제약 조건: CI는 MSRV(1.88), 고정 툴체인(1.99.0), 비차단 최신 stable에서
 //!   cargo test를 돌린다. rustc 진단 문구는 버전마다 달라 한 스냅샷이 세 툴체인을 모두 통과할
 //!   수 없다.
