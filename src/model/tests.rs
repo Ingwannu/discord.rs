@@ -74,6 +74,59 @@ fn application_command_option_choice_new_serializes_value() {
 }
 
 #[test]
+fn command_option_values_keep_their_json_type() {
+    use super::CommandOptionValue;
+
+    let decode = |json: &str| serde_json::from_str::<CommandOptionValue>(json);
+    assert_eq!(
+        decode(r#""billing""#).unwrap(),
+        CommandOptionValue::String("billing".to_string())
+    );
+    assert_eq!(decode("6").unwrap(), CommandOptionValue::Integer(6));
+    assert_eq!(decode("-6").unwrap(), CommandOptionValue::Integer(-6));
+    assert_eq!(decode("0.5").unwrap(), CommandOptionValue::Number(0.5));
+    assert_eq!(decode("true").unwrap(), CommandOptionValue::Boolean(true));
+    // Discord bounds integers to +-2^53; a u64 past i64 is not an option.
+    assert!(decode("18446744073709551615").is_err());
+    assert!(decode("null").is_err());
+    assert!(decode("{}").is_err());
+    assert!(decode("[1]").is_err());
+
+    // A NUMBER option sent without a fraction still reads as a number.
+    assert_eq!(decode("5").unwrap().as_f64(), Some(5.0));
+    assert_eq!(decode("5").unwrap().as_i64(), Some(5));
+    assert_eq!(decode("5.5").unwrap().as_i64(), None);
+    assert_eq!(decode(r#""5""#).unwrap().as_i64(), None);
+    assert_eq!(decode("true").unwrap().as_bool(), Some(true));
+    let user: Option<UserId> = decode(r#""80351110224678912""#).unwrap().as_id();
+    assert_eq!(user.map(UserId::get), Some(80_351_110_224_678_912));
+    let not_an_id: Option<UserId> = decode(r#""abc""#).unwrap().as_id();
+    assert_eq!(not_an_id, None);
+
+    for json in [r#""text""#, "6", "-6", "0.5", "false"] {
+        let value = decode(json).unwrap();
+        assert_eq!(serde_json::to_string(&value).unwrap(), json);
+    }
+
+    // Choices take any value that fits, and other `Serialize` values
+    // through `try_new`.
+    assert_eq!(
+        ApplicationCommandOptionChoice::new("Six", 6_u32).value,
+        CommandOptionValue::Integer(6)
+    );
+    assert_eq!(
+        ApplicationCommandOptionChoice::try_new("Big", 9_007_199_254_740_991_u64)
+            .unwrap()
+            .value,
+        CommandOptionValue::Integer(9_007_199_254_740_991)
+    );
+    assert!(ApplicationCommandOptionChoice::try_new("List", vec![1]).is_err());
+    let choice: ApplicationCommandOptionChoice =
+        serde_json::from_value(json!({ "name": "Half", "value": 0.5 })).unwrap();
+    assert_eq!(choice.value.as_f64(), Some(0.5));
+}
+
+#[test]
 fn snowflake_timestamp_extracts_creation_time() {
     // Discord Snowflake: timestamp is in the top 42 bits
     let sf: GenericId = test_id(1759288472266248192);

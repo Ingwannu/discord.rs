@@ -354,7 +354,7 @@ mod tests {
     use super::{
         parse_interaction, parse_interaction_context, parse_raw_interaction, RawInteraction,
     };
-    use crate::model::{Interaction, InteractionContextType};
+    use crate::model::{CommandOptionValue, Interaction, InteractionContextType};
     use crate::response::AckKind;
 
     #[test]
@@ -421,11 +421,17 @@ mod tests {
             Interaction::Autocomplete(interaction) => {
                 assert_eq!(interaction.data.options.len(), 2);
                 assert_eq!(interaction.data.options[0].name, "topic");
-                assert_eq!(interaction.data.options[0].value, Some(json!("billing")));
+                assert_eq!(
+                    interaction.data.options[0].value,
+                    Some(CommandOptionValue::String("billing".to_string()))
+                );
                 assert!(interaction.data.options[0].is_focused());
                 assert_eq!(interaction.data.options[1].name, "nested");
                 assert_eq!(interaction.data.options[1].options.len(), 1);
-                assert_eq!(interaction.data.options[1].options[0].value, Some(json!(2)));
+                assert_eq!(
+                    interaction.data.options[1].options[0].value,
+                    Some(CommandOptionValue::Integer(2))
+                );
             }
             other => panic!("unexpected typed interaction: {other:?}"),
         }

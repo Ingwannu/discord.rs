@@ -8,10 +8,10 @@ use crate::parsers::V2ModalSubmission;
 
 use super::{
     ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, CommandOptionType,
-    CommandType, ComponentType, Entitlement, GenericId, GuildId, GuildInstallOwner,
-    InteractionContextType, InteractionId, InteractionResponseState, InteractionResponseType,
-    InteractionType, Member, MentionableId, Message, MessageId, Permissions, Role, RoleId, User,
-    UserId,
+    CommandOptionValue, CommandType, ComponentType, Entitlement, GenericId, GuildId,
+    GuildInstallOwner, InteractionContextType, InteractionId, InteractionResponseState,
+    InteractionResponseType, InteractionType, Member, MentionableId, Message, MessageId,
+    Permissions, Role, RoleId, User, UserId,
 };
 
 /// `authorizing_integration_owners` of an interaction (or of a message's
@@ -241,10 +241,13 @@ pub struct CommandInteractionOption {
     #[serde(rename = "type")]
     pub kind: CommandOptionType,
     pub name: String,
-    #[serde(default)]
+    /// Options of a subcommand or subcommand group; empty for a value
+    /// option.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<CommandInteractionOption>,
+    /// The value the user gave; absent for subcommands and groups.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<serde_json::Value>,
+    pub value: Option<CommandOptionValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
 }

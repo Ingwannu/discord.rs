@@ -63,8 +63,8 @@ pub use channel::{
 };
 pub use command::{
     ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice,
-    ApplicationCommandPermission, CommandPermissionTarget, CommandPermissionsId,
-    EditApplicationCommandPermissions, GuildApplicationCommandPermissions,
+    ApplicationCommandPermission, CommandOptionValue, CommandPermissionTarget,
+    CommandPermissionsId, EditApplicationCommandPermissions, GuildApplicationCommandPermissions,
 };
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use component::MessageSelectDefaultValue;

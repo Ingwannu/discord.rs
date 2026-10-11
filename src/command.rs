@@ -7,7 +7,7 @@ use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
     ApplicationCommandOptionChoice, ApplicationIntegrationType, ChannelType, CommandOptionType,
-    CommandType, InteractionContextType,
+    CommandOptionValue, CommandType, InteractionContextType,
 };
 
 /// Discord's documented application-command limits, used by the builders'
@@ -788,13 +788,18 @@ impl CommandOptionBuilder {
         self
     }
 
-    pub fn choice(mut self, name: &str, value: impl Serialize) -> Self {
+    /// Adds a choice; `value` is a string, an integer that fits `i64`, a
+    /// float, or a bool (use [`Self::try_choice`] for other `Serialize`
+    /// values such as `u64`).
+    pub fn choice(mut self, name: &str, value: impl Into<CommandOptionValue>) -> Self {
         self.inner
             .choices
             .push(ApplicationCommandOptionChoice::new(name, value));
         self
     }
 
+    /// Adds a choice whose value is any `Serialize` type that writes a JSON
+    /// string, number, or boolean; fails for anything else.
     pub fn try_choice(
         mut self,
         name: &str,
@@ -849,7 +854,7 @@ impl CommandOptionBuilder {
     pub fn localized_choice<I, L, N>(
         mut self,
         name: &str,
-        value: impl Serialize,
+        value: impl Into<CommandOptionValue>,
         name_localizations: I,
     ) -> Self
     where
