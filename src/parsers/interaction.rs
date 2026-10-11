@@ -1,5 +1,5 @@
 //! Interaction decoding: the typed decoder ([`decode_interaction`], and
-//! `Deserialize for Interaction` in [`wire`]) and the raw-handler helpers
+//! `Deserialize for Interaction` in the private `wire` module) and the raw-handler helpers
 //! that work on a `serde_json::Value` the endpoint already parsed.
 
 use serde::Deserialize;
