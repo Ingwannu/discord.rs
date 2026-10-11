@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ActivityLaunchId, ApplicationId, ChannelId, GuildId, PermissionsBitField, SkuId, User, UserId,
+    ActivityLaunchId, ApplicationId, ChannelId, GuildId, PermissionsBitField,
+    RoleConnectionMetadataType, SkuId, User, UserId,
 };
 
 /// Partial application object attached to messages sent by an app
@@ -166,11 +167,13 @@ pub struct ModifyCurrentApplication {
     pub event_webhooks_types: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `ApplicationRoleConnectionMetadata`.
+/// One application role connection metadata record. No `Default`: `type`,
+/// `key`, `name`, and `description` are required; use
+/// [`ApplicationRoleConnectionMetadata::new`].
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplicationRoleConnectionMetadata {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: RoleConnectionMetadataType,
     pub key: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,6 +181,26 @@ pub struct ApplicationRoleConnectionMetadata {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description_localizations: Option<HashMap<String, String>>,
+}
+
+impl ApplicationRoleConnectionMetadata {
+    /// A record comparing the user's `key` value with `kind`; localizations
+    /// unset.
+    pub fn new(
+        kind: RoleConnectionMetadataType,
+        key: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            key: key.into(),
+            name: name.into(),
+            name_localizations: None,
+            description: description.into(),
+            description_localizations: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
-    ApplicationCommandOptionChoice, ApplicationIntegrationType, ChannelType,
-    InteractionContextType, PermissionsBitField,
+    ApplicationCommandOptionChoice, ApplicationIntegrationType, ChannelType, CommandOptionType,
+    CommandType, InteractionContextType, PermissionsBitField,
 };
 
 /// Discord's documented application-command limits, used by the builders'
@@ -452,7 +452,8 @@ fn ensure_unique_option_names(
 }
 
 fn is_subcommand_like(option: &ApplicationCommandOption) -> bool {
-    option.kind == option_type::SUB_COMMAND || option.kind == option_type::SUB_COMMAND_GROUP
+    option.kind == CommandOptionType::SUB_COMMAND
+        || option.kind == CommandOptionType::SUB_COMMAND_GROUP
 }
 
 /// Validates one level of options (a command's top level or a subcommand's
@@ -518,10 +519,10 @@ fn validate_option_constraints(option: &ApplicationCommandOption) -> Result<(), 
     if !option.choices.is_empty() {
         if !matches!(
             option.kind,
-            option_type::STRING | option_type::INTEGER | option_type::NUMBER
+            CommandOptionType::STRING | CommandOptionType::INTEGER | CommandOptionType::NUMBER
         ) {
             return Err(DiscordError::model(format!(
-                "option \"{name}\" of type {} has choices, which only STRING, \
+                "option \"{name}\" of type {:?} has choices, which only STRING, \
                  INTEGER, and NUMBER options accept",
                 option.kind
             )));
@@ -618,14 +619,14 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         .channel_types
         .as_ref()
         .is_some_and(|channel_types| !channel_types.is_empty())
-        && option.kind != option_type::CHANNEL
+        && option.kind != CommandOptionType::CHANNEL
     {
         return Err(DiscordError::model(format!(
             "option \"{name}\" sets channel_types, which only CHANNEL options accept"
         )));
     }
     if let Some(file_types) = &option.file_types {
-        if option.kind != option_type::ATTACHMENT {
+        if option.kind != CommandOptionType::ATTACHMENT {
             return Err(DiscordError::model(format!(
                 "option \"{name}\" sets file_types, which only ATTACHMENT options accept"
             )));
@@ -633,21 +634,21 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         validation::ensure_file_types(&format!("option \"{name}\" file_types"), file_types)?;
     }
     match option.kind {
-        option_type::SUB_COMMAND_GROUP => {
+        CommandOptionType::SUB_COMMAND_GROUP => {
             if let Some(nested) = option
                 .options
                 .iter()
-                .find(|nested| nested.kind != option_type::SUB_COMMAND)
+                .find(|nested| nested.kind != CommandOptionType::SUB_COMMAND)
             {
                 return Err(DiscordError::model(format!(
                     "subcommand group \"{name}\" may only contain subcommands, \
-                     got option \"{}\" of type {}",
+                     got option \"{}\" of type {:?}",
                     nested.name, nested.kind
                 )));
             }
             validate_option_level(&format!("option \"{name}\""), &option.options)
         }
-        option_type::SUB_COMMAND => {
+        CommandOptionType::SUB_COMMAND => {
             if let Some(nested) = option
                 .options
                 .iter()
@@ -664,7 +665,7 @@ fn validate_option(option: &ApplicationCommandOption) -> Result<(), DiscordError
         _ => {
             if !option.options.is_empty() {
                 return Err(DiscordError::model(format!(
-                    "option \"{name}\" of type {} cannot have nested options",
+                    "option \"{name}\" of type {:?} cannot have nested options",
                     option.kind
                 )));
             }
@@ -707,49 +708,14 @@ fn validate_chat_input_command(command: &CommandDefinition) -> Result<(), Discor
     Ok(())
 }
 
-/// Public module for `command_type` APIs.
-pub mod command_type {
-    /// Public constant for `CHAT_INPUT`.
-    pub const CHAT_INPUT: u8 = 1;
-    /// Public constant for `USER`.
-    pub const USER: u8 = 2;
-    /// Public constant for `MESSAGE`.
-    pub const MESSAGE: u8 = 3;
-    /// Public constant for `PRIMARY_ENTRY_POINT`.
-    pub const PRIMARY_ENTRY_POINT: u8 = 4;
-}
-
-/// Public module for `option_type` APIs.
-pub mod option_type {
-    /// Public constant for `SUB_COMMAND`.
-    pub const SUB_COMMAND: u8 = 1;
-    /// Public constant for `SUB_COMMAND_GROUP`.
-    pub const SUB_COMMAND_GROUP: u8 = 2;
-    /// Public constant for `STRING`.
-    pub const STRING: u8 = 3;
-    /// Public constant for `INTEGER`.
-    pub const INTEGER: u8 = 4;
-    /// Public constant for `BOOLEAN`.
-    pub const BOOLEAN: u8 = 5;
-    /// Public constant for `USER`.
-    pub const USER: u8 = 6;
-    /// Public constant for `CHANNEL`.
-    pub const CHANNEL: u8 = 7;
-    /// Public constant for `ROLE`.
-    pub const ROLE: u8 = 8;
-    /// Public constant for `MENTIONABLE`.
-    pub const MENTIONABLE: u8 = 9;
-    /// Public constant for `NUMBER`.
-    pub const NUMBER: u8 = 10;
-    /// Public constant for `ATTACHMENT`.
-    pub const ATTACHMENT: u8 = 11;
-}
-
+/// Body for creating or overwriting an application command.
+///
+/// `kind` is optional on the wire: Discord treats an absent `type` as
+/// [`CommandType::CHAT_INPUT`]. The builders always set it.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `CommandDefinition`.
 pub struct CommandDefinition {
-    #[serde(rename = "type")]
-    pub kind: u8,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<CommandType>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_localizations: Option<HashMap<String, String>>,
@@ -796,22 +762,18 @@ impl From<CommandDefinition> for ApplicationCommand {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-/// Typed Discord API object for `CommandOptionBuilder`.
+/// Builds an [`ApplicationCommandOption`]. No `Default`: an option needs a
+/// type, a name, and a description.
+#[derive(Clone, Debug)]
 pub struct CommandOptionBuilder {
     inner: ApplicationCommandOption,
 }
 
 impl CommandOptionBuilder {
     /// Creates a `new` value.
-    pub fn new(kind: u8, name: &str, description: &str) -> Self {
+    pub fn new(kind: CommandOptionType, name: &str, description: &str) -> Self {
         Self {
-            inner: ApplicationCommandOption {
-                kind,
-                name: name.to_string(),
-                description: description.to_string(),
-                ..ApplicationCommandOption::default()
-            },
+            inner: ApplicationCommandOption::new(kind, name, description),
         }
     }
 
@@ -934,57 +896,57 @@ impl CommandOptionBuilder {
 
     /// Creates a `subcommand` value.
     pub fn subcommand(name: &str, description: &str) -> Self {
-        Self::new(option_type::SUB_COMMAND, name, description)
+        Self::new(CommandOptionType::SUB_COMMAND, name, description)
     }
 
     /// Creates a `subcommand_group` value.
     pub fn subcommand_group(name: &str, description: &str) -> Self {
-        Self::new(option_type::SUB_COMMAND_GROUP, name, description)
+        Self::new(CommandOptionType::SUB_COMMAND_GROUP, name, description)
     }
 
     /// Creates a `string` value.
     pub fn string(name: &str, description: &str) -> Self {
-        Self::new(option_type::STRING, name, description)
+        Self::new(CommandOptionType::STRING, name, description)
     }
 
     /// Creates a `integer` value.
     pub fn integer(name: &str, description: &str) -> Self {
-        Self::new(option_type::INTEGER, name, description)
+        Self::new(CommandOptionType::INTEGER, name, description)
     }
 
     /// Creates a `boolean` value.
     pub fn boolean(name: &str, description: &str) -> Self {
-        Self::new(option_type::BOOLEAN, name, description)
+        Self::new(CommandOptionType::BOOLEAN, name, description)
     }
 
     /// Creates a `user` value.
     pub fn user(name: &str, description: &str) -> Self {
-        Self::new(option_type::USER, name, description)
+        Self::new(CommandOptionType::USER, name, description)
     }
 
     /// Creates a `channel` value.
     pub fn channel(name: &str, description: &str) -> Self {
-        Self::new(option_type::CHANNEL, name, description)
+        Self::new(CommandOptionType::CHANNEL, name, description)
     }
 
     /// Creates a `role` value.
     pub fn role(name: &str, description: &str) -> Self {
-        Self::new(option_type::ROLE, name, description)
+        Self::new(CommandOptionType::ROLE, name, description)
     }
 
     /// Creates a `mentionable` value.
     pub fn mentionable(name: &str, description: &str) -> Self {
-        Self::new(option_type::MENTIONABLE, name, description)
+        Self::new(CommandOptionType::MENTIONABLE, name, description)
     }
 
     /// Creates a `number` value.
     pub fn number(name: &str, description: &str) -> Self {
-        Self::new(option_type::NUMBER, name, description)
+        Self::new(CommandOptionType::NUMBER, name, description)
     }
 
     /// Creates a `attachment` value.
     pub fn attachment(name: &str, description: &str) -> Self {
-        Self::new(option_type::ATTACHMENT, name, description)
+        Self::new(CommandOptionType::ATTACHMENT, name, description)
     }
 
     pub fn build(self) -> ApplicationCommandOption {
@@ -1005,7 +967,8 @@ impl CommandOptionBuilder {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+/// No `Default`: a default would not carry this builder's command type.
+#[derive(Clone, Debug)]
 /// Typed Discord API object for `SlashCommandBuilder`.
 pub struct SlashCommandBuilder {
     inner: CommandDefinition,
@@ -1016,7 +979,7 @@ impl SlashCommandBuilder {
     pub fn new(name: &str, description: &str) -> Self {
         Self {
             inner: CommandDefinition {
-                kind: command_type::CHAT_INPUT,
+                kind: Some(CommandType::CHAT_INPUT),
                 name: name.to_string(),
                 description: description.to_string(),
                 ..CommandDefinition::default()
@@ -1129,7 +1092,8 @@ impl SlashCommandBuilder {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+/// No `Default`: a default would not carry this builder's command type.
+#[derive(Clone, Debug)]
 /// Typed Discord API object for `PrimaryEntryPointCommandBuilder`.
 pub struct PrimaryEntryPointCommandBuilder {
     inner: CommandDefinition,
@@ -1140,7 +1104,7 @@ impl PrimaryEntryPointCommandBuilder {
     pub fn new(name: &str, description: &str) -> Self {
         Self {
             inner: CommandDefinition {
-                kind: command_type::PRIMARY_ENTRY_POINT,
+                kind: Some(CommandType::PRIMARY_ENTRY_POINT),
                 name: name.to_string(),
                 description: description.to_string(),
                 ..CommandDefinition::default()
@@ -1215,7 +1179,8 @@ impl PrimaryEntryPointCommandBuilder {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+/// No `Default`: a default would not carry this builder's command type.
+#[derive(Clone, Debug)]
 /// Typed Discord API object for `UserCommandBuilder`.
 pub struct UserCommandBuilder {
     inner: CommandDefinition,
@@ -1226,7 +1191,7 @@ impl UserCommandBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             inner: CommandDefinition {
-                kind: command_type::USER,
+                kind: Some(CommandType::USER),
                 name: name.to_string(),
                 ..CommandDefinition::default()
             },
@@ -1262,7 +1227,8 @@ impl UserCommandBuilder {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+/// No `Default`: a default would not carry this builder's command type.
+#[derive(Clone, Debug)]
 /// Typed Discord API object for `MessageCommandBuilder`.
 pub struct MessageCommandBuilder {
     inner: CommandDefinition,
@@ -1273,7 +1239,7 @@ impl MessageCommandBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             inner: CommandDefinition {
-                kind: command_type::MESSAGE,
+                kind: Some(CommandType::MESSAGE),
                 name: name.to_string(),
                 ..CommandDefinition::default()
             },
@@ -1316,27 +1282,26 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        command_type, ensure_unique_option_names, limits, option_type, CommandOptionBuilder,
-        MessageCommandBuilder, PrimaryEntryPointCommandBuilder, SlashCommandBuilder,
-        UserCommandBuilder,
+        ensure_unique_option_names, limits, CommandOptionBuilder, MessageCommandBuilder,
+        PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
     };
     use crate::model::{
         ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType, ChannelType,
-        InteractionContextType, PermissionsBitField,
+        CommandOptionType, CommandType, InteractionContextType, PermissionsBitField,
     };
 
     #[test]
     fn slash_command_builder_serializes_nested_options() {
         let command = SlashCommandBuilder::new("hello", "Say hello")
             .option(
-                CommandOptionBuilder::new(option_type::STRING, "target", "Target user")
+                CommandOptionBuilder::new(CommandOptionType::STRING, "target", "Target user")
                     .required(true)
                     .choice("World", "world"),
             )
             .build();
 
         let value = serde_json::to_value(command).unwrap();
-        assert_eq!(value["type"], json!(command_type::CHAT_INPUT));
+        assert_eq!(value["type"], json!(CommandType::CHAT_INPUT));
         assert_eq!(value["options"][0]["name"], json!("target"));
         assert_eq!(value["options"][0]["choices"][0]["value"], json!("world"));
     }
@@ -1349,8 +1314,14 @@ mod tests {
             .build();
 
         let value = serde_json::to_value(command).unwrap();
-        assert_eq!(value["options"][0]["type"], json!(option_type::STRING));
-        assert_eq!(value["options"][1]["type"], json!(option_type::BOOLEAN));
+        assert_eq!(
+            value["options"][0]["type"],
+            json!(CommandOptionType::STRING)
+        );
+        assert_eq!(
+            value["options"][1]["type"],
+            json!(CommandOptionType::BOOLEAN)
+        );
     }
 
     #[test]
@@ -1358,47 +1329,47 @@ mod tests {
         let cases = [
             (
                 CommandOptionBuilder::subcommand("sub", "desc").build(),
-                option_type::SUB_COMMAND,
+                CommandOptionType::SUB_COMMAND,
             ),
             (
                 CommandOptionBuilder::subcommand_group("group", "desc").build(),
-                option_type::SUB_COMMAND_GROUP,
+                CommandOptionType::SUB_COMMAND_GROUP,
             ),
             (
                 CommandOptionBuilder::string("string", "desc").build(),
-                option_type::STRING,
+                CommandOptionType::STRING,
             ),
             (
                 CommandOptionBuilder::integer("integer", "desc").build(),
-                option_type::INTEGER,
+                CommandOptionType::INTEGER,
             ),
             (
                 CommandOptionBuilder::boolean("boolean", "desc").build(),
-                option_type::BOOLEAN,
+                CommandOptionType::BOOLEAN,
             ),
             (
                 CommandOptionBuilder::user("user", "desc").build(),
-                option_type::USER,
+                CommandOptionType::USER,
             ),
             (
                 CommandOptionBuilder::channel("channel", "desc").build(),
-                option_type::CHANNEL,
+                CommandOptionType::CHANNEL,
             ),
             (
                 CommandOptionBuilder::role("role", "desc").build(),
-                option_type::ROLE,
+                CommandOptionType::ROLE,
             ),
             (
                 CommandOptionBuilder::mentionable("mentionable", "desc").build(),
-                option_type::MENTIONABLE,
+                CommandOptionType::MENTIONABLE,
             ),
             (
                 CommandOptionBuilder::number("number", "desc").build(),
-                option_type::NUMBER,
+                CommandOptionType::NUMBER,
             ),
             (
                 CommandOptionBuilder::attachment("attachment", "desc").build(),
-                option_type::ATTACHMENT,
+                CommandOptionType::ATTACHMENT,
             ),
         ];
 
@@ -1432,8 +1403,11 @@ mod tests {
         let value = serde_json::to_value(option).unwrap();
         let nested = &value["options"][0]["options"];
 
-        assert_eq!(value["type"], json!(option_type::SUB_COMMAND_GROUP));
-        assert_eq!(value["options"][0]["type"], json!(option_type::SUB_COMMAND));
+        assert_eq!(value["type"], json!(CommandOptionType::SUB_COMMAND_GROUP));
+        assert_eq!(
+            value["options"][0]["type"],
+            json!(CommandOptionType::SUB_COMMAND)
+        );
         assert_eq!(nested[0]["required"], json!(true));
         assert_eq!(nested[1]["autocomplete"], json!(true));
         assert_eq!(nested[1]["min_value"], json!(1.0));
@@ -1442,7 +1416,7 @@ mod tests {
         assert_eq!(nested[2]["max_length"], json!(120));
         assert_eq!(nested[3]["choices"][0]["name"], json!("Half"));
         assert_eq!(nested[3]["choices"][0]["value"], json!(0.5));
-        assert_eq!(nested[4]["type"], json!(option_type::ATTACHMENT));
+        assert_eq!(nested[4]["type"], json!(CommandOptionType::ATTACHMENT));
     }
 
     #[test]
@@ -1468,7 +1442,8 @@ mod tests {
 
         let application_command: ApplicationCommand = command.clone().into();
 
-        assert_eq!(application_command.kind, command_type::CHAT_INPUT);
+        assert_eq!(application_command.kind, Some(CommandType::CHAT_INPUT));
+        assert_eq!(application_command.command_type(), CommandType::CHAT_INPUT);
         assert_eq!(application_command.name, "ban");
         assert_eq!(application_command.description, "Ban a member");
         assert_eq!(application_command.options.len(), 1);
@@ -1523,7 +1498,7 @@ mod tests {
             .build();
 
         let value = serde_json::to_value(command).unwrap();
-        assert_eq!(value["type"], json!(command_type::PRIMARY_ENTRY_POINT));
+        assert_eq!(value["type"], json!(CommandType::PRIMARY_ENTRY_POINT));
         assert_eq!(value["integration_types"], json!([0, 1]));
         assert_eq!(value["contexts"], json!([0, 1]));
         assert_eq!(value["handler"], json!(2));
@@ -1646,7 +1621,7 @@ mod tests {
             CommandOptionBuilder::string("plain", "desc")
                 .option(CommandOptionBuilder::string("nested", "desc"))
                 .try_build(),
-            "option \"plain\" of type 3 cannot have nested options",
+            "option \"plain\" of type STRING cannot have nested options",
         );
 
         // Group -> subcommand -> basic option is the valid shape.
@@ -1697,10 +1672,10 @@ mod tests {
         let user_value = serde_json::to_value(user_command).unwrap();
         let message_value = serde_json::to_value(message_command).unwrap();
 
-        assert_eq!(user_value["type"], json!(command_type::USER));
+        assert_eq!(user_value["type"], json!(CommandType::USER));
         assert_eq!(user_value["default_member_permissions"], json!("16"));
         assert_eq!(user_value["dm_permission"], json!(true));
-        assert_eq!(message_value["type"], json!(command_type::MESSAGE));
+        assert_eq!(message_value["type"], json!(CommandType::MESSAGE));
         assert_eq!(message_value["default_member_permissions"], json!("32"));
         assert_eq!(message_value["dm_permission"], json!(false));
     }
@@ -2032,7 +2007,7 @@ mod tests {
             CommandOptionBuilder::boolean("flag", "desc")
                 .choice("yes", true)
                 .try_build(),
-            "option \"flag\" of type 5 has choices, which only STRING, INTEGER, and NUMBER",
+            "option \"flag\" of type BOOLEAN has choices, which only STRING, INTEGER, and NUMBER",
         );
         expect_model_error(
             CommandOptionBuilder::string("topic", "desc")
@@ -2253,7 +2228,7 @@ mod tests {
         let quote = MessageCommandBuilder::new("Quote Message")
             .try_build()
             .expect("context-menu names may contain spaces and capitals");
-        assert_eq!(quote.kind, command_type::MESSAGE);
+        assert_eq!(quote.kind, Some(CommandType::MESSAGE));
     }
 
     #[test]

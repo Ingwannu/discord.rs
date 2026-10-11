@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::{
     ApplicationCommandHandlerType, ApplicationId, ApplicationIntegrationType, ChannelId,
-    ChannelType, CommandId, CommandPermissionType, CommandVersionId, GenericId, GuildId,
-    InteractionContextType, InvalidId, PermissionsBitField, RoleId, UserId,
+    ChannelType, CommandId, CommandOptionType, CommandPermissionType, CommandType,
+    CommandVersionId, GenericId, GuildId, InteractionContextType, InvalidId, PermissionsBitField,
+    RoleId, UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -44,11 +45,15 @@ impl ApplicationCommandOptionChoice {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `ApplicationCommandOption`.
+/// An application command option (or subcommand / subcommand group).
+///
+/// No `Default`: `type` is required and has no default (2.x defaulted to
+/// `0`, which is not an option type). Use [`ApplicationCommandOption::new`]
+/// or [`CommandOptionBuilder`](crate::command::CommandOptionBuilder).
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApplicationCommandOption {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: CommandOptionType,
     pub name: String,
     /// Localized `name` per locale key; same rules as `name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +89,33 @@ pub struct ApplicationCommandOption {
     pub channel_types: Option<Vec<ChannelType>>,
 }
 
+impl ApplicationCommandOption {
+    /// An option of `kind` with every optional field unset.
+    pub fn new(
+        kind: CommandOptionType,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            name_localizations: None,
+            description: description.into(),
+            description_localizations: None,
+            required: None,
+            autocomplete: None,
+            options: Vec::new(),
+            choices: Vec::new(),
+            min_value: None,
+            max_value: None,
+            min_length: None,
+            max_length: None,
+            file_types: None,
+            channel_types: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `ApplicationCommand`.
 pub struct ApplicationCommand {
@@ -93,8 +125,11 @@ pub struct ApplicationCommand {
     pub application_id: Option<ApplicationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
-    #[serde(rename = "type")]
-    pub kind: u8,
+    /// Command type. Discord documents `type` as optional with
+    /// [`CommandType::CHAT_INPUT`] as its default; [`Self::command_type`]
+    /// applies that default.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<CommandType>,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name_localizations: Option<HashMap<String, String>>,
@@ -456,6 +491,12 @@ impl EditApplicationCommandPermissions {
 }
 
 impl ApplicationCommand {
+    /// The command type, applying Discord's documented default
+    /// ([`CommandType::CHAT_INPUT`]) when `type` is absent.
+    pub fn command_type(&self) -> CommandType {
+        self.kind.unwrap_or(CommandType::CHAT_INPUT)
+    }
+
     /// Returns the command ID when Discord has assigned one.
     pub fn id_opt(&self) -> Option<CommandId> {
         self.id

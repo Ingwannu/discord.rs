@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DiscordError;
+use crate::model::ApplicationIntegrationType;
 use crate::types::invalid_data_error;
 
 const API_BASE: &str = "https://discord.com/api/v10";
@@ -106,7 +107,7 @@ impl OAuth2Client {
         if let Some(integration_type) = request.integration_type {
             url.push('&');
             url.push_str("integration_type=");
-            url.push_str(&integration_type.to_string());
+            url.push_str(&integration_type.get().to_string());
         }
         Ok(url)
     }
@@ -226,7 +227,7 @@ pub struct OAuth2AuthorizationRequest {
     pub response_type: String,
     pub state: Option<String>,
     pub prompt: Option<String>,
-    pub integration_type: Option<u8>,
+    pub integration_type: Option<ApplicationIntegrationType>,
 }
 
 impl OAuth2AuthorizationRequest {
@@ -255,7 +256,7 @@ impl OAuth2AuthorizationRequest {
         self
     }
 
-    pub fn integration_type(mut self, integration_type: u8) -> Self {
+    pub fn integration_type(mut self, integration_type: ApplicationIntegrationType) -> Self {
         self.integration_type = Some(integration_type);
         self
     }
@@ -446,6 +447,7 @@ mod tests {
         OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken,
         OAuth2Scope, OAuth2TokenResponse,
     };
+    use crate::model::ApplicationIntegrationType;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -465,7 +467,7 @@ mod tests {
                 )
                 .state("state with space")
                 .prompt("consent")
-                .integration_type(1),
+                .integration_type(ApplicationIntegrationType::USER_INSTALL),
             )
             .unwrap();
 

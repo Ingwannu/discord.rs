@@ -101,7 +101,7 @@ pub use cache::{
 };
 pub use collection::Collection;
 pub use command::{
-    command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
+    CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
     PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
 pub use error::{DiscordError, HttpError};

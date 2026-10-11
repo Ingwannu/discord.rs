@@ -9,12 +9,13 @@ pub use crate::collector::{
     ModalCollector, ReactionCollector,
 };
 pub use crate::command::{
-    command_type, option_type, CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
+    CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
     PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
 pub use crate::constants::gateway_intents;
-// The open discriminants builders take; they replace the 2.x `button_style`
-// and `text_input_style` constant modules this prelude used to export.
+// The open discriminants builders take; they replace the 2.x `button_style`,
+// `text_input_style`, `command_type`, and `option_type` constant modules this
+// prelude used to export.
 pub use crate::error::DiscordError;
 pub use crate::event::Event;
 pub use crate::formatters::{MentionResolver, TimestampStyle};
@@ -25,7 +26,10 @@ pub use crate::gateway::{Client, Context, EventDispatchMode, EventHandler, Shard
 pub use crate::helpers::{
     launch_activity, respond_to_interaction, respond_with_message, send_message,
 };
-pub use crate::model::{ButtonStyle, ChannelType, ComponentType, SeparatorSpacing, TextInputStyle};
+pub use crate::model::{
+    ButtonStyle, ChannelType, CommandOptionType, CommandType, ComponentType, SeparatorSpacing,
+    TextInputStyle,
+};
 // Deprecated in 3.0 in favour of `InteractionResponder`; kept so existing
 // prelude users keep compiling (with a deprecation warning at the call site).
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]

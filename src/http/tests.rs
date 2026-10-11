@@ -1,4 +1,7 @@
-use crate::model::{test_id, ChannelType, InteractionResponseType, MfaLevel, OverwriteType};
+use crate::model::{
+    test_id, ChannelType, CommandType, InteractionResponseType, MfaLevel, OverwriteType,
+    RoleConnectionMetadataType,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,7 +21,7 @@ use super::rate_limit::RateLimitState;
 use super::{
     discord_api_error, discord_rate_limit_error, sleep_for_retry_after, FileAttachment, RestClient,
 };
-use crate::command::{command_type, CommandDefinition};
+use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
     AddGroupDmRecipient, AddGuildMember, AddLobbyMember, ApplicationCommandPermission,
@@ -633,7 +636,7 @@ fn assert_named_file_multipart_request(
 
 fn sample_command() -> CommandDefinition {
     CommandDefinition {
-        kind: command_type::CHAT_INPUT,
+        kind: Some(CommandType::CHAT_INPUT),
         name: "ping".to_string(),
         description: "pong".to_string(),
         ..CommandDefinition::default()
@@ -2786,13 +2789,12 @@ async fn application_management_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("app-token", 555, base_url);
-    let records = vec![ApplicationRoleConnectionMetadata {
-        kind: 1,
-        key: "score".to_string(),
-        name: "Score".to_string(),
-        description: "User score".to_string(),
-        ..ApplicationRoleConnectionMetadata::default()
-    }];
+    let records = vec![ApplicationRoleConnectionMetadata::new(
+        RoleConnectionMetadataType::INTEGER_LESS_THAN_OR_EQUAL,
+        "score",
+        "Score",
+        "User score",
+    )];
 
     assert_eq!(client.get_current_application().await.unwrap().name, "app");
     assert_eq!(
