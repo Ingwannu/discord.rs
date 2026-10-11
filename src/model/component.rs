@@ -1,6 +1,6 @@
 //! Message components (legacy and Components V2) and their parts.
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::types::Emoji;
 
@@ -85,9 +85,21 @@ pub struct MessageComponent {
     /// Maximum text-input length.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_length: Option<u64>,
-    /// Submitted or pre-filled text-input value.
+    /// `value`: a string for text inputs (pre-filled or submitted) and
+    /// submitted radio groups, a boolean for submitted checkboxes. `None`
+    /// when absent, and for a radio group submitted with nothing selected
+    /// (`null`). Read it with [`Self::value_str`] / [`Self::value_bool`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub value: Option<MessageComponentValue>,
+    /// `values` of a submitted select menu, checkbox group, or file upload
+    /// (selected option values, snowflakes, or attachment IDs). An empty
+    /// list (nothing selected) is kept apart from an absent field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
+    /// Whether a checkbox starts checked (`default` in modal create
+    /// payloads).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default: Option<bool>,
     /// Child components (action rows, sections, containers).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<MessageComponent>,
@@ -170,6 +182,8 @@ impl MessageComponent {
             min_length: None,
             max_length: None,
             value: None,
+            values: None,
+            default: None,
             components: Vec::new(),
             component: None,
             accessory: None,
@@ -193,6 +207,18 @@ impl MessageComponent {
             (ComponentType::BUTTON, Some(style)) => Some(ButtonStyle::new(style)),
             _ => None,
         }
+    }
+
+    /// The string `value`: a text input's text or a submitted radio group's
+    /// selected option. `None` when there is none or it is not a string.
+    pub fn value_str(&self) -> Option<&str> {
+        self.value.as_ref().and_then(MessageComponentValue::as_str)
+    }
+
+    /// The boolean `value` of a submitted checkbox (`true` when checked).
+    /// `None` when there is none or it is not a boolean.
+    pub fn value_bool(&self) -> Option<bool> {
+        self.value.as_ref().and_then(MessageComponentValue::as_bool)
     }
 
     /// The text input style, if this is a [`ComponentType::TEXT_INPUT`] that
@@ -231,6 +257,112 @@ impl<'a> Iterator for MessageComponentIter<'a> {
             self.stack.push(child);
         }
         Some(component)
+    }
+}
+
+/// The `value` of a received component, whose JSON type depends on the
+/// component: text inputs and radio groups send a string, a submitted
+/// checkbox sends a boolean.
+///
+/// Reads and writes the bare JSON value. Any other JSON type (a component
+/// Discord adds later) is kept in [`Other`](Self::Other) and written back
+/// unchanged, so decoding never fails on it.
+///
+/// ```
+/// use discordrs::{MessageComponent, MessageComponentValue};
+///
+/// let checkbox: MessageComponent =
+///     serde_json::from_str(r#"{"type": 23, "id": 2, "custom_id": "agree", "value": true}"#)
+///         .unwrap();
+/// assert_eq!(checkbox.value, Some(MessageComponentValue::Bool(true)));
+/// assert_eq!(checkbox.value_bool(), Some(true));
+/// assert_eq!(checkbox.value_str(), None);
+/// ```
+// [Decision Log]
+// - 목적과 의도: 모달 제출 컴포넌트의 `value`를 문서대로 읽는다. 텍스트 입력·라디오 그룹은
+//   문자열(라디오는 선택이 없으면 null), 체크박스는 bool이다(components/reference, 3714862).
+// - 기존 구현 및 제약 조건: `MessageComponent`는 모든 종류의 필드를 담는 넓은 수신 구조체이고
+//   디코딩이 실패하지 않는 것을 원칙으로 한다. 2.x는 `value: Option<String>`이라 체크박스 제출
+//   `"value": true`가 들어 있는 페이로드 전체가 디코딩 오류였다.
+// - 검토한 주요 대안: (1) `value`를 `serde_json::Value`로 두기, (2) 종류별 접근자만 두고 저장은
+//   그대로, (3) JSON 타입별 enum(String/Bool) + 모르는 모양을 담는 Other + 접근자.
+// - 선택한 방식: (3). `values`(선택 메뉴·체크박스 그룹·파일 업로드)는 별도 필드
+//   `Option<Vec<String>>`로 둔다.
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 타입 정보를 잃고 사용자가 매번 꺼내야 한다.
+//   (2)는 bool을 String에 담을 수 없어 저장이 불가능하다(`style`은 두 종류 모두 u8이라 원시 저장 +
+//   접근자가 가능했던 것과 다르다). (3)은 와이어의 JSON 타입이 이미 종류를 구분하므로 종류를 다시
+//   확인할 필요가 없고, Other로 넓은 구조체의 "디코딩은 실패하지 않는다" 원칙을 지킨다.
+// - 장점, 단점 및 영향: 파괴적 변경(`value.as_deref()` → `value_str()`). Other는 `Box`로 두어
+//   `Option<MessageComponentValue>` 크기가 `Option<String>`과 같다.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MessageComponentValue {
+    /// A text input's text or a radio group's selected option value.
+    String(String),
+    /// A submitted checkbox: `true` when checked.
+    Bool(bool),
+    /// A JSON value of another type, kept as sent.
+    Other(Box<serde_json::Value>),
+}
+
+impl MessageComponentValue {
+    /// The string, if this is [`Self::String`].
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::Bool(_) | Self::Other(_) => None,
+        }
+    }
+
+    /// The boolean, if this is [`Self::Bool`].
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Self::Bool(value) => Some(*value),
+            Self::String(_) | Self::Other(_) => None,
+        }
+    }
+}
+
+impl From<String> for MessageComponentValue {
+    fn from(value: String) -> Self {
+        Self::String(value)
+    }
+}
+
+impl From<&str> for MessageComponentValue {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
+impl From<bool> for MessageComponentValue {
+    fn from(value: bool) -> Self {
+        Self::Bool(value)
+    }
+}
+
+impl Serialize for MessageComponentValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Other(value) => value.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MessageComponentValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(value) => Self::String(value),
+            serde_json::Value::Bool(value) => Self::Bool(value),
+            other => Self::Other(Box::new(other)),
+        })
     }
 }
 

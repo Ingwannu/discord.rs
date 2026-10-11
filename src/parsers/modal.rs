@@ -19,6 +19,23 @@ fn parse_select_component_data(
     Ok((custom_id, values))
 }
 
+/// A submitted radio group's `value`: the selected option's value, or
+/// `null` when nothing is selected (Discord documents it as `?string`). A
+/// missing key reads as `None` too; any other type is an error.
+fn nullable_string_field(
+    component: &Value,
+    field: &str,
+    context: &str,
+) -> Result<Option<String>, DiscordError> {
+    match component.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(invalid_data_error(format!(
+            "invalid {context}.{field}: expected a string or null"
+        ))),
+    }
+}
+
 fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalComponent>, DiscordError> {
     let Some(component_type) = component
         .get("type")
@@ -55,7 +72,7 @@ fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalCompone
         }
         ComponentType::RADIO_GROUP => V2ModalComponent::RadioGroup {
             custom_id: required_string_field(component, "custom_id", "radio_group")?,
-            value: required_string_field(component, "value", "radio_group")?,
+            value: nullable_string_field(component, "value", "radio_group")?,
         },
         ComponentType::CHECKBOX_GROUP => {
             let (custom_id, values) = parse_select_component_data(component, "checkbox_group")?;
@@ -65,9 +82,11 @@ fn parse_modal_leaf_component(component: &Value) -> Result<Option<V2ModalCompone
             let (custom_id, values) = parse_select_component_data(component, "file_upload")?;
             V2ModalComponent::FileUpload { custom_id, values }
         }
+        // Discord sends the state as `value` (a boolean); the variant keeps
+        // the more descriptive name `checked`.
         ComponentType::CHECKBOX => V2ModalComponent::Checkbox {
             custom_id: required_string_field(component, "custom_id", "checkbox")?,
-            checked: required_bool_field(component, "checked", "checkbox")?,
+            checked: required_bool_field(component, "value", "checkbox")?,
         },
         _ => return Ok(None),
     };
@@ -151,18 +170,20 @@ pub enum V2ModalComponent {
         /// Submitted selected mentionable IDs.
         values: Vec<String>,
     },
-    /// Discord API enum variant `RadioGroup`.
+    /// A submitted radio group (wire `value: ?string`).
     RadioGroup {
         /// Component custom ID.
         custom_id: String,
-        /// Submitted selected option value.
-        value: String,
+        /// The selected option's value, or `None` when the user selected
+        /// nothing (Discord sends `null`; possible when the group is not
+        /// `required`).
+        value: Option<String>,
     },
-    /// Discord API enum variant `CheckboxGroup`.
+    /// A submitted checkbox group (wire `values`).
     CheckboxGroup {
         /// Component custom ID.
         custom_id: String,
-        /// Submitted checkbox values.
+        /// Values of the checked options; empty when none is checked.
         values: Vec<String>,
     },
     /// Discord API enum variant `FileUpload`.
@@ -172,11 +193,13 @@ pub enum V2ModalComponent {
         /// Uploaded attachment IDs.
         values: Vec<String>,
     },
-    /// Discord API enum variant `Checkbox`.
+    /// A submitted checkbox (wire `value: bool`).
     Checkbox {
         /// Component custom ID.
         custom_id: String,
-        /// Whether the checkbox was checked.
+        /// Whether the checkbox was checked: the submitted `value`. (2.x
+        /// read a `checked` key Discord never sends, so every checkbox
+        /// submission failed to parse.)
         checked: bool,
     },
 }
@@ -245,6 +268,8 @@ impl V2ModalSubmission {
             })
     }
 
+    /// The selected option of radio group `custom_id`. `None` when there
+    /// is no such radio group or nothing was selected.
     pub fn get_radio_value(&self, custom_id: &str) -> Option<&str> {
         self.components
             .iter()
@@ -252,7 +277,21 @@ impl V2ModalSubmission {
                 V2ModalComponent::RadioGroup {
                     custom_id: component_custom_id,
                     value,
-                } if component_custom_id == custom_id => Some(value.as_str()),
+                } if component_custom_id == custom_id => value.as_deref(),
+                _ => None,
+            })
+    }
+
+    /// Whether checkbox `custom_id` was checked, or `None` when there is no
+    /// such checkbox.
+    pub fn get_checkbox(&self, custom_id: &str) -> Option<bool> {
+        self.components
+            .iter()
+            .find_map(|component| match component {
+                V2ModalComponent::Checkbox {
+                    custom_id: component_custom_id,
+                    checked,
+                } if component_custom_id == custom_id => Some(*checked),
                 _ => None,
             })
     }
@@ -387,7 +426,7 @@ mod tests {
                     "component": {
                         "type": 23,
                         "custom_id": "enabled",
-                        "checked": true
+                        "value": true
                     }
                 }
             ]
@@ -399,6 +438,8 @@ mod tests {
             Some(&["mod".to_string(), "admin".to_string()][..])
         );
         assert_eq!(submission.get_radio_value("visibility"), Some("public"));
+        assert_eq!(submission.get_checkbox("enabled"), Some(true));
+        assert_eq!(submission.get_checkbox("visibility"), None);
         assert_eq!(submission.get_text("roles"), None);
         assert_eq!(
             submission.components,
@@ -409,7 +450,7 @@ mod tests {
                 },
                 V2ModalComponent::RadioGroup {
                     custom_id: "visibility".to_string(),
-                    value: "public".to_string(),
+                    value: Some("public".to_string()),
                 },
                 V2ModalComponent::Checkbox {
                     custom_id: "enabled".to_string(),
@@ -526,6 +567,48 @@ mod tests {
     }
 
     #[test]
+    fn unchecked_checkboxes_and_empty_selections_parse() {
+        // Discord: a checkbox's `value` is `false` when unchecked, a radio
+        // group's `value` is `null` when nothing is selected, and a checkbox
+        // group's `values` is `[]` when nothing is checked.
+        let submission = parse_modal_submission(&json!({
+            "custom_id": "optional_modal",
+            "components": [
+                { "type": 18, "id": 1, "component": {
+                    "type": 23, "id": 2, "custom_id": "newsletter", "value": false
+                }},
+                { "type": 18, "id": 3, "component": {
+                    "type": 21, "id": 4, "custom_id": "class", "value": null
+                }},
+                { "type": 18, "id": 5, "component": {
+                    "type": 22, "id": 6, "custom_id": "days", "values": []
+                }},
+                { "type": 18, "id": 7, "component": {
+                    "type": 21, "id": 8, "custom_id": "legacy_radio"
+                }}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(submission.get_checkbox("newsletter"), Some(false));
+        assert_eq!(submission.get_radio_value("class"), None);
+        assert_eq!(submission.get_select_values("days"), Some(&[][..]));
+        assert_eq!(
+            submission.components[1],
+            V2ModalComponent::RadioGroup {
+                custom_id: "class".to_string(),
+                value: None,
+            }
+        );
+        assert_eq!(
+            submission.components[3],
+            V2ModalComponent::RadioGroup {
+                custom_id: "legacy_radio".to_string(),
+                value: None,
+            }
+        );
+    }
+
+    #[test]
     fn parse_modal_submission_reports_leaf_validation_errors() {
         let error = parse_modal_submission(&json!({
             "custom_id": "broken_text",
@@ -544,11 +627,36 @@ mod tests {
             "components": [{
                 "type": 23,
                 "custom_id": "enabled",
-                "checked": "yes"
+                "value": "yes"
             }]
         }))
         .unwrap_err();
-        assert!(error.to_string().contains("checkbox.checked"));
+        assert!(error.to_string().contains("checkbox.value"));
+
+        // The 2.x key `checked` is not what Discord sends; it is not read.
+        let error = parse_modal_submission(&json!({
+            "custom_id": "legacy_checkbox",
+            "components": [{
+                "type": 23,
+                "custom_id": "enabled",
+                "checked": true
+            }]
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("checkbox.value"));
+
+        let error = parse_modal_submission(&json!({
+            "custom_id": "broken_radio",
+            "components": [{
+                "type": 21,
+                "custom_id": "class",
+                "value": 3
+            }]
+        }))
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("invalid radio_group.value: expected a string or null"));
 
         let error = parse_modal_submission(&json!({
             "custom_id": "broken_select",

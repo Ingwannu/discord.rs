@@ -16,6 +16,10 @@
 //! The second half pins the open-value contract per converted field: an
 //! unknown value that fits the storage round-trips unchanged and one past the
 //! storage width is a decode error, not a truncation.
+//!
+//! It also pins the received modal values (a later fix, same payloads): a
+//! submitted checkbox's boolean `value`, a radio group's string `value`, and
+//! the `values` lists, both through `MessageComponent` and the modal parser.
 
 // Generated verbatim by ci/doc_examples.py; formatting it would make the
 // next regeneration a noisy diff.
@@ -29,8 +33,8 @@ use serde_json::{json, Value};
 use super::{
     Activity, Application, ApplicationCommand, AuditLogEntry, AutoModerationRule, Channel,
     CommandInteractionData, CurrentUserGuild, Entitlement, Guild, GuildOnboarding, Integration,
-    Invite, Message, MessageComponent, SharedClientTheme, Sku, StageInstance, Sticker, StickerPack,
-    Subscription, UpdatePresence, User, Webhook,
+    Invite, Message, MessageComponent, MessageComponentValue, SharedClientTheme, Sku,
+    StageInstance, Sticker, StickerPack, Subscription, UpdatePresence, User, Webhook,
 };
 use crate::model::{
     ActivityType, ApplicationEventWebhookStatus, AuditLogActionType, AutoModerationEventType,
@@ -369,6 +373,148 @@ fn documented_interactions_parse_with_typed_command_data() {
     }
 }
 
+/// The submitted `value`/`values` of the documented modal components keep
+/// their JSON types: a string for text inputs and radio groups, a boolean
+/// for checkboxes, and a list for selects, checkbox groups, and file
+/// uploads.
+#[test]
+fn documented_submitted_component_values_keep_their_types() {
+    let submitted = |section: &str| -> MessageComponent {
+        let (_, json) = payloads::COMPONENTS
+            .iter()
+            // Submit examples are the label payloads without `label` text
+            // (the last such entry of the section).
+            .rfind(|(name, json)| *name == section && !json.contains(r#""label""#))
+            .copied()
+            .unwrap_or_else(|| panic!("no submitted {section} example"));
+        let label: MessageComponent = round_trip(section, json);
+        match label.component {
+            Some(child) => *child,
+            None => panic!("{section}: the submit example wraps a label child"),
+        }
+    };
+
+    let checkbox = submitted("Checkbox");
+    assert_eq!(checkbox.kind, ComponentType::CHECKBOX);
+    assert_eq!(checkbox.value, Some(MessageComponentValue::Bool(true)));
+    assert_eq!(checkbox.value_bool(), Some(true));
+    assert_eq!(checkbox.value_str(), None);
+
+    let radio = submitted("Radio Group");
+    assert_eq!(radio.value_str(), Some("warrior"));
+    assert_eq!(radio.value_bool(), None);
+
+    let text = submitted("Text Input");
+    assert!(text
+        .value_str()
+        .is_some_and(|text| text.starts_with("The recent")));
+
+    let group = submitted("Checkbox Group");
+    assert_eq!(
+        group.values.as_deref(),
+        Some(
+            &[
+                "march-5".to_string(),
+                "march-10".to_string(),
+                "march-4".to_string()
+            ][..]
+        )
+    );
+    let upload = submitted("File Upload");
+    assert_eq!(
+        upload.values.as_deref(),
+        Some(&["111111111111111111111".to_string()][..])
+    );
+    let select = submitted("String Select");
+    assert_eq!(
+        select.values.as_deref(),
+        Some(&["butterfly".to_string()][..])
+    );
+
+    // Discord's other submit states: unchecked, nothing selected (`null`
+    // and `[]`), and a value type this version does not know.
+    let unchecked: MessageComponent = round_trip(
+        "unchecked",
+        r#"{"type":23,"id":2,"custom_id":"c","value":false}"#,
+    );
+    assert_eq!(unchecked.value_bool(), Some(false));
+    let empty_radio: MessageComponent = decode(
+        "empty radio",
+        json!({"type": 21, "custom_id": "r", "value": null}),
+    );
+    assert_eq!(empty_radio.value, None);
+    let empty_group: MessageComponent =
+        round_trip("empty group", r#"{"type":22,"custom_id":"g","values":[]}"#);
+    assert_eq!(empty_group.values, Some(Vec::new()));
+    let future: MessageComponent = round_trip(
+        "future value",
+        r#"{"type":99,"custom_id":"f","value":{"level":3}}"#,
+    );
+    assert_eq!(
+        future.value,
+        Some(MessageComponentValue::Other(Box::new(json!({"level": 3}))))
+    );
+
+    // The create-side initial state of a checkbox is `default`.
+    let initial: MessageComponent = round_trip(
+        "checkbox create",
+        r#"{"type":23,"custom_id":"c","default":true}"#,
+    );
+    assert_eq!(initial.default, Some(true));
+}
+
+/// Every documented modal submit `data` goes through the modal parser with
+/// the submitted values intact.
+#[test]
+fn documented_modal_submits_parse() {
+    use crate::parsers::{parse_modal_submission, V2ModalComponent};
+
+    assert_eq!(
+        payloads::MODAL_SUBMITS.len(),
+        10,
+        "modal submit examples changed"
+    );
+    for (section, json) in payloads::MODAL_SUBMITS {
+        let data = parse(section, json);
+        let submission = match parse_modal_submission(&data) {
+            Ok(submission) => submission,
+            Err(error) => panic!("{section}: modal submit does not parse: {error}"),
+        };
+        let [component] = submission.components.as_slice() else {
+            panic!("{section}: expected one submitted component");
+        };
+        let ok = match (*section, component) {
+            ("Text Input", V2ModalComponent::TextInput { value, .. }) => !value.is_empty(),
+            ("String Select", V2ModalComponent::StringSelect { values, .. })
+            | ("User Select", V2ModalComponent::UserSelect { values, .. })
+            | ("Role Select", V2ModalComponent::RoleSelect { values, .. })
+            | ("Mentionable Select", V2ModalComponent::MentionableSelect { values, .. })
+            | ("Channel Select", V2ModalComponent::ChannelSelect { values, .. })
+            | ("File Upload", V2ModalComponent::FileUpload { values, .. })
+            | ("Checkbox Group", V2ModalComponent::CheckboxGroup { values, .. }) => {
+                !values.is_empty()
+            }
+            ("Radio Group", V2ModalComponent::RadioGroup { value, .. }) => {
+                value.as_deref() == Some("warrior")
+            }
+            ("Checkbox", V2ModalComponent::Checkbox { checked, .. }) => *checked,
+            _ => false,
+        };
+        assert!(ok, "{section}: parsed as {component:?}");
+    }
+
+    let checkbox = payloads::MODAL_SUBMITS
+        .iter()
+        .find(|(section, _)| *section == "Checkbox")
+        .map(|(section, json)| parse(section, json))
+        .unwrap_or_else(|| panic!("no checkbox modal submit example"));
+    let submission = match parse_modal_submission(&checkbox) {
+        Ok(submission) => submission,
+        Err(error) => panic!("checkbox modal submit: {error}"),
+    };
+    assert_eq!(submission.get_checkbox("like_checkbox"), Some(true));
+}
+
 #[test]
 fn documented_components_round_trip() {
     assert!(
@@ -377,14 +523,6 @@ fn documented_components_round_trip() {
     );
     for (section, json) in payloads::COMPONENTS {
         let name = format!("{section} component");
-        // Known model gap, not a discriminant: a submitted checkbox carries
-        // a boolean `value`, which `MessageComponent::value` (a string) cannot
-        // hold. Everything else about the example must still decode.
-        if *section == "Checkbox" && json.contains(r#""value":true"#) {
-            let gap = json.replace(r#","value":true"#, "");
-            let _: MessageComponent = round_trip(&name, &gap);
-            continue;
-        }
         let component: MessageComponent = round_trip(&name, json);
         for nested in component.iter() {
             if nested.kind == ComponentType::BUTTON {

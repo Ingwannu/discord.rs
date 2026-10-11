@@ -68,8 +68,8 @@ pub use command::{
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use component::MessageSelectDefaultValue;
 pub use component::{
-    MentionableId, MessageComponent, MessageComponentIter, MessageMediaGalleryItem,
-    MessageSelectOption, SelectDefaultValue, UnfurledMediaItem,
+    MentionableId, MessageComponent, MessageComponentIter, MessageComponentValue,
+    MessageMediaGalleryItem, MessageSelectOption, SelectDefaultValue, UnfurledMediaItem,
 };
 pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedMedia};
 pub use entity::DiscordModel;
