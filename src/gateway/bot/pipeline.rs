@@ -6,8 +6,6 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use serde_json::value::RawValue;
-use serde_json::Value;
 use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tokio::time::{Duration, Instant};
@@ -22,46 +20,13 @@ use super::{
     InteractionOverloadHook, InteractionOverloadReason, MemberChunkWaiters, OverloadedInteraction,
     OVERLOAD_WARNING_INTERVAL,
 };
-use crate::event::{Event, EventKind, EventMetadata, RawLength};
+use crate::event::{Event, EventKind};
+pub(in crate::gateway) use crate::gateway::client::GatewayDispatch;
 
 /// How long aborted pipeline tasks get to confirm they stopped. Aborting is
 /// asynchronous: a task only stops at its next await point, so shutdown
 /// joins it afterwards instead of assuming it is gone.
 pub(super) const ABORT_CONFIRM_GRACE: Duration = Duration::from_secs(1);
-
-/// One gateway dispatch as handed over by the gateway read loop: its
-/// metadata (name, sequence, receive time) and its payload, which the
-/// processor decodes.
-pub(super) struct GatewayDispatch {
-    pub(super) metadata: EventMetadata,
-    pub(super) data: Box<RawValue>,
-}
-
-impl GatewayDispatch {
-    /// A dispatch received now. Bridges the read loop's `Value` payload until
-    /// the read loop hands over the payload text itself.
-    pub(super) fn new(event_name: String, data: Value) -> Self {
-        let data = serde_json::value::to_raw_value(&data)
-            // Serializing a `Value` cannot fail; an empty payload is the
-            // harmless fallback.
-            .unwrap_or_else(|_| RawValue::NULL.to_owned());
-        Self {
-            metadata: EventMetadata::new(&event_name, Instant::now()),
-            data,
-        }
-    }
-}
-
-/// Never prints the payload, which can carry interaction tokens.
-impl std::fmt::Debug for GatewayDispatch {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("GatewayDispatch")
-            .field("metadata", &self.metadata)
-            .field("data", &RawLength(Some(&self.data)))
-            .finish()
-    }
-}
 
 /// The first reason a shard's pipeline can no longer keep runtime state
 /// consistent with the gateway stream.

@@ -2,7 +2,12 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use std::borrow::Cow;
+use std::fmt;
+
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout, timeout_at, Duration, Instant};
@@ -15,6 +20,7 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
+use crate::event::{EventMetadata, RawLength};
 use crate::model::{ChannelId, GuildId, RequestChannelInfo, RequestGuildMembers, UpdatePresence};
 #[cfg(feature = "sharding")]
 use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
@@ -117,8 +123,134 @@ enum PermitWait {
     Shutdown,
 }
 
-// Callback type for dispatching events
-pub(crate) type EventCallback = Arc<dyn Fn(String, Value) + Send + Sync>;
+/// One dispatch as the read loop hands it to the shard's event pipeline:
+/// its metadata (name, sequence, receive time) and its `d` payload, copied
+/// once out of the frame so the frame can be dropped right away. The
+/// pipeline's processor decodes it; the read loop never does.
+pub(crate) struct GatewayDispatch {
+    pub(crate) metadata: EventMetadata,
+    pub(crate) data: Box<RawValue>,
+}
+
+#[cfg(test)]
+impl GatewayDispatch {
+    /// A dispatch received now, from a `Value` payload (tests only).
+    pub(crate) fn new(event_name: String, data: Value) -> Self {
+        Self {
+            metadata: EventMetadata::new(&event_name, Instant::now()),
+            data: serde_json::value::to_raw_value(&data)
+                .unwrap_or_else(|error| unreachable!("a Value always serializes: {error}")),
+        }
+    }
+}
+
+/// Never prints the payload, which can carry interaction tokens.
+impl fmt::Debug for GatewayDispatch {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayDispatch")
+            .field("metadata", &self.metadata)
+            .field("data", &RawLength(Some(&self.data)))
+            .finish()
+    }
+}
+
+/// Receives every dispatch from the read loop. It runs inside the loop that
+/// also answers heartbeats, so it must never wait.
+pub(crate) type EventCallback = Arc<dyn Fn(GatewayDispatch) + Send + Sync>;
+
+/// The parts of a gateway payload the read loop reads, borrowed from the
+/// frame text: no `Value` tree is built, and `d` stays unparsed.
+///
+/// ```text
+/// [Decision Log]
+/// - 목적과 의도: 읽기 루프가 프레임마다 `Value` 트리를 만들고 `d`를 복제하던 비용(기준선
+///   핫스팟 ②, 대형 GUILD_CREATE에서 프레임 파싱+봉투만 185,099 allocs / 20.8 MB)을 없앤다.
+/// - 기존 구현 및 제약 조건: 읽기 루프는 하트비트 ACK도 처리하므로 GUILD_CREATE를 여기서
+///   디코딩하면 안 된다(W1). 시퀀스는 콜백 전에 저장되고, 큐 거부는 PipelineFault로 처리된다.
+///   READY의 session_id·resume_gateway_url은 재개를 위해 읽기 루프가 즉시 알아야 한다.
+/// - 검토한 주요 대안: (a) 프레임 String을 처리기로 옮겨 처리기에서 봉투 재파싱, (b) 얕은 봉투 +
+///   `d`를 `Box<RawValue>`로 한 번 복사, (c) 처리기에서만 봉투 파싱.
+/// - 선택한 방식: (b). 명시적 구조체(flatten·untagged·Value 없음)로 `op`/`s`/`t`와 빌린 `d`만
+///   읽고, READY는 전용 작은 DTO로 세션만 읽는다.
+/// - 다른 대안 대신 이 방식을 선택한 이유: (a)는 처리기가 봉투 전체를 다시 훑고 프레임 전체를
+///   붙잡는다. (c)는 시퀀스·ACK·재연결 처리가 처리기 적체에 묶인다. `&RawValue`는 프레임을
+///   빌리므로 큐를 건널 수 없어 한 번의 복사는 남는다.
+/// - 장점, 단점 및 영향: 디스패치당 할당은 `d` 복사 1회(+ 알 수 없는 이름의 문자열)다.
+///   텍스트 프레임은 복사하지 않고, 압축 프레임은 압축기의 소유 출력을 그대로 쓴다.
+/// ```
+#[derive(Deserialize)]
+struct GatewayEnvelope<'a> {
+    #[serde(default)]
+    op: Option<u64>,
+    #[serde(default)]
+    s: Option<u64>,
+    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    t: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    d: Option<&'a RawValue>,
+}
+
+/// The READY fields the read loop needs to resume the session; the event
+/// processor decodes the full READY payload.
+#[derive(Deserialize)]
+struct ReadySession<'a> {
+    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    session_id: Option<Cow<'a, str>>,
+    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    resume_gateway_url: Option<Cow<'a, str>>,
+}
+
+/// Reads an optional string borrowed from the frame when it has no escapes.
+/// serde borrows a bare `Cow<str>` field but not one inside `Option`, which
+/// would allocate every dispatch name.
+fn borrowed_str<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Cow<'de, str>>, D::Error> {
+    struct BorrowedStr;
+
+    impl<'de> serde::de::Visitor<'de> for BorrowedStr {
+        type Value = Option<Cow<'de, str>>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string or null")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_str(self)
+        }
+
+        fn visit_borrowed_str<E: serde::de::Error>(
+            self,
+            value: &'de str,
+        ) -> Result<Self::Value, E> {
+            Ok(Some(Cow::Borrowed(value)))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Some(Cow::Owned(value.to_owned())))
+        }
+    }
+
+    deserializer.deserialize_option(BorrowedStr)
+}
+
+/// HELLO's payload.
+#[derive(Deserialize)]
+struct HelloData {
+    heartbeat_interval: u64,
+}
 #[cfg(feature = "sharding")]
 pub(crate) type SupervisorCallback = Arc<dyn Fn(ShardSupervisorEvent) + Send + Sync>;
 
@@ -365,6 +497,38 @@ impl GatewayClient {
         dropped
     }
 
+    /// Records READY's session id and resume URL for the next RESUME.
+    fn record_ready_session(&mut self, data: &RawValue) {
+        match serde_json::from_str::<ReadySession<'_>>(data.get()) {
+            Ok(ready) => {
+                if let Some(session_id) = ready.session_id {
+                    self.session_id = Some(session_id.into_owned());
+                }
+                if let Some(resume_url) = ready.resume_gateway_url {
+                    self.resume_gateway_url = Some(
+                        self.gateway_config
+                            .clone()
+                            .with_base_url(resume_url.into_owned())
+                            .normalized_url(),
+                    );
+                }
+            }
+            Err(error) => warn!("READY did not carry a readable session: {error}"),
+        }
+        #[cfg(feature = "sharding")]
+        if let Some(session_id) = self.session_id.clone() {
+            self.publish_supervisor(ShardSupervisorEvent::SessionEstablished {
+                shard_id: self.current_shard_id(),
+                session_id,
+            });
+            self.publish_state(ShardRuntimeState::Running);
+        }
+        info!(
+            "Received READY, session_id={}",
+            self.session_id.as_deref().unwrap_or("?")
+        );
+    }
+
     async fn connect_and_run(
         &mut self,
         url: &str,
@@ -443,18 +607,21 @@ impl GatewayClient {
                 }
             }
         };
-        let hello_payload: Value = serde_json::from_str(&hello_text)?;
-        let hello_op = hello_payload["op"].as_u64().unwrap_or(u64::MAX);
+        let hello: GatewayEnvelope<'_> = serde_json::from_str(hello_text.as_str())?;
+        let hello_op = hello.op.unwrap_or(u64::MAX);
         if hello_op != OP_HELLO {
             return Err(crate::error::DiscordError::gateway(format!(
                 "expected Hello opcode {OP_HELLO}, got {hello_op}"
             )));
         }
-        let heartbeat_interval_ms = hello_payload["d"]["heartbeat_interval"]
-            .as_u64()
+        let heartbeat_interval_ms = hello
+            .d
+            .and_then(|data| serde_json::from_str::<HelloData>(data.get()).ok())
+            .map(|data| data.heartbeat_interval)
             .ok_or_else(|| {
                 crate::error::DiscordError::gateway("missing heartbeat_interval in Hello")
             })?;
+        drop(hello_text);
 
         debug!("Received Hello, heartbeat_interval={heartbeat_interval_ms}ms");
 
@@ -552,6 +719,9 @@ impl GatewayClient {
         let action = loop {
             tokio::select! {
                 msg = read.next() => {
+                    // Taken before anything else so interaction deadlines
+                    // count from the frame's arrival.
+                    let received_at = Instant::now();
                     let text = match msg {
                         Some(Ok(WsMessage::Close(frame))) => {
                             #[cfg(feature = "sharding")]
@@ -583,48 +753,38 @@ impl GatewayClient {
                         }
                     };
 
-                    let payload: Value = match serde_json::from_str(&text) {
-                        Ok(v) => v,
+                    let envelope: GatewayEnvelope<'_> = match serde_json::from_str(text.as_str()) {
+                        Ok(envelope) => envelope,
                         Err(e) => {
                             warn!("Failed to parse gateway message: {e}");
                             continue;
                         }
                     };
 
-                    let op = payload["op"].as_u64().unwrap_or(u64::MAX);
+                    let op = envelope.op.unwrap_or(u64::MAX);
 
                     match op {
                         OP_DISPATCH => {
-                            if let Some(s) = payload["s"].as_u64() {
+                            if let Some(s) = envelope.s {
                                 self.sequence.store(s, Ordering::Relaxed);
                             }
-                            let event_name = payload["t"].as_str().unwrap_or("").to_string();
-                            let data = payload["d"].clone();
+                            let event_name = envelope.t.as_deref().unwrap_or("");
+                            let data = envelope.d.unwrap_or(RawValue::NULL);
 
                             if event_name == "READY" {
-                                if let Some(sid) = data["session_id"].as_str() {
-                                    self.session_id = Some(sid.to_string());
-                                }
-                                if let Some(resume_url) = data["resume_gateway_url"].as_str() {
-                                    self.resume_gateway_url = Some(
-                                        self.gateway_config
-                                            .clone()
-                                            .with_base_url(resume_url)
-                                            .normalized_url(),
-                                    );
-                                }
-                                #[cfg(feature = "sharding")]
-                                if let Some(session_id) = self.session_id.clone() {
-                                    self.publish_supervisor(ShardSupervisorEvent::SessionEstablished {
-                                        shard_id: self.current_shard_id(),
-                                        session_id,
-                                    });
-                                    self.publish_state(ShardRuntimeState::Running);
-                                }
-                                info!("Received READY, session_id={}", self.session_id.as_deref().unwrap_or("?"));
+                                self.record_ready_session(data);
                             }
 
-                            on_event(event_name, data);
+                            let mut metadata = EventMetadata::new(event_name, received_at);
+                            if let Some(s) = envelope.s {
+                                metadata = metadata.with_sequence(s);
+                            }
+                            // The only copy of the payload; the frame is
+                            // dropped at the end of this iteration.
+                            on_event(GatewayDispatch {
+                                metadata,
+                                data: data.to_owned(),
+                            });
                         }
                         OP_HEARTBEAT => {
                             let seq = self.sequence.load(Ordering::Relaxed);
@@ -649,7 +809,10 @@ impl GatewayClient {
                             break ReconnectAction::Resume;
                         }
                         OP_INVALID_SESSION => {
-                            let resumable = payload["d"].as_bool().unwrap_or(false);
+                            let resumable = envelope
+                                .d
+                                .and_then(|data| serde_json::from_str::<bool>(data.get()).ok())
+                                .unwrap_or(false);
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             warn!("Invalid session, resumable={resumable}");
@@ -1063,7 +1226,8 @@ mod tests {
         is_terminal_close_frame, rand_jitter, recv_control_command, request_channel_info_payload,
         request_guild_members_payload, resume_payload, terminal_close_error,
         update_presence_payload, voice_state_update_payload, AbortOnDrop, EventCallback,
-        GatewayClient, GatewayCommand, ReconnectAction, GATEWAY_COMMAND_QUEUE_CAPACITY,
+        GatewayClient, GatewayCommand, GatewayDispatch, ReconnectAction,
+        GATEWAY_COMMAND_QUEUE_CAPACITY,
     };
     use crate::model::{RequestChannelInfo, RequestGuildMembers, UpdatePresence};
     #[cfg(feature = "sharding")]
@@ -1682,8 +1846,12 @@ mod tests {
         });
 
         let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
-        let on_event: EventCallback = Arc::new(move |name, data| {
-            events_for_callback.lock().unwrap().push((name, data));
+        let on_event: EventCallback = Arc::new(move |dispatch: GatewayDispatch| {
+            let data = serde_json::from_str(dispatch.data.get()).unwrap();
+            events_for_callback
+                .lock()
+                .unwrap()
+                .push((dispatch.metadata.name().to_string(), data));
         });
         let action = client
             .connect_and_run(&format!("ws://{address}"), on_event)
@@ -1710,6 +1878,126 @@ mod tests {
             7
         );
         assert_eq!(events.lock().unwrap()[0].0, "READY");
+    }
+
+    #[test]
+    fn envelope_borrows_names_and_payloads_from_the_frame() {
+        use std::borrow::Cow;
+
+        let frame = r#"{"op":0,"s":3,"t":"MESSAGE_CREATE","d":{"id":"1"}}"#;
+        let envelope: super::GatewayEnvelope<'_> = serde_json::from_str(frame).unwrap();
+        assert_eq!(envelope.op, Some(0));
+        assert_eq!(envelope.s, Some(3));
+        assert!(matches!(envelope.t, Some(Cow::Borrowed("MESSAGE_CREATE"))));
+        assert_eq!(
+            envelope.d.map(serde_json::value::RawValue::get),
+            Some(r#"{"id":"1"}"#)
+        );
+
+        let escaped: super::GatewayEnvelope<'_> =
+            serde_json::from_str(r#"{"op":0,"t":"A\u0042","d":null}"#).unwrap();
+        assert!(matches!(escaped.t, Some(Cow::Owned(ref name)) if name == "AB"));
+        assert!(escaped.d.is_none());
+
+        let bare: super::GatewayEnvelope<'_> =
+            serde_json::from_str(r#"{"op":11,"t":null}"#).unwrap();
+        assert!(bare.t.is_none() && bare.s.is_none());
+
+        let ready: super::ReadySession<'_> =
+            serde_json::from_str(r#"{"session_id":"abc","guilds":[{"id":"1"}]}"#).unwrap();
+        assert!(matches!(ready.session_id, Some(Cow::Borrowed("abc"))));
+        assert!(ready.resume_gateway_url.is_none());
+        assert!(serde_json::from_str::<super::ReadySession<'_>>(r#"{"session_id":1}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn connect_and_run_hands_each_dispatch_payload_over_as_raw_text() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let dispatches = Arc::new(Mutex::new(Vec::<(String, Option<u64>, String)>::new()));
+        let dispatches_for_callback = Arc::clone(&dispatches);
+        let frames = [
+            r#"{"op":0,"t":"MESSAGE_CREATE","s":9,"d": {"id":"5","channel_id":"6","content":"x"} }"#,
+            r#"{"t":"RESUMED","op":0,"d":null,"s":10}"#,
+            r#"{"op":0,"t":"MESSAGE\u005fDELETE","s":11,"d":{"id":"5","channel_id":"6"}}"#,
+            r#"{"op":0,"t":"SOMETHING_NEW","d":[1,2]}"#,
+            r#"{"op":0,"t":"READY","s":12,"d":{"session_id":42}}"#,
+            r#"not json"#,
+        ];
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            ws.send(WsMessage::Text(
+                r#"{"op":10,"d":{"heartbeat_interval":60000}}"#.into(),
+            ))
+            .await
+            .unwrap();
+            let _identify = ws.next().await;
+            for frame in frames {
+                ws.send(WsMessage::Text(frame.into())).await.unwrap();
+            }
+            let _ = ws.next().await;
+        });
+        // Shut down once all five dispatches arrived (the bad frame is
+        // skipped), not after a fixed delay that a loaded machine can miss.
+        let (arrived_tx, mut arrived_rx) = mpsc::unbounded_channel::<()>();
+        let shutdown = tokio::spawn(async move {
+            for _ in 0..5 {
+                tokio::time::timeout(Duration::from_secs(10), arrived_rx.recv())
+                    .await
+                    .expect("every dispatch arrives");
+            }
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+        });
+
+        let mut client = GatewayClient::new("token".into(), 1).control(command_rx);
+        let on_event: EventCallback = Arc::new(move |dispatch: GatewayDispatch| {
+            dispatches_for_callback.lock().unwrap().push((
+                dispatch.metadata.name().to_string(),
+                dispatch.metadata.sequence(),
+                dispatch.data.get().to_string(),
+            ));
+            // Debug never prints the payload.
+            assert!(!format!("{dispatch:?}").contains("channel_id"));
+            arrived_tx.send(()).ok();
+        });
+        client
+            .connect_and_run(&format!("ws://{address}"), on_event)
+            .await
+            .unwrap();
+        shutdown.await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(
+            *dispatches.lock().unwrap(),
+            vec![
+                (
+                    "MESSAGE_CREATE".to_string(),
+                    Some(9),
+                    r#"{"id":"5","channel_id":"6","content":"x"}"#.to_string()
+                ),
+                ("RESUMED".to_string(), Some(10), "null".to_string()),
+                (
+                    "MESSAGE_DELETE".to_string(),
+                    Some(11),
+                    r#"{"id":"5","channel_id":"6"}"#.to_string()
+                ),
+                ("SOMETHING_NEW".to_string(), None, "[1,2]".to_string()),
+                (
+                    "READY".to_string(),
+                    Some(12),
+                    r#"{"session_id":42}"#.to_string()
+                ),
+            ]
+        );
+        // A READY without a readable session leaves the session unset; the
+        // sequence still advanced before each hand-over.
+        assert_eq!(client.session_id, None);
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            12
+        );
     }
 
     #[tokio::test]
@@ -1772,8 +2060,12 @@ mod tests {
                     .compression(GatewayCompression::ZlibStream),
             )
             .control(command_rx);
-        let on_event: EventCallback = Arc::new(move |name, data| {
-            events_for_callback.lock().unwrap().push((name, data));
+        let on_event: EventCallback = Arc::new(move |dispatch: GatewayDispatch| {
+            let data = serde_json::from_str(dispatch.data.get()).unwrap();
+            events_for_callback
+                .lock()
+                .unwrap()
+                .push((dispatch.metadata.name().to_string(), data));
         });
         let action = client
             .connect_and_run(&format!("ws://{address}"), on_event)
@@ -1840,7 +2132,7 @@ mod tests {
             .sequence
             .store(42, std::sync::atomic::Ordering::Relaxed);
         let action = client
-            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_| {}))
             .await
             .unwrap();
 
@@ -1894,7 +2186,7 @@ mod tests {
         let mut client = GatewayClient::new("secret-token".into(), 513)
             .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}")));
         let action = client
-            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_| {}))
             .await
             .unwrap();
 
@@ -1954,7 +2246,7 @@ mod tests {
 
         let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
         let action = client
-            .connect_and_run(&format!("ws://{address}"), Arc::new(|_, _| {}))
+            .connect_and_run(&format!("ws://{address}"), Arc::new(|_| {}))
             .await
             .unwrap();
 
@@ -2031,7 +2323,7 @@ mod tests {
             .sequence
             .store(42, std::sync::atomic::Ordering::Relaxed);
 
-        client.run(Arc::new(|_, _| {})).await.unwrap();
+        client.run(Arc::new(|_| {})).await.unwrap();
 
         shutdown.await.unwrap();
         server.await.unwrap();
@@ -2078,7 +2370,7 @@ mod tests {
 
         let mut client = GatewayClient::new("bad-token".into(), 513)
             .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")));
-        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("run must return instead of retrying a terminal close")
             .expect_err("a terminal close code is an error");
@@ -2110,7 +2402,7 @@ mod tests {
 
         let mut client = GatewayClient::new("token".into(), 513)
             .gateway_config(GatewayConnectionConfig::new(format!("ws://{address}/")));
-        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let error = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("run must return on a pre-HELLO terminal close")
             .expect_err("4012 is not reconnectable");
@@ -2323,8 +2615,7 @@ mod tests {
 
         // Fresh session: one permit, reported as sent after the write.
         let server = serve_one_connection(&listener, true);
-        let (sent, action) =
-            tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        let (sent, action) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_| {})));
         assert_eq!(sent["op"], serde_json::json!(2));
         assert!(matches!(action.unwrap(), ReconnectAction::Resume));
         assert_eq!(*gate.acquired.lock().unwrap(), vec![(1, 2)]);
@@ -2335,7 +2626,7 @@ mod tests {
 
         // Resume: no permit.
         let server = serve_one_connection(&listener, false);
-        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_| {})));
         assert_eq!(sent["op"], serde_json::json!(6));
         assert_eq!(gate.acquired.lock().unwrap().len(), 1);
 
@@ -2344,7 +2635,7 @@ mod tests {
         client.session_id = None;
         let started = Instant::now();
         let server = serve_one_connection(&listener, false);
-        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_, _| {})));
+        let (sent, _) = tokio::join!(server, client.connect_and_run(&url, Arc::new(|_| {})));
         assert_eq!(sent["op"], serde_json::json!(2));
         assert!(started.elapsed() < Duration::from_secs(4));
         assert_eq!(gate.acquired.lock().unwrap().len(), 2);
@@ -2363,7 +2654,7 @@ mod tests {
         let gate = Arc::new(RecordingGate::default());
         let mut client = gated_client(&gate);
         assert!(client
-            .connect_and_run(&url, Arc::new(|_, _| {}))
+            .connect_and_run(&url, Arc::new(|_| {}))
             .await
             .is_err());
         server.await.unwrap();
@@ -2404,7 +2695,7 @@ mod tests {
 
         // Nothing listens on this URL: the gate is never passed, so the
         // client must not dial.
-        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("Shutdown must end the wait for an IDENTIFY permit");
         assert!(result.is_ok());
@@ -2452,7 +2743,7 @@ mod tests {
             .unwrap();
         command_tx.send(GatewayCommand::Shutdown).await.unwrap();
 
-        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("Shutdown must still end the wait");
         assert!(result.is_ok());
@@ -2531,7 +2822,7 @@ mod tests {
         }
         command_tx.send(GatewayCommand::Shutdown).await.unwrap();
 
-        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("Shutdown must end the wait");
         assert!(result.is_ok());
@@ -2634,7 +2925,7 @@ mod tests {
         let started = Instant::now();
         let error = tokio::time::timeout(
             Duration::from_secs(5),
-            client.connect_and_run(&url, Arc::new(|_, _| {})),
+            client.connect_and_run(&url, Arc::new(|_| {})),
         )
         .await
         .expect("a silent server must not hold the permit")
@@ -2659,7 +2950,7 @@ mod tests {
         let mut client = gated_client(&gate);
         // Nothing listens on this address; a dial attempt would fail with a
         // connection error and back off instead of returning at once.
-        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
             .await
             .expect("a refused permit must stop the shard immediately");
         assert!(result.unwrap_err().to_string().contains("gate closed"));

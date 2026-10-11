@@ -1,6 +1,7 @@
 //! Inbound replica: the gateway pipeline from frame text to the `Event` a
 //! handler receives, step by step, plus the typed-decode reference.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -8,6 +9,8 @@ use std::time::{Duration, Instant};
 
 use discordrs::model::Presence;
 use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 use crate::alloc::{Mark, Recorder, Sample, Uncounted};
@@ -35,35 +38,25 @@ impl Pipeline {
 
     /// One frame from websocket text to the `Arc<Event>` a handler receives.
     pub(crate) async fn dispatch(&mut self, frame: &str, rec: &mut Recorder) -> Arc<Event> {
-        // gateway/compression.rs `decode_gateway_message`:
-        // `WsMessage::Text(text) => text.to_string()`.
-        let text = rec.step("frame_to_string", || frame.to_string());
-        // gateway/client.rs read loop: `serde_json::from_str::<Value>(&text)`.
-        let payload: Value = rec.step("parse_frame", || serde_json::from_str(&text).unwrap());
-        // gateway/client.rs: `payload["s"]`, `payload["t"].as_str().to_string()`,
-        // `payload["d"].clone()`, then `on_event(event_name, data)`.
-        let (event_name, data) = rec.step("envelope", || {
-            black_box(payload["op"].as_u64());
-            black_box(payload["s"].as_u64());
-            (
-                payload["t"].as_str().unwrap_or("").to_string(),
-                payload["d"].clone(),
-            )
+        // gateway/client.rs read loop: `GatewayEnvelope` parsed from the
+        // frame text in place (gateway/compression.rs no longer copies text
+        // frames), `d` left as a borrowed `RawValue`.
+        let envelope: Envelope<'_> = rec.step("envelope", || serde_json::from_str(frame).unwrap());
+        // client.rs: `EventMetadata::new` + `with_sequence`, then the one
+        // copy of `d` into the queued `GatewayDispatch`.
+        let (metadata, raw) = rec.step("queue_payload", || {
+            black_box(envelope.op);
+            let mut metadata = EventMetadata::new(
+                envelope.t.as_deref().unwrap_or(""),
+                tokio::time::Instant::now(),
+            );
+            if let Some(sequence) = envelope.s {
+                metadata = metadata.with_sequence(sequence);
+            }
+            (metadata, envelope.d.unwrap_or(RawValue::NULL).to_owned())
         });
         // The read loop drops the frame before the processor task decodes.
-        rec.step("drop_frame", || {
-            drop(payload);
-            drop(text);
-        });
-        // gateway/bot/pipeline.rs `GatewayDispatch::new`: the payload as
-        // raw text plus its metadata, queued for the processor.
-        let (metadata, raw) = rec.step("queue_payload", || {
-            (
-                EventMetadata::new(&event_name, tokio::time::Instant::now()),
-                serde_json::value::to_raw_value(&data).unwrap(),
-            )
-        });
-        rec.step("drop_dispatch_value", || drop(data));
+        rec.step("drop_frame", || drop(envelope));
         // pipeline.rs `process_gateway_dispatch`: `Event::decode` with the
         // default `keep_raw_events(false)`.
         let event = rec.step("decode_event", || Event::decode(metadata, raw, false));
@@ -82,6 +75,62 @@ impl Pipeline {
             event
         })
     }
+}
+
+/// gateway/client.rs `GatewayEnvelope`: `op`, `s`, `t`, and a borrowed `d`.
+#[derive(Deserialize)]
+struct Envelope<'a> {
+    #[serde(default)]
+    op: Option<u64>,
+    #[serde(default)]
+    s: Option<u64>,
+    #[serde(default, borrow, deserialize_with = "borrowed_str")]
+    t: Option<Cow<'a, str>>,
+    #[serde(default, borrow)]
+    d: Option<&'a RawValue>,
+}
+
+/// client.rs `borrowed_str`: the dispatch name borrowed from the frame.
+fn borrowed_str<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Cow<'de, str>>, D::Error> {
+    struct BorrowedStr;
+
+    impl<'de> serde::de::Visitor<'de> for BorrowedStr {
+        type Value = Option<Cow<'de, str>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a string or null")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            deserializer: D,
+        ) -> Result<Self::Value, D::Error> {
+            deserializer.deserialize_str(self)
+        }
+
+        fn visit_borrowed_str<E: serde::de::Error>(
+            self,
+            value: &'de str,
+        ) -> Result<Self::Value, E> {
+            Ok(Some(Cow::Borrowed(value)))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Some(Cow::Owned(value.to_owned())))
+        }
+    }
+
+    deserializer.deserialize_option(BorrowedStr)
 }
 
 /// gateway/bot.rs `apply_cache_updates`, for the event kinds measured here.

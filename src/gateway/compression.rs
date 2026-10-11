@@ -1,5 +1,5 @@
 use flate2::{Decompress, FlushDecompress};
-use tokio_tungstenite::tungstenite::Message as WsMessage;
+use tokio_tungstenite::tungstenite::{Message as WsMessage, Utf8Bytes};
 
 use crate::ws::GatewayCompression;
 
@@ -8,13 +8,33 @@ pub(super) const ZLIB_SUFFIX: &[u8] = &[0x00, 0x00, 0xff, 0xff];
 /// appended to the message; a tuning value, not a protocol limit.
 const DECOMPRESS_CHUNK_BYTES: usize = 8192;
 
+/// One gateway message's JSON text.
+///
+/// A text frame is kept in the frame's own buffer (no copy); a compressed
+/// frame is the decompressor's owned output, taken out of its reusable
+/// buffers. Either way nothing borrows from decompressor state, so the read
+/// loop can parse it, copy the dispatch payload out, and drop it.
+pub(super) enum GatewayText {
+    Frame(Utf8Bytes),
+    Owned(String),
+}
+
+impl GatewayText {
+    pub(super) fn as_str(&self) -> &str {
+        match self {
+            GatewayText::Frame(text) => text.as_str(),
+            GatewayText::Owned(text) => text,
+        }
+    }
+}
+
 pub(super) fn decode_gateway_message(
     message: WsMessage,
     compression_decoder: &mut GatewayCompressionDecoder,
-) -> Result<Option<String>, String> {
+) -> Result<Option<GatewayText>, String> {
     match message {
-        WsMessage::Text(text) => Ok(Some(text.to_string())),
-        WsMessage::Binary(bytes) => compression_decoder.decode(&bytes),
+        WsMessage::Text(text) => Ok(Some(GatewayText::Frame(text))),
+        WsMessage::Binary(bytes) => Ok(compression_decoder.decode(&bytes)?.map(GatewayText::Owned)),
         _ => Ok(None),
     }
 }

@@ -2650,8 +2650,8 @@ async fn start_gateway_shard(
     );
     let fault = pipeline.fault();
     let ingress = pipeline.ingress();
-    let callback: EventCallback = Arc::new(move |event_name: String, data: serde_json::Value| {
-        ingress.push(GatewayDispatch::new(event_name, data));
+    let callback: EventCallback = Arc::new(move |dispatch: GatewayDispatch| {
+        ingress.push(dispatch);
     });
 
     let mut gateway = GatewayClient::new(token, intents)
