@@ -329,7 +329,9 @@ pub(super) struct EventPipeline {
     /// The thread running the overload hook; it exits once the processor
     /// and interaction dispatcher dropped their queue handles.
     overload_worker: Option<OverloadHookWorker>,
-    #[cfg(test)]
+    /// Only the queue-overflow test reads this, and it observes progress
+    /// through the cache, so the field exists only when both are compiled.
+    #[cfg(all(test, feature = "cache"))]
     pub(super) handler_drops: Arc<OverflowLog>,
     /// Largest number of handler tasks a lane held at once.
     #[cfg(test)]
@@ -503,7 +505,7 @@ pub(super) fn spawn_event_pipeline(
         #[cfg(test)]
         Arc::clone(&handler_high_water),
     ));
-    #[cfg(not(test))]
+    #[cfg(not(all(test, feature = "cache")))]
     drop(handler_drops);
     EventPipeline {
         ingress,
@@ -513,7 +515,7 @@ pub(super) fn spawn_event_pipeline(
         events: AbortOnDrop::new(events),
         interactions: AbortOnDrop::new(interactions),
         overload_worker,
-        #[cfg(test)]
+        #[cfg(all(test, feature = "cache"))]
         handler_drops,
         #[cfg(test)]
         handler_high_water,

@@ -3720,6 +3720,7 @@ fn members_chunk_dispatch(
 
 /// Waits (bounded) until the internal processor cached message `id` from
 /// [`message_create_dispatch`].
+#[cfg(feature = "cache")]
 async fn wait_for_cached_message(cache: &crate::cache::CacheHandle, id: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -3750,6 +3751,9 @@ fn ready_dispatch_event() -> Event {
     })
 }
 
+// Observes that internal processing ran ahead by reading the cache; without
+// the cache every read is empty and the test cannot tell.
+#[cfg(feature = "cache")]
 #[tokio::test]
 async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
     struct FetchingHandler {
@@ -3933,6 +3937,9 @@ async fn next_started(started: &mut mpsc::UnboundedReceiver<String>) -> String {
         .expect("handler alive")
 }
 
+// Observes that internal processing ran ahead by reading the cache; without
+// the cache every read is empty and the test cannot tell.
+#[cfg(feature = "cache")]
 #[tokio::test]
 async fn serial_mode_runs_one_handler_at_a_time_while_internal_processing_runs_ahead() {
     let probe = Arc::new(HandlerProbe::default());
@@ -4021,6 +4028,9 @@ async fn concurrent_mode_caps_in_flight_handlers_per_shard() {
     assert_eq!(probe.max_in_flight(), 2);
 }
 
+// Observes that internal processing ran ahead by reading the cache; without
+// the cache every read is empty and the test cannot tell.
+#[cfg(feature = "cache")]
 #[tokio::test]
 async fn full_handler_queue_drops_deliveries_but_keeps_internal_state_current() {
     let probe = Arc::new(HandlerProbe::default());
