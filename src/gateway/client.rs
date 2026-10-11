@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -41,13 +41,14 @@ const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
 /// HELLO gives it back (as abandoned) and retries through the normal
 /// backoff, instead of holding the bucket until the gate's own watchdog.
 const GATED_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
-/// Most non-presence commands kept while waiting for an IDENTIFY permit.
-/// That wait can last hours (until a daily budget reset), so the backlog is
+/// Most non-presence commands kept for the next connection while the
+/// client is not connected (reconnect backoff, or waiting for an IDENTIFY
+/// permit, which can last hours until a daily budget reset). The backlog is
 /// bounded: presence updates coalesce to the newest one, and beyond this
 /// many other commands the oldest is dropped. Its caller has most likely
 /// timed out by then (e.g. `fetch_members`), while newer requests may
 /// still be answered.
-const MAX_DEFERRED_WHILE_GATED: usize = 32;
+const MAX_DEFERRED_COMMANDS: usize = 32;
 /// A connection that dies faster than this is treated as unhealthy and
 /// re-dialed with escalating backoff instead of immediately.
 const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
@@ -259,6 +260,8 @@ impl GatewayClient {
         };
         let [shard_id, shard_count] = self.shard_info.unwrap_or([0, 1]);
         debug!("Waiting for IDENTIFY permit for shard {shard_id}/{shard_count}");
+        // The backlog may have grown during an earlier backoff.
+        self.bound_deferred_commands();
         let acquire = gate.acquire(shard_id, shard_count);
         tokio::pin!(acquire);
         let mut listening = self.command_rx.is_some();
@@ -273,49 +276,60 @@ impl GatewayClient {
                 }, if listening => match command {
                     Some(GatewayCommand::Shutdown) => return Ok(PermitWait::Shutdown),
                     Some(GatewayCommand::Reconnect) => {}
-                    Some(command) => self.defer_while_gated(command),
+                    Some(command) => self.defer_command(command),
                     None => listening = false,
                 },
             }
         }
     }
 
-    /// Queues a command that arrived while waiting for an IDENTIFY permit,
-    /// with the bounded backlog policy of [`MAX_DEFERRED_WHILE_GATED`].
-    /// `Shutdown` never comes here; it ends the wait instead.
-    fn defer_while_gated(&mut self, command: GatewayCommand) {
-        fn is_presence(command: &GatewayCommand) -> bool {
-            matches!(
-                command,
-                GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_)
-            )
-        }
-        if is_presence(&command) {
-            // Presence is state: only the newest update matters.
-            self.deferred_commands.retain(|queued| !is_presence(queued));
-            self.deferred_commands.push_back(command);
-            return;
-        }
-        let queued = self
+    /// Queues a command for the next connection and keeps the backlog
+    /// within [`MAX_DEFERRED_COMMANDS`]. `Shutdown` never comes here; it
+    /// ends the wait instead.
+    fn defer_command(&mut self, command: GatewayCommand) {
+        self.deferred_commands.push_back(command);
+        self.bound_deferred_commands();
+    }
+
+    /// Applies the backlog policy to everything queued, including a backlog
+    /// that grew before the policy applied: the newest presence update
+    /// wins, and at most [`MAX_DEFERRED_COMMANDS`] other commands stay
+    /// (oldest dropped first). Returns how many commands of each kind were
+    /// dropped for the cap. Only kinds and counts are logged, because
+    /// payloads can carry credentials.
+    fn bound_deferred_commands(&mut self) -> BTreeMap<&'static str, usize> {
+        let newest_presence = self.deferred_commands.iter().rposition(is_presence_command);
+        let others = self
             .deferred_commands
             .iter()
-            .filter(|queued| !is_presence(queued))
+            .filter(|command| !is_presence_command(command))
             .count();
-        if queued >= MAX_DEFERRED_WHILE_GATED {
-            if let Some(oldest) = self
-                .deferred_commands
-                .iter()
-                .position(|queued| !is_presence(queued))
-            {
-                if let Some(dropped) = self.deferred_commands.remove(oldest) {
-                    warn!(
-                        "dropping deferred gateway command {dropped:?} while waiting for an \
-                         IDENTIFY permit (backlog limit {MAX_DEFERRED_WHILE_GATED})"
-                    );
-                }
+        let mut excess = others.saturating_sub(MAX_DEFERRED_COMMANDS);
+        let mut dropped: BTreeMap<&'static str, usize> = BTreeMap::new();
+        let mut index = 0;
+        self.deferred_commands.retain(|command| {
+            let position = index;
+            index += 1;
+            if is_presence_command(command) {
+                // Superseded presence updates are expected, not a loss.
+                return Some(position) == newest_presence;
             }
+            if excess > 0 {
+                excess -= 1;
+                *dropped.entry(gateway_command_kind(command)).or_default() += 1;
+                return false;
+            }
+            true
+        });
+        if !dropped.is_empty() {
+            warn!(
+                dropped = dropped.values().sum::<usize>(),
+                kinds = ?dropped,
+                "dropped the oldest deferred gateway commands while disconnected \
+                 (backlog limit {MAX_DEFERRED_COMMANDS})"
+            );
         }
-        self.deferred_commands.push_back(command);
+        dropped
     }
 
     async fn connect_and_run(
@@ -732,6 +746,26 @@ fn close_frame_action(frame: Option<CloseFrame>) -> ReconnectAction {
     }
 }
 
+fn is_presence_command(command: &GatewayCommand) -> bool {
+    matches!(
+        command,
+        GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_)
+    )
+}
+
+/// Variant name for logs; never the payload, which can carry credentials.
+fn gateway_command_kind(command: &GatewayCommand) -> &'static str {
+    match command {
+        GatewayCommand::Shutdown => "Shutdown",
+        GatewayCommand::Reconnect => "Reconnect",
+        GatewayCommand::UpdatePresence(_) => "UpdatePresence",
+        GatewayCommand::UpdatePresenceData(_) => "UpdatePresenceData",
+        GatewayCommand::RequestGuildMembers(_) => "RequestGuildMembers",
+        GatewayCommand::RequestChannelInfo(_) => "RequestChannelInfo",
+        GatewayCommand::SendPayload(_) => "SendPayload",
+    }
+}
+
 async fn recv_control_command(
     command_rx: &mut Option<mpsc::Receiver<GatewayCommand>>,
     deferred_commands: &mut VecDeque<GatewayCommand>,
@@ -919,11 +953,12 @@ impl GatewayClient {
         &mut self,
         duration: Duration,
     ) -> Result<bool, crate::error::DiscordError> {
-        let Some(command_rx) = self.command_rx.as_mut() else {
+        if self.command_rx.is_none() {
             sleep(duration).await;
             return Ok(false);
-        };
+        }
 
+        self.bound_deferred_commands();
         let deadline = Instant::now() + duration;
         loop {
             let now = Instant::now();
@@ -931,7 +966,11 @@ impl GatewayClient {
                 return Ok(false);
             }
 
-            match timeout(deadline - now, command_rx.recv()).await {
+            let received = match self.command_rx.as_mut() {
+                Some(command_rx) => timeout(deadline - now, command_rx.recv()).await,
+                None => return Ok(false),
+            };
+            match received {
                 Ok(Some(GatewayCommand::Shutdown)) => return Ok(true),
                 Ok(Some(GatewayCommand::Reconnect)) => {
                     self.session_id = None;
@@ -939,9 +978,7 @@ impl GatewayClient {
                     self.sequence.store(0, Ordering::Relaxed);
                     return Ok(false);
                 }
-                Ok(Some(command)) => {
-                    self.deferred_commands.push_back(command);
-                }
+                Ok(Some(command)) => self.defer_command(command),
                 Ok(None) | Err(_) => return Ok(false),
             }
         }
@@ -950,7 +987,7 @@ impl GatewayClient {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::{BTreeMap, VecDeque};
     use std::io::Write;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -2334,7 +2371,7 @@ mod tests {
             .send(GatewayCommand::UpdatePresence("idle".into()))
             .await
             .unwrap();
-        for index in 0..(super::MAX_DEFERRED_WHILE_GATED + extra) {
+        for index in 0..(super::MAX_DEFERRED_COMMANDS + extra) {
             command_tx
                 .send(GatewayCommand::SendPayload(
                     serde_json::json!({ "n": index }),
@@ -2384,8 +2421,137 @@ mod tests {
             })
             .collect();
         let expected: Vec<u64> =
-            (extra as u64..(super::MAX_DEFERRED_WHILE_GATED + extra) as u64).collect();
+            (extra as u64..(super::MAX_DEFERRED_COMMANDS + extra) as u64).collect();
         assert_eq!(payloads, expected);
+    }
+
+    fn payload_numbers(client: &GatewayClient) -> Vec<u64> {
+        client
+            .deferred_commands
+            .iter()
+            .filter_map(|command| match command {
+                GatewayCommand::SendPayload(payload) => payload["n"].as_u64(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn presence_statuses(client: &GatewayClient) -> Vec<String> {
+        client
+            .deferred_commands
+            .iter()
+            .filter_map(|command| match command {
+                GatewayCommand::UpdatePresence(status) => Some(status.clone()),
+                GatewayCommand::UpdatePresenceData(_) => Some("data".to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Regression: a backlog that was already oversized (e.g. from a long
+    /// reconnect backoff) stayed oversized during the permit wait; each new
+    /// command only replaced one old one.
+    #[tokio::test]
+    async fn oversized_backlog_is_normalized_on_entering_the_gate_wait() {
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let gate: Arc<dyn crate::ws::IdentifyGate> = Arc::new(PendingGate);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::default().identify_gate(gate))
+            .control(command_rx);
+        for index in 0..100_u64 {
+            if index % 40 == 0 {
+                client
+                    .deferred_commands
+                    .push_back(GatewayCommand::UpdatePresence(format!("p{index}")));
+            }
+            client
+                .deferred_commands
+                .push_back(GatewayCommand::SendPayload(
+                    serde_json::json!({ "n": index }),
+                ));
+        }
+        command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("Shutdown must end the wait");
+        assert!(result.is_ok());
+        assert_eq!(presence_statuses(&client), vec!["p80".to_string()]);
+        let max = super::MAX_DEFERRED_COMMANDS as u64;
+        assert_eq!(
+            payload_numbers(&client),
+            (100 - max..100).collect::<Vec<_>>()
+        );
+    }
+
+    /// Regression: commands received during reconnect backoff were appended
+    /// without any bound.
+    #[tokio::test]
+    async fn reconnect_backoff_keeps_the_deferred_backlog_bounded() {
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513).control(command_rx);
+        for index in 0..50_u64 {
+            client
+                .deferred_commands
+                .push_back(GatewayCommand::SendPayload(
+                    serde_json::json!({ "n": index }),
+                ));
+        }
+        for index in 50..90_u64 {
+            command_tx
+                .send(GatewayCommand::SendPayload(
+                    serde_json::json!({ "n": index }),
+                ))
+                .await
+                .unwrap();
+        }
+        command_tx
+            .send(GatewayCommand::UpdatePresence("idle".into()))
+            .await
+            .unwrap();
+        command_tx
+            .send(GatewayCommand::UpdatePresence("dnd".into()))
+            .await
+            .unwrap();
+
+        let shutdown = client
+            .wait_for_backoff_command(Duration::from_millis(100))
+            .await
+            .unwrap();
+        assert!(!shutdown);
+        assert_eq!(presence_statuses(&client), vec!["dnd".to_string()]);
+        let max = super::MAX_DEFERRED_COMMANDS as u64;
+        assert_eq!(payload_numbers(&client), (90 - max..90).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn dropped_command_report_names_kinds_not_payloads() {
+        let mut client = GatewayClient::new("secret-token".into(), 513);
+        client
+            .deferred_commands
+            .push_back(GatewayCommand::SendPayload(serde_json::json!({
+                "token": "do-not-log-me"
+            })));
+        for index in 0..super::MAX_DEFERRED_COMMANDS {
+            client
+                .deferred_commands
+                .push_back(GatewayCommand::SendPayload(
+                    serde_json::json!({ "n": index }),
+                ));
+        }
+        let dropped = client.bound_deferred_commands();
+        assert_eq!(dropped, BTreeMap::from([("SendPayload", 1)]));
+        assert!(!format!("{dropped:?}").contains("do-not-log-me"));
+        assert_eq!(client.deferred_commands.len(), super::MAX_DEFERRED_COMMANDS);
+        // Every variant has a fixed, payload-free name.
+        for command in [
+            GatewayCommand::Shutdown,
+            GatewayCommand::Reconnect,
+            GatewayCommand::UpdatePresence("x".into()),
+            GatewayCommand::SendPayload(serde_json::json!({"token": "do-not-log-me"})),
+        ] {
+            assert!(!super::gateway_command_kind(&command).contains("do-not-log-me"));
+        }
     }
 
     /// Regression: only the TCP/TLS connect was bounded while a permit was

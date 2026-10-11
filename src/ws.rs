@@ -166,8 +166,9 @@ pub type IdentifyPermitFuture<'a> =
 /// A wait may last long (until a bucket frees up or the daily session
 /// budget resets). Meanwhile the client keeps serving its control channel,
 /// so a shutdown ends the wait at once. Other commands are kept for the
-/// connection in a bounded backlog: presence updates coalesce to the newest
-/// one, and beyond 32 other commands the oldest is dropped. Once granted, connection setup
+/// connection in a bounded backlog (the same one used during reconnect
+/// backoff): presence updates coalesce to the newest one, and beyond 32
+/// other commands the oldest is dropped. Once granted, connection setup
 /// (connect, WebSocket upgrade, and HELLO) is bounded to 15 seconds; an
 /// attempt that runs over is reported as [`IdentifyOutcome::Abandoned`].
 pub trait IdentifyGate: Send + Sync {
