@@ -97,7 +97,7 @@ pub use guild_aux::{
     GuildWidget, GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings,
     Integration, IntegrationAccount, IntegrationApplication, ModifyGuildOnboarding,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, OnboardingPrompt, OnboardingPromptOption,
-    VanityUrl, WelcomeScreen, WelcomeScreenChannel,
+    PartialIntegration, VanityUrl, WelcomeScreen, WelcomeScreenChannel,
 };
 pub use interaction::{
     AuthorizingIntegrationOwners, AutocompleteInteraction, ChatInputCommandInteraction,

@@ -102,6 +102,38 @@ pub struct Integration {
     pub scopes: Vec<String>,
 }
 
+/// Partial integration object, as listed in a user connection's
+/// `integrations` (Discord docs: Connection Structure).
+///
+/// Discord documents these only as "partial server integrations" without
+/// saying which fields they carry, so only `id` is required and the rest
+/// are the fields the documented partial integration example has. A full
+/// [`Integration`] requires `name` and `account`, and one missing field
+/// would fail the whole connection list.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PartialIntegration {
+    /// Integration ID.
+    pub id: IntegrationId,
+    /// Integration name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Integration type (`twitch`, `youtube`, `discord`, or
+    /// `guild_subscription`).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Whether the integration is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// The integration's account on the external service.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<IntegrationAccount>,
+    /// The integrated application, for app integrations. The documented
+    /// partial example has this key, which a full [`Integration`] carries as
+    /// `application.id` instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_id: Option<ApplicationId>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `GuildWidgetSettings`.
 pub struct GuildWidgetSettings {

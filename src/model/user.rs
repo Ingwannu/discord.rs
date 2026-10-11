@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ConnectionVisibility, GuildId, SkuId, UserId, UserPremiumType};
+use super::{ConnectionVisibility, GuildId, PartialIntegration, SkuId, UserId, UserPremiumType};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's avatar decoration.
@@ -122,7 +122,7 @@ pub struct UserConnection {
     pub revoked: Option<bool>,
     /// Partial integration objects associated with the connection.
     #[serde(default)]
-    pub integrations: Vec<serde_json::Value>,
+    pub integrations: Vec<PartialIntegration>,
     /// Whether the connection is verified.
     #[serde(default)]
     pub verified: bool,
@@ -200,5 +200,83 @@ impl UpdateUserApplicationRoleConnection {
                 .collect(),
         );
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+
+    use super::UserConnection;
+    use crate::model::test_id;
+
+    /// A connection (Connection Structure) whose integrations are the
+    /// documented partial integration (resources/audit-log.mdx — Example
+    /// Partial Integration Object) and a bare one with only an ID.
+    const CONNECTION: &str = r#"{
+      "id": "1234567",
+      "name": "twitchusername",
+      "type": "twitch",
+      "revoked": false,
+      "integrations": [
+        {
+          "id": "33590653072239123",
+          "name": "A Name",
+          "type": "twitch",
+          "account": {
+            "name": "twitchusername",
+            "id": "1234567"
+          },
+          "application_id": "94651234501213162"
+        },
+        { "id": "33590653072239124" }
+      ],
+      "verified": true,
+      "friend_sync": false,
+      "show_activity": true,
+      "two_way_link": false,
+      "visibility": 1
+    }"#;
+
+    fn check(connection: &UserConnection) {
+        let [documented, bare] = &connection.integrations[..] else {
+            panic!("two integrations");
+        };
+        assert_eq!(documented.id, test_id(33590653072239123));
+        assert_eq!(documented.name.as_deref(), Some("A Name"));
+        assert_eq!(documented.kind.as_deref(), Some("twitch"));
+        let account = documented.account.as_ref().unwrap();
+        assert_eq!(
+            (account.id.as_str(), account.name.as_str()),
+            ("1234567", "twitchusername")
+        );
+        assert_eq!(documented.application_id, Some(test_id(94651234501213162)));
+        assert_eq!(bare.id, test_id(33590653072239124));
+        assert!(bare.name.is_none() && bare.account.is_none());
+    }
+
+    #[test]
+    fn connection_integrations_decode_as_partial_integrations() {
+        let from_text: UserConnection = serde_json::from_str(CONNECTION).unwrap();
+        check(&from_text);
+        let wire: Value = serde_json::from_str(CONNECTION).unwrap();
+        let from_value: UserConnection = serde_json::from_value(wire.clone()).unwrap();
+        check(&from_value);
+        assert_eq!(
+            serde_json::to_value(&from_value).unwrap()["integrations"],
+            wire["integrations"]
+        );
+
+        // `integrations` is optional on the wire.
+        let mut without = wire;
+        if let Some(connection) = without.as_object_mut() {
+            connection.remove("integrations");
+        }
+        let connection: UserConnection = serde_json::from_value(without).unwrap();
+        assert!(connection.integrations.is_empty());
+        assert_eq!(
+            serde_json::to_value(&connection).unwrap()["integrations"],
+            json!([])
+        );
     }
 }

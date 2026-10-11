@@ -3073,7 +3073,11 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
                 "name": "example-user",
                 "type": "github",
                 "revoked": false,
-                "integrations": [{ "id": "integration-1" }],
+                "integrations": [{
+                    "id": "33590653072239123",
+                    "type": "twitch",
+                    "account": { "id": "1234567", "name": "twitchusername" }
+                }],
                 "verified": true,
                 "friend_sync": false,
                 "show_activity": true,
@@ -3119,7 +3123,16 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
         .await
         .unwrap();
     assert_eq!(connections[0].kind, "github");
-    assert_eq!(connections[0].integrations[0]["id"], json!("integration-1"));
+    let integration = &connections[0].integrations[0];
+    assert_eq!(integration.id.get(), 33590653072239123);
+    assert_eq!(integration.kind.as_deref(), Some("twitch"));
+    assert_eq!(
+        integration
+            .account
+            .as_ref()
+            .map(|account| account.name.as_str()),
+        Some("twitchusername")
+    );
 
     let member = client
         .get_current_user_guild_member("oauth.access", test_id(200))
