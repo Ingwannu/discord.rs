@@ -98,6 +98,18 @@ For `gateway/bot`, `cache`, `collector`, `sharding`, `voice`, and `voice_runtime
 - Use harness tests only after direct unit tests stop being enough.
 - Treat `gateway/bot.rs`, `http.rs`, and `interactions.rs` as the final expensive coverage tiers.
 
+## Model Footprint Report
+
+`tests/id_footprint.rs` measures `size_of` for hot models and, with a counting global allocator in its own test binary, the allocations, retained heap bytes, and time of decoding a representative `MESSAGE_CREATE` and `GUILD_CREATE`. It is a report, not a gate (`#[ignore]`d; a small companion test keeps its payloads decodable). Run it single-threaded so the two tests' allocations do not mix:
+
+```text
+cargo test --release --all-features --locked --test id_footprint -- --ignored --nocapture --test-threads=1
+```
+
+The payloads only use fields that exist before and after a model change, so checking out the previous commit and running the same command gives the comparison. Allocation counts and bytes are deterministic; timings are indicative only. The phase 3 series 2 step A numbers are in `docs/design/3.0-types-events-requests.md` §1.
+
+In unit tests, models without `Default` are built with `T::fixture()` (`src/model/fixtures.rs`, `#[cfg(test)]`) and IDs with `crate::model::test_id(n)`, which infers the marker from context. Integration tests and examples use the public API instead (`"1".parse()?`, `GenericId::try_from(1)?`, or JSON).
+
 ## Build Time
 
 Measured 2026-10-11 on `main` at `a4fc664` (x86_64, `CARGO_BUILD_JOBS=8`, clean target, debug

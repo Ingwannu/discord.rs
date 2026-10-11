@@ -4,7 +4,7 @@
 
 The typed surface is centered on:
 
-- `Snowflake`
+- `GenericId` and the typed IDs (`GuildId`, `ChannelId`, `UserId`, ...)
 - `PermissionsBitField`
 - `User`
 - `Guild`
@@ -47,7 +47,7 @@ Effective permissions following Discord's documented algorithm (owner, `ADMINIST
 
 ## Typed IDs, Discriminants, and Patch Fields (3.0, unreleased)
 
-These primitives are available now, but existing models, REST methods, events, and builders still use `Snowflake`, raw `u8` codes, and `Option<Option<T>>`. Consumers migrate in phase 3 series 2–3 (IDs and discriminants) and phase 4 (patch fields). The design is in `docs/design/3.0-types-events-requests.md` in the repository.
+Since phase 3 series 2 step A, every ID in models, events, REST and cache methods, collectors, and helpers is a numeric `GenericId` (the 2.x `String`-backed `Snowflake` is gone). Step B narrows each one to its per-resource alias (`GuildId`, `ChannelId`, ...). Raw `u8` codes and `Option<Option<T>>` remain until series 3 (discriminants) and phase 4 (patch fields). The design is in `docs/design/3.0-types-events-requests.md` in the repository.
 
 ### `Id<M>` typed IDs
 
@@ -78,9 +78,33 @@ These look like IDs on the wire but are not nonzero snowflakes, so they have the
 
 - `WidgetUserId(String)`: the anonymized widget member `id` (Discord's examples show `"0"`). It is opaque and kept exactly as received.
 - `GuildInstallOwner`: the `GUILD_INSTALL` value of `authorizing_integration_owners`. It is `BotDm` for `"0"` (the interaction came from a DM with the bot) or `Guild(GuildId)`.
-- `UploadId(u32)`: the `files[n]` index of a new upload in the same request. `0` is allowed, and it is separate from a stored `AttachmentId`.
-- `ComponentId(u32)`: the numeric component `id`. Discord treats `0` as "not set" and assigns one.
-- `PollAnswerId(u32)`: a poll `answer_id`.
+- `UploadId(u32)`: the `files[n]` index of a new upload in the same request. `0` is allowed, and it is separate from a stored `AttachmentId`. (No typed request field carries one yet; it arrives with the typed attachment metadata of phase 5.)
+- `ComponentId(u32)`: the numeric component `id` (`MessageComponent::id`). Discord treats `0` as "not set" and assigns one.
+- `PollAnswerId(u32)`: a poll `answer_id` (`PollAnswer::answer_id`, `PollAnswerCount::id`, `PollVoteEvent::answer_id`, and the `answer_id` of `get_poll_answer_voters`).
+- `AuthorizingIntegrationOwners`: an interaction's (and `MessageInteractionMetadata`'s) `authorizing_integration_owners`, with `guild_install: Option<GuildInstallOwner>` (key `"0"`), `user_install: Option<UserId>` (key `"1"`), and `other` for keys added later, written back unchanged.
+- `CreateGuildPlaceholderId(u64)`: the request-local role and channel numbers of the deprecated create-guild body (`CreateGuild` with `CreateGuildPlaceholderRole` / `CreateGuildPlaceholderChannel` / `CreateGuildPlaceholderOverwrite`). `0` is allowed.
+- Plain strings, not IDs: voice region IDs, integration account IDs, connection account IDs, invite codes, Activity instance and location IDs, `custom_id`, and webhook/follow-up message IDs in `*_webhook_message*` / `*_followup_message*` calls (Discord also accepts `@original` there).
+
+### Migrating from 2.x `Snowflake`
+
+- **Type.** `Snowflake` (a `String` plus a parsed `u64`) is replaced by `GenericId`: 8 bytes, `Copy`, never zero. `discordrs::Snowflake` survives only as a deprecated alias of `GenericId`, so old imports still compile, with a deprecation warning that names the replacement. Write `GenericId` (or, once step B lands, the typed alias) instead.
+- **No implicit conversions.** `From<u64>`, `From<&str>`, `From<String>`, `Snowflake::new`, and the infallible `FromStr` are gone, so `rest.get_channel("123")` and `get_channel(123u64)` no longer compile. Endpoints and helpers take a concrete `GenericId` by value. Validate untrusted text or config once, at the boundary:
+
+```rust
+use discordrs::{DiscordError, GenericId};
+
+fn ids(raw: &str) -> Result<(GenericId, GenericId), DiscordError> {
+    let from_text: GenericId = raw.parse()?; // `?` maps InvalidId into DiscordError
+    let from_number = GenericId::try_from(81384788765712384_u64)?;
+    Ok((from_text, from_number))
+}
+```
+
+- **Copy, by value.** Drop `.clone()` on IDs, and pass them by value where 2.x took `&Snowflake` (cache getters such as `cache.member(guild_id, user_id)`, `CacheBackend` methods, `MentionResolver`, `MemberPermissionInput::new`, `DiscordModel::id()` now returns `GenericId`). Cache keys are numeric tuples, so lookups no longer hash strings.
+- **Accessors.** `as_str()` is gone (an ID stores no text): use `Display`/`to_string()` for text and `get()` for the number. `as_u64()`/`to_u64()` become `get()`, `timestamp()` returns `u64` (no `Option`), and `is_valid()` has nothing left to check.
+- **Stricter decoding.** Zero, empty, signed, or non-digit IDs are decode errors instead of being kept as strings. The documented exceptions above have their own types.
+- **`Default` removed from persisted models with a required ID** (`Message`, `User`, `Guild`, `Channel`, `Role`, `Attachment`, `Sticker`, `Entitlement`, the interaction variants, and about sixty types in all): a default would need a sentinel ID. `Member` keeps `Default` because its `user` is optional. Request bodies whose ID is required gained a `new(...)` constructor instead: `CreateDmChannel::new`, `ModifyGuildChannelPosition::new`, `ModifyGuildRolePosition::new`, `CreateTestEntitlement::new`, `CreateStageInstance::new`, `LobbyMember::new`, `LobbyMemberUpdate::new`. Queries, patches, and bodies whose IDs are optional keep `Default`. In tests, build models from JSON (`serde_json::from_value(json!({"id": "1", ...}))`).
+- **Raw interaction context.** `parsers::InteractionContext` IDs (`id`, `application_id`, `guild_id`, `channel_id`, `user_id`) and `RawInteraction::{Command, Autocomplete}::id` are `GenericId`, and the stateless helpers take `interaction_id`/`channel_id`/`message_id` as `GenericId`.
 
 ### Open discriminants
 
@@ -105,7 +129,7 @@ Seven names are still taken by their 2.x versions. Until series 3 swaps them in,
 
 - `MessageComponent` — `Message.components` (and related read-side payloads, including modal and snapshot components) moved from raw `serde_json::Value` to this tolerant typed structure. It is deliberately one *wide* struct covering the whole component tree: `kind` carries the raw component `type`, every known field is optional, and decoding never fails when Discord ships new component kinds. Associated constants (`MessageComponent::BUTTON`, `STRING_SELECT`, `SECTION`, `CONTAINER`, `LABEL`, ...) name the type codes, and `iter()` walks the component and every nested child (`components`, label `component`, section `accessory`) depth-first.
 - `MessageSelectOption`, `MessageSelectDefaultValue`, `UnfurledMediaItem`, and `MessageMediaGalleryItem` — typed pieces of received components.
-- `ResolvedData` — interaction `resolved` data as six lookup maps keyed by `Snowflake` (`users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
+- `ResolvedData` — interaction `resolved` data as six lookup maps keyed by ID (`GenericId` since 3.0; `users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
 - `MessageInteractionMetadata` — typed `Message::interaction_metadata` (triggering interaction id/type, user, authorizing integration owners, original response message id, target user/message, interacted message id, and nested `triggering_interaction_metadata` for modals). Prefer it over the deprecated `MessageInteraction`.
 - `InteractionReplyData` and `AutocompleteChoice` in `discordrs::response` — the payload types behind the `2.2.0` `InteractionResponder` methods; `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
 - `CollectorEndReason` and `CollectorStopHandle` in `discordrs::collector`; `RateLimitInfo` and `RestClientBuilder` in the HTTP layer; `AudioPlayerState`, `AudioPlayerEvent`, `TrackEndReason`, and `NoSubscriberBehavior` in `discordrs::voice::player`.

@@ -246,17 +246,17 @@ use discordrs::{
     GuildBansQuery, GuildWidgetImageStyle, ModifyCurrentMember, ModifyGuild,
     ModifyGuildChannelPosition, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
     ModifyGuildRolePosition, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
-    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, Snowflake, WelcomeScreenChannel,
+    ModifyStageInstance, RoleColors, SearchGuildMembersQuery, GenericId, WelcomeScreenChannel,
 };
 
 async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
-    let guild_id = Snowflake::from("123");
-    let channel_id = Snowflake::from("456");
-    let user_id = Snowflake::from("789");
+    let guild_id: GenericId = "123".parse()?;
+    let channel_id: GenericId = "456".parse()?;
+    let user_id: GenericId = "789".parse()?;
 
     let guild = http
         .get_guild_with_query(
-            guild_id.clone(),
+            guild_id,
             &GetGuildQuery {
                 with_counts: Some(true),
             },
@@ -266,10 +266,10 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let bans = http
         .get_guild_bans_with_query(
-            guild_id.clone(),
+            guild_id,
             &GuildBansQuery {
                 limit: Some(100),
-                after: Some(Snowflake::from("100")),
+                after: Some("100".parse()?),
                 ..Default::default()
             },
         )
@@ -278,7 +278,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let matching_members = http
         .search_guild_members_with_query(
-            guild_id.clone(),
+            guild_id,
             &SearchGuildMembersQuery {
                 query: "alice & bob".to_string(),
                 limit: Some(5),
@@ -288,7 +288,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     println!("matching members: {}", matching_members.len());
 
     http.modify_guild(
-        guild_id.clone(),
+        guild_id,
         &ModifyGuild {
             name: Some("renamed".to_string()),
             description: Some(None),
@@ -298,7 +298,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.create_guild_channel_from_request(
-        guild_id.clone(),
+        guild_id,
         &CreateGuildChannel {
             name: "rules".to_string(),
             kind: Some(0),
@@ -309,7 +309,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.modify_guild_channel_positions(
-        guild_id.clone(),
+        guild_id,
         &[ModifyGuildChannelPosition {
             id: channel_id,
             position: Some(Some(2)),
@@ -320,17 +320,17 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.modify_guild_role_positions_typed(
-        guild_id.clone(),
+        guild_id,
         &[ModifyGuildRolePosition {
-            id: Snowflake::from("321"),
+            id: "321".parse()?,
             position: Some(Some(1)),
         }],
     )
     .await?;
 
     http.create_guild_ban_typed(
-        guild_id.clone(),
-        user_id.clone(),
+        guild_id,
+        user_id,
         &CreateGuildBan {
             delete_message_seconds: Some(60),
             ..Default::default()
@@ -340,7 +340,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let role = http
         .create_guild_role(
-            guild_id.clone(),
+            guild_id,
             &CreateGuildRole {
                 name: Some("Gradient".to_string()),
                 colors: Some(RoleColors {
@@ -354,8 +354,8 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
         .await?;
 
     http.modify_guild_role(
-        guild_id.clone(),
-        role.id.clone(),
+        guild_id,
+        role.id,
         &ModifyGuildRole {
             mentionable: Some(Some(true)),
             unicode_emoji: Some(None),
@@ -365,8 +365,8 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.modify_guild_member_typed(
-        guild_id.clone(),
-        user_id.clone(),
+        guild_id,
+        user_id,
         &ModifyGuildMember {
             nick: Some(None),
             channel_id: Some(None),
@@ -377,7 +377,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let current_member = http
         .modify_current_member(
-            guild_id.clone(),
+            guild_id,
             &ModifyCurrentMember {
                 nick: Some(Some("bot".to_string())),
                 avatar: Some(None),
@@ -388,7 +388,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     println!("current member: {:?}", current_member.user);
 
     http.modify_guild_widget(
-        guild_id.clone(),
+        guild_id,
         &ModifyGuildWidgetSettings {
             enabled: Some(true),
             channel_id: Some(None),
@@ -397,11 +397,11 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.modify_guild_welcome_screen_config(
-        guild_id.clone(),
+        guild_id,
         &ModifyGuildWelcomeScreen {
             enabled: Some(Some(true)),
             welcome_channels: Some(Some(vec![WelcomeScreenChannel {
-                channel_id: Snowflake::from("456"),
+                channel_id: "456".parse()?,
                 description: "Start here".to_string(),
                 emoji_id: None,
                 emoji_name: Some("wave".to_string()),
@@ -412,9 +412,9 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     http.modify_guild_onboarding_config(
-        guild_id.clone(),
+        guild_id,
         &ModifyGuildOnboarding {
-            default_channel_ids: Some(vec![Snowflake::from("456")]),
+            default_channel_ids: Some(vec!["456".parse()?]),
             enabled: Some(true),
             mode: Some(0),
             ..Default::default()
@@ -424,11 +424,11 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let prune = http
         .begin_guild_prune_with_request(
-            guild_id.clone(),
+            guild_id,
             &BeginGuildPruneRequest {
                 days: Some(7),
                 compute_prune_count: Some(false),
-                include_roles: Some(vec![Snowflake::from("321")]),
+                include_roles: Some(vec!["321".parse()?]),
                 ..Default::default()
             },
         )
@@ -437,7 +437,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let stage = http
         .create_stage_instance_from_request(&CreateStageInstance {
-            channel_id: channel_id.clone(),
+            channel_id: channel_id,
             topic: "Town hall".to_string(),
             privacy_level: Some(2),
             send_start_notification: Some(true),
@@ -455,8 +455,8 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
     let member = http
         .add_guild_member(
-            guild_id.clone(),
-            user_id.clone(),
+            guild_id,
+            user_id,
             &AddGuildMember {
                 access_token: "oauth2-guilds.join-token".to_string(),
                 ..Default::default()
@@ -468,14 +468,14 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
         println!("User was already in the guild");
     }
 
-    let role_counts = http.get_guild_role_member_counts(guild_id.clone()).await?;
+    let role_counts = http.get_guild_role_member_counts(guild_id).await?;
     println!("{role_counts:?}");
 
     let audit_log = http
         .get_guild_audit_log_typed(
-            guild_id.clone(),
+            guild_id,
             &AuditLogQuery {
-                after: Some(Snowflake::from("100")),
+                after: Some("100".parse()?),
                 limit: Some(25),
                 ..Default::default()
             },
@@ -489,7 +489,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     println!("widget bytes: {}", widget_png.len());
 
     http.add_group_dm_recipient(
-        Snowflake::from("555"),
+        "555".parse()?,
         user_id,
         &AddGroupDmRecipient {
             access_token: "oauth2-gdm.join-token".to_string(),
@@ -511,7 +511,7 @@ use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, MessageBuilder, b
 
 async fn send_panel(
     http: &discordrs::DiscordHttpClient,
-    channel_id: u64,
+    channel_id: discordrs::GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     let message = MessageBuilder::new()
         .content("Support panel")
@@ -540,7 +540,7 @@ use discordrs::{
 
 async fn send_support_panel(
     http: &DiscordHttpClient,
-    channel_id: u64,
+    channel_id: discordrs::GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
         ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
@@ -579,15 +579,21 @@ let row = ActionRowBuilder::new().add_select_menu(
 Sticker packs and guild sticker writes are typed:
 
 ```rust
-use discordrs::{CreateGuildSticker, DiscordHttpClient, FileAttachment, ModifyGuildSticker};
+use discordrs::{
+    CreateGuildSticker, DiscordHttpClient, FileAttachment, GenericId, ModifyGuildSticker,
+};
 
 async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
-    let pack = http.get_sticker_pack(123456789012345678).await?;
+    // IDs are checked once at the boundary; `?` turns `InvalidId` into
+    // `DiscordError`. After that they are `Copy`.
+    let pack_id: GenericId = "123456789012345678".parse()?;
+    let guild_id: GenericId = "223456789012345678".parse()?;
+    let pack = http.get_sticker_pack(pack_id).await?;
     println!("pack: {}", pack.name);
 
     let sticker = http
         .create_guild_sticker_from_request(
-            123456789012345678,
+            guild_id,
             &CreateGuildSticker {
                 name: "wave".to_string(),
                 description: "Waves hello".to_string(),
@@ -598,7 +604,7 @@ async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::Discor
         .await?;
 
     http.modify_guild_sticker_from_request(
-        123456789012345678,
+        guild_id,
         sticker.id,
         &ModifyGuildSticker {
             name: Some("wave2".to_string()),
@@ -643,12 +649,12 @@ async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::D
 Discord's Message Resource search and current-pin routes are exposed as typed `RestClient` methods:
 
 ```rust
-use discordrs::{ChannelPinsQuery, DiscordHttpClient, SearchGuildMessagesQuery};
+use discordrs::{ChannelPinsQuery, DiscordHttpClient, GenericId, SearchGuildMessagesQuery};
 
 async fn inspect_messages(
     http: &DiscordHttpClient,
-    guild_id: u64,
-    channel_id: u64,
+    guild_id: GenericId,
+    channel_id: GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     let search = http
         .search_guild_messages(
@@ -676,8 +682,9 @@ async fn inspect_messages(
 
     println!("current pins: {}", pins.items.len());
 
-    http.pin_message(channel_id, 123456789012345678).await?;
-    http.unpin_message(channel_id, 123456789012345678).await?;
+    let message_id: GenericId = "123456789012345678".parse()?;
+    http.pin_message(channel_id, message_id).await?;
+    http.unpin_message(channel_id, message_id).await?;
     Ok(())
 }
 ```
@@ -694,8 +701,8 @@ use discordrs::{
 
 async fn channel_admin(
     http: &discordrs::DiscordHttpClient,
-    channel_id: u64,
-    role_id: u64,
+    channel_id: discordrs::GenericId,
+    role_id: discordrs::GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     let invites = http.get_channel_invites(channel_id).await?;
     println!("active invites: {}", invites.len());
@@ -758,9 +765,9 @@ use discordrs::{CreateMessage, DiscordHttpClient, MessageReference};
 
 async fn reply_and_forward(
     http: &DiscordHttpClient,
-    channel_id: u64,
-    message_id: u64,
-    announce_channel_id: u64,
+    channel_id: discordrs::GenericId,
+    message_id: discordrs::GenericId,
+    announce_channel_id: discordrs::GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     // Reply to a message in the same channel.
     http.create_message(
@@ -789,7 +796,7 @@ async fn reply_and_forward(
 `discordrs::model_ext` adds discord.js-style methods directly to the typed models (`Message`, `Member`, `Guild`, `Channel`, `Role`, `User`). They are inherent impls, so no extra trait import is needed — just call them on the model values you already have:
 
 ```rust
-use discordrs::{CreateGuildChannel, Guild, Member, Message, RestClient};
+use discordrs::{CreateGuildChannel, GenericId, Guild, Member, Message, RestClient};
 
 async fn entity_tour(
     http: &RestClient,
@@ -803,17 +810,17 @@ async fn entity_tour(
     reply.pin(http).await?;
     let thread = message.start_thread(http, "follow-up").await?;
     println!("thread {} — jump link {}", thread.id, message.link());
-    message.forward_to(http, 123456789012345678u64).await?;
+    message.forward_to(http, "123456789012345678".parse()?).await?;
 
     // Member: moderation with an explicit guild id
     member
-        .timeout(http, guild.id.clone(), "2026-08-01T00:00:00+00:00")
+        .timeout(http, guild.id, "2026-08-01T00:00:00+00:00")
         .await?;
     member
-        .add_role(http, guild.id.clone(), 987654321098765432u64)
+        .add_role(http, guild.id, "987654321098765432".parse()?)
         .await?;
     member
-        .kick_with_reason(http, guild.id.clone(), "spam")
+        .kick_with_reason(http, guild.id, "spam")
         .await?;
     println!("moderated {}", member.display_name());
 
@@ -834,8 +841,9 @@ async fn entity_tour(
         channel.is_text_based(),
         guild.icon_url(Some(256)),
     );
-    let fetched = guild.fetch_member(http, 42u64).await?;
-    guild.ban(http, 42u64, Some(3600)).await?;
+    let user_id = GenericId::try_from(42_u64)?;
+    let fetched = guild.fetch_member(http, user_id).await?;
+    guild.ban(http, user_id, Some(3600)).await?;
     println!("banned {}", fetched.display_name());
 
     // User: DMs, tags, avatars
@@ -971,7 +979,7 @@ use discordrs::{DiscordHttpClient, InteractionCallbackResponse};
 
 async fn respond_and_inspect(
     http: &DiscordHttpClient,
-    interaction_id: u64,
+    interaction_id: discordrs::GenericId,
     interaction_token: &str,
 ) -> Result<(), discordrs::DiscordError> {
     let result = http
@@ -1129,7 +1137,7 @@ fn with_backend<B: CacheBackend + 'static>(token: &str, backend: Arc<B>) {
 For hot member, message, and presence reads, use the `Arc` variants to avoid deep cloning cached payloads:
 
 ```rust
-async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::Snowflake, user_id: discordrs::Snowflake) {
+async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::GenericId, user_id: discordrs::GenericId) {
     if let Some(member) = ctx.members().cached_arc(guild_id, user_id).await {
         println!("Cached member: {}", member.user.id);
     }
@@ -1195,7 +1203,7 @@ Application command permission edits are an OAuth2 Bearer-token flow in Discord,
 use discordrs::{ApplicationCommandPermission, EditApplicationCommandPermissions};
 
 let edit = EditApplicationCommandPermissions::new([
-    ApplicationCommandPermission::role("123456789012345678", true),
+    ApplicationCommandPermission::role("123456789012345678".parse()?, true),
 ]);
 
 let permissions = rest
@@ -1234,7 +1242,7 @@ let webhook_id = webhook.id.expect("webhook id");
 let webhook_token = webhook.token.expect("webhook token");
 
 rest.modify_webhook_from_request(
-    webhook_id.clone(),
+    webhook_id,
     &ModifyWebhook {
         name: Some("ops".to_string()),
         avatar: Some(None),
@@ -1244,7 +1252,7 @@ rest.modify_webhook_from_request(
 .await?;
 
 rest.execute_webhook_with_query(
-    webhook_id.clone(),
+    webhook_id,
     &webhook_token,
     &WebhookExecuteQuery {
         wait: Some(false),
@@ -1261,13 +1269,13 @@ let message_query = WebhookMessageQuery {
 };
 
 let message = rest
-    .get_webhook_message_with_query(webhook_id.clone(), &webhook_token, message_id, &message_query)
+    .get_webhook_message_with_query(webhook_id, &webhook_token, message_id, &message_query)
     .await?;
 
 rest.edit_webhook_message_with_query(
     webhook_id,
     &webhook_token,
-    message.id.as_str(),
+    &message.id.to_string(),
     &message_query,
     &discordrs::CreateMessage {
         content: Some("deployment edited".to_string()),
@@ -1326,8 +1334,8 @@ Generated query strings are percent-encoded. Request body serialization failures
 ```rust
 async fn moderate(
     rest: &discordrs::RestClient,
-    guild_id: u64,
-    user_id: u64,
+    guild_id: discordrs::GenericId,
+    user_id: discordrs::GenericId,
 ) -> Result<(), discordrs::DiscordError> {
     rest.with_reason("spam")
         .remove_guild_member(guild_id, user_id)
@@ -1365,7 +1373,7 @@ async fn guild_lifecycle(http: &DiscordHttpClient) -> Result<(), discordrs::Disc
         .await?;
 
     // POST /guilds/{id}/mfa — returns the updated level.
-    let level = http.modify_guild_mfa_level(guild.id.clone(), 1).await?;
+    let level = http.modify_guild_mfa_level(guild.id, 1).await?;
     println!("mfa level: {}", level.level);
 
     // DELETE /guilds/{id} — the bot must own the guild.
@@ -1453,7 +1461,7 @@ If you want the underlying shard-local sender, call `ctx.shard_messenger().await
 `Context::fetch_members(...)` requests guild members over the gateway and awaits the correlated `GUILD_MEMBERS_CHUNK` payloads — the discord.js `guild.members.fetch()` equivalent. Fetched members and presences also fill the cache.
 
 ```rust
-async fn load_members(ctx: &discordrs::Context, guild_id: u64) -> Result<(), discordrs::DiscordError> {
+async fn load_members(ctx: &discordrs::Context, guild_id: discordrs::GenericId) -> Result<(), discordrs::DiscordError> {
     // All members (requires the GUILD_MEMBERS privileged intent).
     let members = ctx.fetch_members(guild_id, None, None).await?;
     println!("fetched {} members", members.len());
@@ -1601,9 +1609,12 @@ From `Context`, the common gateway-driven flow is:
 ```rust
 #[cfg(feature = "voice")]
 async fn join_and_prepare_voice(ctx: &discordrs::Context) -> Result<(), discordrs::DiscordError> {
-    ctx.join_voice("1", "2", false, false).await?;
+    let guild_id: discordrs::GenericId = "1".parse()?;
+    let channel_id: discordrs::GenericId = "2".parse()?;
+    let user_id: discordrs::GenericId = "1234".parse()?;
+    ctx.join_voice(guild_id, channel_id, false, false).await?;
 
-    if let Some(config) = ctx.voice_runtime_config("1", "1234").await {
+    if let Some(config) = ctx.voice_runtime_config(guild_id, user_id).await {
         println!("Voice endpoint: {}", config.websocket_url());
     }
 
@@ -1622,8 +1633,8 @@ use discordrs::{
 
 async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
     let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
-        "1",
-        "42",
+        "1".parse()?,
+        "42".parse()?,
         "session-id",
         "voice-token",
         "wss://voice.discord.media/?v=8",
@@ -1653,20 +1664,20 @@ async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
 Voice-state REST routes are also typed:
 
 ```rust
-use discordrs::{DiscordHttpClient, ModifyCurrentUserVoiceState, ModifyUserVoiceState, Snowflake};
+use discordrs::{DiscordHttpClient, GenericId, ModifyCurrentUserVoiceState, ModifyUserVoiceState};
 
 async fn manage_voice_state(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordError> {
-    let guild_id = Snowflake::from("123");
-    let channel_id = Snowflake::from("456");
-    let user_id = Snowflake::from("789");
+    let guild_id: GenericId = "123".parse()?;
+    let channel_id: GenericId = "456".parse()?;
+    let user_id: GenericId = "789".parse()?;
 
-    let state = http.get_current_user_voice_state(guild_id.clone()).await?;
+    let state = http.get_current_user_voice_state(guild_id).await?;
     println!("current voice session: {:?}", state.session_id);
 
     http.modify_current_user_voice_state_from_request(
-        guild_id.clone(),
+        guild_id,
         &ModifyCurrentUserVoiceState {
-            channel_id: Some(channel_id.clone()),
+            channel_id: Some(channel_id),
             suppress: Some(false),
             request_to_speak_timestamp: Some(None),
         },

@@ -318,7 +318,7 @@ let webhook_id = webhook.id.clone().expect("webhook id");
 let webhook_token = webhook.token.as_deref().expect("webhook token");
 
 rest.modify_webhook_from_request(
-    webhook_id.clone(),
+    webhook_id,
     &ModifyWebhook {
         name: Some("ops".to_string()),
         avatar: Some(None),
@@ -740,7 +740,7 @@ let audit_log = rest
 Channel invite listing and creation are typed through `get_channel_invites(...)` and `create_channel_invite_typed(...)`:
 
 ```rust
-use discordrs::{CreateChannelInvite, Snowflake};
+use discordrs::{CreateChannelInvite, GenericId};
 
 let invites = rest.get_channel_invites(channel_id).await?;
 let invite = rest
@@ -749,7 +749,7 @@ let invite = rest
         &CreateChannelInvite {
             max_age: Some(600),
             unique: Some(true),
-            role_ids: Some(vec![Snowflake::from("701")]),
+            role_ids: Some(vec!["701".parse::<GenericId>()?]),
             ..Default::default()
         },
     )
@@ -799,12 +799,12 @@ Group DM creation is typed through `CreateGroupDmChannel`, and recipient managem
 ```rust
 use std::collections::HashMap;
 
-use discordrs::{AddGroupDmRecipient, CreateGroupDmChannel, Snowflake};
+use discordrs::{AddGroupDmRecipient, CreateGroupDmChannel, GenericId};
 
 let group_dm = rest
     .create_group_dm_channel_typed(&CreateGroupDmChannel {
         access_tokens: vec![gdm_join_access_token.to_string()],
-        nicks: HashMap::from([(Snowflake::from("42"), "friend".to_string())]),
+        nicks: HashMap::from([(GenericId::try_from(42_u64)?, "friend".to_string())]),
     })
     .await?;
 

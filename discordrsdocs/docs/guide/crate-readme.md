@@ -88,7 +88,10 @@ use discordrs::{
     button_style, create_container, send_container_message, ButtonConfig, DiscordHttpClient,
 };
 
-async fn send_support_panel(http: &DiscordHttpClient, channel_id: u64) -> Result<(), discordrs::DiscordError> {
+async fn send_support_panel(
+    http: &DiscordHttpClient,
+    channel_id: discordrs::GenericId,
+) -> Result<(), discordrs::DiscordError> {
     let buttons = vec![
         ButtonConfig::new("ticket_open", "Open Ticket").style(button_style::PRIMARY),
         ButtonConfig::new("ticket_status", "Check Status").style(button_style::SECONDARY),

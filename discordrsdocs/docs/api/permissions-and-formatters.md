@@ -76,15 +76,14 @@ From 2026-11-16 Discord sends channels a bot cannot view with the `CHANNEL_OBFUS
 
 ```rust
 use std::time::SystemTime;
-use discordrs::model::Snowflake;
 use discordrs::permissions::{cached_permissions_for, PermissionDataError};
-use discordrs::CacheHandle;
+use discordrs::{CacheHandle, GenericId};
 
 async fn check(
     cache: &CacheHandle,
-    guild: &Snowflake,
-    user: &Snowflake,
-    channel: &Snowflake,
+    guild: GenericId,
+    user: GenericId,
+    channel: GenericId,
 ) -> Result<(), PermissionDataError> {
     let result = cached_permissions_for(cache, guild, user, channel, SystemTime::now()).await?;
     println!("{result:?}");
@@ -101,19 +100,21 @@ For data that is not in model form, the pure core takes everything explicitly an
 ```rust
 use std::time::{Duration, SystemTime};
 use discordrs::bitfield::permissions;
-use discordrs::model::{PermissionOverwrite, Snowflake};
+use discordrs::model::PermissionOverwrite;
 use discordrs::permissions::{ChannelClass, ChannelPermissionInput, MemberPermissionInput};
+use discordrs::{GenericId, InvalidId};
 
-fn example(overwrites: &[PermissionOverwrite]) {
+fn example(overwrites: &[PermissionOverwrite]) -> Result<(), InvalidId> {
     let (guild, owner, member, role) = (
-        Snowflake::from(1u64),
-        Snowflake::from(2u64),
-        Snowflake::from(3u64),
-        Snowflake::from(4u64),
+        GenericId::try_from(1_u64)?,
+        GenericId::try_from(2_u64)?,
+        GenericId::try_from(3_u64)?,
+        GenericId::try_from(4_u64)?,
     );
     let now = SystemTime::now();
-    let input = MemberPermissionInput::new(&guild, &owner, &member, permissions::VIEW_CHANNEL)
-        .role(&role, permissions::SEND_MESSAGES)
+    // IDs are Copy: pass them by value.
+    let input = MemberPermissionInput::new(guild, owner, member, permissions::VIEW_CHANNEL)
+        .role(role, permissions::SEND_MESSAGES)
         .communication_disabled_until(now + Duration::from_secs(60), now);
 
     let guild_level = input.guild_permissions();
@@ -121,6 +122,7 @@ fn example(overwrites: &[PermissionOverwrite]) {
     // For a thread pass ChannelClass::Thread with the parent's overwrites;
     // mark obfuscated channels with `.obfuscated(true)`.
     let _ = (guild_level, in_channel);
+    Ok(())
 }
 ```
 
@@ -188,10 +190,10 @@ The output matches discord.js 0.6.2 for every case in the committed golden corpu
 
 ```rust
 use discordrs::formatters::{clean_content, MentionKind};
-use discordrs::model::Snowflake;
+use discordrs::GenericId;
 
-let names = |kind: MentionKind, id: &Snowflake| match (kind, id.as_str()) {
-    (MentionKind::User, "80351110224678912") => Some("Nelly".to_string()),
+let names = |kind: MentionKind, id: GenericId| match (kind, id.get()) {
+    (MentionKind::User, 80351110224678912) => Some("Nelly".to_string()),
     _ => None,
 };
 assert_eq!(clean_content("hi <@80351110224678912>", &names), "hi @Nelly");

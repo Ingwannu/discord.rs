@@ -174,19 +174,19 @@ async fn receive_voice() -> Result<(), discordrs::DiscordError> {
 ## Voice State REST
 
 ```rust
-use discordrs::{ModifyCurrentUserVoiceState, ModifyUserVoiceState, Snowflake};
+use discordrs::{GenericId, ModifyCurrentUserVoiceState, ModifyUserVoiceState};
 
-let guild_id = Snowflake::from("123");
-let channel_id = Snowflake::from("456");
-let user_id = Snowflake::from("789");
+let guild_id: GenericId = "123".parse()?;
+let channel_id: GenericId = "456".parse()?;
+let user_id: GenericId = "789".parse()?;
 
-let state = rest.get_current_user_voice_state(guild_id.clone()).await?;
+let state = rest.get_current_user_voice_state(guild_id).await?;
 println!("current voice session: {:?}", state.session_id);
 
 rest.modify_current_user_voice_state_from_request(
-    guild_id.clone(),
+    guild_id,
     &ModifyCurrentUserVoiceState {
-        channel_id: Some(channel_id.clone()),
+        channel_id: Some(channel_id),
         suppress: Some(false),
         request_to_speak_timestamp: Some(None),
     },

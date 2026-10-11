@@ -27,7 +27,7 @@ Since `2.2.0` the parsed variants also carry a shared response state, so the `di
 
 ## Typed Resolved Data (2.2.0)
 
-Interaction `resolved` payloads decode to the typed `ResolvedData` container instead of raw JSON: six lookup maps keyed by `Snowflake` (`users`, `members`, `roles`, `channels`, `messages`, `attachments`), each defaulting to empty when Discord omits it, with by-ID accessors:
+Interaction `resolved` payloads decode to the typed `ResolvedData` container instead of raw JSON: six lookup maps keyed by `GenericId` (`users`, `members`, `roles`, `channels`, `messages`, `attachments`), each defaulting to empty when Discord omits it, with by-ID accessors:
 
 ```rust
 use discordrs::Interaction;
