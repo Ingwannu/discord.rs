@@ -374,6 +374,93 @@ impl RestClient {
         )
         .await
     }
+
+    pub(crate) async fn send_message_json(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        body: &Value,
+    ) -> Result<Value, DiscordError> {
+        self.request(
+            Method::POST,
+            &format!("/channels/{}/messages", channel_id.into()),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn pin_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!(
+                "/channels/{}/messages/pins/{}",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn unpin_message(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!(
+                "/channels/{}/messages/pins/{}",
+                channel_id.into(),
+                message_id.into()
+            ),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    pub async fn get_pinned_messages(
+        &self,
+        channel_id: impl Into<Snowflake>,
+    ) -> Result<Vec<Message>, DiscordError> {
+        self.request_typed(
+            Method::GET,
+            &format!("/channels/{}/pins", channel_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    /// Calls the legacy `pin_message` route.
+    pub async fn pin_message_legacy(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::PUT,
+            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
+
+    /// Calls the legacy `unpin_message` route.
+    pub async fn unpin_message_legacy(
+        &self,
+        channel_id: impl Into<Snowflake>,
+        message_id: impl Into<Snowflake>,
+    ) -> Result<(), DiscordError> {
+        self.request_no_content(
+            Method::DELETE,
+            &format!("/channels/{}/pins/{}", channel_id.into(), message_id.into()),
+            Option::<&Value>::None,
+        )
+        .await
+    }
 }
 
 fn channel_pins_query(query: &ChannelPinsQuery) -> String {
