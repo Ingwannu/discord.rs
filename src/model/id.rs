@@ -46,6 +46,12 @@ pub use marker::IdMarker;
 /// Discord epoch (2015-01-01T00:00:00Z) in Unix milliseconds.
 const DISCORD_EPOCH_MS: u64 = 1_420_070_400_000;
 
+/// Bits below a snowflake's timestamp: 5 worker, 5 process, and 12
+/// increment bits, so `id >> 22` is milliseconds since the Discord epoch
+/// (Discord docs: Reference › Snowflakes). Discord's guild-to-shard formula
+/// and default avatar index use the same shifted value.
+pub(crate) const SNOWFLAKE_TIMESTAMP_SHIFT: u32 = 22;
+
 /// A nonzero Discord snowflake whose resource kind is the marker `M`.
 ///
 /// Use the aliases ([`GuildId`], [`ChannelId`], [`UserId`], ...) rather than
@@ -114,7 +120,7 @@ impl<M: IdMarker> Id<M> {
         // The top 42 bits are milliseconds since the Discord epoch. The
         // largest possible value, (u64::MAX >> 22) + epoch, is about 5.8e12,
         // far below u64::MAX, so this addition cannot overflow.
-        (self.get() >> 22) + DISCORD_EPOCH_MS
+        (self.get() >> SNOWFLAKE_TIMESTAMP_SHIFT) + DISCORD_EPOCH_MS
     }
 
     /// Forgets the resource kind, e.g. to store mixed IDs together or to

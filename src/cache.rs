@@ -42,7 +42,8 @@ use store::{
 /// formula never divides by zero.
 #[cfg(any(feature = "cache", feature = "gateway"))]
 pub(crate) fn shard_for_guild_id(guild_id: GuildId, shard_count: u32) -> u32 {
-    let shard = (guild_id.get() >> 22) % u64::from(shard_count.max(1));
+    let shard =
+        (guild_id.get() >> crate::model::SNOWFLAKE_TIMESTAMP_SHIFT) % u64::from(shard_count.max(1));
     // The remainder is below `shard_count`, so the conversion cannot fail.
     u32::try_from(shard).unwrap_or(0)
 }

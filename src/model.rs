@@ -190,6 +190,7 @@ pub use patch::{Nullable, NullablePatch, Patch};
 
 #[cfg(test)]
 pub(crate) use id::test_id;
+pub(crate) use id::SNOWFLAKE_TIMESTAMP_SHIFT;
 
 /// The 2.x ID type, now a plain alias for [`GenericId`].
 ///

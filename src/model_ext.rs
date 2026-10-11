@@ -118,9 +118,14 @@ fn cdn_asset_url<M: IdMarker>(kind: &str, id: Id<M>, hash: &str, size: Option<u1
     }
 }
 
+/// Default avatars on the CDN, `embed/avatars/0.png` through `5.png`
+/// (Discord docs: Reference › Image Formatting › CDN Endpoints, "Default
+/// User Avatar").
+const DEFAULT_AVATAR_COUNT: u64 = 6;
+
 /// Index of the default embed avatar for `user`: `(id >> 22) % 6`.
 fn default_avatar_index(user: &User) -> u64 {
-    (user.id.get() >> 22) % 6
+    (user.id.get() >> crate::model::SNOWFLAKE_TIMESTAMP_SHIFT) % DEFAULT_AVATAR_COUNT
 }
 
 /// Returns the ID of the [`User`] carried by a [`Member`], or a
