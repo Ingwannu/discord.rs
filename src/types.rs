@@ -16,7 +16,7 @@ pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
     DiscordError::model(message)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Emoji`.
 pub struct Emoji {
     /// Custom emoji ID; `None` for a Unicode emoji.

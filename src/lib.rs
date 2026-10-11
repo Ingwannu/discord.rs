@@ -66,6 +66,8 @@ pub mod parsers;
 pub mod permissions;
 /// Commonly used discord.rs types re-exported for application code.
 pub mod prelude;
+// Docs in the file's `//!` header only (see `formatters`).
+pub mod request;
 /// Interaction response and message response builders.
 pub mod response;
 #[cfg(feature = "sharding")]
