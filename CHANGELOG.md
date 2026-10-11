@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `InteractionResponsePhase` / `response_phase()`, `InteractionResponse::Accepted`, `InteractionContextData::create_response`, `edit_follow_up` / `delete_follow_up`, `InteractionReplyData::poll`, `INTERACTION_RESPONSE_PONG`, and `AppContext: InteractionResponder`. `InteractionResponder`, `InteractionReplyData`, and `AutocompleteChoice` are in the prelude.
 
+- **Typed primitives for the 3.0 type migration** (consumers migrate in the following phase 3 series): `Id<M>` with aliases (`GuildId`, `ChannelId`, `UserId`, … `GenericId`) — 8 bytes, `Copy`, numeric hashing/ordering, strict decimal-string serde that rejects zero, signs, overflow, and garbage, no `Default` and no implicit `u64`/cross-marker conversions; `WidgetUserId`, `GuildInstallOwner`, `UploadId`, `ComponentId`, and `PollAnswerId` for ID-like wire values that may legitimately be `"0"` or are not snowflakes; open discriminant newtypes (`MessageType`, `ComponentType`, `AuditLogActionType`, …) that keep unknown values; and `Patch<T>` / `Nullable<T>` / `NullablePatch<T>` that distinguish an absent key, `null`, and a value (an absent required field is an error, never a silent `null`). Compile-fail tests (trybuild) pin the type-safety guarantees in CI.
+
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
 - CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
