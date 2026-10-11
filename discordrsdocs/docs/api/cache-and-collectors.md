@@ -88,7 +88,8 @@ use std::sync::Arc;
 use discordrs::cache::CacheBackend;
 use discordrs::{gateway_intents, Client};
 
-fn with_backend(token: &str, backend: Arc<dyn CacheBackend>) {
+// `CacheBackend` is not object safe since 3.0: pass `Arc<YourBackend>`.
+fn with_backend<B: CacheBackend + 'static>(token: &str, backend: Arc<B>) {
     let _builder = Client::builder(token, gateway_intents::GUILD_MESSAGES)
         .cache_backend(backend);
 }

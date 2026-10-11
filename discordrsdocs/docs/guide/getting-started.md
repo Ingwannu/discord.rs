@@ -15,13 +15,13 @@ discordrs = { version = "2.2.0", features = ["gateway"] }
 
 ## Minimal Typed Gateway Bot
 
+Handlers are plain `async fn` in the impl (no `#[async_trait]` since 3.0); see [Gateway API](../api/gateway.md) for the `Send` rule and migration.
+
 ```rust
-use async_trait::async_trait;
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, _ctx: Context, event: Event) {
         if let Event::Ready(ready) = event {

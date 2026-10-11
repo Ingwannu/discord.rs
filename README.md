@@ -150,13 +150,14 @@ A navigation-focused docs website (similar to the discord.js docs browsing style
 
 ## Quick Example
 
+Handler traits are implemented with plain `async fn` (no `#[async_trait]`);
+the futures must be `Send` because handlers run on spawned Tokio tasks.
+
 ```rust
-use async_trait::async_trait;
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, _ctx: Context, event: Event) {
         match event {
@@ -265,7 +266,6 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 ## Interactions Endpoint Example
 
 ```rust
-use async_trait::async_trait;
 use axum::Router;
 use discordrs::{
     create_container, InteractionContext, InteractionHandler, InteractionResponse, RawInteraction,
@@ -275,7 +275,6 @@ use discordrs::{
 #[derive(Clone)]
 struct Handler;
 
-#[async_trait]
 impl InteractionHandler for Handler {
     async fn handle(
         &self,
@@ -306,11 +305,11 @@ fn app(public_key: &str) -> Router {
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio, async-trait |
-| `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio |
+| `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2 |
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
-| `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
-| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
+| `interactions` | HTTP Interactions Endpoint with Ed25519 | axum 0.8, ed25519-dalek |
+| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio |
 | `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
 | `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
 | `voice` | Voice connection/player skeletons, the `AudioPlayer`/`AudioResource` playback pipeline, plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |

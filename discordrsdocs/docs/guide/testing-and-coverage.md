@@ -164,12 +164,15 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
 
 ## Compile-Fail Tests (trybuild)
 
-`tests/compile_fail.rs` checks that misuse of the 3.0 typed primitives stays a compile error:
+`tests/compile_fail.rs` checks that misuse of the 3.0 typed primitives and async-trait contracts stays a compile error:
 
 - passing a `ChannelId` where a `GuildId` is required;
 - implicit `u64` → ID conversion;
 - `GuildId::default()`, or `#[derive(Default)]` on a struct that stores an ID;
-- `Patch::null()` on a non-nullable `Patch<bool>`.
+- `Patch::null()` on a non-nullable `Patch<bool>`;
+- an `async fn` impl of a public async trait whose future is not `Send` (`CacheBackend`, the async trait available with default features, which this test uses).
+
+The positive side of that contract is `tests/async_traits.rs`: it implements every public async trait from outside the crate with plain `async fn` (no attribute macro) and runs the futures on spawned Tokio tasks, so a signature that `async fn` can no longer implement fails the build.
 
 Each case is a file in `tests/ui/` with an expected `.stderr` that holds rustc's diagnostic text. That text changes between Rust releases, so the snapshots are kept for one toolchain only, the pinned `RUST_TOOLCHAIN` (currently 1.99.0). The test does nothing unless `DISCORDRS_TRYBUILD=1` is set. CI sets it only in the `rust-check` job (step "Compile-fail snapshots"). The `msrv` and `stable-canary` jobs still compile the test file, and the test then skips itself.
 

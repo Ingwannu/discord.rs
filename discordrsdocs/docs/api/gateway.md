@@ -9,7 +9,7 @@ Gateway runtime is provided behind the `gateway` feature.
 - `Event`: typed Gateway event enum
 - `GatewayClient`: raw websocket lifecycle management (identify, heartbeat, resume, reconnect)
 - `Context`: shared runtime handles (`http`, cache, typemap, shard info)
-- `EventHandler`: async trait with `handle_event(ctx, event)`
+- `EventHandler`: handler trait with `handle_event(ctx, event)` and typed hooks, implemented with plain `async fn`
 - `EventDispatchMode`: serial (default) or concurrent handler scheduling
 - `RequestChannelInfo`: typed opcode 43 request for ephemeral voice-channel metadata
 
@@ -28,6 +28,48 @@ Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGE
     .start()
     .await?;
 ```
+
+## Implementing handlers without `#[async_trait]`
+
+Since 3.0 the crate no longer depends on `async-trait`. `EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, and `CachedManager` declare their methods as `fn ... -> impl Future<Output = T> + Send` (return-position `impl Trait` in traits), so implementations are written with plain `async fn`. Delete `#[async_trait]` and the `use async_trait::async_trait;` import from your impls, and drop `async-trait` from your `Cargo.toml` if nothing else uses it.
+
+Before (2.x):
+
+```rust
+use async_trait::async_trait;
+use discordrs::{Context, EventHandler, Message};
+
+struct Handler;
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn message_create(&self, _ctx: Context, message: Message) {
+        println!("{}", message.content);
+    }
+}
+```
+
+After (3.0):
+
+```rust
+use discordrs::{Context, EventHandler, Message};
+
+struct Handler;
+
+impl EventHandler for Handler {
+    async fn message_create(&self, _ctx: Context, message: Message) {
+        println!("{}", message.content);
+    }
+}
+```
+
+What else to know:
+
+- **Futures must be `Send`.** Handlers and cache backend calls run on spawned Tokio tasks, so an `async fn` in your impl must not hold a non-`Send` value (`Rc`, a `RefCell` borrow, a `std::sync::MutexGuard`) across an `.await`. The compiler reports this at your impl ("future cannot be sent between threads safely"); use `Arc`, `tokio::sync::Mutex`, or drop the value before awaiting.
+- **Leftover `#[async_trait]` attributes fail with `E0195`** ("lifetime parameters or bounds on method ... do not match the trait declaration"). That error means: remove the attribute.
+- **No `dyn EventHandler` / `dyn CacheBackend`.** The traits are no longer object safe. `ClientBuilder::event_handler(handler)` still takes any handler by value. `ClientBuilder::cache_backend` now takes `Arc<B>` for a concrete backend type `B: CacheBackend` instead of `Arc<dyn CacheBackend>`; `.cache_backend(Arc::new(MyBackend::new()))` keeps compiling, while a variable typed `Arc<dyn CacheBackend>` must become `Arc<MyBackend>` (or a generic `Arc<B>`).
+- Default methods are unchanged: implement only the hooks you need. Overriding `handle_event` replaces the default routing to the typed hooks.
+- Internally the runtime boxes each handler call once, as async-trait did; the default `handle_event` routing now allocates once per event instead of twice.
 
 ## Intents
 
@@ -128,14 +170,14 @@ The return value is the gateway's result, so a non-reconnectable close code such
 
 ## Default Allowed Mentions and Cache Backend (2.2.0)
 
-`ClientBuilder` gains two configuration hooks in `2.2.0`:
+`ClientBuilder` gains two configuration hooks in `2.2.0` (since 3.0 `cache_backend` takes `Arc<B>` of a concrete backend type, see above):
 
 ```rust
 use std::sync::Arc;
 use discordrs::cache::CacheBackend;
 use discordrs::{AllowedMentions, Client};
 
-fn configure(token: &str, intents: u64, backend: Arc<dyn CacheBackend>) {
+fn configure<B: CacheBackend + 'static>(token: &str, intents: u64, backend: Arc<B>) {
     let _builder = Client::builder(token, intents)
         // Injected into outgoing message payloads whenever the payload does
         // not set allowed_mentions itself — discord.js ClientOptions#allowedMentions.

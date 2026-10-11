@@ -53,11 +53,9 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 
 ```rust
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
-use async_trait::async_trait;
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, _ctx: Context, event: Event) {
         match event {
@@ -144,11 +142,11 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 | Feature | Description | Key deps |
 |---------|-------------|----------|
-| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio, async-trait |
-| `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2, async-trait |
+| (default) | Builders, typed models, command builders, parsers, REST client, helpers, and in-memory cache storage | reqwest, serde_json, tokio |
+| `gateway` | Gateway WebSocket, `Client`, typed `Event`, and `EventHandler::handle_event(...)` dispatch | tokio-tungstenite, flate2 |
 | `zstd-stream` | Gateway zstd-stream transport compression | gateway, zstd |
-| `interactions` | HTTP Interactions Endpoint with Ed25519 | axum, ed25519-dalek |
-| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio, async-trait |
+| `interactions` | HTTP Interactions Endpoint with Ed25519 | axum 0.8, ed25519-dalek |
+| `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio |
 | `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
 | `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
 | `voice` | Voice gateway/UDP runtime receive, the `AudioPlayer` playback pipeline, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |

@@ -79,13 +79,13 @@ Common replacements:
 
 Prefer `EventHandler::handle_event(...)` when you want typed `Event` dispatch from a single match point. The legacy per-event convenience callbacks remain available for compatibility, and `ready`, `message_create`, and `interaction_create` now also receive typed payloads.
 
+Since 3.0 the handler traits are implemented with plain `async fn` — delete `#[async_trait]` from existing impls (before/after in the [Gateway API docs](discordrsdocs/docs/api/gateway.md#implementing-handlers-without-async_trait)). The futures must be `Send`, because handlers run on spawned Tokio tasks.
+
 ```rust
-use async_trait::async_trait;
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         match event {
@@ -855,7 +855,6 @@ Other helpers: `message.edit/edit_with/delete/unreact/unpin/crosspost`, `member.
 `Context` now exposes direct gateway control helpers, and the helpers module exposes typed response helpers.
 
 ```rust
-use async_trait::async_trait;
 use discordrs::{
     defer_interaction, followup_message, gateway_intents, Client, Context, Event, EventHandler,
     MessageBuilder,
@@ -863,7 +862,6 @@ use discordrs::{
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, ctx: Context, event: Event) {
         if let Event::InteractionCreate(interaction) = event {
@@ -1003,7 +1001,6 @@ async fn respond_and_inspect(
 If you run an outgoing-interactions HTTP server instead of the gateway runtime, prefer the typed endpoint helpers.
 
 ```rust
-use async_trait::async_trait;
 use axum::Router;
 use discordrs::{
     Interaction, InteractionContextData, InteractionResponse, TypedInteractionHandler,
@@ -1013,7 +1010,6 @@ use discordrs::{
 #[derive(Clone)]
 struct Handler;
 
-#[async_trait]
 impl TypedInteractionHandler for Handler {
     async fn handle_typed(
         &self,
@@ -1123,7 +1119,8 @@ use std::sync::Arc;
 use discordrs::cache::CacheBackend;
 use discordrs::{gateway_intents, Client};
 
-fn with_backend(token: &str, backend: Arc<dyn CacheBackend>) {
+// `CacheBackend` is not object safe since 3.0: pass `Arc<YourBackend>`.
+fn with_backend<B: CacheBackend + 'static>(token: &str, backend: Arc<B>) {
     let _builder = Client::builder(token, gateway_intents::GUILD_MESSAGES)
         .cache_backend(backend);
 }
@@ -1481,12 +1478,10 @@ With `gateway + sharding`, you have two entry points:
 - `spawn_shards(count)`: return a `ShardSupervisor` so you can inspect state and control shards yourself
 
 ```rust
-use async_trait::async_trait;
 use discordrs::{gateway_intents, Client, Context, EventHandler};
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {}
 
 #[tokio::main]

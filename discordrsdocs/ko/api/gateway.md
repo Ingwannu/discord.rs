@@ -7,7 +7,7 @@
 - `GatewayClient`: identify/heartbeat/resume/reconnect 처리
 - `Client`: 고수준 타입드 런타임 (`BotClient`는 호환 별칭)
 - `Context`: 핸들러 공유 컨텍스트(`http`, 캐시, typemap, 샤드 정보)
-- `EventHandler`: 이벤트 콜백 트레잇
+- `EventHandler`: 이벤트 콜백 트레잇(일반 `async fn`으로 구현)
 - `EventDispatchMode`: 직렬(기본) 또는 동시 핸들러 스케줄링
 
 ## 기본 실행
@@ -18,6 +18,48 @@ Client::builder(&token, gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGE
     .start()
     .await?;
 ```
+
+## `#[async_trait]` 없이 핸들러 구현하기
+
+3.0부터 크레이트는 `async-trait`에 의존하지 않습니다. `EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, `CachedManager`는 메서드를 `fn ... -> impl Future<Output = T> + Send`(트레잇 반환 위치 `impl Trait`)로 선언하므로 구현은 일반 `async fn`으로 씁니다. 기존 impl에서 `#[async_trait]`와 `use async_trait::async_trait;`를 지우고, 다른 곳에서 쓰지 않으면 `Cargo.toml`의 `async-trait`도 지웁니다.
+
+이전(2.x):
+
+```rust
+use async_trait::async_trait;
+use discordrs::{Context, EventHandler, Message};
+
+struct Handler;
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn message_create(&self, _ctx: Context, message: Message) {
+        println!("{}", message.content);
+    }
+}
+```
+
+이후(3.0):
+
+```rust
+use discordrs::{Context, EventHandler, Message};
+
+struct Handler;
+
+impl EventHandler for Handler {
+    async fn message_create(&self, _ctx: Context, message: Message) {
+        println!("{}", message.content);
+    }
+}
+```
+
+함께 알아 둘 점:
+
+- **future는 `Send`여야 합니다.** 핸들러와 캐시 백엔드 호출은 생성된(spawn) Tokio 작업에서 실행되므로, impl의 `async fn`이 `.await`를 건너 `Send`가 아닌 값(`Rc`, `RefCell` 빌림, `std::sync::MutexGuard`)을 들고 있으면 안 됩니다. 컴파일러가 impl 위치에서 "future cannot be sent between threads safely"로 알려 줍니다. `Arc`, `tokio::sync::Mutex`를 쓰거나 await 전에 값을 버립니다.
+- **남겨 둔 `#[async_trait]`는 `E0195`로 실패합니다**("lifetime parameters or bounds on method ... do not match the trait declaration"). 이 오류는 속성을 지우라는 뜻입니다.
+- **`dyn EventHandler` / `dyn CacheBackend`는 없습니다.** 트레잇이 더 이상 object safe가 아닙니다. `ClientBuilder::event_handler(handler)`는 그대로 핸들러를 값으로 받습니다. `ClientBuilder::cache_backend`는 `Arc<dyn CacheBackend>` 대신 구체 타입 `B: CacheBackend`의 `Arc<B>`를 받습니다. `.cache_backend(Arc::new(MyBackend::new()))`는 그대로 컴파일되지만, `Arc<dyn CacheBackend>` 타입 변수는 `Arc<MyBackend>`(또는 제네릭 `Arc<B>`)로 바꿔야 합니다.
+- 기본 메서드는 그대로입니다. 필요한 훅만 구현하며, `handle_event`를 재정의하면 타입 훅으로 가는 기본 라우팅을 대체합니다.
+- 런타임은 내부에서 핸들러 호출마다 한 번 박싱합니다(async-trait와 같음). 기본 `handle_event` 라우팅은 이벤트당 할당이 두 번에서 한 번으로 줄었습니다.
 
 ## 인텐트
 
@@ -96,14 +138,14 @@ INTERACTION_CREATE는 일반 핸들러 큐를 거치지 않습니다. 샤드마�
 
 ## 기본 Allowed Mentions와 캐시 백엔드 (2.2.0)
 
-2.2.0에서 `ClientBuilder`에 두 가지 구성 옵션이 추가되었습니다.
+2.2.0에서 `ClientBuilder`에 두 가지 구성 옵션이 추가되었습니다(3.0부터 `cache_backend`는 구체 백엔드 타입의 `Arc<B>`를 받습니다. 위 절 참고).
 
 ```rust
 use std::sync::Arc;
 use discordrs::cache::CacheBackend;
 use discordrs::{AllowedMentions, Client};
 
-fn configure(token: &str, intents: u64, backend: Arc<dyn CacheBackend>) {
+fn configure<B: CacheBackend + 'static>(token: &str, intents: u64, backend: Arc<B>) {
     let _builder = Client::builder(token, intents)
         // 페이로드가 allowed_mentions를 직접 지정하지 않은 경우에만 주입됩니다
         // — discord.js의 ClientOptions#allowedMentions에 해당합니다.

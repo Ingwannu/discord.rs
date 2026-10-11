@@ -81,6 +81,31 @@ operation)를 읽고, 8단계 drift CI가 같은 메타데이터를 쓴다.
   외 키가 있으면 전체 무효, 미디어 URL은 http(s)·2,048자 이하(5단계).
 - 규격은 Discord가 "변경될 수 있다"고 명시하므로 한도 상수에 출처를 남기고 과잉 차단하지 않는다.
 
+### 의존성 정리 (2026-10-11)
+
+깨끗한 디버그 빌드가 기본 기능 34초, 전체 기능 50초였고 `syn`이 v2(serde_derive·tokio-macros·
+tracing-attributes)와 v3(async-trait 0.1.90+)로 두 번 빌드됐다. 우리 lockfile을 async-trait 0.1.89로
+고정해도 사용자 Cargo는 최신 0.1.x를 고르므로 의존성 자체를 없앴다.
+
+```text
+[Decision Log]
+- 목적과 의도: 사용자 빌드에서 syn v3와 작은 의존성을 빼 컴파일 시간을 줄인다.
+- 기존 구현 및 제약 조건: EventHandler·CacheBackend·인터랙션 핸들러·CachedManager가 #[async_trait],
+  런타임은 Arc<dyn EventHandler>/Arc<dyn CacheBackend>를 저장. axum 0.7도 async-trait에 의존.
+  MSRV 1.88. hex는 서명 검증의 decode 두 곳뿐.
+- 검토한 주요 대안: (1) async-trait 버전 고정, (2) 런타임 전체를 핸들러 타입으로 제네릭화,
+  (3) 공개 trait은 RPITIT(fn -> impl Future + Send), 내부는 비공개 박싱 trait + 블랭킷 impl.
+- 선택한 방식: (3). axum은 async-trait를 쓰지 않는 0.8로 올리고, hex는 비공개 코덱으로 바꾼다.
+  tokio-tungstenite는 올리지 않는다: 0.26~0.30 모두 webpki-roots ^0.26(1.0을 재수출하는 얇은 shim)을
+  요구하고, 0.30은 digest 0.11·rand 0.10·getrandom 0.4 중복을 새로 들여온다.
+- 다른 대안 대신 이 방식을 선택한 이유: (1)은 사용자에게 효과가 없고, (2)는 ClientBuilder·감독자·
+  파이프라인에 타입 매개변수가 번진다. (3)은 사용자 impl에서 매크로만 지우면 되고 호출당 박싱 한 번이
+  유지된다(기본 handle_event 라우팅은 두 번에서 한 번으로 줄었다).
+- 장점, 단점 및 영향: 파괴적 변경 — dyn EventHandler/dyn CacheBackend 불가, cache_backend가 Arc<B>를
+  받음, From<hex::FromHexError> 제거, 엔드포인트 Router가 axum 0.8 타입. 사용자 future는 Send여야 하며
+  tests/ui/cache_backend_future_not_send.rs가 이를 고정한다.
+```
+
 ---
 
 # 부록: 남은 감사 항목 설계 노트

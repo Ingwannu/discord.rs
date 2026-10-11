@@ -78,11 +78,13 @@ flowchart LR
 - `src/parsers/`: raw + typed interaction parsing helpers
 - `src/helpers.rs`: high-level reply helpers for interaction flows
 - `src/interactions.rs`: HTTP endpoint mode with signature verification
+- `src/hex.rs`: private hex codec for the endpoint's Ed25519 public key and signatures (replaces the `hex` crate)
 
 ## Runtime Patterns
 
 - Gateway mode: maintain websocket session, handle typed `Event`, call `RestClient` or managers when needed
 - Endpoint mode: receive signed interaction payloads, parse with `parse_interaction(...)`, respond with helpers
 - Hybrid mode: use both for richer operational workflows
+- Public async traits (`EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, `CachedManager`) declare `fn ... -> impl Future + Send`, so users implement them with plain `async fn` and no proc-macro dependency. Such traits are not object safe, so the gateway runtime shares the handler and the cache backend through private object-safe traits (`ErasedEventHandler` in `src/gateway/bot.rs`, `ErasedCacheBackend` in `src/gateway/bot/backend.rs`) with a blanket impl that boxes each call once. The interactions endpoint is generic over the handler and needs no erasure.
 - Sharding and voice are dedicated feature-gated layers above the base `Client`.
 - Add new endpoints to the matching `src/http/<domain>.rs` `impl RestClient` block and new model types to the matching `src/model/<domain>.rs` plus one re-export line in `src/model.rs`; route construction stays in `src/http/paths.rs`, body encoding in `src/http/body.rs`, and rate-limit bookkeeping in `src/http/rate_limit.rs`.

@@ -36,12 +36,10 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ## 2. Start a typed Gateway client
 
 ```rust
-use async_trait::async_trait;
 use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
 
 struct Handler;
 
-#[async_trait]
 impl EventHandler for Handler {
     async fn handle_event(&self, _ctx: Context, event: Event) {
         match event {
