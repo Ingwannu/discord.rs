@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Webhook::kind` reads and writes Discord's `type` key (2.x used `kind` on the wire and never decoded the value).
 - Guild, channel, and gateway models are smaller (`Channel` 536 → 488 bytes, `Guild` 856 → 784), and decoding a GUILD_CREATE allocates 200 fewer times (presence status is interned).
 
+- **Modal checkbox and radio submissions parse.** Discord sends a submitted checkbox as `value: true|false`; the parser read a `checked` key and the model stored `value` as a string, so every modal containing a checkbox failed to parse. A radio group with nothing selected (`value: null`) was rejected too. `CheckboxBuilder` sent its initial state as `checked` instead of Discord's `default`. All ten documented modal-submit payloads now parse with their values.
+
 ### Added
 - `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
 - **Channel obfuscation readiness** (mandatory for all bots from 2026-11-16): `ChannelFlags` with `CHANNEL_OBFUSCATED` and the other documented channel flags, `Channel::channel_flags()` / `Channel::is_obfuscated()`, and IDENTIFY `capabilities` via `GatewayCapabilities`, `GatewayConnectionConfig::capabilities(...)`, and `ClientBuilder::gateway_capabilities(...)` for Discord's temporary early opt-in.
@@ -111,6 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One permission type** (breaking). Every permission field and parameter uses `Permissions`, including `CurrentUserGuild::permissions` (was `String`); `PermissionsBitField` is a deprecated alias. Bitfields serialize in Discord's shape: permissions as strings; message, channel, and user flags, intents, capabilities, and custom `BitFieldFlags` sets as numbers (`BitFieldFlags::STRING_ENCODED`). Negative input is rejected, and `add` / `remove` / `merge` / `missing` are `#[must_use]`.
 - `Interaction::Unknown::kind` is an `InteractionType` and always the interaction type; an unknown command type is in `raw_data["type"]`.
 - Presence `status` (and the `ClientStatus` fields, `UpdatePresence::status`, `PresenceUpdateEvent::status`) is a `PresenceStatus` (constants `ONLINE`, `DND`, `IDLE`, `INVISIBLE`, `OFFLINE`; unknown strings kept; compares with `&str`).
+
+- Modal values (breaking): `MessageComponent::value` is `Option<MessageComponentValue>` (`String` / `Bool` / `Other`, with `value_str()` / `value_bool()`), plus new `values: Option<Vec<String>>` and `default: Option<bool>`; `RadioGroup::value` is `Option<String>`; `V2ModalSubmission::get_checkbox`. `CheckboxBuilder::default_checked(bool)` replaces `checked(bool)` (deprecated alias). The `disabled` setters on the radio-group, checkbox-group, and checkbox builders and `CheckboxBuilder::required` are removed: Discord rejects disabled components in modals and a single checkbox cannot be required (use a one-option checkbox group with `required(true)`).
 
 ### Deprecated
 - `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.
