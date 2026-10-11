@@ -1,0 +1,1363 @@
+{
+  "meta": {
+    "arch": "x86_64",
+    "cpu": "Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz",
+    "crate_version": "2.2.0",
+    "deterministic_metrics": [
+      "allocs",
+      "alloc_bytes",
+      "retained_bytes",
+      "peak_bytes"
+    ],
+    "features": "gateway,cache,collectors (+ whatever else the build enabled)",
+    "fixtures_digest": "e5323e72de891517",
+    "git_commit": "f438ed2",
+    "git_dirty": false,
+    "logical_cpus": 16,
+    "os": "linux",
+    "profile": "release",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)"
+  },
+  "scenarios": [
+    {
+      "channel": 488,
+      "context": 480,
+      "deterministic": [
+        "event",
+        "message",
+        "guild",
+        "member",
+        "user",
+        "channel",
+        "presence",
+        "context",
+        "value",
+        "empty_collector_hub_bytes"
+      ],
+      "empty_collector_hub_bytes": 1241224,
+      "event": 4848,
+      "group": "layout",
+      "guild": 784,
+      "member": 728,
+      "message": 4808,
+      "presence": 160,
+      "scenario": "layout.size_of",
+      "user": 408,
+      "value": 32
+    },
+    {
+      "alloc_bytes": 3053066,
+      "allocs": 305,
+      "deterministic": [],
+      "group": "e2e",
+      "note": "connect, IDENTIFY, READY: allocations made and heap a connected shard keeps",
+      "peak_bytes": 2533038,
+      "retained_bytes": 1776427,
+      "scenario": "e2e.idle_client"
+    },
+    {
+      "alloc_bytes": 11656.0,
+      "allocs": 13.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 82921,
+      "min_ns": 67915,
+      "note": "unknown dispatch with an empty d: socket-to-handler overhead per frame",
+      "ops": 300,
+      "peak_bytes": 10921,
+      "retained_bytes": 0,
+      "scenario": "e2e.floor"
+    },
+    {
+      "alloc_bytes": 65251.0,
+      "allocs": 576.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 163894,
+      "min_ns": 139639,
+      "ops": 300,
+      "peak_bytes": 28484,
+      "retained_bytes": 0,
+      "scenario": "e2e.message_create.plain"
+    },
+    {
+      "alloc_bytes": 165265.0,
+      "allocs": 1508.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 310932,
+      "min_ns": 262682,
+      "ops": 300,
+      "peak_bytes": 88911,
+      "retained_bytes": 0,
+      "scenario": "e2e.message_create.embeds"
+    },
+    {
+      "alloc_bytes": 144279.0,
+      "allocs": 1034.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 251703,
+      "min_ns": 199071,
+      "ops": 300,
+      "peak_bytes": 77545,
+      "retained_bytes": 0,
+      "scenario": "e2e.message_create.components_v2"
+    },
+    {
+      "alloc_bytes": 35093.0,
+      "allocs": 220.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 122828,
+      "min_ns": 100163,
+      "ops": 300,
+      "peak_bytes": 14529,
+      "retained_bytes": 0,
+      "scenario": "e2e.message_update.partial"
+    },
+    {
+      "alloc_bytes": 53977.0,
+      "allocs": 373.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 134571,
+      "min_ns": 112646,
+      "ops": 300,
+      "peak_bytes": 26412,
+      "retained_bytes": 0,
+      "scenario": "e2e.presence_update"
+    },
+    {
+      "alloc_bytes": 181999.0,
+      "allocs": 1522.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 300586,
+      "min_ns": 249525,
+      "ops": 300,
+      "peak_bytes": 101869,
+      "retained_bytes": 0,
+      "scenario": "e2e.interaction_create.chat_input"
+    },
+    {
+      "alloc_bytes": 31646.0,
+      "allocs": 281.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 300,
+      "median_ns": 106034,
+      "min_ns": 90100,
+      "ops": 300,
+      "peak_bytes": 15668,
+      "retained_bytes": 0,
+      "scenario": "e2e.unknown_dispatch"
+    },
+    {
+      "alloc_bytes": 62982889.08,
+      "allocs": 508715.88,
+      "deterministic": [],
+      "group": "e2e",
+      "guilds": 25,
+      "hwm_after_kib": 542152,
+      "iterations": 25,
+      "median_ns": 163157970,
+      "members_per_guild": 1000,
+      "min_ns": 98112179,
+      "note": "retained_bytes: heap held after the storm (cache + collector hub journal + queues); time measured with allocation counting on (about 65 ns per allocation)",
+      "ops": 25,
+      "peak_bytes": 410709673,
+      "retained_bytes": 388203773,
+      "rss_after_kib": 542152,
+      "rss_before_kib": 34736,
+      "scenario": "e2e.guild_create_storm"
+    },
+    {
+      "alloc_bytes": 11657.0,
+      "allocs": 13.0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 256,
+      "median_ns": 213605,
+      "min_ns": 178308,
+      "note": "256 tiny dispatches evict the storm from the collector hub journal; -retained_bytes is what the journal held",
+      "ops": 256,
+      "peak_bytes": 614,
+      "retained_bytes": -306535049,
+      "rss_after_kib": 542152,
+      "scenario": "e2e.journal_flush_after_storm"
+    },
+    {
+      "alloc_bytes": 65251.0,
+      "allocs": 576.0,
+      "collectors": 0,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 200,
+      "median_ns": 301994,
+      "min_ns": 246972,
+      "note": "MESSAGE_CREATE through the real pipeline with K hub collectors (one matches when K > 0); time: until the handler and the matching collector have it",
+      "ops": 200,
+      "peak_bytes": 28484,
+      "retained_bytes": 0,
+      "scenario": "e2e.fanout.message_collectors.k0"
+    },
+    {
+      "alloc_bytes": 74963.0,
+      "allocs": 696.0,
+      "collectors": 1,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 200,
+      "median_ns": 521820,
+      "min_ns": 348932,
+      "note": "MESSAGE_CREATE through the real pipeline with K hub collectors (one matches when K > 0); time: until the handler and the matching collector have it",
+      "ops": 200,
+      "peak_bytes": 28678,
+      "retained_bytes": 0,
+      "scenario": "e2e.fanout.message_collectors.k1"
+    },
+    {
+      "alloc_bytes": 142947.0,
+      "allocs": 1536.0,
+      "collectors": 8,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 200,
+      "median_ns": 481091,
+      "min_ns": 277250,
+      "note": "MESSAGE_CREATE through the real pipeline with K hub collectors (one matches when K > 0); time: until the handler and the matching collector have it",
+      "ops": 200,
+      "peak_bytes": 30328,
+      "retained_bytes": 0,
+      "scenario": "e2e.fanout.message_collectors.k8"
+    },
+    {
+      "alloc_bytes": 686819.0,
+      "allocs": 8256.0,
+      "collectors": 64,
+      "deterministic": [],
+      "group": "e2e",
+      "iterations": 200,
+      "median_ns": 1305391,
+      "min_ns": 614273,
+      "note": "MESSAGE_CREATE through the real pipeline with K hub collectors (one matches when K > 0); time: until the handler and the matching collector have it",
+      "ops": 200,
+      "peak_bytes": 43756,
+      "retained_bytes": 0,
+      "scenario": "e2e.fanout.message_collectors.k64"
+    },
+    {
+      "copies_k64": 64.0,
+      "copies_k8": 8.0,
+      "copy_allocs": 120.0,
+      "copy_bytes": 9712.0,
+      "deterministic": [
+        "k8_minus_k1",
+        "k64_minus_k1",
+        "k64_minus_k1_by_bytes"
+      ],
+      "group": "collectors",
+      "k64_minus_k1": 63.0,
+      "k64_minus_k1_by_bytes": 63.0,
+      "k8_minus_k1": 7.0,
+      "note": "one copy = allocs(k=1) - allocs(k=0) per MESSAGE_CREATE; k64_minus_k1 = extra copies caused by 63 non-matching collectors (gate: 0)",
+      "scenario": "collectors.payload_copies"
+    },
+    {
+      "deterministic": [],
+      "group": "process",
+      "hwm_kib": 541328,
+      "note": "VmRSS/VmHWM of the end-to-end bot process from /proc/self/status (glibc malloc, 4 runtime workers); null off Linux",
+      "rss_after_journal_flush_kib": 542152,
+      "rss_after_storm_kib": 542152,
+      "rss_before_storm_kib": 34736,
+      "rss_idle_client_kib": 9804,
+      "rss_start_kib": 4216,
+      "scenario": "process.rss"
+    },
+    {
+      "alloc_bytes": 54345,
+      "allocs": 573,
+      "cold_allocs": 581,
+      "cold_peak_bytes": 36721,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "MESSAGE_CREATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 54318,
+      "min_ns": 46085,
+      "payload_bytes": 1571,
+      "peak_bytes": 28484,
+      "retained_bytes": 27661,
+      "scenario": "inbound.message_create.plain",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 5533,
+          "allocs": 19,
+          "mean_ns": 3844,
+          "peak_bytes": 5490,
+          "retained_bytes": 8237
+        },
+        "collector_publish": {
+          "alloc_bytes": 9712,
+          "allocs": 120,
+          "mean_ns": 12326,
+          "peak_bytes": 9712,
+          "retained_bytes": 9712
+        },
+        "decode_event": {
+          "alloc_bytes": 18516,
+          "allocs": 214,
+          "mean_ns": 14441,
+          "peak_bytes": 18092,
+          "retained_bytes": 9712
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 2555,
+          "peak_bytes": 0,
+          "retained_bytes": -9046
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 2818,
+          "peak_bytes": 0,
+          "retained_bytes": -11524
+        },
+        "envelope": {
+          "alloc_bytes": 9060,
+          "allocs": 107,
+          "mean_ns": 3287,
+          "peak_bytes": 9060,
+          "retained_bytes": 9060
+        },
+        "frame_to_string": {
+          "alloc_bytes": 1571,
+          "allocs": 1,
+          "mean_ns": 5174,
+          "peak_bytes": 1571,
+          "retained_bytes": 1571
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 2809,
+          "peak_bytes": 0,
+          "retained_bytes": -9712
+        },
+        "parse_frame": {
+          "alloc_bytes": 9953,
+          "allocs": 112,
+          "mean_ns": 9023,
+          "peak_bytes": 9953,
+          "retained_bytes": 9953
+        }
+      }
+    },
+    {
+      "alloc_bytes": 154359,
+      "allocs": 1505,
+      "cold_allocs": 1513,
+      "cold_peak_bytes": 104469,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "MESSAGE_CREATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 167423,
+      "min_ns": 140562,
+      "payload_bytes": 3735,
+      "peak_bytes": 88911,
+      "retained_bytes": 80144,
+      "scenario": "inbound.message_create.embeds",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 12854,
+          "allocs": 73,
+          "mean_ns": 10909,
+          "peak_bytes": 12806,
+          "retained_bytes": 15558
+        },
+        "collector_publish": {
+          "alloc_bytes": 32293,
+          "allocs": 338,
+          "mean_ns": 48238,
+          "peak_bytes": 32293,
+          "retained_bytes": 32293
+        },
+        "decode_event": {
+          "alloc_bytes": 55422,
+          "allocs": 547,
+          "mean_ns": 42344,
+          "peak_bytes": 51520,
+          "retained_bytes": 32293
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 7636,
+          "peak_bytes": 0,
+          "retained_bytes": -24311
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 7615,
+          "peak_bytes": 0,
+          "retained_bytes": -29337
+        },
+        "envelope": {
+          "alloc_bytes": 24325,
+          "allocs": 270,
+          "mean_ns": 9430,
+          "peak_bytes": 24325,
+          "retained_bytes": 24325
+        },
+        "frame_to_string": {
+          "alloc_bytes": 3735,
+          "allocs": 1,
+          "mean_ns": 17545,
+          "peak_bytes": 3735,
+          "retained_bytes": 3735
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 8450,
+          "peak_bytes": 0,
+          "retained_bytes": -32293
+        },
+        "parse_frame": {
+          "alloc_bytes": 25730,
+          "allocs": 276,
+          "mean_ns": 22678,
+          "peak_bytes": 25602,
+          "retained_bytes": 25602
+        }
+      }
+    },
+    {
+      "alloc_bytes": 133373,
+      "allocs": 1031,
+      "cold_allocs": 1039,
+      "cold_peak_bytes": 96621,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "MESSAGE_CREATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 118210,
+      "min_ns": 100110,
+      "payload_bytes": 2615,
+      "peak_bytes": 77545,
+      "retained_bytes": 78430,
+      "scenario": "inbound.message_create.components_v2",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 16372,
+          "allocs": 38,
+          "mean_ns": 7440,
+          "peak_bytes": 16324,
+          "retained_bytes": 19076
+        },
+        "collector_publish": {
+          "alloc_bytes": 29677,
+          "allocs": 222,
+          "mean_ns": 32792,
+          "peak_bytes": 29677,
+          "retained_bytes": 29677
+        },
+        "decode_event": {
+          "alloc_bytes": 47066,
+          "allocs": 383,
+          "mean_ns": 31551,
+          "peak_bytes": 41472,
+          "retained_bytes": 29677
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 5222,
+          "peak_bytes": 0,
+          "retained_bytes": -18177
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 5551,
+          "peak_bytes": 0,
+          "retained_bytes": -21827
+        },
+        "envelope": {
+          "alloc_bytes": 18191,
+          "allocs": 189,
+          "mean_ns": 6319,
+          "peak_bytes": 18191,
+          "retained_bytes": 18191
+        },
+        "frame_to_string": {
+          "alloc_bytes": 2615,
+          "allocs": 1,
+          "mean_ns": 11228,
+          "peak_bytes": 2615,
+          "retained_bytes": 2615
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 6010,
+          "peak_bytes": 0,
+          "retained_bytes": -29677
+        },
+        "parse_frame": {
+          "alloc_bytes": 19452,
+          "allocs": 198,
+          "mean_ns": 17074,
+          "peak_bytes": 19276,
+          "retained_bytes": 19212
+        }
+      }
+    },
+    {
+      "alloc_bytes": 24187,
+      "allocs": 217,
+      "cold_allocs": 216,
+      "cold_peak_bytes": 12742,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "MESSAGE_UPDATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 18897,
+      "min_ns": 16304,
+      "payload_bytes": 553,
+      "peak_bytes": 12742,
+      "retained_bytes": 7279,
+      "scenario": "inbound.message_update.partial",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 6616,
+          "allocs": 36,
+          "mean_ns": 4479,
+          "peak_bytes": 6047,
+          "retained_bytes": 29
+        },
+        "collector_publish": {
+          "alloc_bytes": 3625,
+          "allocs": 40,
+          "mean_ns": 3686,
+          "peak_bytes": 3625,
+          "retained_bytes": 3625
+        },
+        "decode_event": {
+          "alloc_bytes": 6520,
+          "allocs": 67,
+          "mean_ns": 4177,
+          "peak_bytes": 6112,
+          "retained_bytes": 3625
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 690,
+          "peak_bytes": 0,
+          "retained_bytes": -3056
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 788,
+          "peak_bytes": 0,
+          "retained_bytes": -4356
+        },
+        "envelope": {
+          "alloc_bytes": 3070,
+          "allocs": 34,
+          "mean_ns": 1216,
+          "peak_bytes": 3070,
+          "retained_bytes": 3070
+        },
+        "frame_to_string": {
+          "alloc_bytes": 553,
+          "allocs": 1,
+          "mean_ns": 65,
+          "peak_bytes": 553,
+          "retained_bytes": 553
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1070,
+          "peak_bytes": 0,
+          "retained_bytes": -3625
+        },
+        "parse_frame": {
+          "alloc_bytes": 3803,
+          "allocs": 39,
+          "mean_ns": 2575,
+          "peak_bytes": 3803,
+          "retained_bytes": 3803
+        }
+      }
+    },
+    {
+      "alloc_bytes": 43071,
+      "allocs": 370,
+      "cold_allocs": 374,
+      "cold_peak_bytes": 28288,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "PRESENCE_UPDATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 26926,
+      "min_ns": 23095,
+      "payload_bytes": 772,
+      "peak_bytes": 26412,
+      "retained_bytes": 20602,
+      "scenario": "inbound.presence_update",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 1216,
+          "allocs": 14,
+          "mean_ns": 1174,
+          "peak_bytes": 1216,
+          "retained_bytes": 1876
+        },
+        "collector_publish": {
+          "alloc_bytes": 9363,
+          "allocs": 83,
+          "mean_ns": 7219,
+          "peak_bytes": 9363,
+          "retained_bytes": 9363
+        },
+        "decode_event": {
+          "alloc_bytes": 15583,
+          "allocs": 131,
+          "mean_ns": 6513,
+          "peak_bytes": 14869,
+          "retained_bytes": 9363
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1579,
+          "peak_bytes": 0,
+          "retained_bytes": -7671
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1783,
+          "peak_bytes": 0,
+          "retained_bytes": -9223
+        },
+        "envelope": {
+          "alloc_bytes": 7686,
+          "allocs": 68,
+          "mean_ns": 2387,
+          "peak_bytes": 7686,
+          "retained_bytes": 7686
+        },
+        "frame_to_string": {
+          "alloc_bytes": 772,
+          "allocs": 1,
+          "mean_ns": 93,
+          "peak_bytes": 772,
+          "retained_bytes": 772
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1969,
+          "peak_bytes": 0,
+          "retained_bytes": -9363
+        },
+        "parse_frame": {
+          "alloc_bytes": 8451,
+          "allocs": 73,
+          "mean_ns": 4947,
+          "peak_bytes": 8451,
+          "retained_bytes": 8451
+        }
+      }
+    },
+    {
+      "alloc_bytes": 171093,
+      "allocs": 1519,
+      "cold_allocs": 1519,
+      "cold_peak_bytes": 101869,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "INTERACTION_CREATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 169611,
+      "min_ns": 142410,
+      "payload_bytes": 3956,
+      "peak_bytes": 101869,
+      "retained_bytes": 74680,
+      "scenario": "inbound.interaction_create.chat_input",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 73,
+          "peak_bytes": 0,
+          "retained_bytes": 0
+        },
+        "collector_publish": {
+          "alloc_bytes": 37156,
+          "allocs": 316,
+          "mean_ns": 50527,
+          "peak_bytes": 37156,
+          "retained_bytes": 37156
+        },
+        "decode_event": {
+          "alloc_bytes": 74518,
+          "allocs": 652,
+          "mean_ns": 51694,
+          "peak_bytes": 59071,
+          "retained_bytes": 37524
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 7864,
+          "peak_bytes": 0,
+          "retained_bytes": -27171
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 7832,
+          "peak_bytes": 0,
+          "retained_bytes": -32102
+        },
+        "envelope": {
+          "alloc_bytes": 27189,
+          "allocs": 272,
+          "mean_ns": 9610,
+          "peak_bytes": 27189,
+          "retained_bytes": 27189
+        },
+        "frame_to_string": {
+          "alloc_bytes": 3956,
+          "allocs": 1,
+          "mean_ns": 16398,
+          "peak_bytes": 3956,
+          "retained_bytes": 3956
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 8400,
+          "peak_bytes": 0,
+          "retained_bytes": -37156
+        },
+        "parse_frame": {
+          "alloc_bytes": 28274,
+          "allocs": 278,
+          "mean_ns": 24198,
+          "peak_bytes": 28146,
+          "retained_bytes": 28146
+        }
+      }
+    },
+    {
+      "alloc_bytes": 20740,
+      "allocs": 278,
+      "cold_allocs": 278,
+      "cold_peak_bytes": 14292,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "GUILD_JOIN_REQUEST_UPDATE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 19498,
+      "min_ns": 17023,
+      "payload_bytes": 951,
+      "peak_bytes": 14292,
+      "retained_bytes": 9528,
+      "scenario": "inbound.unknown_dispatch",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 48,
+          "peak_bytes": 0,
+          "retained_bytes": 0
+        },
+        "collector_publish": {
+          "alloc_bytes": 4764,
+          "allocs": 68,
+          "mean_ns": 5422,
+          "peak_bytes": 4764,
+          "retained_bytes": 4764
+        },
+        "decode_event": {
+          "alloc_bytes": 4764,
+          "allocs": 68,
+          "mean_ns": 2325,
+          "peak_bytes": 4764,
+          "retained_bytes": 4764
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1549,
+          "peak_bytes": 0,
+          "retained_bytes": -4739
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1744,
+          "peak_bytes": 0,
+          "retained_bytes": -6448
+        },
+        "envelope": {
+          "alloc_bytes": 4764,
+          "allocs": 68,
+          "mean_ns": 2687,
+          "peak_bytes": 4764,
+          "retained_bytes": 4764
+        },
+        "frame_to_string": {
+          "alloc_bytes": 951,
+          "allocs": 1,
+          "mean_ns": 57,
+          "peak_bytes": 951,
+          "retained_bytes": 951
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 1621,
+          "peak_bytes": 0,
+          "retained_bytes": -4764
+        },
+        "parse_frame": {
+          "alloc_bytes": 5497,
+          "allocs": 73,
+          "mean_ns": 4835,
+          "peak_bytes": 5497,
+          "retained_bytes": 5497
+        }
+      }
+    },
+    {
+      "alloc_bytes": 751,
+      "allocs": 10,
+      "cold_allocs": 10,
+      "cold_peak_bytes": 717,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "PERF_REPORT_PROBE",
+      "group": "inbound",
+      "iterations": 2000,
+      "median_ns": 1914,
+      "min_ns": 1723,
+      "payload_bytes": 46,
+      "peak_bytes": 717,
+      "retained_bytes": 34,
+      "scenario": "inbound.floor",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 37,
+          "peak_bytes": 0,
+          "retained_bytes": 0
+        },
+        "collector_publish": {
+          "alloc_bytes": 17,
+          "allocs": 1,
+          "mean_ns": 458,
+          "peak_bytes": 17,
+          "retained_bytes": 17
+        },
+        "decode_event": {
+          "alloc_bytes": 17,
+          "allocs": 1,
+          "mean_ns": 368,
+          "peak_bytes": 17,
+          "retained_bytes": 17
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 39,
+          "peak_bytes": 0,
+          "retained_bytes": 0
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 157,
+          "peak_bytes": 0,
+          "retained_bytes": -700
+        },
+        "envelope": {
+          "alloc_bytes": 17,
+          "allocs": 1,
+          "mean_ns": 106,
+          "peak_bytes": 17,
+          "retained_bytes": 17
+        },
+        "frame_to_string": {
+          "alloc_bytes": 46,
+          "allocs": 1,
+          "mean_ns": 41,
+          "peak_bytes": 46,
+          "retained_bytes": 46
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 109,
+          "peak_bytes": 0,
+          "retained_bytes": -17
+        },
+        "parse_frame": {
+          "alloc_bytes": 654,
+          "allocs": 6,
+          "mean_ns": 411,
+          "peak_bytes": 654,
+          "retained_bytes": 654
+        }
+      }
+    },
+    {
+      "alloc_bytes": 1914,
+      "allocs": 15,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "reference",
+      "iterations": 2000,
+      "median_ns": 4309,
+      "min_ns": 3788,
+      "note": "serde_json::from_str::<T>(d) only: no envelope, Value tree, raw copy, cache, or publish",
+      "payload_bytes": 1530,
+      "peak_bytes": 1914,
+      "retained_bytes": 1906,
+      "scenario": "ref.typed_from_str.message_create.plain"
+    },
+    {
+      "alloc_bytes": 20108,
+      "allocs": 38,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "reference",
+      "iterations": 2000,
+      "median_ns": 10816,
+      "min_ns": 9563,
+      "note": "serde_json::from_str::<T>(d) only: no envelope, Value tree, raw copy, cache, or publish",
+      "payload_bytes": 2574,
+      "peak_bytes": 17084,
+      "retained_bytes": 17020,
+      "scenario": "ref.typed_from_str.message_create.components_v2"
+    },
+    {
+      "alloc_bytes": 19424,
+      "allocs": 240,
+      "collectors": 1,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "fanout",
+      "iterations": 2000,
+      "median_ns": 13448,
+      "min_ns": 12303,
+      "note": "hub journal clone + one clone per collector, one match; retained_bytes = journal copy + the collected message",
+      "peak_bytes": 19424,
+      "retained_bytes": 10378,
+      "scenario": "fanout.message_collectors.k1"
+    },
+    {
+      "alloc_bytes": 87408,
+      "allocs": 1080,
+      "collectors": 8,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "fanout",
+      "iterations": 2000,
+      "median_ns": 59646,
+      "min_ns": 52690,
+      "note": "hub journal clone + one clone per collector, one match; retained_bytes = journal copy + the collected message",
+      "peak_bytes": 20090,
+      "retained_bytes": 10378,
+      "scenario": "fanout.message_collectors.k8"
+    },
+    {
+      "alloc_bytes": 631280,
+      "allocs": 7800,
+      "collectors": 64,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "fanout",
+      "iterations": 2000,
+      "median_ns": 430618,
+      "min_ns": 374062,
+      "note": "hub journal clone + one clone per collector, one match; retained_bytes = journal copy + the collected message",
+      "peak_bytes": 20090,
+      "retained_bytes": 10378,
+      "scenario": "fanout.message_collectors.k64"
+    },
+    {
+      "alloc_bytes": 46567,
+      "allocs": 313,
+      "body_bytes": 1011,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "outbound",
+      "iterations": 5000,
+      "median_ns": 21529,
+      "min_ns": 18963,
+      "peak_bytes": 28075,
+      "retained_bytes": 0,
+      "scenario": "outbound.create_message.components_v2",
+      "steps": {
+        "build": {
+          "alloc_bytes": 30830,
+          "allocs": 220,
+          "peak_bytes": 24278,
+          "retained_bytes": 13234
+        },
+        "encode": {
+          "alloc_bytes": 1920,
+          "allocs": 4,
+          "peak_bytes": 1024,
+          "retained_bytes": 1024
+        },
+        "serialize_body": {
+          "alloc_bytes": 13817,
+          "allocs": 89,
+          "peak_bytes": 13817,
+          "retained_bytes": 13817
+        }
+      }
+    },
+    {
+      "alloc_bytes": 63072,
+      "allocs": 406,
+      "body_bytes": 1029,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "outbound",
+      "iterations": 5000,
+      "median_ns": 28500,
+      "min_ns": 25113,
+      "peak_bytes": 30322,
+      "retained_bytes": 0,
+      "scenario": "outbound.interaction_reply.components_v2",
+      "steps": {
+        "build": {
+          "alloc_bytes": 44647,
+          "allocs": 309,
+          "peak_bytes": 27051,
+          "retained_bytes": 13817
+        },
+        "encode": {
+          "alloc_bytes": 3968,
+          "allocs": 5,
+          "peak_bytes": 2048,
+          "retained_bytes": 2048
+        },
+        "serialize_body": {
+          "alloc_bytes": 14457,
+          "allocs": 92,
+          "peak_bytes": 14457,
+          "retained_bytes": 14457
+        }
+      }
+    },
+    {
+      "alloc_bytes": 32750,
+      "allocs": 224,
+      "body_bytes": 1011,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "reference",
+      "iterations": 5000,
+      "median_ns": 17261,
+      "min_ns": 15059,
+      "peak_bytes": 24278,
+      "retained_bytes": 0,
+      "scenario": "ref.outbound.create_message.direct_to_vec",
+      "steps": {
+        "build": {
+          "alloc_bytes": 30830,
+          "allocs": 220,
+          "peak_bytes": 24278,
+          "retained_bytes": 13234
+        },
+        "encode": {
+          "alloc_bytes": 1920,
+          "allocs": 4,
+          "peak_bytes": 1024,
+          "retained_bytes": 1024
+        }
+      }
+    },
+    {
+      "alloc_bytes": 60424830,
+      "allocs": 508698,
+      "cold_allocs": 508839,
+      "cold_peak_bytes": 38303276,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "event": "GUILD_CREATE",
+      "group": "inbound",
+      "iterations": 15,
+      "median_ns": 195855329,
+      "min_ns": 145990871,
+      "payload_bytes": 1121980,
+      "peak_bytes": 34722506,
+      "retained_bytes": 28013916,
+      "scenario": "inbound.guild_create.large",
+      "steps": {
+        "cache_apply": {
+          "alloc_bytes": 3881208,
+          "allocs": 31291,
+          "mean_ns": 8243966,
+          "peak_bytes": 1927985,
+          "retained_bytes": 3579250
+        },
+        "collector_publish": {
+          "alloc_bytes": 12217333,
+          "allocs": 105056,
+          "mean_ns": 21517389,
+          "peak_bytes": 12217333,
+          "retained_bytes": 12217333
+        },
+        "decode_event": {
+          "alloc_bytes": 22365176,
+          "allocs": 187251,
+          "mean_ns": 63564825,
+          "peak_bytes": 20674932,
+          "retained_bytes": 12217333
+        },
+        "drop_dispatch_value": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 14265885,
+          "peak_bytes": 0,
+          "retained_bytes": -10289348
+        },
+        "drop_frame": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 23637587,
+          "peak_bytes": 0,
+          "retained_bytes": -11578953
+        },
+        "envelope": {
+          "alloc_bytes": 10289360,
+          "allocs": 92528,
+          "mean_ns": 20655060,
+          "peak_bytes": 10289360,
+          "retained_bytes": 10289360
+        },
+        "frame_to_string": {
+          "alloc_bytes": 1121980,
+          "allocs": 1,
+          "mean_ns": 8671845,
+          "peak_bytes": 1121980,
+          "retained_bytes": 1121980
+        },
+        "handler_drop": {
+          "alloc_bytes": 0,
+          "allocs": 0,
+          "mean_ns": 19683230,
+          "peak_bytes": 0,
+          "retained_bytes": -12217333
+        },
+        "parse_frame": {
+          "alloc_bytes": 10549773,
+          "allocs": 92571,
+          "mean_ns": 40715497,
+          "peak_bytes": 10456973,
+          "retained_bytes": 10456973
+        }
+      }
+    },
+    {
+      "alloc_bytes": 4356545,
+      "allocs": 12567,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "reference",
+      "iterations": 15,
+      "median_ns": 3907432,
+      "min_ns": 3684545,
+      "note": "serde_json::from_str::<T>(d) only: no envelope, Value tree, raw copy, cache, or publish",
+      "payload_bytes": 1121941,
+      "peak_bytes": 3168193,
+      "retained_bytes": 3168193,
+      "scenario": "ref.typed_from_str.guild_create.large"
+    },
+    {
+      "alloc_bytes": 6666044.0,
+      "allocs": 31316.4,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes"
+      ],
+      "group": "cache",
+      "iterations": 10,
+      "median_ns": 6902507,
+      "members": 10000,
+      "min_ns": 6087669,
+      "note": "retained_bytes: heap the cache holds for 10 large guilds",
+      "ops": 10,
+      "peak_bytes": 34148624,
+      "retained_bytes": 34148624,
+      "scenario": "cache.guild_create.10x1000_members"
+    },
+    {
+      "alloc_bytes": 5033.0,
+      "allocs": 1.97,
+      "cached_messages": 10000,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes"
+      ],
+      "group": "cache",
+      "iterations": 50000,
+      "median_ns": 2246,
+      "min_ns": 785,
+      "note": "per insert: upsert_message only (the input copy is excluded); retained_bytes: cache after 50k inserts under the default 100/channel, 10k total limits",
+      "ops": 50000,
+      "peak_bytes": 58526010,
+      "retained_bytes": 58110248,
+      "scenario": "cache.message_insert.50k"
+    },
+    {
+      "alloc_bytes": 6066.97,
+      "allocs": 28.17,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes"
+      ],
+      "group": "cache",
+      "iterations": 10000,
+      "median_ns": 4910,
+      "min_ns": 3919,
+      "note": "per update: cache.message() clone + key set + merge + upsert_message (the partial's copy is excluded)",
+      "ops": 10000,
+      "peak_bytes": 297107,
+      "retained_bytes": 290752,
+      "scenario": "cache.message_update_merge.10k"
+    },
+    {
+      "alloc_bytes": 62822706.36,
+      "allocs": 508713.04,
+      "cache_bytes": 80527728,
+      "deterministic": [
+        "allocs",
+        "alloc_bytes",
+        "retained_bytes",
+        "peak_bytes",
+        "journal_bytes",
+        "cache_bytes"
+      ],
+      "group": "storm",
+      "guilds": 25,
+      "journal_bytes": 305433000,
+      "members_per_guild": 1000,
+      "note": "replica, sequential, handler events dropped: retained_bytes = live heap after the storm (gate), split into journal_bytes and cache_bytes; allocs/alloc_bytes per guild",
+      "ops": 25,
+      "peak_bytes": 408467444,
+      "retained_bytes": 385960728,
+      "scenario": "storm.guild_create_25"
+    }
+  ],
+  "schema": 1
+}

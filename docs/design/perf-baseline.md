@@ -1,13 +1,15 @@
-# 성능 기준선: 게이트웨이 수신·캐시·컬렉터·송신 (main `706b7ae`)
+# 성능 기준선과 게이트: 게이트웨이 수신·캐시·컬렉터·송신
 
 작성: 2026-10-11. 3.0 4단계(`3.0-types-events-requests.md` §3 "이벤트 API")가 바꿀 게이트웨이
 파이프라인의 **변경 전** 수치와, 같은 수치를 다시 재는 도구(`tests/perf_report/`,
 `ci/perf_diff.py`)를 기록한다. 사용자 목표인 낮은 RAM과 높은 속도를 기준으로, 4단계가 개선을
 증명하고 이후 회귀를 잡는 데 쓴다.
 
-기준 커밋은 4단계 직전 main `706b7ae`(타입 ID B 단계 `a8b3427`, 음성 전송 암호·샤드 큐 수정 포함)다.
-같은 하네스로 잰 B 단계 이전 main `15d98a5`와 비교하면 결정적 지표가 하나도 바뀌지 않았다(`size_of`
-포함). `Id<M>` 마커는 같은 8바이트 표현이라 메모리·할당 비용이 없다는 확인이기도 하다.
+- **4단계 비교 기준은 §8, main `23775d1`(시리즈 3 이후)이다.** 보고서 JSON은
+  `docs/design/perf/23775d1.json`이고, 게이트(§9)와 CI(§10)가 이것을 쓴다.
+- §2·§4·§5는 처음 기록한 main `706b7ae`(타입 ID B 단계 `a8b3427`, 음성 전송 암호·샤드 큐 수정
+  포함) 기준선으로, 역사 기록으로 남긴다. 같은 하네스로 잰 B 단계 이전 main `15d98a5`와 결정적
+  지표가 하나도 다르지 않았다(`size_of` 포함). `Id<M>` 마커는 같은 8바이트 표현이라 비용이 없다.
 
 ```text
 [Decision Log]
@@ -49,16 +51,23 @@ python3 ci/perf_diff.py before.json after.json
 python3 ci/perf_diff.py before.json after.json --deterministic-only --scenario 'inbound.*'
 python3 ci/perf_diff.py before.json after.json --metric 'steps.*.allocs' --format markdown
 python3 ci/perf_diff.py before.json after.json --fail-on-regression 2   # 결정적 지표가 2% 넘게 늘면 exit 1
+
+# 4단계 작업자가 병합 전에 돌리는 판정(§9): 기준선 대비 회귀 + 입력 일치 + 체크포인트 상한
+python3 ci/perf_diff.py docs/design/perf/23775d1.json target/perf-report.json \
+    --deterministic-only --strict --fail-on-regression 2
+python3 ci/perf_diff.py --gates ci/perf-gates.json --checkpoint B --strict target/perf-report.json
 ```
 
 - `--all-features`가 필요하다(테스트 파일은 `gateway`+`cache`+`collectors`가 모두 켜졌을 때만
   컴파일된다. 실제 봇과 같은 파이프라인, 특히 컬렉터 저널 복제를 재기 위해서다).
-- 4단계 전후 비교: 이 브랜치가 main에 들어간 뒤에는 두 커밋에서 같은 명령을 돌려 비교한다.
-  입력(fixture, `payload_bytes`)이 바뀌면 perf_diff가 "numbers are not comparable" 경고를 낸다.
+- `--scenario`/`--metric`은 출력과 실패 판정에 같이 적용된다. 입력(`payload_bytes`, `ops` 등)이나
+  fixture 다이제스트(`meta.fixtures_digest`)가 다르거나 기준선의 시나리오가 사라지면 경고이고,
+  `--strict`에서는 실패다. 4단계에서 단계 이름이 바뀌어 `steps.*` 지표가 사라지는 것은 실패가
+  아니다(사라진 지표는 표에 `-`로 보인다).
 - 동반 테스트 `perf_fixtures_decode`(기본 `cargo test --all-features`에 포함)는 fixture가 오류나
   `.ok()` 대체 경로로 빠지지 않고 끝까지 디코딩되는지 검사한다.
 
-## 2. 측정 환경 (기준선)
+## 2. 측정 환경 (`706b7ae` 기준선)
 
 | 항목 | 값 |
 |---|---|
@@ -75,11 +84,13 @@ python3 ci/perf_diff.py before.json after.json --fail-on-regression 2   # 결정
 |---|---|---|
 | `inbound.*` | message_create.plain / .embeds / .components_v2, message_update.partial, presence_update, interaction_create.chat_input, unknown_dispatch, floor, guild_create.large | 프레임 텍스트에서 핸들러가 받는 `Event`까지를 공개 API로 단계별 재현(replica): `frame_to_string` → `parse_frame` → `envelope` → `drop_frame` → `decode_event` → `cache_apply` → `collector_publish` → `drop_dispatch_value` → `handler_drop` |
 | `ref.*` | typed_from_str.message_create.plain / .components_v2 / guild_create.large, outbound.create_message.direct_to_vec | 4·5단계가 다가갈 하한: `serde_json::from_str::<T>(d)`만, 또는 본문을 `Value` 없이 바로 `to_vec` |
-| `e2e.*` | idle_client, floor, 위 7개 이벤트, guild_create_storm(서로 다른 대형 길드 25개), journal_flush_after_storm, fanout.message_collectors.k{1,8,64} | 별도 프로세스의 실제 `Client` + 가짜 게이트웨이. 웹소켓 읽기·큐·태스크·`Context`까지 포함 |
+| `e2e.*` | idle_client, floor, 위 7개 이벤트, guild_create_storm(서로 다른 대형 길드 25개), journal_flush_after_storm, fanout.message_collectors.k{0,1,8,64} | 별도 프로세스의 실제 `Client` + 가짜 게이트웨이. 웹소켓 읽기·큐·태스크·`Context`까지 포함 |
+| `storm.*` | guild_create_25 (`23775d1`부터) | 같은 25길드를 replica로 이 프로세스에서 차례로 처리(핸들러 이벤트는 매번 놓음). 결정적인 폭주 뒤 live 힙(`retained_bytes`)과 그 중 저널 몫(`journal_bytes`, 작은 이벤트 256개로 밀어낼 때 풀리는 양)·캐시 몫(`cache_bytes`) |
+| `collectors.*` | payload_copies (`23775d1`부터) | e2e 팬아웃의 할당 수에서 구한 구조 지표: 복사 1회 = 일치하는 컬렉터 하나의 이벤트당 비용(`allocs(k=1) − allocs(k=0)`), `k64_minus_k1` = 일치하지 않는 컬렉터 63개가 더하는 복사 수 |
 | `cache.*` | guild_create.10x1000_members, message_insert.50k, message_update_merge.10k | 기본 `CacheConfig`(채널당 100, 전체 10,000 메시지)에서 `CacheHandle` 공개 API |
 | `fanout.*` | message_collectors.k{1,8,64} | 이벤트 하나를 컬렉터 K개에 전달(하나만 일치): 저널 복제 1회 + 구독자마다 복제 + 추출 + 필터 |
 | `outbound.*` | create_message.components_v2, interaction_reply.components_v2 | 빌더로 만들고 REST 클라이언트처럼 `to_value`(http/body.rs) 후 `to_vec`(reqwest `.json`) |
-| `layout` / `process` | size_of, process.rss | 주요 타입 크기, e2e 봇 프로세스의 VmRSS/VmHWM |
+| `layout` / `process` | size_of, process.rss | 주요 타입 크기와 빈 `CollectorHub`의 힙(`empty_collector_hub_bytes`, `23775d1`부터; 256칸 저널 링 + 고정 136 B), e2e 봇 프로세스의 VmRSS/VmHWM |
 
 fixture: `tests/fixtures/perf/*.json`(Discord 문서 예시를 본뜬 실제 형태). 대형 GUILD_CREATE는
 `guild_create_template.json`의 항목 템플릿을 결정적으로 복제한다: 멤버 1,000(전원 온라인, presence
@@ -107,7 +118,7 @@ fixture: `tests/fixtures/perf/*.json`(Discord 문서 예시를 본뜬 실제 형
 - e2e 시간은 잠금 단계(명령 → 자식 게이트웨이 → 웹소켓 → 핸들러 수신) 지연이라 파이프·소켓
   왕복(`e2e.floor` ≈ 90 µs)을 포함한다. 처리량이 아니다.
 
-## 4. 기준선 수치 (main `706b7ae`, 릴리스)
+## 4. 기준선 수치 (main `706b7ae`, 릴리스, 역사 기록)
 
 ### 수신 파이프라인 replica (`inbound.*`) 와 하한 (`ref.*`)
 
@@ -246,9 +257,10 @@ interaction_reply = build 309(내부 `to_value` 포함) / `serialize_body` 92 / 
 - 송신: `src/http/body.rs:57` `serialize_body`가 본문을 `Value`로 바꾼 뒤 reqwest가 다시
   `to_vec`한다(create_message 313 중 89 allocs, 28%). 빌더 자체도 `Value` 트리를 만든다(220).
   바로 `to_vec`하면 224 allocs, 약 18% 빠름(22.0 → 18.0 µs). 5단계 타입 요청 모델의 근거.
-- e2e에서 컬렉터 경로가 부하 아래 처음 돌 때 1회성 할당(약 1.9 MB, 매 실행 1,939,000 B)이
-  있다. 원인은 이번에 추적하지 않았다. 보고서는 버리는 패스를 먼저 돌려 대부분을 빼지만
-  k=1에는 349,020 B가 남는다(e2e 보유량은 결정적 지표가 아니다).
+- e2e 팬아웃 k=1의 "1회성" 보유량(1,939,000 B, 버리는 패스를 넣은 뒤 349,020 B)은 할당이 아니라
+  저널 교체였다(`23775d1` 작업에서 확인). 앞선 시나리오가 남긴 작은 floor 이벤트 칸을 9,712 B짜리
+  MESSAGE_CREATE 사본이 차례로 밀어내며 늘어난 몫이다(200칸 × 9,712 B ≈ 1.94 MB, 36칸 ≈ 0.35 MB).
+  지금은 워밍업으로 저널 256칸을 먼저 채우므로 0이다.
 
 ## 6. 공개 API로 재지 못한 것과 replica의 한계
 
@@ -258,6 +270,9 @@ interaction_reply = build 309(내부 `to_value` 포함) / `serialize_body` 92 / 
   +3 allocs로 일정). `merge_message_update`는 fixture가 가진 키만 옮기도록 재현했다.
 - 핸들러 레인(입력·핸들러 큐, `Box::pin`, `JoinSet`, `Context` 복제)과 웹소켓 읽기는 e2e로만 보이며
   단계별로 나눌 수 없다.
+- `CollectorHub::publish`가 비공개라 컬렉터 복사 수(`collectors.payload_copies`)는 e2e 프로세스의
+  할당 수에서 구한다. e2e 할당 수는 지금까지 실행마다 정확히 같았고, 지표는 복사 단위로 나눈 뒤
+  소수 둘째 자리에서 반올림하므로 스케줄링 잡음에 강하다.
 - 측정하지 않은 경로: 전송 압축(zlib/zstd, 가짜 게이트웨이는 평문), READY 처리, 외부 캐시 백엔드
   전달(`forward_cache_backend_updates`), 음성 상태 갱신, 샤딩 감독, REST 전송 자체(reqwest·TLS).
 - 시간: 공유 VM이라 같은 명령에서도 작은 시나리오 중앙값이 최대 ±60% 흔들렸다. 비교는 결정적
@@ -272,4 +287,177 @@ interaction_reply = build 309(내부 `to_value` 포함) / `serialize_body` 92 / 
   바뀌면 단계 이름이 바뀌어도 된다(perf_diff가 사라진·새 지표를 보여 준다).
 - 시나리오를 추가할 때는 같은 입력을 전후 커밋에서 쓸 수 있게 fixture를 파일로 두고, 결정적이지
   않은 지표는 `deterministic` 목록에서 뺀다.
-- 기준선을 다시 기록할 때는 이 문서의 커밋·환경·표를 함께 고친다.
+- 기준선을 다시 기록할 때는 새 절(커밋·환경·표)을 더하고 `docs/design/perf/<커밋>.json`을 커밋하며,
+  `.github/workflows/perf-report.yml`의 `PERF_BASELINE`을 바꾼다. 이전 절은 역사 기록으로 둔다.
+- `ci/perf-gates.json`의 상한은 지표 이름에 묶인다(`steps.cache_apply.allocs` 등). replica 단계
+  이름을 바꾸면 상한 파일도 같이 고친다. `EventKind`가 생기면 `main.rs`의 layout 시나리오에
+  `event_kind`(=`size_of::<EventKind>()`)를 더한다. 그 전까지 그 상한은 `MISSING`이다.
+
+## 8. 기준선 main `23775d1` (시리즈 3 이후, 4단계 비교 기준)
+
+시리즈 3(열린 판별값)이 `Channel`·`Guild`를 줄이고 GUILD_CREATE 할당을 줄인 뒤의 main이다. 4단계의 전후 비교와 게이트는 이 절과 `docs/design/perf/23775d1.json`을 기준으로 한다. `3.0-types-events-requests.md`의 게이트 표는 기준 커밋을 `8599632`로 적었고, 같은 날 그보다 16커밋 뒤인
+`23775d1`에서 재기로 했다. `8599632`도 같은 하네스로 쟀다(rustc 1.99.0). 할당 수와 모든 게이트 지표가
+같았고, 다른 것은 컴포넌트가 많은 메시지의 바이트뿐이다(`inbound.message_create.components_v2`
+alloc B +0.8%, embeds +0.3%, `ref.typed_from_str.message_create.components_v2` +3.1%). `ea06a27`(모달
+제출 값)이 모든 `MessageComponent`에 `values`·`default`를 더해 컴포넌트당 약 24 B 커졌기 때문이다.
+그래서 두 커밋 중 어느 쪽을 기준으로 해도 게이트 판정은 같다.
+
+| 항목 | 값 |
+|---|---|
+| 커밋 | main `23775d1`. 보고서 메타의 커밋은 그 위에 새 시나리오·`perf_diff`·CI만 더한 `f438ed2`(`src/`는 `23775d1`과 같음, 작업 트리 깨끗함) |
+| 기계 | §2와 같음(`ingwdev1`, Xeon Gold 6248, vCPU 16, glibc malloc) |
+| 툴체인 | rustc 1.99.0(CI 고정 버전), `--release --all-features`. 같은 커밋을 rustc 1.97.1로 잰 결과와 결정적 지표가 모두 같았다 |
+| 실행 | 1.99.0으로 2회 + 1.97.1로 1회(2026-10-11 15:00–15:10 UTC), load average 10–11. 결정적 지표는 세 번 모두 같았다(해시 시드에 묶인 `cache.message_*` peak 제외). 시간은 1.99.0 두 번의 중앙값 범위 |
+| 소요 | 한 번 약 26초(새 `storm.*`가 약 5초) |
+
+시리즈 3의 효과(`706b7ae` → `23775d1`, 결정적 지표, 바뀐 것만):
+
+| 시나리오 | 지표 | `706b7ae` | `23775d1` | 변화 |
+|---|---|---:|---:|---:|
+| `inbound.guild_create.large` | allocs | 514,698 | 508,698 | -1.2% |
+| `inbound.guild_create.large` | steps.cache_apply.allocs | 35,291 | 31,291 | -11.3% |
+| `inbound.guild_create.large` | steps.collector_publish.allocs | 107,056 | 105,056 | -1.9% |
+| `inbound.guild_create.large` | peak_bytes | 34,762,376 | 34,722,506 | -0.1% |
+| `inbound.presence_update` | allocs | 376 | 370 | -1.6% |
+| `ref.typed_from_str.guild_create.large` | allocs | 14,567 | 12,567 | -13.7% |
+| `cache.guild_create.10x1000_members` | allocs | 35,316.4 | 31,316.4 | -11.3% |
+| `cache.guild_create.10x1000_members` | retained_bytes | 34,449,734 | 34,148,624 | -0.9% |
+| `layout.size_of` | channel | 536 | 488 | -9.0% |
+| `layout.size_of` | guild | 856 | 784 | -8.4% |
+
+MESSAGE_CREATE·INTERACTION_CREATE·업데이트 이벤트의 할당 수, `Event`(4,848 B)·`Message` 크기, 저널·팬아웃 비용은 그대로다.
+
+### 수신 replica와 하한
+
+| 시나리오 | 프레임 B | allocs | alloc B | retained B | peak B | 시간(중앙값, 2회) |
+|---|---:|---:|---:|---:|---:|---:|
+| `inbound.message_create.plain` | 1,571 | 573 | 54,345 | 27,661 | 28,484 | 54.3 µs – 54.5 µs |
+| `inbound.message_create.embeds` | 3,735 | 1,505 | 154,359 | 80,144 | 88,911 | 166.7 µs – 167.4 µs |
+| `inbound.message_create.components_v2` | 2,615 | 1,031 | 133,373 | 78,430 | 77,545 | 112.3 µs – 118.2 µs |
+| `inbound.message_update.partial` | 553 | 217 | 24,187 | 7,279 | 12,742 | 18.9 µs |
+| `inbound.presence_update` | 772 | 370 | 43,071 | 20,602 | 26,412 | 23.8 µs – 26.9 µs |
+| `inbound.interaction_create.chat_input` | 3,956 | 1,519 | 171,093 | 74,680 | 101,869 | 161.5 µs – 169.6 µs |
+| `inbound.unknown_dispatch` | 951 | 278 | 20,740 | 9,528 | 14,292 | 17.7 µs – 19.5 µs |
+| `inbound.floor` | 46 | 10 | 751 | 34 | 717 | 1.8 µs – 1.9 µs |
+| `inbound.guild_create.large` | 1,121,980 | 508,698 | 60,424,830 | 28,013,916 | 34,722,506 | 166.6 ms – 195.9 ms |
+| `ref.typed_from_str.message_create.plain` | 1,530 | 15 | 1,914 | 1,906 | 1,914 | 4.1 µs – 4.3 µs |
+| `ref.typed_from_str.message_create.components_v2` | 2,574 | 38 | 20,108 | 17,020 | 17,084 | 10.5 µs – 10.8 µs |
+| `ref.typed_from_str.guild_create.large` | 1,121,941 | 12,567 | 4,356,545 | 3,168,193 | 3,168,193 | 3.9 ms – 4.0 ms |
+
+단계별 allocs(정상 상태): plain `cache_apply` 19, `collector_publish` 120, `decode_event` 214, `envelope` 107, `frame_to_string` 1, `parse_frame` 112. 대형 길드 `cache_apply` 31,291, `collector_publish` 105,056, `decode_event` 187,251, `envelope` 92,528, `frame_to_string` 1, `parse_frame` 92,571.
+
+### 새 결정적 시나리오
+
+| 시나리오 | 값 |
+|---|---|
+| `storm.guild_create_25` | 길드당 allocs 508,713.04 / alloc B 62,822,706; 폭주 뒤 live 힙(`retained_bytes`) **385,960,728 B** = 저널 305,433,000 B(79%) + 캐시 80,527,728 B; 최대 힙 408,467,444 B |
+| `collectors.payload_copies` | 복사 1회 = 120 allocs / 9,712 B(이벤트 전체 사본); k8 8회, k64 64회; **`k64_minus_k1` = 63**(바이트 기준 63), `k8_minus_k1` = 7 |
+| `layout.size_of` | `Event` 4,848 B, `Message` 4,808, `Guild` 784, `Member` 728, `Channel` 488, `Context` 480, `User` 408, `Presence` 160, `Value` 32; 빈 `CollectorHub` **1,241,224 B**(256 × 4,848 + 136) |
+
+`e2e.guild_create_storm`(실제 런타임, 388.2 MB)과 `storm.guild_create_25`(replica, 386.0 MB)는 같은 크기의 길드 25개라 거의 같다. 차이 2.2 MB는 실제 런타임 쪽(큐, 웹소켓 버퍼 등)으로 보이며 스케줄링에 따라 흔들린다. 게이트는 결정적인 replica 쪽을 쓴다.
+
+### 캐시, 팬아웃, 송신, e2e
+
+| 시나리오 | allocs | alloc B | retained B | peak B | 시간(중앙값, 2회) |
+|---|---:|---:|---:|---:|---:|
+| `cache.guild_create.10x1000_members` (길드당; 보유는 10길드) | 31,316.4 | 6,666,044 | 34,148,624 | 34,148,624 | 6.7 ms – 6.9 ms |
+| `cache.message_insert.50k` (삽입당) | 1.97 | 5,033 | 58,110,248 | 58,526,010 | 2.2 µs |
+| `cache.message_update_merge.10k` (갱신당) | 28.17 | 6,066.97 | 290,752 | 297,107 | 4.9 µs |
+| `fanout.message_collectors.k1` | 240 | 19,424 | 10,378 | 19,424 | 13.4 µs |
+| `fanout.message_collectors.k64` | 7,800 | 631,280 | 10,378 | 20,090 | 424.5 µs – 430.6 µs |
+| `outbound.create_message.components_v2` | 313 | 46,567 | 0 | 28,075 | 20.5 µs – 21.5 µs |
+| `outbound.interaction_reply.components_v2` | 406 | 63,072 | 0 | 30,322 | 26.8 µs – 28.5 µs |
+| `e2e.floor` (프레임당) | 13 | 11,656 | 0 | 10,921 | 77.3 µs – 82.9 µs |
+| `e2e.message_create.plain` (프레임당) | 576 | 65,251 | 0 | 28,484 | 161.3 µs – 163.9 µs |
+| `e2e.fanout.message_collectors.k0` (프레임당) | 576 | 65,251 | 0 | 28,484 | 302.0 µs – 344.6 µs |
+| `e2e.fanout.message_collectors.k1` (프레임당) | 696 | 74,963 | 0 | 28,678 | 342.8 µs – 521.8 µs |
+| `e2e.fanout.message_collectors.k64` (프레임당) | 8,256 | 686,819 | 0 | 43,756 | 1.1 ms – 1.3 ms |
+| `e2e.guild_create_storm` (길드당, 계수 켠 채 시간 측정) | 508,715.88 | 62,982,889.08 | 388,203,773 | 410,709,673 | 122.1 ms – 163.2 ms |
+
+대기 중 샤드: 305 allocs, 보유 1,776,427 B. e2e 봇 RSS(KiB): 시작 4,216 → READY 후 9,804 → 폭주 전 34,736 → 폭주 후 542,152(2회차 542,072), VmHWM 541,328.
+
+### 게이트 현황 (`23775d1`)
+
+| 시나리오 | 지표 | `23775d1` | B 상한 | C 상한 |
+|---|---|---:|---:|---:|
+| `inbound.guild_create.large` | allocs | 508,698 | 55,000 | 30,000 |
+| `inbound.guild_create.large` | alloc_bytes | 60,424,830 | 12,000,000 | 9,000,000 |
+| `inbound.guild_create.large` | peak_bytes | 34,722,506 | 10,000,000 | 8,000,000 |
+| `inbound.message_create.plain` | allocs | 573 | 60 | 40 |
+| `inbound.message_create.plain` | alloc_bytes | 54,345 | 16,000 | 12,000 |
+| `inbound.guild_create.large` | steps.cache_apply.allocs | 31,291 | 31,291 | 12,000 |
+| `layout.size_of` | event | 4,848 | 192 | 192 |
+| `layout.size_of` | event_kind | (아직 없음) | 64 | 64 |
+| `layout.size_of` | empty_collector_hub_bytes | 1,241,224 | 4,096 | 4,096 |
+| `collectors.payload_copies` | k64_minus_k1 | 63 | 0.25 | 0.25 |
+| `storm.guild_create_25` | retained_bytes | 385,960,728 | 190,000,000 | 120,000,000 |
+
+`23775d1`에서 B를 만족하는 것은 길드 `cache_apply`(상한이 기준선 자체)뿐이다. `event_kind`는 `EventKind`가 생기면 보고된다.
+
+## 9. 게이트와 판정
+
+`ci/perf-gates.json`은 `3.0-types-events-requests.md` "4단계 실행 결정"의 게이트 표를 체크포인트별
+절대 상한으로 옮긴 것이다. C는 B를 상속하고("유지" 행) 바뀌는 행만 덮어쓴다. 단위는 바이트이고 표의
+MB·KB는 십진(1 MB = 1,000,000 B), KiB는 1,024 B다.
+
+| 게이트(표) | 보고서 지표 | 메모 |
+|---|---|---|
+| GUILD_CREATE allocs / alloc B / peak B | `inbound.guild_create.large` `allocs` / `alloc_bytes` / `peak_bytes` | 정상 상태 한 번 |
+| MESSAGE_CREATE allocs / alloc B | `inbound.message_create.plain` `allocs` / `alloc_bytes` | |
+| 길드 `cache_apply` allocs | `inbound.guild_create.large` `steps.cache_apply.allocs` | B의 "기준선 이하"는 `23775d1`의 31,291 |
+| `size_of::<Event>()` / `size_of::<EventKind>()` | `layout.size_of` `event` / `event_kind` | `event_kind`는 `EventKind`가 생기면 보고(§7) |
+| 256칸 빈 저널 저장공간 | `layout.size_of` `empty_collector_hub_bytes` | `CollectorHub::new()`의 힙을 잰 값이라 허브 고정 비용 136 B도 들어간다 |
+| 컬렉터 `k64 − k1` 추가 복사 | `collectors.payload_copies` `k64_minus_k1` | 상한 0.25: 복사 0회에 e2e 계수 잡음 여유(복사 1회는 할당 수십 개) |
+| 25길드 폭주 뒤 live 힙 | `storm.guild_create_25` `retained_bytes` | replica, 핸들러 이벤트를 매번 놓은 뒤 |
+
+판정 명령과 의미:
+
+```bash
+# 체크포인트 상한(절대값). --strict: 지표가 보고서에 없으면 실패
+python3 ci/perf_diff.py --gates ci/perf-gates.json --checkpoint B --strict target/perf-report.json
+# 기준선 대비 회귀(결정적 지표 +2%) + 입력·fixture 일치 + 기준선 시나리오 누락 없음
+python3 ci/perf_diff.py docs/design/perf/23775d1.json target/perf-report.json \
+    --deterministic-only --strict --fail-on-regression 2
+# 범위를 좁혀 판정(필터는 출력과 실패 판정에 같이 적용된다)
+python3 ci/perf_diff.py docs/design/perf/23775d1.json target/perf-report.json \
+    --scenario 'inbound.*' --metric allocs --fail-on-regression 2
+```
+
+- 종료 코드: 0 통과, 1 회귀·상한 초과·`--strict` 위반, 2 인자·입력 오류.
+- 4단계 작업 중에는 줄어드는 것이 목표라 회귀 판정은 "늘지 않음"을, 체크포인트 판정은 "목표에
+  닿음"을 본다. 체크포인트 판정은 그 체크포인트를 끝냈다고 주장할 때만 쓴다.
+- 시간·RSS·e2e 할당 수는 어느 판정에도 들어가지 않는다(시나리오의 `deterministic` 목록 밖).
+
+## 10. CI
+
+`.github/workflows/perf-report.yml`(`perf-report (non-blocking)`)이 PR마다 PR과 그 base를 같은
+러너·같은 고정 툴체인(`RUST_TOOLCHAIN`, `ci.yml`과 같게 유지)으로 빌드해 보고서를 돌리고,
+`ci/perf_summary.sh`가 잡 요약에 다음을 쓴다: base 대비 결정적 지표 diff와 +2%·`--strict` 판정,
+모든 지표(접힘), 커밋된 기준선(`PERF_BASELINE`) 대비 diff(참고용), 체크포인트 B·C 게이트 현황.
+보고서 두 개는 아티팩트로 올린다.
+
+```text
+[Decision Log]
+- 목적과 의도: 4단계 PR마다 성능 변화를 사람이 직접 돌리지 않아도 보이게 하되, 시간·RSS 잡음이나
+  러너 차이로 PR이 막히지 않게 한다.
+- 기존 구현 및 제약 조건: 결정적 지표(할당 수·바이트·보유·최대 힙)는 할당 요청을 세므로 glibc와
+  무관하고, 이 기계에서 실행 3회와 rustc 1.97.1·1.99.0 사이에서 모두 같았다(해시 시드에 묶인
+  `cache.message_*` peak만 예외로 비결정 처리). 하지만 GitHub 러너에서는 아직 확인하지 않았고,
+  std 내부 변경(툴체인 올림)이나 Cargo.lock 변경은 PR과 무관하게 수치를 옮길 수 있다. 4단계
+  PR은 단계·시나리오를 일부러 바꾼다. 빌드는 릴리스 + 전체 기능이라 러너에서 10분 이상 걸린다.
+- 검토한 주요 대안: (1) 커밋된 기준선 JSON과 비교해 실패, (2) 같은 잡에서 base와 head를 빌드해
+  비교하고 실패, (3) (2)와 같지만 경고 주석과 요약만 내고 실패하지 않음, (4) CI에 넣지 않고
+  로컬 판정만.
+- 선택한 방식: (3). 잡은 `continue-on-error`이고 필수 검사로 두지 않는다. base 대비 결정적 +2%
+  회귀나 입력 변경은 `::warning` 주석과 요약의 경고로만 낸다. 커밋된 기준선 비교와 게이트
+  현황은 참고용이다. 병합 판정은 §9의 명령을 로컬에서 돌려 하고(작업자·조정자), CI 요약은 그
+  확인 수단이다.
+- 다른 대안 대신 이 방식을 선택한 이유: (1)은 기준선을 잰 기계·툴체인과 러너가 달라 PR과 무관한
+  차이로 실패할 수 있다. (2)는 같은 러너라 비교 자체는 안정적이지만, 4단계처럼 일부러 바꾸는
+  PR과 의존성 갱신 PR을 막고 러너에서의 안정성도 아직 증명되지 않았다. (4)는 리뷰어가 수치를
+  보지 못한다.
+- 장점, 단점 및 영향: PR마다 같은 조건의 전후 비교가 요약에 남고 막히는 일은 없다. 대신 경고를
+  무시하면 회귀가 들어갈 수 있다. 러너에서 몇 번 돌려 무관한 PR의 base·head 결정적 지표가
+  같음이 확인되면, 요약 스크립트가 회귀 때 실패하게 하고 `continue-on-error`를 빼서 (2)로 올릴
+  수 있다(이 문서와 워크플로를 함께 고친다).
+```

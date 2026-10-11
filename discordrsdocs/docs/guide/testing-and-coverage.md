@@ -111,18 +111,23 @@ The payloads only use fields that exist before and after a model change, so chec
 
 ## Performance Report
 
-`tests/perf_report/` measures the paths that decide RAM and speed: the gateway inbound pipeline from frame text to the `Event` a handler receives, the in-memory cache, collector fan-out, and outbound request bodies. For every scenario it reports allocations, bytes allocated, bytes retained, peak live heap, and the median time, and it records the RSS of a bot process around a storm of large `GUILD_CREATE`s. Like the footprint report it is `#[ignore]`d and needs a release build (about 20 s):
+`tests/perf_report/` measures the paths that decide RAM and speed: the gateway inbound pipeline from frame text to the `Event` a handler receives, the in-memory cache, collector fan-out, and outbound request bodies. For every scenario it reports allocations, bytes allocated, bytes retained, peak live heap, and the median time, and it records the RSS of a bot process around a storm of large `GUILD_CREATE`s. Like the footprint report it is `#[ignore]`d and needs a release build (about 26 s):
 
 ```text
 cargo test --release --all-features --locked --test perf_report -- --ignored --nocapture --test-threads=1
 python3 ci/perf_diff.py before.json after.json            # change per metric; ~ marks noisy metrics
-python3 ci/perf_diff.py before.json after.json --fail-on-regression 2
+# Before merging phase 4 work: no deterministic regression against the committed baseline,
+# same inputs, and (when claiming a checkpoint) its gates met.
+python3 ci/perf_diff.py docs/design/perf/23775d1.json target/perf-report.json --deterministic-only --strict --fail-on-regression 2
+python3 ci/perf_diff.py --gates ci/perf-gates.json --checkpoint B --strict target/perf-report.json
 ```
 
 - Each scenario prints a `perf-report: {json}` line, and the run is written to `target/perf-report.json` (`DISCORDRS_PERF_REPORT=path` overrides). `ci/perf_diff.py` (standard library only, tested in `ci/tests/test_perf_diff.py`) reads either form.
 - `inbound.*` replays the private pipeline steps with public API (`decode_event`, `CacheHandle`, `Event::clone`), step by step; `e2e.*` runs the real `Client` in a child process against a fake gateway in another, so its counts and RSS belong to the bot alone. In every event type the two differ by exactly the 3 allocations the handler lane adds, which is how the replica is checked against the private code. When you change `gateway/client.rs`, `gateway/bot/pipeline.rs`, `apply_cache_updates`, or collector publishing, update the matching step in `tests/perf_report/inbound.rs`.
-- Allocation counts, bytes, retained, and peak are deterministic for the replica, cache, fan-out, and outbound scenarios; times, RSS, and end-to-end numbers are not. Timed iterations run with counting switched off, because counting costs about 65 ns per allocation.
-- The baseline for `main` at `706b7ae` (the last commit before phase 4), the metric definitions, and the hot spots phase 4 targets are in `docs/design/perf-baseline.md`.
+- Allocation counts, bytes, retained, and peak are deterministic for the replica, cache, fan-out, outbound, and storm scenarios (identical across runs and across rustc 1.97.1 and 1.99.0); times, RSS, and end-to-end numbers are not. Timed iterations run with counting switched off, because counting costs about 65 ns per allocation. The phase 4 gates have their own scenarios: `storm.guild_create_25` (live heap after 25 large guilds, journal and cache shares), `collectors.payload_copies` (extra copies 63 non-matching collectors cause), and `layout.size_of` (`Event` size, empty `CollectorHub` heap).
+- `perf_diff.py` filters (`--scenario`, `--metric`) also decide what can fail; `--strict` fails on changed inputs or fixtures (`meta.fixtures_digest`) and on missing scenarios or gate metrics; `--gates ci/perf-gates.json --checkpoint B|C` checks the phase 4 caps.
+- The non-blocking `perf-report` workflow runs the report for each PR and its base on the same runner and posts the comparison and gate status as the job summary; a deterministic regression over 2% is a warning, never a failure. Why it does not gate yet, and how it could, is in `docs/design/perf-baseline.md` §10.
+- The current baseline (`main` at `23775d1`, committed as `docs/design/perf/23775d1.json`), the earlier `706b7ae` one, the metric definitions, and the hot spots phase 4 targets are in `docs/design/perf-baseline.md`.
 
 In unit tests, models without `Default` are built with `T::fixture()` (`src/model/fixtures.rs`, `#[cfg(test)]`) and IDs with `crate::model::test_id(n)`, which infers the marker from context. Integration tests and examples use the public API instead (`"1".parse()?`, `GuildId::try_from(1)?`, or JSON).
 
