@@ -274,7 +274,7 @@ fn from_data<T>(data: Option<Value>, kind: &str) -> Result<T, DiscordError>
 where
     T: serde::de::DeserializeOwned,
 {
-    Ok(serde_json::from_value(required_data(data, kind)?)?)
+    decode_value(&required_data(data, kind)?)
 }
 
 fn from_field<T>(data: &Value, field: &str) -> Result<T, DiscordError>
@@ -283,9 +283,8 @@ where
 {
     let value = data
         .get(field)
-        .cloned()
         .ok_or_else(|| invalid_data_error(format!("missing webhook field {field}")))?;
-    Ok(serde_json::from_value(value)?)
+    decode_value(value)
 }
 
 fn optional_from_field<T>(data: &Value, field: &str) -> Result<Option<T>, DiscordError>
@@ -294,7 +293,27 @@ where
 {
     match data.get(field) {
         Some(Value::Null) | None => Ok(None),
-        Some(value) => Ok(Some(serde_json::from_value(value.clone())?)),
+        Some(value) => decode_value(value).map(Some),
+    }
+}
+
+/// Decodes a model from part of the payload through its JSON text.
+///
+/// The webhook payload arrives as a `Value` (the public input of
+/// [`parse_webhook_event_payload`]), but REST and the gateway decode the same
+/// models (`Guild`, `Application`, `Entitlement`, ...) from text, and every
+/// reader type compiles each model's `Deserialize` once more. Writing the
+/// small sub-object back to text keeps one reader for the whole crate;
+/// webhook events are rare, so the extra serialization costs nothing that
+/// matters.
+fn decode_value<T>(value: &Value) -> Result<T, DiscordError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let text = serde_json::to_string(value)?;
+    match serde_json::from_str(&text) {
+        Ok(decoded) => Ok(decoded),
+        Err(error) => Err(error.into()),
     }
 }
 
