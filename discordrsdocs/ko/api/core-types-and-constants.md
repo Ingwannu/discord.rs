@@ -43,7 +43,7 @@
 - 타임스탬프: `timestamp(secs).style(TimestampStyle::RelativeTime)`, `Timestamp::from(SystemTime)`. `TimestampStyle`은 문서화된 9가지 스타일(`t T d D f F s S R`)을 모두 지원합니다.
 - 마크다운: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`, `inline_code`, `code_block`, `code_block_with_language`, `quote`, `block_quote`, `heading`(`HeadingLevel`), `subtext`, `unordered_list`, `ordered_list`, `ListItem`을 쓰는 중첩 목록.
 - `escape_markdown(text, EscapeMarkdownOptions)`와 개별 이스케이퍼. 기본값은 배포된 discord.js v14(@discordjs/formatters 0.6.2)와 같고, 커밋된 골든 코퍼스에서 출력이 일치합니다. discord.js 버그 네 가지(같은 줄 `<:` 뒤 `_` 미처리, 자동 링크 안 `_` 이스케이프, 줄당 첫 마스킹 링크만 처리, 백틱 네 개 이상에서 닫는 펜스가 남는 `cleanCodeBlockContent`)는 따르지 않습니다. 공백 판정은 원래 정규식처럼 ECMAScript `\s` 기준입니다. 모든 백틱 연속을 끊는 `clean_code_block_content`도 제공합니다.
-- `clean_content(text, &resolver)`: 숨은 캐시 조회 없이 `MentionResolver`(트레이트 또는 클로저, `MentionKind`)로 이름을 받습니다. `Message::clean_content(...)`와 `Member::mention()`이 이를 호출합니다.
+- `clean_content(text, &resolver)`: 숨은 캐시 조회 없이 `MentionResolver`(트레이트 또는 클로저, `MentionKind`)로 이름을 받습니다. 슬래시 커맨드 이름은 discord.js 문자 클래스와 똑같이 판정합니다(Unicode 17.0 기준으로 생성한 표라 Rust 컴파일러 버전과 무관). `Message::clean_content(...)`와 `Member::mention()`이 이를 호출합니다.
 
 ## 2.2.0 신규 타입
 

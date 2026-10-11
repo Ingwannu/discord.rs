@@ -772,3 +772,69 @@ fn member_mention_and_message_clean_content_delegate() {
     };
     assert_eq!(message.clean_content(&Names), "hey @Nelly in #general");
 }
+
+// ---------------------------------------------------------------------------
+// Command-name class (expected results from discord.js on Node 24.16,
+// Unicode 17.0; the table was also checked against discord.js for every
+// Unicode scalar value)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn command_names_use_discord_js_character_class() {
+    let cases = [
+        // Script=Devanagari marks outside U+0900-U+097F are accepted.
+        ("a\u{A8E0}", true),
+        ("a\u{11B00}", true),
+        // Other_Alphabetic but General_Category Mn, Script=Inherited.
+        ("a\u{0345}", false),
+        // Inside the Devanagari block but Script=Inherited / Common.
+        ("a\u{0951}", false),
+        ("a\u{0964}", false),
+        // Inside the Thai block but Script=Common (currency sign).
+        ("a\u{0E3F}", false),
+        ("a\u{1CD0}", false),
+        ("don\u{02BC}t", true),
+        ("a\u{24B6}", false),
+        ("e\u{0301}", false),
+        ("สวัสดี", true),
+        ("नमस्ते", true),
+        ("한국어", true),
+        ("x²", true),
+        ("漢字", true),
+        ("a😀", false),
+        ("a\u{0085}", false),
+        ("a-b_c d", true),
+    ];
+    let nobody = |_: MentionKind, _: &Snowflake| None;
+    for (name, accepted) in cases {
+        let input = format!("</{name}:123456789012345678>");
+        let expected = if accepted {
+            format!("/{name}")
+        } else {
+            input.clone()
+        };
+        assert_eq!(clean_content(&input, &nobody), expected, "{name:?}");
+    }
+}
+
+#[test]
+fn command_name_table_is_well_formed() {
+    use super::command_name_ranges::{RANGES, UNICODE_VERSION};
+    assert_eq!(UNICODE_VERSION, "17.0");
+    assert!(!RANGES.is_empty());
+    let mut previous_end: Option<u32> = None;
+    for &(low, high) in RANGES {
+        assert!(low <= high, "{low:#X}..={high:#X}");
+        assert!(high <= 0x10FFFF);
+        assert!(high < 0xD800 || low > 0xDFFF, "no surrogates");
+        if let Some(end) = previous_end {
+            assert!(low > end + 1, "sorted, disjoint, merged: {low:#X}");
+        }
+        previous_end = Some(high);
+    }
+    // Ends of the table and of a range are inclusive.
+    assert!(super::is_command_name_char('-'));
+    assert!(super::is_command_name_char('z'));
+    assert!(!super::is_command_name_char('{'));
+    assert!(!super::is_command_name_char(':'));
+}

@@ -43,7 +43,7 @@ Effective permissions following Discord's documented algorithm (owner, `ADMINIST
 - Timestamps: `timestamp(secs).style(TimestampStyle::RelativeTime)`, `Timestamp::from(SystemTime)`; `TimestampStyle` has all nine documented styles (`t T d D f F s S R`).
 - Markdown: `bold`, `italic`, `underline`, `strikethrough`, `spoiler`, `inline_code`, `code_block`, `code_block_with_language`, `quote`, `block_quote`, `heading` (`HeadingLevel`), `subtext`, `unordered_list`, `ordered_list`, and nested variants with `ListItem`.
 - `escape_markdown(text, EscapeMarkdownOptions)` plus the individual escapers, matching discord.js 0.6.2 on a committed golden corpus (four documented discord.js bugs fixed); `clean_code_block_content`, which breaks every backtick run of three or more.
-- `clean_content(text, &resolver)` with a `MentionResolver` (trait or closure; `MentionKind`); `Message::clean_content(...)` and `Member::mention()` delegate to it.
+- `clean_content(text, &resolver)` with a `MentionResolver` (trait or closure; `MentionKind`), matching discord.js's command-name character class exactly (Unicode 17.0 table); `Message::clean_content(...)` and `Member::mention()` delegate to it.
 
 ## New in 2.2.0
 
