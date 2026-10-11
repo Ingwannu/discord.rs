@@ -527,6 +527,7 @@ mod tests {
                         custom_id: "button:ok".to_string(),
                         component_type: ComponentType::BUTTON,
                         values: Vec::new(),
+                        resolved: None,
                     },
                 }),
             )

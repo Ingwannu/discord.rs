@@ -844,6 +844,34 @@ fn documented_component_interactions_round_trip_through_the_decoder() {
             original["values"].as_array().map_or(0, Vec::len),
             "{section}"
         );
+        // Selects keep `resolved` and look their values up in it.
+        assert_eq!(
+            component.data.resolved.is_some(),
+            original.get("resolved").is_some(),
+            "{section}: resolved"
+        );
+        let data = &component.data;
+        match *section {
+            "User Select" => {
+                assert_eq!(data.get_users().count(), 1, "{section}");
+                assert_eq!(data.get_members().count(), 1, "{section}");
+            }
+            "Role Select" => {
+                let roles: Vec<_> = data.get_roles().map(|role| role.name.as_str()).collect();
+                assert_eq!(roles, ["Developer"], "{section}");
+            }
+            // The example's resolved user key has one more digit than its
+            // selected user value, so only the role resolves.
+            "Mentionable Select" => assert_eq!(data.get_roles().count(), 1, "{section}"),
+            "Channel Select" => {
+                let channels: Vec<_> = data
+                    .get_channels()
+                    .filter_map(|channel| channel.name.as_deref())
+                    .collect();
+                assert_eq!(channels, ["playtesting"], "{section}");
+            }
+            _ => assert!(data.resolved().is_none(), "{section}"),
+        }
     }
 }
 

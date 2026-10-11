@@ -1020,6 +1020,7 @@ fn interaction_accessors_and_discord_model_trait_delegate_to_context_and_ids() {
             custom_id: "button".to_string(),
             component_type: ComponentType::BUTTON,
             values: vec!["x".to_string()],
+            resolved: None,
         },
     });
     let user = User {

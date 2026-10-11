@@ -313,6 +313,59 @@ pub struct ComponentInteractionData {
     /// Selected values of a select menu; empty for buttons.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
+    /// The users, members, roles, and channels behind the selected values
+    /// of a user, role, mentionable, or channel select. Discord omits it for
+    /// buttons and string selects. The lookups below read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<ResolvedData>,
+}
+
+impl ComponentInteractionData {
+    /// The resolved data of the selection, when Discord sent any.
+    pub fn resolved(&self) -> Option<&ResolvedData> {
+        self.resolved.as_ref()
+    }
+
+    /// Users selected in a user or mentionable select (roles of a
+    /// mentionable select are left out; see [`Self::get_roles`]).
+    pub fn get_users(&self) -> impl Iterator<Item = &User> + '_ {
+        resolve_values(&self.values, self.resolved.as_ref(), ResolvedData::user)
+    }
+
+    /// Partial members of the users selected in a user or mentionable
+    /// select; only present for a message in a guild.
+    pub fn get_members(&self) -> impl Iterator<Item = &Member> + '_ {
+        resolve_values(&self.values, self.resolved.as_ref(), ResolvedData::member)
+    }
+
+    /// Roles selected in a role or mentionable select.
+    pub fn get_roles(&self) -> impl Iterator<Item = &Role> + '_ {
+        resolve_values(&self.values, self.resolved.as_ref(), ResolvedData::role)
+    }
+
+    /// Partial channels selected in a channel select.
+    pub fn get_channels(&self) -> impl Iterator<Item = &Channel> + '_ {
+        resolve_values(&self.values, self.resolved.as_ref(), ResolvedData::channel)
+    }
+}
+
+/// Looks up each selected or uploaded value as an ID of kind `M` in
+/// `resolved`, in order, skipping values that are not IDs or that Discord
+/// did not resolve.
+fn resolve_values<'a, M, T, F>(
+    values: &'a [String],
+    resolved: Option<&'a ResolvedData>,
+    lookup: F,
+) -> impl Iterator<Item = &'a T> + 'a
+where
+    M: IdMarker,
+    T: 'a,
+    F: Fn(&'a ResolvedData, Id<M>) -> Option<&'a T> + 'a,
+{
+    values.iter().filter_map(move |value| {
+        let id = value.parse().ok()?;
+        lookup(resolved?, id)
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -449,11 +502,7 @@ impl ModalSubmitInteraction {
             .iter()
             .find_map(|component| submitted_values(component, custom_id))
             .unwrap_or_default();
-        let resolved = self.resolved.as_ref();
-        values.iter().filter_map(move |value| {
-            let id = value.parse().ok()?;
-            lookup(resolved?, id)
-        })
+        resolve_values(values, self.resolved.as_ref(), lookup)
     }
 }
 
