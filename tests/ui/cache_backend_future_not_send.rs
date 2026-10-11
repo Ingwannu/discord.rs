@@ -40,7 +40,7 @@ impl CacheBackend for NotSend {
         _epoch: u64,
         _guild_id: GuildId,
         _user_id: UserId,
-        _member: Member,
+        _member: Arc<Member>,
     ) -> Result<(), DiscordError> {
         Ok(())
     }
@@ -66,7 +66,7 @@ impl CacheBackend for NotSend {
         Ok(())
     }
 
-    async fn put_message(&self, _epoch: u64, _message: Message) -> Result<(), DiscordError> {
+    async fn put_message(&self, _epoch: u64, _message: Arc<Message>) -> Result<(), DiscordError> {
         Ok(())
     }
 
@@ -99,7 +99,7 @@ impl CacheBackend for NotSend {
         _epoch: u64,
         _guild_id: GuildId,
         _user_id: UserId,
-        _presence: Presence,
+        _presence: Arc<Presence>,
     ) -> Result<(), DiscordError> {
         Ok(())
     }

@@ -77,6 +77,8 @@ pub use entity::DiscordModel;
 pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
+#[cfg(all(feature = "gateway", feature = "cache"))]
+pub(crate) use gateway_payload::normalize_presence;
 pub use gateway_payload::{GuildCreate, MessageUpdate, PartialUser};
 pub use guild::{
     CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,

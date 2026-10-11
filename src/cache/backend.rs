@@ -125,12 +125,15 @@ pub trait CacheBackend: Send + Sync {
     fn purge_expired_entries(&self) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a member unless `epoch` is older than the store's epoch.
+    ///
+    /// The snapshot is the `Arc` the gateway event and the in-memory cache
+    /// share; serialize from it or keep it, without copying it first.
     fn put_member(
         &self,
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     fn get_member(
@@ -153,10 +156,15 @@ pub trait CacheBackend: Send + Sync {
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     /// Stores a message unless `epoch` is older than the store's epoch.
+    ///
+    /// Always a complete message: for MESSAGE_UPDATE the gateway runtime
+    /// reads the stored copy with [`get_message`](Self::get_message), merges
+    /// the typed update into it, and stores the result; it never stores an
+    /// update on its own.
     fn put_message(
         &self,
         epoch: u64,
-        message: Message,
+        message: Arc<Message>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     fn get_message(
@@ -184,7 +192,7 @@ pub trait CacheBackend: Send + Sync {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send;
 
     fn get_presence(
@@ -238,9 +246,9 @@ impl CacheBackend for CacheHandle {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_member(epoch, guild_id, user_id, Arc::new(member))
+        self.fenced_upsert_member(epoch, guild_id, user_id, member)
             .await;
         Ok(())
     }
@@ -267,8 +275,8 @@ impl CacheBackend for CacheHandle {
         Ok(())
     }
 
-    async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError> {
-        self.fenced_upsert_message(epoch, Arc::new(message)).await;
+    async fn put_message(&self, epoch: u64, message: Arc<Message>) -> Result<(), DiscordError> {
+        self.fenced_upsert_message(epoch, message).await;
         Ok(())
     }
 
@@ -303,9 +311,9 @@ impl CacheBackend for CacheHandle {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_presence(epoch, guild_id, user_id, Arc::new(presence))
+        self.fenced_upsert_presence(epoch, guild_id, user_id, presence)
             .await;
         Ok(())
     }

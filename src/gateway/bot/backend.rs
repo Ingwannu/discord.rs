@@ -65,6 +65,7 @@ use super::presence_from_update;
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::{Event, EventKind};
+use crate::model::normalize_presence;
 use crate::model::{
     ChannelId, GuildId, Member, Message, MessageId, MessageUpdate, Presence, UserId,
 };
@@ -101,7 +102,7 @@ pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) -> BackendFuture<'_, ()>;
     fn delete_member<'a>(
         &'a self,
@@ -109,7 +110,7 @@ pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
         guild_id: &'a GuildId,
         user_id: &'a UserId,
     ) -> BackendFuture<'a, ()>;
-    fn put_message(&self, epoch: u64, message: Message) -> BackendFuture<'_, ()>;
+    fn put_message(&self, epoch: u64, message: Arc<Message>) -> BackendFuture<'_, ()>;
     fn get_message<'a>(
         &'a self,
         channel_id: &'a ChannelId,
@@ -126,7 +127,7 @@ pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) -> BackendFuture<'_, ()>;
 }
 
@@ -157,7 +158,7 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) -> BackendFuture<'_, ()> {
         Box::pin(
             async move { CacheBackend::put_member(self, epoch, guild_id, user_id, member).await },
@@ -173,7 +174,7 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
         Box::pin(async move { CacheBackend::delete_member(self, epoch, *guild_id, *user_id).await })
     }
 
-    fn put_message(&self, epoch: u64, message: Message) -> BackendFuture<'_, ()> {
+    fn put_message(&self, epoch: u64, message: Arc<Message>) -> BackendFuture<'_, ()> {
         Box::pin(async move { CacheBackend::put_message(self, epoch, message).await })
     }
 
@@ -201,7 +202,7 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: Presence,
+        presence: Arc<Presence>,
     ) -> BackendFuture<'_, ()> {
         Box::pin(async move {
             CacheBackend::put_presence(self, epoch, guild_id, user_id, presence).await
@@ -262,7 +263,7 @@ pub(super) enum BackendWrite {
     PutMember {
         guild_id: GuildId,
         user_id: UserId,
-        member: Box<crate::model::Member>,
+        member: Arc<Member>,
     },
     DeleteMember {
         guild_id: GuildId,
@@ -270,10 +271,12 @@ pub(super) enum BackendWrite {
     },
     PutMembersChunk {
         guild_id: GuildId,
-        members: Vec<crate::model::Member>,
-        presences: Vec<crate::model::Presence>,
+        members: Vec<Arc<Member>>,
+        /// Already carrying their `user_id`.
+        presences: Vec<Arc<Presence>>,
     },
-    PutMessage(Box<crate::model::Message>),
+    /// Shared with the event and the in-memory cache.
+    PutMessage(Arc<Message>),
     UpdateMessage(Box<BackendMessageUpdate>),
     DeleteMessages {
         channel_id: ChannelId,
@@ -282,7 +285,7 @@ pub(super) enum BackendWrite {
     PutPresence {
         guild_id: GuildId,
         user_id: UserId,
-        presence: Box<crate::model::Presence>,
+        presence: Arc<Presence>,
     },
     /// Test hook: acknowledges once every earlier write was applied.
     #[cfg(test)]
@@ -295,7 +298,7 @@ pub(super) struct BackendMessageUpdate {
     update: Arc<MessageUpdate>,
     /// The in-memory cache's merged copy, used when the backend does not
     /// hold the message.
-    in_memory: Option<crate::model::Message>,
+    in_memory: Option<Arc<Message>>,
 }
 
 #[derive(Debug)]
@@ -1053,7 +1056,7 @@ async fn apply_backend_write(
         } => {
             contained(
                 "put_member",
-                backend.put_member(epoch, guild_id, user_id, *member),
+                backend.put_member(epoch, guild_id, user_id, member),
             )
             .await
         }
@@ -1081,14 +1084,10 @@ async fn apply_backend_write(
                 .await;
                 first_error = first_error.and(result);
             }
-            for mut presence in presences {
-                let user_id = presence
-                    .user_id
-                    .or_else(|| presence.user.as_ref().map(|user| user.id));
-                let Some(user_id) = user_id else {
+            for presence in presences {
+                let Some(user_id) = presence.user_id else {
                     continue;
                 };
-                presence.user_id = Some(user_id);
                 let result = contained(
                     "put_presence",
                     backend.put_presence(epoch, guild_id, user_id, presence),
@@ -1099,7 +1098,7 @@ async fn apply_backend_write(
             first_error
         }
         BackendWrite::PutMessage(message) => {
-            contained("put_message", backend.put_message(epoch, *message)).await
+            contained("put_message", backend.put_message(epoch, message)).await
         }
         BackendWrite::UpdateMessage(update) => {
             let BackendMessageUpdate { update, in_memory } = *update;
@@ -1109,10 +1108,11 @@ async fn apply_backend_write(
             )
             .await;
             let merged = match stored {
-                Ok(Some(stored)) => {
-                    let mut merged = stored.as_ref().clone();
-                    update.apply_to(&mut merged);
-                    merged
+                Ok(Some(mut stored)) => {
+                    // Copy-on-write: a backend that hands out a unique
+                    // `Arc` is merged in place, a shared one is copied.
+                    update.apply_to(Arc::make_mut(&mut stored));
+                    stored
                 }
                 Ok(None) => match in_memory {
                     Some(message) => message,
@@ -1155,7 +1155,7 @@ async fn apply_backend_write(
         } => {
             contained(
                 "put_presence",
-                backend.put_presence(epoch, guild_id, user_id, *presence),
+                backend.put_presence(epoch, guild_id, user_id, presence),
             )
             .await
         }
@@ -1186,7 +1186,7 @@ pub(super) async fn forward_cache_backend_updates(
             .map(|user| BackendWrite::PutMember {
                 guild_id: event.guild_id,
                 user_id: user.id,
-                member: Box::new((*event.member).clone()),
+                member: Arc::clone(&event.member),
             }),
         EventKind::MemberRemove(data) => Some(BackendWrite::DeleteMember {
             guild_id: data.guild_id,
@@ -1194,14 +1194,21 @@ pub(super) async fn forward_cache_backend_updates(
         }),
         EventKind::GuildMembersChunk(chunk) => Some(BackendWrite::PutMembersChunk {
             guild_id: chunk.guild_id,
-            members: chunk.members.clone(),
-            presences: chunk.presences.clone().unwrap_or_default(),
+            members: chunk.members.iter().cloned().map(Arc::new).collect(),
+            presences: chunk
+                .presences
+                .iter()
+                .flatten()
+                .map(|presence| {
+                    let mut presence = presence.clone();
+                    normalize_presence(&mut presence);
+                    Arc::new(presence)
+                })
+                .collect(),
         }),
-        EventKind::MessageCreate(message) => {
-            Some(BackendWrite::PutMessage(Box::new((**message).clone())))
-        }
+        EventKind::MessageCreate(message) => Some(BackendWrite::PutMessage(Arc::clone(message))),
         EventKind::MessageUpdate(update) => {
-            let in_memory = cache.message(update.channel_id, update.id).await;
+            let in_memory = cache.message_arc(update.channel_id, update.id).await;
             Some(BackendWrite::UpdateMessage(Box::new(
                 BackendMessageUpdate {
                     update: Arc::clone(update),
@@ -1219,7 +1226,7 @@ pub(super) async fn forward_cache_backend_updates(
         }),
         EventKind::PresenceUpdate(event) => match (event.guild_id, event.user_id) {
             (Some(guild_id), Some(user_id)) => Some(BackendWrite::PutPresence {
-                presence: Box::new(presence_from_update(event, user_id)),
+                presence: Arc::new(presence_from_update(event, user_id)),
                 guild_id,
                 user_id,
             }),
@@ -1230,7 +1237,7 @@ pub(super) async fn forward_cache_backend_updates(
                 member.user.as_ref().map(|user| BackendWrite::PutMember {
                     guild_id,
                     user_id: user.id,
-                    member: Box::new(member.clone()),
+                    member: Arc::new(member.clone()),
                 })
             }
             _ => None,

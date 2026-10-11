@@ -235,7 +235,7 @@ mod cache_backend {
             epoch: u64,
             guild_id: GuildId,
             user_id: UserId,
-            member: Member,
+            member: Arc<Member>,
         ) -> Result<(), DiscordError> {
             self.store
                 .put_member(epoch, guild_id, user_id, member)
@@ -263,7 +263,7 @@ mod cache_backend {
             self.store.delete_member(epoch, guild_id, user_id).await
         }
 
-        async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError> {
+        async fn put_message(&self, epoch: u64, message: Arc<Message>) -> Result<(), DiscordError> {
             self.store.put_message(epoch, message).await
         }
 
@@ -298,7 +298,7 @@ mod cache_backend {
             epoch: u64,
             guild_id: GuildId,
             user_id: UserId,
-            presence: Presence,
+            presence: Arc<Presence>,
         ) -> Result<(), DiscordError> {
             self.store
                 .put_presence(epoch, guild_id, user_id, presence)
@@ -355,7 +355,7 @@ mod cache_backend {
                 ..Member::default()
             };
             backend
-                .put_member(epoch, guild_id, user_id, member)
+                .put_member(epoch, guild_id, user_id, Arc::new(member))
                 .await
                 .expect("put_member succeeds");
             backend

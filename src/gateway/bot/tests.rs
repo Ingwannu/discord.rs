@@ -3321,7 +3321,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        _member: Member,
+        _member: Arc<Member>,
     ) -> Result<(), crate::error::DiscordError> {
         if self
             .panic_on_put_member
@@ -3363,7 +3363,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
     async fn put_message(
         &self,
         epoch: u64,
-        message: Message,
+        message: Arc<Message>,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         if let Some(gate) = &self.put_message_gate {
@@ -3376,7 +3376,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
         self.messages
             .lock()
             .expect("recorder mutex")
-            .insert((message.channel_id, message.id), message);
+            .insert((message.channel_id, message.id), message.as_ref().clone());
         Ok(())
     }
 
@@ -3424,7 +3424,7 @@ impl crate::cache::CacheBackend for RecordingBackend {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: crate::model::Presence,
+        presence: Arc<crate::model::Presence>,
     ) -> Result<(), crate::error::DiscordError> {
         self.fences.lock().unwrap().push(epoch);
         self.record(format!(
@@ -4506,7 +4506,7 @@ async fn full_cache_backend_queue_schedules_an_ordered_shard_resync() {
         super::CacheBackendForwarder::spawn(recorder.clone(), 1, Duration::from_secs(5));
     let health = forwarder.health_handle();
     let message = |id: &str| {
-        super::BackendWrite::PutMessage(Box::new(Message {
+        super::BackendWrite::PutMessage(Arc::new(Message {
             id: named_id(id),
             channel_id: test_id(10),
             ..Message::fixture()
@@ -4630,6 +4630,89 @@ async fn cache_backend_message_update_merges_instead_of_overwriting_with_a_parti
         .expect("in-memory copy used");
     assert_eq!(stored.content, "memory-edited");
     assert_eq!(stored.author.expect("author kept").username, "cached");
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn the_event_cache_and_backend_share_one_message_and_member_allocation() {
+    let store = crate::cache::CacheHandle::new();
+    let (forwarder, _worker) =
+        super::CacheBackendForwarder::spawn(Arc::new(store.clone()), 16, Duration::from_secs(5));
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "MESSAGE_CREATE",
+        json!({ "id": "11", "channel_id": "10", "guild_id": "9", "content": "shared" }),
+    )
+    .unwrap();
+    let member_add = decode_event(
+        "GUILD_MEMBER_ADD",
+        json!({ "guild_id": "9", "user": { "id": "5", "username": "a" }, "roles": [] }),
+    )
+    .unwrap();
+    for event in [&create, &member_add] {
+        super::apply_cache_updates(&cache, SINGLE_SHARD, event).await;
+        super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
+    }
+    forwarder.flush().await;
+
+    let EventKind::MessageCreate(message) = create.kind() else {
+        panic!("unexpected {create:?}");
+    };
+    let cached = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+    let mirrored = store.message_arc(test_id(10), test_id(11)).await.unwrap();
+    assert!(Arc::ptr_eq(message, &cached));
+    assert!(Arc::ptr_eq(message, &mirrored));
+
+    let EventKind::MemberAdd(member) = member_add.kind() else {
+        panic!("unexpected {member_add:?}");
+    };
+    let cached = cache.member_arc(test_id(9), test_id(5)).await.unwrap();
+    let mirrored = store.member_arc(test_id(9), test_id(5)).await.unwrap();
+    assert!(Arc::ptr_eq(&member.member, &cached));
+    assert!(Arc::ptr_eq(&member.member, &mirrored));
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn message_updates_copy_shared_snapshots_and_merge_unique_ones_in_place() {
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "MESSAGE_CREATE",
+        json!({ "id": "11", "channel_id": "10", "content": "v1", "pinned": true }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &create).await;
+    let old = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+
+    // The event (and `old`) still hold the cached allocation: the update
+    // goes into a new snapshot and the old one stays as it was.
+    let edit = Event::from_kind(
+        "MESSAGE_UPDATE",
+        EventKind::MessageUpdate(content_update(test_id(11), test_id(10), "v2")),
+    );
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &edit).await;
+    let new = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+    assert_eq!(old.content, "v1");
+    assert_eq!(new.content, "v2");
+    assert_eq!(new.pinned, Some(true), "omitted fields are kept");
+    assert!(!Arc::ptr_eq(&old, &new));
+    let EventKind::MessageCreate(message) = create.kind() else {
+        panic!("unexpected {create:?}");
+    };
+    assert_eq!(message.content, "v1", "the earlier event is unchanged");
+
+    // Once nobody else holds it, the next update merges in place.
+    drop((old, create));
+    let address = Arc::as_ptr(&new);
+    drop(new);
+    let again = Event::from_kind(
+        "MESSAGE_UPDATE",
+        EventKind::MessageUpdate(content_update(test_id(11), test_id(10), "v3")),
+    );
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &again).await;
+    let merged = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+    assert_eq!(merged.content, "v3");
+    assert_eq!(Arc::as_ptr(&merged), address);
 }
 
 /// A MESSAGE_UPDATE payload carrying every message field Discord can send.
@@ -5855,7 +5938,7 @@ async fn failed_backend_writes_quarantine_the_shard_and_retry_the_resync_on_a_ti
         super::CacheBackendForwarder::spawn(recorder.clone(), 16, Duration::from_secs(5));
     let health = forwarder.health_handle();
     let message = |id: &str| {
-        super::BackendWrite::PutMessage(Box::new(Message {
+        super::BackendWrite::PutMessage(Arc::new(Message {
             id: named_id(id),
             channel_id: test_id(10),
             ..Message::fixture()
@@ -5949,7 +6032,7 @@ async fn backend_worker_shutdown_aborts_a_hung_call_so_no_write_lands_afterwards
         super::CacheBackendForwarder::spawn(recorder.clone(), 16, Duration::from_secs(5));
     forwarder.forward(
         (0, 1),
-        super::BackendWrite::PutMessage(Box::new(Message {
+        super::BackendWrite::PutMessage(Arc::new(Message {
             id: test_id(1),
             channel_id: test_id(10),
             ..Message::fixture()
@@ -6410,7 +6493,7 @@ async fn backend_panics_are_contained_and_resynced_and_a_stopped_worker_is_repor
     let member = super::BackendWrite::PutMember {
         guild_id: test_id(1),
         user_id: test_id(2),
-        member: Box::new(Member::default()),
+        member: Arc::new(Member::default()),
     };
     forwarder.forward((0, 1), member);
     forwarder.flush().await;
@@ -6467,7 +6550,7 @@ async fn further_losses_cannot_postpone_a_pending_resync() {
     let (forwarder, _worker) =
         super::CacheBackendForwarder::spawn(recorder.clone(), 1, Duration::from_secs(5));
     let put = |id: &str| {
-        super::BackendWrite::PutMessage(Box::new(Message {
+        super::BackendWrite::PutMessage(Arc::new(Message {
             id: named_id(id),
             channel_id: test_id(10),
             ..Message::fixture()
@@ -6614,7 +6697,7 @@ impl crate::cache::CacheBackend for DelayedStore {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        member: Member,
+        member: Arc<Member>,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
             .put_member(epoch, guild_id, user_id, member)
@@ -6648,7 +6731,7 @@ impl crate::cache::CacheBackend for DelayedStore {
     async fn put_message(
         &self,
         epoch: u64,
-        message: Message,
+        message: Arc<Message>,
     ) -> Result<(), crate::error::DiscordError> {
         self.put_gate.acquire().await.expect("gate open").forget();
         if self.fail_put.lock().unwrap().contains(&message.id) {
@@ -6688,7 +6771,7 @@ impl crate::cache::CacheBackend for DelayedStore {
         epoch: u64,
         guild_id: GuildId,
         user_id: UserId,
-        presence: crate::model::Presence,
+        presence: Arc<crate::model::Presence>,
     ) -> Result<(), crate::error::DiscordError> {
         self.store
             .put_presence(epoch, guild_id, user_id, presence)
@@ -6727,7 +6810,7 @@ async fn a_previous_clients_late_write_and_late_clear_are_both_rejected() {
     let old_backend = Arc::new(DelayedStore::new(&store, 0));
     let old_puts = Arc::clone(&old_backend.put_gate);
     let message = |id: &str| {
-        super::BackendWrite::PutMessage(Box::new(Message {
+        super::BackendWrite::PutMessage(Arc::new(Message {
             id: named_id(id),
             channel_id: test_id(10),
             ..Message::fixture()
@@ -7033,7 +7116,7 @@ async fn dropping_an_unpolled_wait_future_aborts_the_shards() {
 
 #[cfg(feature = "cache")]
 fn put_message_write(id: &str) -> super::BackendWrite {
-    super::BackendWrite::PutMessage(Box::new(Message {
+    super::BackendWrite::PutMessage(Arc::new(Message {
         id: named_id(id),
         channel_id: test_id(10),
         ..Message::fixture()
@@ -7103,7 +7186,7 @@ async fn a_new_shard_layout_claims_the_store_and_old_layout_writes_cannot_touch_
     let member_write = |guild: u64, user: &str| super::BackendWrite::PutMember {
         guild_id: test_id(guild),
         user_id: named_id(user),
-        member: Box::new(Member::default()),
+        member: Arc::new(Member::default()),
     };
     // Guild on shard 1 of 2 in the new layout.
     let shard1_guild = 1_u64 << 22;
@@ -7297,11 +7380,11 @@ async fn a_lost_rejection_of_the_initial_claim_is_epoch_discovery_not_a_takeover
     crate::cache::CacheBackend::put_message(
         &store,
         1,
-        Message {
+        Arc::new(Message {
             id: named_id("left-over"),
             channel_id: test_id(10),
             ..Message::fixture()
-        },
+        }),
     )
     .await
     .unwrap();

@@ -1937,10 +1937,12 @@ mod tests {
     async fn cache_handle_backend_fences_writes_and_clears_with_one_store_epoch() {
         let cache = CacheHandle::new();
         let channel = test_id(10);
-        let message = |id: u64| Message {
-            id: test_id(id),
-            channel_id: channel,
-            ..Message::fixture()
+        let message = |id: u64| {
+            Arc::new(Message {
+                id: test_id(id),
+                channel_id: channel,
+                ..Message::fixture()
+            })
         };
         let cached = |id: u64| {
             let cache = cache.clone();
@@ -1967,7 +1969,12 @@ mod tests {
         let shard1_guild = test_id(1_u64 << 22);
         let user = test_id(5);
         cache
-            .put_member(new, shard1_guild, user, crate::model::Member::default())
+            .put_member(
+                new,
+                shard1_guild,
+                user,
+                Arc::new(crate::model::Member::default()),
+            )
             .await
             .unwrap();
 
@@ -1982,7 +1989,7 @@ mod tests {
         assert!(cached(2001).await);
         cache.delete_member(old, shard1_guild, user).await.unwrap();
         cache
-            .put_presence(old, shard1_guild, user, Presence::default())
+            .put_presence(old, shard1_guild, user, Arc::new(Presence::default()))
             .await
             .unwrap();
         cache
@@ -2026,7 +2033,12 @@ mod tests {
         assert!(after_shard_clear > new);
         assert!(cache.member(shard1_guild, user).await.is_none());
         cache
-            .put_presence(after_shard_clear, shard1_guild, user, Presence::default())
+            .put_presence(
+                after_shard_clear,
+                shard1_guild,
+                user,
+                Arc::new(Presence::default()),
+            )
             .await
             .unwrap();
         assert!(cache.presence(shard1_guild, user).await.is_some());
@@ -2782,26 +2794,26 @@ mod tests {
                     epoch,
                     guild_id,
                     user_id,
-                    crate::model::Member {
+                    Arc::new(crate::model::Member {
                         user: Some(User {
                             id: user_id,
                             username: "backend member".to_string(),
                             ..User::fixture()
                         }),
                         ..crate::model::Member::default()
-                    },
+                    }),
                 )
                 .await
                 .unwrap();
             backend
                 .put_message(
                     epoch,
-                    Message {
+                    Arc::new(Message {
                         id: message_id,
                         channel_id,
                         content: "backend message".to_string(),
                         ..Message::fixture()
-                    },
+                    }),
                 )
                 .await
                 .unwrap();
@@ -2810,11 +2822,11 @@ mod tests {
                     epoch,
                     guild_id,
                     user_id,
-                    Presence {
+                    Arc::new(Presence {
                         user_id: Some(user_id),
                         status: Some(PresenceStatus::IDLE),
                         ..Presence::default()
-                    },
+                    }),
                 )
                 .await
                 .unwrap();
@@ -2889,12 +2901,12 @@ mod tests {
         CacheBackend::put_message(
             &cache,
             0,
-            Message {
+            Arc::new(Message {
                 id: test_id(31),
                 channel_id: test_id(10),
                 content: "clear me".to_string(),
                 ..Message::fixture()
-            },
+            }),
         )
         .await
         .unwrap();
