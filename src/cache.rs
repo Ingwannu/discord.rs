@@ -8,8 +8,9 @@ use tokio::sync::RwLock;
 use crate::event::ScheduledEvent;
 use crate::model::{
     Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, Member, Message, MessageId,
-    MessageUpdate, Presence, Role, RoleId, ScheduledEventId, SoundboardSound, SoundboardSoundId,
-    StageInstance, StageInstanceId, Sticker, StickerId, User, UserId, VoiceState,
+    MessageUpdate, PartialUser, Presence, Role, RoleId, ScheduledEventId, SoundboardSound,
+    SoundboardSoundId, StageInstance, StageInstanceId, Sticker, StickerId, User, UserId,
+    VoiceState,
 };
 use crate::types::Emoji;
 
@@ -626,6 +627,39 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn upsert_user(&self, user: User) {
         let mut store = self.store.write().await;
+        self.insert_user(&mut store, user);
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn upsert_user(&self, _user: User) {}
+
+    /// Applies a partial user (MESSAGE_UPDATE's `author`) to the cached
+    /// user under the write lock: sent fields replace, `null` clears, and
+    /// omitted fields keep their cached value. A user that is not cached is
+    /// stored only when the partial user is complete
+    /// ([`PartialUser::to_user`]), never made up from an id alone. Works
+    /// whether or not the message itself is cached.
+    ///
+    /// Replacing the cached user with [`PartialUser::to_user`] instead would
+    /// turn every omitted field into `None` and wipe, for example, a cached
+    /// avatar on a username-only update.
+    #[cfg(feature = "cache")]
+    pub async fn apply_partial_user(&self, user: &PartialUser) {
+        let mut store = self.store.write().await;
+        if let Some(cached) = store.users.get_mut(&user.id) {
+            user.apply_to(cached);
+            // Refresh recency as the 2.x upsert of the author did.
+            remember_key(&mut store.user_order, user.id);
+        } else if let Some(complete) = user.to_user() {
+            self.insert_user(&mut store, complete);
+        }
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_partial_user(&self, _user: &PartialUser) {}
+
+    #[cfg(feature = "cache")]
+    fn insert_user(&self, store: &mut CacheStore, user: User) {
         let user_id = user.id;
         store.users.insert(user_id, user);
         remember_key(&mut store.user_order, user_id);
@@ -634,9 +668,6 @@ impl CacheHandle {
             store.users.remove(&key);
         }
     }
-
-    #[cfg(not(feature = "cache"))]
-    pub async fn upsert_user(&self, _user: User) {}
 
     #[cfg(feature = "cache")]
     pub async fn remove_user(&self, user_id: UserId) {

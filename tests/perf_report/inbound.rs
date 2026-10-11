@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use discordrs::model::Presence;
+use discordrs::model::{Nullable, Patch, Presence};
 use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -145,8 +145,8 @@ async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
             cache.upsert_message(Arc::clone(message)).await;
         }
         EventKind::MessageUpdate(update) => {
-            if let Some(author) = update.author_user() {
-                cache.upsert_user(author).await;
+            if let Patch::Value(Nullable::Value(author)) = &update.author {
+                cache.apply_partial_user(author).await;
             }
             cache.apply_message_update(update).await;
         }

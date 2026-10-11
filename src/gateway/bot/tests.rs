@@ -4715,6 +4715,69 @@ async fn message_updates_copy_shared_snapshots_and_merge_unique_ones_in_place() 
     assert_eq!(Arc::as_ptr(&merged), address);
 }
 
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn message_update_authors_patch_the_cached_user_instead_of_replacing_it() {
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "MESSAGE_CREATE",
+        json!({
+            "id": "11",
+            "channel_id": "10",
+            "content": "v1",
+            "author": { "id": "5", "username": "before", "avatar": "a1", "global_name": "Five" }
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &create).await;
+
+    // Username only: the cached avatar and global name stay.
+    let rename = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "author": { "id": "5", "username": "after" } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &rename).await;
+    let user = cache.user(test_id(5)).await.expect("user cached");
+    assert_eq!(user.username, "after");
+    assert_eq!(user.avatar.as_deref(), Some("a1"));
+    assert_eq!(user.global_name.as_deref(), Some("Five"));
+
+    // `null` clears, and it does so for a message the cache never saw.
+    let cleared = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "99", "channel_id": "10", "author": { "id": "5", "avatar": null } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &cleared).await;
+    assert!(cache.message(test_id(10), test_id(99)).await.is_none());
+    let user = cache.user(test_id(5)).await.expect("user cached");
+    assert_eq!(user.avatar, None);
+    assert_eq!(user.username, "after");
+    assert_eq!(user.global_name.as_deref(), Some("Five"));
+
+    // An uncached user is stored only from a complete author.
+    let id_only = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "author": { "id": "6", "avatar": "a6" } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &id_only).await;
+    assert!(cache.user(test_id(6)).await.is_none());
+    let complete = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "author": { "id": "7", "username": "new" } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &complete).await;
+    let user = cache
+        .user(test_id(7))
+        .await
+        .expect("complete author stored");
+    assert_eq!(user.username, "new");
+    assert_eq!(user.avatar, None);
+}
+
 /// A MESSAGE_UPDATE payload carrying every message field Discord can send.
 fn full_message_update_payload() -> Value {
     let mut payload = json!({

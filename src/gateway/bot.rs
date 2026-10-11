@@ -25,7 +25,9 @@ use crate::collector::CollectorHub;
 use crate::error::DiscordError;
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
-use crate::model::{ApplicationId, ChannelId, GuildId, Interaction, MessageId, RoleId, UserId};
+use crate::model::{
+    ApplicationId, ChannelId, GuildId, Interaction, MessageId, Nullable, Patch, RoleId, UserId,
+};
 #[cfg(feature = "sharding")]
 use crate::sharding::{
     ShardInfo, ShardIpcMessage, ShardRuntimeChannels, ShardRuntimeState, ShardSupervisorEvent,
@@ -2827,8 +2829,10 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             cache.upsert_message(Arc::clone(message)).await;
         }
         EventKind::MessageUpdate(update) => {
-            if let Some(author) = update.author_user() {
-                cache.upsert_user(author).await;
+            // A patch on the cached user, not a replacement: the author is
+            // often partial and must not clear what it omits.
+            if let Patch::Value(Nullable::Value(author)) = &update.author {
+                cache.apply_partial_user(author).await;
             }
             // Merges into the cached message only; an update alone is never
             // stored as a message (its omitted fields are unknown).

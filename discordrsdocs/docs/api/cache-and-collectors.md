@@ -31,6 +31,7 @@ The cache keeps messages, members, presences, and guilds as `Arc`s and shares th
 
 - `upsert_message`, `upsert_member`, `upsert_presence`, and `upsert_guild` take `impl Into<Arc<T>>`: pass the `Arc` an event holds (`EventKind::MessageCreate(message)` → `upsert_message(Arc::clone(message))`) to share it, or a plain value, which is wrapped as before.
 - `apply_message_update(&MessageUpdate)` merges a MESSAGE_UPDATE into the cached message under the write lock and returns the merged `Arc<Message>`; a message that is not cached stays uncached, because an update alone is never stored. The merge is copy-on-write: in place when the cache holds the only reference, otherwise into a new snapshot, so an earlier event, collector, or handler that still holds the old `Arc<Message>` keeps seeing the message as it was.
+- `apply_partial_user(&PartialUser)` applies MESSAGE_UPDATE's `author` to the cached user under the write lock: sent fields replace, `null` clears, omitted fields keep their cached value, whether or not the message itself is cached. A user that is not cached is stored only when the author is complete (`PartialUser::to_user`, which needs `username`); an id alone never creates one. The gateway runtime calls it for every MESSAGE_UPDATE with an author.
 - Cached objects are never mutated behind a shared `Arc`; there is no interior mutability on them.
 
 ### READY Invalidation per Shard (3.0)
