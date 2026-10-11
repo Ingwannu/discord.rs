@@ -149,7 +149,7 @@ fn parse_webhook_event_body(body: Value) -> Result<WebhookEventBody, DiscordErro
     let kind = required_string(&body, "type")?;
     let timestamp = required_string(&body, "timestamp")?;
     let data = body.get("data").cloned();
-    let event = parse_webhook_event(&kind, data.clone())?;
+    let event = parse_webhook_event(&kind, data)?;
 
     Ok(WebhookEventBody {
         kind,

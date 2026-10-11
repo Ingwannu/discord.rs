@@ -2675,10 +2675,10 @@ impl Drop for ChildIpc {
 
 impl ChildIpc {
     fn send(&self, message: &ChildMessage, priority: FramePriority) -> Result<(), DiscordError> {
-        self.send_encoded(encode_ipc_line(message)?, priority)
+        self.send_encoded(&encode_ipc_line(message)?, priority)
     }
 
-    fn send_encoded(&self, frame: String, priority: FramePriority) -> Result<(), DiscordError> {
+    fn send_encoded(&self, frame: &str, priority: FramePriority) -> Result<(), DiscordError> {
         if frame.len() > self.settings.max_frame {
             return Err(DiscordError::model(format!(
                 "IPC frame of {} bytes exceeds the parent's limit of {} bytes",
@@ -2701,7 +2701,7 @@ impl ChildIpc {
     fn send_response(&self, id: u64, payload: Value) {
         let result = match encode_ipc_line(&ChildMessage::Response { id, payload }) {
             Ok(frame) if frame.len() <= self.settings.max_frame => {
-                self.send_encoded(frame, FramePriority::Data)
+                self.send_encoded(&frame, FramePriority::Data)
             }
             Ok(frame) => {
                 warn!(
@@ -3014,7 +3014,7 @@ impl ShardChildProcess {
         let writer = Arc::new(ChildWriter::default());
         let ipc = Arc::new_cyclic(|weak: &Weak<ChildIpc>| {
             let thread_writer = Arc::clone(&writer);
-            let thread_ipc = weak.clone();
+            let thread_ipc = Weak::clone(weak);
             let spawned = std::thread::Builder::new()
                 .name("discordrs-shard-ipc-out".to_string())
                 .spawn(move || run_child_writer(thread_writer, sink, thread_ipc));

@@ -989,7 +989,7 @@ async fn read_source(mut resource: AudioResource, frames: mpsc::Sender<SourceEve
     }
 }
 
-fn read_failure(error: DiscordError) -> TrackEndReason {
+fn read_failure(error: &DiscordError) -> TrackEndReason {
     tracing::warn!(%error, "audio resource failed while reading");
     TrackEndReason::Error(error.to_string())
 }
@@ -1032,11 +1032,11 @@ impl ActiveTrack {
         match self.frames.try_recv() {
             Ok(SourceEvent::Frame(bytes)) => Ok(Some(bytes)),
             Ok(SourceEvent::End) => Err(TrackEndReason::Finished),
-            Ok(SourceEvent::Failed(error)) => Err(read_failure(error)),
+            Ok(SourceEvent::Failed(error)) => Err(read_failure(&error)),
             Err(TryRecvError::Empty) => Ok(None),
             // The reader drops its sender without reporting End or Failed
             // only if the input panicked.
-            Err(TryRecvError::Disconnected) => Err(read_failure(voice_error(
+            Err(TryRecvError::Disconnected) => Err(read_failure(&voice_error(
                 "audio source reader stopped unexpectedly",
             ))),
         }
@@ -1698,12 +1698,12 @@ impl PlayerTask {
         }
     }
 
-    fn send_to_all(&self, position: u64, frame: Arc<[u8]>) {
+    fn send_to_all(&self, position: u64, frame: &Arc<[u8]>) {
         let now = Instant::now();
         for subscriber in self.subscribers.values() {
             subscriber
                 .shared
-                .update(|state| state.push(position, &frame, now));
+                .update(|state| state.push(position, frame, now));
         }
     }
 
@@ -1955,7 +1955,7 @@ impl PlayerTask {
         let encoded = (!self.subscribers.is_empty())
             .then(|| track.encode(pcm_s16le_to_f32(&bytes, track.volume.get())));
         match encoded {
-            Some(Ok(opus)) => self.send_to_all(self.position, opus.into()),
+            Some(Ok(opus)) => self.send_to_all(self.position, &opus.into()),
             Some(Err(error)) => {
                 tracing::warn!(%error, "failed to encode PCM frame to Opus");
                 self.finish_playback(TrackEndReason::Error(error.to_string()), false);

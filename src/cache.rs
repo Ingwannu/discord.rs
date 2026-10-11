@@ -729,7 +729,7 @@ impl CacheHandle {
                 // removal is left to the throttled sweep.
                 !seen_expired(store.member_seen.get(*key), self.config.member_ttl, now)
             })
-            .map(|(_, member)| member.clone())
+            .map(|(_, member)| Arc::clone(member))
             .collect()
     }
 
@@ -848,7 +848,7 @@ impl CacheHandle {
                 // removal is left to the throttled sweep.
                 !seen_expired(store.message_seen.get(*key), self.config.message_ttl, now)
             })
-            .map(|(_, message)| message.clone())
+            .map(|(_, message)| Arc::clone(message))
             .collect()
     }
 
@@ -1043,7 +1043,7 @@ impl CacheHandle {
                 // removal is left to the throttled sweep.
                 !seen_expired(store.presence_seen.get(*key), self.config.presence_ttl, now)
             })
-            .map(|(_, presence)| presence.clone())
+            .map(|(_, presence)| Arc::clone(presence))
             .collect()
     }
 

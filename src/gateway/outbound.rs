@@ -200,11 +200,11 @@ where
 {
     let payload = match command {
         GatewayCommand::UpdatePresence(status) => {
-            update_presence_payload(UpdatePresence::online_with_activity(status))
+            update_presence_payload(&UpdatePresence::online_with_activity(status))
         }
-        GatewayCommand::UpdatePresenceData(presence) => update_presence_payload(presence),
-        GatewayCommand::RequestGuildMembers(request) => request_guild_members_payload(request),
-        GatewayCommand::RequestChannelInfo(request) => request_channel_info_payload(request),
+        GatewayCommand::UpdatePresenceData(presence) => update_presence_payload(&presence),
+        GatewayCommand::RequestGuildMembers(request) => request_guild_members_payload(&request),
+        GatewayCommand::RequestChannelInfo(request) => request_channel_info_payload(&request),
         GatewayCommand::SendPayload(payload) => payload,
         GatewayCommand::Shutdown | GatewayCommand::Reconnect => return Ok(()),
     };

@@ -170,7 +170,7 @@ impl GatewayClient {
             info!("Connecting to gateway: {url}");
 
             let connection_started = Instant::now();
-            match self.connect_and_run(&url, on_event.clone()).await {
+            match self.connect_and_run(&url, Arc::clone(&on_event)).await {
                 Ok(action) => {
                     match action {
                         ReconnectAction::Resume => {
@@ -472,8 +472,8 @@ impl GatewayClient {
 
         // Spawn heartbeat task
         let (heartbeat_tx, mut heartbeat_rx) = mpsc::channel::<String>(8);
-        let sequence_clone = self.sequence.clone();
-        let ack_received = self.heartbeat_ack_received.clone();
+        let sequence_clone = Arc::clone(&self.sequence);
+        let ack_received = Arc::clone(&self.heartbeat_ack_received);
         ack_received.store(true, Ordering::Relaxed);
 
         let _heartbeat_task = AbortOnDrop::new(tokio::spawn(async move {
@@ -801,14 +801,14 @@ pub(crate) fn voice_state_update_payload(
     })
 }
 
-pub(crate) fn update_presence_payload(presence: UpdatePresence) -> Value {
+pub(crate) fn update_presence_payload(presence: &UpdatePresence) -> Value {
     serde_json::json!({
         "op": 3,
         "d": presence
     })
 }
 
-pub(crate) fn request_guild_members_payload(request: RequestGuildMembers) -> Value {
+pub(crate) fn request_guild_members_payload(request: &RequestGuildMembers) -> Value {
     serde_json::json!({
         "op": 8,
         "d": request
@@ -828,7 +828,7 @@ pub(crate) fn request_soundboard_sounds_payload(
     })
 }
 
-pub(crate) fn request_channel_info_payload(request: RequestChannelInfo) -> Value {
+pub(crate) fn request_channel_info_payload(request: &RequestChannelInfo) -> Value {
     serde_json::json!({
         "op": 43,
         "d": request
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn gateway_typed_presence_and_member_request_payloads_match_gateway_shape() {
         let presence = UpdatePresence::online_with_activity("busy");
-        let payload = update_presence_payload(presence);
+        let payload = update_presence_payload(&presence);
         assert_eq!(payload["op"], serde_json::json!(3));
         assert_eq!(payload["d"]["status"], serde_json::json!("online"));
         assert_eq!(
@@ -1139,7 +1139,7 @@ mod tests {
             serde_json::json!("busy")
         );
 
-        let payload = request_guild_members_payload(RequestGuildMembers {
+        let payload = request_guild_members_payload(&RequestGuildMembers {
             guild_id: test_id(1),
             query: Some("abc".to_string()),
             limit: Some(10),
@@ -1152,7 +1152,7 @@ mod tests {
         assert_eq!(payload["d"]["user_ids"], serde_json::json!(["2"]));
         assert_eq!(payload["d"]["nonce"], serde_json::json!("nonce"));
 
-        let payload = request_channel_info_payload(RequestChannelInfo::voice_metadata(test_id(1)));
+        let payload = request_channel_info_payload(&RequestChannelInfo::voice_metadata(test_id(1)));
         assert_eq!(payload["op"], serde_json::json!(43));
         assert_eq!(payload["d"]["guild_id"], serde_json::json!("1"));
         assert_eq!(
