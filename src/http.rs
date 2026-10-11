@@ -112,6 +112,8 @@ pub type DiscordHttpClient = RestClient;
 
 #[derive(Default)]
 struct RateLimitRouteGates {
+    // One gate per route or bucket, shared by every client clone. The std
+    // lock only guards the map; the tokio gate is held for a whole request.
     routes: StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 

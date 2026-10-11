@@ -52,6 +52,8 @@ const MAX_DEFERRED_COMMANDS: usize = 32;
 /// A connection that dies faster than this is treated as unhealthy and
 /// re-dialed with escalating backoff instead of immediately.
 const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
+/// Mixed into the heartbeat jitter so shards that start in the same instant
+/// still get different first-heartbeat delays.
 static JITTER_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct GatewayClient {
@@ -66,7 +68,11 @@ pub(crate) struct GatewayClient {
     deferred_commands: VecDeque<GatewayCommand>,
     #[cfg(feature = "sharding")]
     supervisor_callback: Option<SupervisorCallback>,
+    // Written by the read loop, read by the heartbeat task; kept across
+    // reconnects for RESUME.
     sequence: Arc<AtomicU64>,
+    // Cleared by the heartbeat task before each beat, set by the read loop
+    // on ACK: still clear at the next beat means a zombie connection.
     heartbeat_ack_received: Arc<AtomicBool>,
     last_identify: Option<Instant>,
     /// Set when the server explicitly asked for a reconnect (op 7 RECONNECT

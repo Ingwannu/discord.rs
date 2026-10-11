@@ -37,6 +37,7 @@ pub(super) fn lock_sharding_manager(
 /// without waiting leaves the shards (and the boot schedule) running.
 /// `wait*` methods watch every shard at once; see [`ShardSupervisor::wait`].
 pub struct ShardSupervisor {
+    // Shared with `manager()` callers; locked only for short sync calls.
     pub(super) manager: Arc<StdMutex<ShardingManager>>,
     pub(super) tasks: Vec<(u32, JoinHandle<Result<(), DiscordError>>)>,
     /// How long the remaining shards get to stop gracefully after one shard

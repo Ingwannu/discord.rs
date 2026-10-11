@@ -190,7 +190,7 @@ use std::io::{self, BufRead, Write as _};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard, Weak};
+use std::sync::{Arc, Condvar, Mutex as StdMutex, MutexGuard, OnceLock, Weak};
 use std::time::Duration;
 
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -1092,6 +1092,7 @@ enum ChildCommand {
 
 struct ChildEntry {
     shard_ids: Vec<u32>,
+    // Written by the child's monitor task, snapshotted by `children()`.
     status: Arc<StdMutex<ChildStatus>>,
     command_tx: mpsc::Sender<ChildCommand>,
 }
@@ -1202,6 +1203,7 @@ pub struct ProcessShardManager {
     children: Vec<ChildEntry>,
     shutdown_tx: watch::Sender<bool>,
     completion: watch::Receiver<CompletionState>,
+    // `broadcast(&self)` may run concurrently; request ids must be unique.
     next_request_id: AtomicU64,
     broadcast_timeout: Duration,
     max_frame: usize,
@@ -2661,8 +2663,9 @@ struct ChildIpc {
     writer: Arc<ChildWriter>,
     /// Taken by the reader thread when IPC starts.
     source: StdMutex<Option<FrameSource>>,
-    /// Request queue of the dispatcher started by `serve()`.
-    dispatcher: StdMutex<Option<mpsc::Sender<(u64, Value)>>>,
+    /// Request queue of the dispatcher started by `serve()`; set once.
+    dispatcher: OnceLock<mpsc::Sender<(u64, Value)>>,
+    // Touched by `acquire_identify`, reader-thread grants, and permit drops.
     identify: StdMutex<ChildIdentifyState>,
 }
 
@@ -2813,8 +2816,7 @@ impl ChildIpc {
     /// dispatcher queue holds at most `max_concurrent_requests` requests,
     /// and anything beyond is answered with `null` at once.
     fn dispatch_request(&self, id: u64, payload: Value) {
-        let dispatcher = lock_or_recover(&self.dispatcher).clone();
-        let Some(dispatcher) = dispatcher else {
+        let Some(dispatcher) = self.dispatcher.get() else {
             debug!(request_id = id, "request before serve(); answering null");
             self.send_response(id, Value::Null);
             return;
@@ -3026,7 +3028,7 @@ impl ShardChildProcess {
                 shutdown_tx,
                 writer,
                 source: StdMutex::new(Some(source)),
-                dispatcher: StdMutex::new(None),
+                dispatcher: OnceLock::new(),
                 identify: StdMutex::new(ChildIdentifyState::default()),
             }
         });
@@ -3098,15 +3100,10 @@ impl ShardChildProcess {
         })?;
         let (requests_tx, requests_rx) =
             mpsc::channel(self.ipc.settings.max_concurrent_requests.max(1));
-        {
-            let mut dispatcher = lock_or_recover(&self.ipc.dispatcher);
-            if dispatcher.is_some() {
-                return Err(DiscordError::model(
-                    "ShardChildProcess::serve was already called",
-                ));
-            }
-            *dispatcher = Some(requests_tx);
-        }
+        self.ipc
+            .dispatcher
+            .set(requests_tx)
+            .map_err(|_| DiscordError::model("ShardChildProcess::serve was already called"))?;
         let handler: RequestHandler =
             Arc::new(move |payload| -> RequestFuture { Box::pin(handler(payload)) });
         runtime.spawn(run_request_dispatcher(

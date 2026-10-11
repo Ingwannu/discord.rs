@@ -1098,7 +1098,9 @@ pub struct VoiceRuntimeHandle {
     close_tx: Option<oneshot::Sender<()>>,
     task: JoinHandle<Result<(), DiscordError>>,
     udp_socket: Arc<UdpSocket>,
-    outbound_rtp: Arc<Mutex<VoiceOutboundRtpState>>,
+    // Concurrent `&self` senders must take sequence, timestamp, and nonce in
+    // send order, so the lock is held across the UDP send (tokio mutex).
+    outbound_rtp: Mutex<VoiceOutboundRtpState>,
 }
 
 impl VoiceRuntimeHandle {
@@ -1535,9 +1537,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<VoiceGatewayCommand>();
     let (close_tx, mut close_rx) = oneshot::channel();
     let udp_socket_handle = Arc::clone(&udp_socket);
-    let outbound_rtp = Arc::new(Mutex::new(VoiceOutboundRtpState::new(
-        state_tx.borrow().ready.ssrc,
-    )));
+    let outbound_rtp = Mutex::new(VoiceOutboundRtpState::new(state_tx.borrow().ready.ssrc));
 
     let task = tokio::spawn(async move {
         let mut heartbeat = interval(Duration::from_millis(heartbeat_interval_ms));

@@ -747,6 +747,7 @@ pub struct AudioPlayer {
     command_tx: mpsc::UnboundedSender<PlayerCommand>,
     state_rx: watch::Receiver<AudioPlayerState>,
     events_tx: broadcast::Sender<AudioPlayerEvent>,
+    // Shared by every clone so `subscribe()` ids stay unique.
     next_subscriber_id: Arc<AtomicU64>,
     encoder: Option<EncoderFactory>,
 }
@@ -1187,6 +1188,8 @@ impl SinkState {
 }
 
 struct SinkShared {
+    // Mailbox between the player's control task and this connection's sink
+    // task; a std lock, never held across an await.
     state: Mutex<SinkState>,
     /// Wakes the connection's task after any change, including while it is
     /// inside a send, so stop and close can cancel that send.

@@ -1,8 +1,6 @@
 #[cfg(feature = "collectors")]
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[cfg(feature = "collectors")]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "collectors")]
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "collectors")]
 use std::time::Duration;
@@ -145,6 +143,10 @@ struct EventJournal {
     /// Sequence number of `events[0]`.
     first_seq: u64,
     capacity: usize,
+    /// Set when the last [`CollectorHub`] clone drops. Kept under the same
+    /// lock as `events`, so a reader that sees it has also seen every event
+    /// published before.
+    closed: bool,
 }
 
 #[cfg(feature = "collectors")]
@@ -158,9 +160,10 @@ impl EventJournal {
 
 #[cfg(feature = "collectors")]
 struct HubShared {
+    // The publisher appends and every subscription reads from its own task;
+    // a std lock, never held across an await.
     journal: Mutex<EventJournal>,
     published: Notify,
-    closed: AtomicBool,
 }
 
 #[cfg(feature = "collectors")]
@@ -181,12 +184,7 @@ struct HubPublisher(Arc<HubShared>);
 #[cfg(feature = "collectors")]
 impl Drop for HubPublisher {
     fn drop(&mut self) {
-        // Closed under the journal lock: a reader that sees `closed` while
-        // holding the lock has also seen every event published before.
-        {
-            let _journal = self.0.journal();
-            self.0.closed.store(true, Ordering::SeqCst);
-        }
+        self.0.journal().closed = true;
         self.0.published.notify_waiters();
     }
 }
@@ -246,9 +244,9 @@ impl CollectorHub {
                     events: VecDeque::with_capacity(capacity.min(1024)),
                     first_seq: 0,
                     capacity,
+                    closed: false,
                 }),
                 published: Notify::new(),
-                closed: AtomicBool::new(false),
             }))),
         }
     }
@@ -406,7 +404,7 @@ impl EventSubscription {
                 // publisher may publish and close right after the lock is
                 // released, and a close observed separately could hide that
                 // final event.
-                if self.shared.closed.load(Ordering::SeqCst) {
+                if journal.closed {
                     return Err(broadcast::error::RecvError::Closed);
                 }
             }

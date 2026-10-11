@@ -98,6 +98,8 @@ pub(crate) fn is_global_rate_limit(headers: &HeaderMap, body: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Shared by every client clone and updated by each response. One std lock
+/// per map, each taken briefly from sync code and never two at once.
 #[derive(Default)]
 pub(crate) struct RateLimitState {
     pub(crate) route_buckets: Mutex<HashMap<String, String>>,

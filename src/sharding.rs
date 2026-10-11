@@ -143,8 +143,11 @@ impl ShardRuntimeStatus {
 /// Typed Discord API object for `ShardRuntimeHandle`.
 pub struct ShardRuntimeHandle {
     command_tx: Sender<ShardIpcMessage>,
+    // A std Receiver is neither Clone nor Sync; the lock lets every handle
+    // clone drain the one queue. Always taken before `status`.
     event_rx: Arc<Mutex<Receiver<ShardSupervisorEvent>>>,
     _event_tx_guard: Option<Sender<ShardSupervisorEvent>>,
+    // Written by the shard's publisher, read by the supervisor's handles.
     status: Arc<Mutex<ShardRuntimeStatus>>,
 }
 

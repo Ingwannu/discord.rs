@@ -88,6 +88,8 @@ fn clear_store(store: &mut CacheStore) {
 #[derive(Clone, Default)]
 /// Typed Discord API object for `CacheHandle`.
 pub struct CacheHandle {
+    // Shared by every clone: shard event processors write, handlers read.
+    // Guards are never held across an await.
     #[cfg(feature = "cache")]
     store: Arc<RwLock<CacheStore>>,
     config: CacheConfig,

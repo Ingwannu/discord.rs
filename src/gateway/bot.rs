@@ -211,6 +211,8 @@ impl MemberChunkProgress {
 /// Typed Discord API object for `Context`.
 pub struct Context {
     pub http: Arc<DiscordHttpClient>,
+    /// User data shared by every handler call; an async lock because
+    /// handlers may hold it across `.await`.
     pub data: Arc<RwLock<TypeMap>>,
     pub cache: CacheHandle,
     pub shard_id: u32,
@@ -218,6 +220,8 @@ pub struct Context {
     gateway_commands: GatewayCommandRegistry,
     member_chunk_waiters: MemberChunkWaiters,
     default_allowed_mentions: Option<crate::model::AllowedMentions>,
+    // The event processor applies voice updates; handlers connect and play
+    // through `ctx.voice()`.
     #[cfg(feature = "voice")]
     voice: Arc<RwLock<VoiceManager>>,
     #[cfg(feature = "collectors")]
@@ -427,6 +431,7 @@ impl Context {
         limit: Option<u32>,
         timeout: Duration,
     ) -> Result<Vec<crate::model::Member>, DiscordError> {
+        // Process-wide, so concurrent fetches get distinct chunk nonces.
         static FETCH_NONCE: AtomicU64 = AtomicU64::new(0);
         let messenger = self.messenger_for_guild(guild_id)?;
         let nonce = format!(
