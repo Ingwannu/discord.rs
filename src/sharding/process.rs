@@ -1817,7 +1817,7 @@ impl ParentWriter {
         let (data_tx, mut data_rx) = mpsc::channel::<String>(IPC_WRITE_QUEUE_CAPACITY);
         let (failed_tx, failed_rx) = oneshot::channel();
         let task = match stdin {
-            Some(mut stdin) => Some(tokio::spawn(async move {
+            Some(mut stdin) => Some(crate::task::spawn_erased(async move {
                 loop {
                     let frame = tokio::select! {
                         biased;

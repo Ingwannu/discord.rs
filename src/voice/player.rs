@@ -783,7 +783,7 @@ impl AudioPlayer {
             position: 0,
             retiring: Vec::new(),
         };
-        tokio::spawn(task.run(command_rx));
+        crate::task::spawn_erased(task.run(command_rx));
         tracing::debug!("audio player task started");
 
         Self {
@@ -924,7 +924,7 @@ struct TaskGuard(Option<JoinHandle<()>>);
 
 impl TaskGuard {
     fn spawn(future: impl Future<Output = ()> + Send + 'static) -> Self {
-        Self(Some(tokio::spawn(future)))
+        Self(Some(crate::task::spawn_erased(future)))
     }
 
     fn abort(&self) {

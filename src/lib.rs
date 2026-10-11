@@ -55,6 +55,8 @@ pub mod response;
 #[cfg(feature = "sharding")]
 /// Gateway sharding configuration, runtime coordination, and IPC helpers.
 pub mod sharding;
+#[cfg(any(feature = "voice", feature = "sharding"))]
+mod task;
 /// Legacy compatibility types and shared builder aliases.
 pub mod types;
 #[cfg(feature = "voice")]
