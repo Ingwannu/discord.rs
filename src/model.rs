@@ -130,7 +130,7 @@ pub use poll::{
 };
 pub use presence::{
     Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
-    ClientStatus, Presence, PresenceUser, UpdatePresence,
+    ClientStatus, Presence, PresenceStatus, PresenceUser, UpdatePresence,
 };
 pub use role::{
     CreateGuildRole, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleColors, RoleTags,

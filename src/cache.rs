@@ -1519,7 +1519,7 @@ pub use managers::{
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
-    use crate::model::{test_id, ChannelType, StageInstancePrivacyLevel};
+    use crate::model::{test_id, ChannelType, PresenceStatus, StageInstancePrivacyLevel};
     use crate::model::{ChannelId, GuildId, MessageId, UserId};
     use std::sync::Arc;
     use std::time::Duration;
@@ -2141,7 +2141,7 @@ mod tests {
                 user_id,
                 Presence {
                     user_id: Some(user_id),
-                    status: Some("online".to_string()),
+                    status: Some(PresenceStatus::ONLINE),
                     ..Presence::default()
                 },
             )
@@ -2152,7 +2152,7 @@ mod tests {
                 other_user_id,
                 Presence {
                     user_id: Some(other_user_id),
-                    status: Some("idle".to_string()),
+                    status: Some(PresenceStatus::IDLE),
                     ..Presence::default()
                 },
             )
@@ -2300,7 +2300,7 @@ mod tests {
                 user_id,
                 Presence {
                     user_id: Some(user_id),
-                    status: Some("online".to_string()),
+                    status: Some(PresenceStatus::ONLINE),
                     ..Presence::default()
                 },
             )
@@ -2394,7 +2394,7 @@ mod tests {
                     user_id,
                     Presence {
                         user_id: Some(user_id),
-                        status: Some("online".to_string()),
+                        status: Some(PresenceStatus::ONLINE),
                         ..Presence::default()
                     },
                 )
@@ -2489,7 +2489,7 @@ mod tests {
                 user_id,
                 Presence {
                     user_id: Some(user_id),
-                    status: Some("online".to_string()),
+                    status: Some(PresenceStatus::ONLINE),
                     ..Presence::default()
                 },
             )
@@ -2547,7 +2547,7 @@ mod tests {
                 user_id,
                 Presence {
                     user_id: Some(user_id),
-                    status: Some("online".to_string()),
+                    status: Some(PresenceStatus::ONLINE),
                     ..Presence::default()
                 },
             )
@@ -2602,7 +2602,7 @@ mod tests {
                 user_id,
                 Presence {
                     user_id: Some(user_id),
-                    status: Some("online".to_string()),
+                    status: Some(PresenceStatus::ONLINE),
                     ..Presence::default()
                 },
             )
@@ -2719,7 +2719,7 @@ mod tests {
                     user_id,
                     Presence {
                         user_id: Some(user_id),
-                        status: Some("idle".to_string()),
+                        status: Some(PresenceStatus::IDLE),
                         ..Presence::default()
                     },
                 )
@@ -2842,7 +2842,7 @@ mod tests {
                     user_id,
                     Presence {
                         user_id: Some(user_id),
-                        status: Some("online".to_string()),
+                        status: Some(PresenceStatus::ONLINE),
                         ..Presence::default()
                     },
                 )

@@ -512,7 +512,7 @@ fn decode_presence_update_event(data: Value) -> PresenceUpdateEvent {
         user,
         user_id,
         guild_id: read_optional_snowflake(&data, "guild_id"),
-        status: read_optional_string(&data, "status"),
+        status: read_optional_string(&data, "status").map(PresenceStatus::new),
         activities: data
             .get("activities")
             .and_then(|value| serde_json::from_value(value.clone()).ok())

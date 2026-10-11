@@ -1916,7 +1916,7 @@ fn event_kind_and_raw_cover_missing_variants() {
             Event::PresenceUpdate(PresenceUpdateEvent {
                 user_id: Some(snowflake("103")),
                 guild_id: Some(snowflake("104")),
-                status: Some("idle".to_string()),
+                status: Some(PresenceStatus::IDLE),
                 raw: raw("PRESENCE_UPDATE"),
                 ..PresenceUpdateEvent::default()
             }),

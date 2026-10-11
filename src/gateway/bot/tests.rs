@@ -1,6 +1,6 @@
 use crate::model::{
-    test_id, ChannelType, ComponentType, MessageType, StageInstancePrivacyLevel, StickerFormatType,
-    StickerType,
+    test_id, ChannelType, ComponentType, MessageType, PresenceStatus, StageInstancePrivacyLevel,
+    StickerFormatType, StickerType,
 };
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
@@ -312,7 +312,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
         &Event::PresenceUpdate(PresenceUpdateEvent {
             user_id: Some(user_id),
             guild_id: Some(guild_id),
-            status: Some("online".to_string()),
+            status: Some(PresenceStatus::ONLINE),
             activities: vec![Activity::new(ActivityType::PLAYING, "testing")],
             raw: json!({
                 "user": { "id": user_id },
@@ -1512,7 +1512,7 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         Event::PresenceUpdate(PresenceUpdateEvent {
             user_id: Some(test_id(406)),
             guild_id: Some(guild_id),
-            status: Some("online".to_string()),
+            status: Some(PresenceStatus::ONLINE),
             raw: json!({}),
             ..PresenceUpdateEvent::default()
         }),
@@ -1730,7 +1730,7 @@ async fn event_handler_routes_additional_typed_hooks() {
             Event::PresenceUpdate(PresenceUpdateEvent {
                 user_id: Some(test_id(13)),
                 guild_id: Some(test_id(14)),
-                status: Some("online".to_string()),
+                status: Some(PresenceStatus::ONLINE),
                 raw: json!({}),
                 ..PresenceUpdateEvent::default()
             }),
@@ -3471,7 +3471,7 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     let presence_event = Event::PresenceUpdate(PresenceUpdateEvent {
         guild_id: Some(test_id(1)),
         user_id: Some(test_id(2)),
-        status: Some("online".to_string()),
+        status: Some(PresenceStatus::ONLINE),
         ..PresenceUpdateEvent::default()
     });
     let message_delete_event = Event::MessageDelete(MessageDeleteEvent {
@@ -3584,7 +3584,7 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
             presences: Some(vec![crate::model::Presence {
                 user_id: Some(test_id(2)),
                 user: None,
-                status: Some("idle".to_string()),
+                status: Some(PresenceStatus::IDLE),
                 activities: None,
                 client_status: None,
             }]),
@@ -5243,7 +5243,7 @@ async fn client_builder_start_returns_the_gateway_error_to_its_caller() {
             .presence(crate::model::UpdatePresence {
                 since: None,
                 activities: Vec::new(),
-                status: "idle".to_string(),
+                status: PresenceStatus::IDLE,
                 afk: false,
             })
             .cache_backend(recorder.clone())
