@@ -213,6 +213,10 @@ impl GuildCreate {
         presences: Vec<Arc<Presence>>,
     ) -> Self {
         let guild_id = guild.id;
+        // The guild is shared with the cache's guild store for as long as it
+        // is cached: drop the decoder's doubling slack (up to half the list,
+        // about 60 KB for 300 roles) with one reallocation.
+        guild.roles.shrink_to_fit();
         let mut channels = std::mem::take(&mut guild.channels);
         let mut threads = std::mem::take(&mut guild.threads);
         let mut voice_states = std::mem::take(&mut guild.voice_states);
@@ -262,10 +266,20 @@ impl From<Guild> for GuildCreate {
 }
 
 /// Fills `user_id` from the partial `user` GUILD_CREATE and member chunks
-/// identify presences with.
+/// identify presences with, and drops the spare capacity of `activities`.
+///
+/// A decoded list grows by doubling, so a single activity (440 bytes) leaves
+/// three empty slots behind it. The presence is shared with the cache for as
+/// long as the member stays online, where 2.x stored an exact-size clone:
+/// keeping the slack cost 1.3 KB per cached presence, 33 MB in the 25-guild
+/// storm scenario. Shrinking costs one reallocation per presence that has
+/// activities, during a GUILD_CREATE that already allocates per member.
 pub(crate) fn normalize_presence(presence: &mut Presence) {
     if presence.user_id.is_none() {
         presence.user_id = presence.user.as_ref().map(|user| user.id);
+    }
+    if let Some(activities) = &mut presence.activities {
+        activities.shrink_to_fit();
     }
 }
 

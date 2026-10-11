@@ -110,6 +110,27 @@ fn guild_create_reads_an_unavailable_guild_without_making_one_up() {
 }
 
 #[test]
+fn guild_create_shares_presences_and_roles_without_spare_capacity() {
+    // The cache keeps these allocations for as long as the guild and its
+    // members are cached, so the decoder's doubling slack must not stay.
+    let payload = json!({
+        "id": "10",
+        "name": "guild",
+        "roles": (11..16).map(|id| json!({ "id": id.to_string(), "name": "r" })).collect::<Vec<_>>(),
+        "presences": [{
+            "user": { "id": "30" },
+            "status": "online",
+            "activities": [{ "name": "Custom Status", "type": 4 }]
+        }]
+    });
+    let created = decode_available(&payload.to_string()).unwrap();
+    let activities = created.presences[0].activities.as_ref().unwrap();
+    assert_eq!((activities.len(), activities.capacity()), (1, 1));
+    assert_eq!(created.guild.roles.len(), 5);
+    assert_eq!(created.guild.roles.capacity(), 5);
+}
+
+#[test]
 fn guild_create_fast_path_matches_the_guild_conversion() {
     let payload = guild_create_payload();
     let fast = decode_available(&payload.to_string()).unwrap();
