@@ -35,6 +35,7 @@ use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::Poll;
 
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
@@ -448,18 +449,27 @@ impl VoiceFrameTiming {
 /// # Contract
 ///
 /// The player drives each subscription from its own task, so calls for one
-/// subscription never overlap, and a slow sink only delays itself.
+/// subscription never overlap, and a slow sink only delays itself. A sink
+/// subscribed again to the same player (the same `Arc`) is handed over: the
+/// earlier subscription finishes first, so two tasks never feed one sink.
 ///
-/// - `send_opus_packet` should return `Ok` only if the frame was
-///   transmitted. After an error or a cancellation, the player reports the
-///   frame's media time in the next frame's [`VoiceFrameTiming::gap`].
-/// - The returned future may be dropped before it completes: when it has
-///   run for 60 ms (the connection counts as stalled), when playback is
-///   stopped, paused, or replaced, when new audio supersedes a pending silence frame,
-///   and when the 200 ms close grace period of an unsubscribed or shut-down
-///   player runs out. A dropped send must leave the sink usable, and should
-///   transmit the frame entirely or not at all, as [`VoiceRuntimeHandle`]
-///   does.
+/// - **Transmit only on completion.** A send must transmit nothing before
+///   the poll in which its future completes, and must return `Ok` only if
+///   the frame was transmitted. The player counts an error or a dropped
+///   future as "not transmitted" and reports the frame's media time in the
+///   next frame's [`VoiceFrameTiming::gap`]; that accounting is exact only
+///   if a dropped send really sent nothing. [`VoiceRuntimeHandle`] meets
+///   this: its datagram goes out in the poll that completes the send.
+/// - **Cancellation.** The future may be dropped before it completes: when
+///   it has run for 60 ms (the connection counts as stalled), when playback
+///   is stopped, paused, or replaced, when new audio supersedes a pending
+///   silence frame, and when the 200 ms close grace period of an
+///   unsubscribed or shut-down player runs out. A dropped send must leave
+///   the sink usable.
+/// - **Polls must not block.** The player polls the future while holding
+///   the subscription's internal lock, which is what guarantees that a send
+///   superseded by stop, pause, or replacement is never polled again (see
+///   [`AudioPlayer`]). Polls that block delay the player's control task.
 /// - `update_speaking` receives coalesced state changes: `true` before the
 ///   first frame of a stretch of audio, and `false` after its five-frame
 ///   silence tail or when the subscription closes. On forced cancellation
@@ -677,11 +687,13 @@ impl Drop for PlayerSubscription {
 /// # Sources and underruns
 ///
 /// Each resource is read by its own task, at most 5 frames (100 ms) ahead
-/// plus the frame being read. A track starts, and resumes after an underrun,
-/// once 3 frames (60 ms) are buffered or the input has ended. A tick
-/// without a frame sends nothing; after 3 such ticks in a row the player
-/// goes back to [`AudioPlayerState::Buffering`] and every connection gets
-/// its silence tail. Audio is delayed by an underrun, never skipped.
+/// plus the frame being read. A track starts, resumes after an underrun,
+/// and resumes after [`unpause`](Self::unpause), once 3 frames (60 ms) are
+/// buffered or the input has ended; until then the player is
+/// [`AudioPlayerState::Buffering`]. A tick without a frame sends nothing;
+/// after 3 such ticks in a row the player goes back to `Buffering` and every
+/// connection gets its silence tail. Audio is delayed by an underrun, never
+/// skipped.
 ///
 /// # Connections
 ///
@@ -696,20 +708,30 @@ impl Drop for PlayerSubscription {
 ///   one waits at least 10 ms, so a connection recovering from a stall
 ///   catches up at about twice real time instead of bursting its backlog.
 ///   A warning is logged once while a connection lags.
-/// - **Stop, pause, and replacement flush.** Audio queued for a connection
-///   is discarded and an in-flight send of it is cancelled before
-///   [`AudioPlayerEvent::TrackEnd`] is published (stop, replacement) or the
-///   state changes (pause), so a connection that recovers later never plays
-///   old audio. Packets already handed to the network cannot be recalled.
-///   Pausing keeps the resource's own read-ahead, so unpausing continues
-///   from the next unread frame.
+/// - **Stop, pause, and replacement flush.** Before it publishes
+///   [`AudioPlayerEvent::TrackEnd`] (stop, replacement) or the `Paused`
+///   state, the player discards the audio queued for every connection and
+///   supersedes any send of it in progress. A superseded send is never
+///   polled again, so with a sink that keeps the [`VoiceFrameSink`]
+///   contract no audio of the old track is transmitted after the event;
+///   only a send that already completed went out before it. Pausing keeps
+///   the resource's own read-ahead, so unpausing continues from the next
+///   unread frame.
 /// - **Silence tail.** When a connection's audio stops (stop, pause, end of
 ///   track, underrun, unsubscribe), it gets five Opus silence frames at
 ///   20 ms intervals and then speaking off, as Discord recommends. The tail
 ///   is generated by the connection's task rather than queued with the
 ///   audio, so a lagging connection still gets it once it recovers; new
-///   audio supersedes a tail that has not been sent yet. Speaking states are
-///   coalesced: the connection eventually sees the latest one.
+///   audio supersedes a tail that has not been sent yet. The first silence
+///   frame accounts for media that passed untransmitted; once silence is
+///   on the wire, the next audio starts a new segment without a gap. A
+///   failed silence frame is retried, not counted; after five failures in a
+///   row the tail is given up and only speaking off is sent. Speaking states
+///   are coalesced: the connection eventually sees the latest one.
+/// - **One task per connection.** Subscribing a sink that is already
+///   subscribed, or still closing after an unsubscribe, hands it over: the
+///   earlier subscription is detached, and the new one waits until its tail
+///   and speaking off are done (at most 200 ms) before sending.
 ///
 /// # Shutdown
 ///
@@ -804,6 +826,10 @@ impl AudioPlayer {
     }
 
     /// Resumes playback after [`AudioPlayer::pause`].
+    ///
+    /// The player returns to `Playing` right away if 3 frames are buffered
+    /// (or the input has ended), and otherwise to `Buffering` until they
+    /// are, the same rule as for a start or an underrun.
     pub fn unpause(&self) -> Result<(), DiscordError> {
         self.send_command(PlayerCommand::Unpause)
     }
@@ -859,6 +885,12 @@ impl AudioPlayer {
     /// The player transmits encoded audio to every subscribed sink and
     /// auto-pauses/resumes according to
     /// [`AudioPlayerOptions::no_subscriber_behavior`].
+    ///
+    /// Sinks are identified by their `Arc`. Subscribing a sink that is
+    /// already subscribed replaces the earlier subscription (dropping the
+    /// earlier [`PlayerSubscription`] then has no effect), and a sink still
+    /// closing after an unsubscribe is handed over only once its silence
+    /// tail and speaking off are done.
     pub fn subscribe(
         &self,
         sink: Arc<dyn VoiceFrameSink>,
@@ -1075,6 +1107,9 @@ struct SinkState {
     generation: u64,
     frames: VecDeque<QueuedFrame>,
     talkspurt: Talkspurt,
+    /// The media clock when the last stretch of audio ended, so the first
+    /// silence frame can account for media that passed untransmitted.
+    end_position: u64,
     /// When the connection must be finished; set when it is detached.
     closing: Option<Instant>,
     lagging: bool,
@@ -1108,10 +1143,11 @@ impl SinkState {
         }
     }
 
-    /// Ends the current stretch of audio. With `flush`, audio still queued is
-    /// discarded and an in-flight send of it is cancelled; without, it plays
-    /// out first. Either way the silence tail follows.
-    fn end_talkspurt(&mut self, flush: bool) {
+    /// Ends the current stretch of audio at media clock `position`. With
+    /// `flush`, audio still queued is discarded and an in-flight send of it
+    /// will not be polled again; without, it plays out first. Either way the
+    /// silence tail follows.
+    fn end_talkspurt(&mut self, flush: bool, position: u64) {
         if flush {
             self.generation = self.generation.wrapping_add(1);
             self.frames.clear();
@@ -1120,6 +1156,7 @@ impl SinkState {
             self.talkspurt = Talkspurt::Ending {
                 silence_left: SILENCE_FRAME_COUNT,
             };
+            self.end_position = position;
         }
     }
 
@@ -1156,8 +1193,10 @@ struct SinkShared {
 
 impl SinkShared {
     fn lock(&self) -> MutexGuard<'_, SinkState> {
-        // No user code runs under this lock, so a poisoned lock still holds
-        // consistent state.
+        // The only user code run under this lock is the poll of a sink's send
+        // future (see `SinkWorker::unless_superseded`), which changes nothing
+        // here, so a lock poisoned by a panicking sink still holds consistent
+        // state.
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -1167,46 +1206,85 @@ impl SinkShared {
     }
 }
 
+/// Identifies a connection by the address of the sink behind its `Arc`, so
+/// two subscriptions of the same sink (or clones of its `Arc`) are known to
+/// share one connection.
+fn connection_key(sink: &Arc<dyn VoiceFrameSink>) -> usize {
+    Arc::as_ptr(sink).cast::<()>().addr()
+}
+
 /// The control task's side of one subscribed connection.
 struct Subscriber {
+    key: usize,
     shared: Arc<SinkShared>,
     worker: TaskGuard,
+    /// Closes when the connection's task has finished with the sink.
+    done: watch::Receiver<()>,
 }
 
 impl Subscriber {
-    fn spawn(id: u64, sink: Arc<dyn VoiceFrameSink>) -> Self {
+    /// Starts the connection's task. With a `predecessor` (an earlier task
+    /// for the same connection that is still closing) the new task waits for
+    /// it to finish before it touches the sink, so the two never interleave
+    /// frames or speaking updates.
+    fn spawn(
+        id: u64,
+        sink: Arc<dyn VoiceFrameSink>,
+        predecessor: Option<watch::Receiver<()>>,
+    ) -> Self {
+        let key = connection_key(&sink);
         let shared = Arc::new(SinkShared {
             state: Mutex::new(SinkState {
                 id,
                 generation: 0,
                 frames: VecDeque::new(),
                 talkspurt: Talkspurt::Idle,
+                end_position: 0,
                 closing: None,
                 lagging: false,
                 dropped: 0,
             }),
             wake: Notify::new(),
         });
-        let worker = TaskGuard::spawn(drive_sink(sink, Arc::clone(&shared)));
-        Self { shared, worker }
+        let (done_tx, done) = watch::channel(());
+        let worker = TaskGuard::spawn(drive_sink(sink, Arc::clone(&shared), predecessor, done_tx));
+        Self {
+            key,
+            shared,
+            worker,
+            done,
+        }
     }
 
-    /// Detaches the connection: queued audio is discarded, and the task
-    /// sends the silence tail and exits by `deadline`. The returned guard
-    /// lets shutdown wait for it.
-    fn close(self, deadline: Instant) -> TaskGuard {
+    /// Detaches the connection at media clock `position`: queued audio is
+    /// discarded, and the task sends the silence tail and exits by
+    /// `deadline`.
+    fn close(self, deadline: Instant, position: u64) -> Retiring {
         self.shared.update(|state| {
-            state.end_talkspurt(true);
+            state.end_talkspurt(true, position);
             state.closing = Some(deadline);
         });
-        self.worker
+        Retiring {
+            task: self.worker,
+            connection: Some((self.key, self.done)),
+        }
     }
+}
+
+/// A task that is winding down: the reader of a finished track, or the task
+/// of a detached connection. Shutdown waits for these.
+struct Retiring {
+    task: TaskGuard,
+    /// For a connection's task: its connection key and completion signal, so
+    /// a new subscription of the same connection can wait for it.
+    connection: Option<(usize, watch::Receiver<()>)>,
 }
 
 /// What a connection's task does next.
 enum SinkStep {
     Frame(QueuedFrame),
-    Silence,
+    /// A silence frame of the tail, after this much untransmitted media.
+    Silence(Duration),
     SpeakingOff,
     Wait(Option<Instant>),
     Exit,
@@ -1219,10 +1297,21 @@ struct SinkWorker {
     sink: Arc<dyn VoiceFrameSink>,
     shared: Arc<SinkShared>,
     speaking: bool,
-    /// Position of the last frame transmitted since the last silence tail.
+    /// Position of the last audio frame transmitted in the current media
+    /// segment. A transmitted silence frame ends the segment.
     last_position: Option<u64>,
     /// When the last completed send finished, for pacing.
     last_sent_at: Option<Instant>,
+    /// Consecutive silence frames the sink failed to send.
+    silence_failures: u8,
+    /// Released after `Drop` has cleared speaking (fields drop after the
+    /// destructor runs), which lets a successor on the same connection start.
+    _done: watch::Sender<()>,
+}
+
+/// Converts a number of 20 ms frames into a timeline gap.
+fn frames_gap(frames: u64) -> Duration {
+    PLAYER_FRAME_DURATION.saturating_mul(u32::try_from(frames).unwrap_or(u32::MAX))
 }
 
 fn earliest(at: Instant, other: Option<Instant>) -> Instant {
@@ -1240,19 +1329,32 @@ async fn sleep_until_opt(at: Option<Instant>) {
 ///
 /// One task per connection keeps a slow or stalled connection from delaying
 /// the control loop or the other connections. It ends after its close
-/// deadline at the latest, or is aborted with the player.
-async fn drive_sink(sink: Arc<dyn VoiceFrameSink>, shared: Arc<SinkShared>) {
+/// deadline at the latest, or is aborted with the player. `done` is dropped
+/// when the task ends, however it ends, which releases a successor waiting
+/// on the same connection.
+async fn drive_sink(
+    sink: Arc<dyn VoiceFrameSink>,
+    shared: Arc<SinkShared>,
+    predecessor: Option<watch::Receiver<()>>,
+    done: watch::Sender<()>,
+) {
+    if let Some(mut predecessor) = predecessor {
+        // The predecessor's close deadline bounds this wait.
+        while predecessor.changed().await.is_ok() {}
+    }
     let mut worker = SinkWorker {
         sink,
         shared,
         speaking: false,
         last_position: None,
         last_sent_at: None,
+        silence_failures: 0,
+        _done: done,
     };
     loop {
         match worker.next_step(Instant::now()) {
             SinkStep::Frame(frame) => worker.send_frame(frame).await,
-            SinkStep::Silence => worker.send_silence().await,
+            SinkStep::Silence(gap) => worker.send_silence(gap).await,
             SinkStep::SpeakingOff => worker.set_speaking(false),
             SinkStep::Wait(until) => worker.wait(until).await,
             SinkStep::Exit => return,
@@ -1287,7 +1389,13 @@ impl SinkWorker {
                 if slot > now {
                     SinkStep::Wait(Some(earliest(slot, state.closing)))
                 } else {
-                    SinkStep::Silence
+                    // Until a silence frame is on the wire, the segment is
+                    // still the audio's, so the first one accounts for the
+                    // media that passed since the last transmitted frame.
+                    let skipped = self
+                        .last_position
+                        .map_or(0, |last| state.end_position.saturating_sub(last));
+                    SinkStep::Silence(frames_gap(skipped))
                 }
             }
             Talkspurt::Ending { .. } => {
@@ -1323,8 +1431,15 @@ impl SinkWorker {
     }
 
     /// Runs `future` unless the player supersedes it first: when
-    /// `superseded` holds after a state change, at `deadline`, or when the
-    /// close deadline passes. A superseded future is dropped (cancelled).
+    /// `superseded` holds, once `deadline` has passed, or once the close
+    /// deadline has passed. A superseded future is dropped (cancelled).
+    ///
+    /// The checks run before every poll of `future`, and `future` is polled
+    /// while the mailbox lock is held, the lock the control task takes to
+    /// stop, pause, replace, or detach. So once the control task has made
+    /// such a change, `future` is never polled again: whatever the send
+    /// transmits, it transmitted before the change, and so before the event
+    /// that announces it.
     async fn unless_superseded<F: Future>(
         &self,
         future: F,
@@ -1332,22 +1447,29 @@ impl SinkWorker {
         superseded: impl Fn(&SinkState) -> bool,
     ) -> Option<F::Output> {
         let mut future = std::pin::pin!(future);
+        let mut supervised = std::future::poll_fn(|cx| {
+            let state = self.shared.lock();
+            let now = Instant::now();
+            let passed = |at: Option<Instant>| at.is_some_and(|at| now >= at);
+            if superseded(&state) || passed(deadline) || passed(state.closing) {
+                return Poll::Ready(None);
+            }
+            future.as_mut().poll(cx).map(Some)
+        });
         loop {
-            let give_up_at = {
-                let state = self.shared.lock();
-                if superseded(&state) {
-                    return None;
-                }
-                match (deadline, state.closing) {
-                    (Some(deadline), closing) => Some(earliest(deadline, closing)),
-                    (None, closing) => closing,
-                }
+            let wake_at = match (deadline, self.shared.lock().closing) {
+                (Some(deadline), closing) => Some(earliest(deadline, closing)),
+                (None, closing) => closing,
             };
+            // Changes and deadlines only wake the task; `supervised` decides,
+            // so a send that became ready together with a change is still
+            // checked against the change first. It is polled before the timer
+            // because a passed deadline keeps the timer ready.
             tokio::select! {
                 biased;
-                output = &mut future => return Some(output),
                 () = self.shared.wake.notified() => {}
-                () = sleep_until_opt(give_up_at) => return None,
+                output = &mut supervised => return output,
+                () = sleep_until_opt(wake_at) => {}
             }
         }
     }
@@ -1359,8 +1481,7 @@ impl SinkWorker {
         let skipped = self.last_position.map_or(0, |last| {
             frame.position.saturating_sub(last.saturating_add(1))
         });
-        let gap = PLAYER_FRAME_DURATION.saturating_mul(u32::try_from(skipped).unwrap_or(u32::MAX));
-        let timing = VoiceFrameTiming::after_gap(PLAYER_FRAME_DURATION, gap);
+        let timing = VoiceFrameTiming::after_gap(PLAYER_FRAME_DURATION, frames_gap(skipped));
         let generation = frame.generation;
         let stalled_at = Instant::now() + SINK_SEND_TIMEOUT;
         let send = self.sink.send_opus_packet(&frame.payload, timing);
@@ -1383,28 +1504,44 @@ impl SinkWorker {
         }
     }
 
-    async fn send_silence(&mut self) {
-        // The tail starts a new media segment: it follows the last
-        // transmitted frame contiguously, whatever was dropped before.
-        self.last_position = None;
+    async fn send_silence(&mut self, gap: Duration) {
         let send = self.sink.send_opus_packet(
             &OPUS_SILENCE_FRAME,
-            VoiceFrameTiming::contiguous(PLAYER_FRAME_DURATION),
+            VoiceFrameTiming::after_gap(PLAYER_FRAME_DURATION, gap),
         );
         let outcome = self
             .unless_superseded(send, None, |state| state.talkspurt == Talkspurt::Active)
             .await;
+        // A superseded silence frame was not sent: the segment, and with it
+        // the gap reference for the next audio frame, stays as it was.
         let Some(result) = outcome else {
             return;
         };
         self.last_sent_at = Some(Instant::now());
-        if let Err(error) = result {
-            // Counted anyway, so a connection that keeps failing cannot hold
-            // its tail open forever.
-            tracing::warn!(%error, "failed to send silence frame to subscribed connection");
-        }
+        let delivered = match result {
+            Ok(()) => {
+                // Silence is on the wire: the tail now starts a new segment,
+                // which the next audio frame follows without a gap.
+                self.last_position = None;
+                self.silence_failures = 0;
+                1
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to send silence frame to subscribed connection");
+                // Not sent, so not counted. A connection that keeps failing
+                // gets no tail rather than retries forever; speaking off is
+                // still sent.
+                self.silence_failures += 1;
+                if self.silence_failures < SILENCE_FRAME_COUNT {
+                    0
+                } else {
+                    self.silence_failures = 0;
+                    SILENCE_FRAME_COUNT
+                }
+            }
+        };
         if let Talkspurt::Ending { silence_left } = &mut self.shared.lock().talkspurt {
-            *silence_left = silence_left.saturating_sub(1);
+            *silence_left = silence_left.saturating_sub(delivered);
         }
     }
 }
@@ -1448,15 +1585,22 @@ impl Drop for SinkWorker {
 //   full, with frames positioned on a player media clock so skipped media
 //   becomes an RTP gap.
 // - Why: the control loop never awaits I/O, so command latency does not
-//   depend on any source or connection; a flush happens before the event
-//   that announces it; the tail survives lag because it is state, not a
-//   queued item; and the connection's task can see changes while a send is
-//   pending, so it can cancel that send.
+//   depend on any source or connection. The connection's task polls a
+//   pending send only under the mailbox lock and after re-checking the
+//   mailbox, so once the control task has flushed, the old send is never
+//   polled again, and the flush is complete before the event that
+//   announces it (merely waking the task first would let a send that became
+//   ready at the same moment complete). The tail survives lag because it is
+//   state, not a queued item. Connections are identified by their sink's
+//   `Arc`, and a new task for a connection waits for the previous one, so a
+//   retiring task can never touch a connection that was handed over.
 // - Trade-offs: more moving parts than a channel; a lagging connection loses
 //   audio instead of delaying everyone; a frame can still arrive up to
 //   120 ms late (60 ms queued plus 60 ms in flight), and a recovering
 //   connection catches up at about twice real time; a send in progress when
-//   the network takes the packet cannot be recalled.
+//   the network takes the packet cannot be recalled; a sink poll that blocks
+//   also blocks the control task's next update of that connection; a
+//   re-subscribed connection resumes only after the old tail (up to 200 ms).
 struct PlayerTask {
     options: AudioPlayerOptions,
     subscribers: HashMap<u64, Subscriber>,
@@ -1465,9 +1609,9 @@ struct PlayerTask {
     track: Option<ActiveTrack>,
     /// The media clock: advances once per playing tick.
     position: u64,
-    /// Readers of finished tracks and workers of detached connections that
-    /// may still be running; shutdown waits for them.
-    retiring: Vec<TaskGuard>,
+    /// Readers of finished tracks and tasks of detached connections that may
+    /// still be running; shutdown waits for them.
+    retiring: Vec<Retiring>,
 }
 
 impl PlayerTask {
@@ -1496,17 +1640,20 @@ impl PlayerTask {
         }
         let close_by = Instant::now() + SINK_CLOSE_GRACE;
         for (_, subscriber) in std::mem::take(&mut self.subscribers) {
-            self.retiring.push(subscriber.close(close_by));
+            self.retiring
+                .push(subscriber.close(close_by, self.position));
         }
-        // Connection tasks exit by `close_by` on their own; the extra frame
-        // covers scheduling. Whatever is left is aborted and given one more
-        // frame to unwind.
+        // Connection tasks exit by their close deadline on their own (a task
+        // waiting for a predecessor on the same connection starts after it,
+        // but its own deadline is the same); the extra frame covers
+        // scheduling. Whatever is left is aborted and given one more frame to
+        // unwind.
         let graceful_until = close_by + PLAYER_FRAME_DURATION;
-        for task in &mut self.retiring {
-            task.join_until(graceful_until).await;
+        for retiring in &mut self.retiring {
+            retiring.task.join_until(graceful_until).await;
         }
         let forced_until = Instant::now() + PLAYER_FRAME_DURATION;
-        for task in &mut self.retiring {
+        for Retiring { task, .. } in &mut self.retiring {
             task.abort();
             if !task.join_until(forced_until).await {
                 tracing::warn!(
@@ -1538,9 +1685,15 @@ impl PlayerTask {
         let _ = self.events_tx.send(event);
     }
 
+    /// Ends every connection's stretch of audio. When this returns, a flushed
+    /// connection will not poll a send of the old audio again (see
+    /// `SinkWorker::unless_superseded`), so callers publish the matching
+    /// event only afterwards.
     fn end_talkspurts(&self, flush: bool) {
         for subscriber in self.subscribers.values() {
-            subscriber.shared.update(|state| state.end_talkspurt(flush));
+            subscriber
+                .shared
+                .update(|state| state.end_talkspurt(flush, self.position));
         }
     }
 
@@ -1559,8 +1712,40 @@ impl PlayerTask {
             return false;
         };
         track.reader.abort();
-        self.retiring.push(track.reader);
+        self.retiring.push(Retiring {
+            task: track.reader,
+            connection: None,
+        });
         true
+    }
+
+    /// Detaches a connection, keeping its task for shutdown and for a later
+    /// subscription of the same connection to wait on.
+    fn retire_subscriber(&mut self, subscriber: Subscriber) {
+        let retiring = subscriber.close(Instant::now() + SINK_CLOSE_GRACE, self.position);
+        self.retiring.push(retiring);
+    }
+
+    /// Hands a connection over to a new subscription: an earlier active
+    /// subscription of the same connection is detached, and the most recent
+    /// task still closing on it is returned so the new task can wait for it.
+    fn take_over(&mut self, key: usize) -> Option<watch::Receiver<()>> {
+        let active = self
+            .subscribers
+            .iter()
+            .find(|(_, subscriber)| subscriber.key == key)
+            .map(|(id, _)| *id);
+        if let Some(subscriber) = active.and_then(|id| self.subscribers.remove(&id)) {
+            tracing::debug!("connection subscribed again; replacing its earlier subscription");
+            self.retire_subscriber(subscriber);
+        }
+        self.retiring.iter().rev().find_map(|retiring| {
+            retiring
+                .connection
+                .as_ref()
+                .filter(|(retiring_key, _)| *retiring_key == key)
+                .map(|(_, done)| done.clone())
+        })
     }
 
     fn finish_playback(&mut self, reason: TrackEndReason, flush: bool) {
@@ -1573,7 +1758,10 @@ impl PlayerTask {
         self.emit(AudioPlayerEvent::TrackEnd { reason });
     }
 
-    /// Transitions out of Paused/AutoPaused back into playback.
+    /// Transitions out of Paused/AutoPaused back into playback, under the
+    /// same rule as a start or rebuffer: `Playing` only once
+    /// `REBUFFER_FRAMES` are buffered (or the input has ended), otherwise
+    /// `Buffering` until they are.
     fn resume_playback(&mut self) {
         if self.subscribers.is_empty()
             && self.options.no_subscriber_behavior == NoSubscriberBehavior::Pause
@@ -1581,14 +1769,19 @@ impl PlayerTask {
             self.set_state(AudioPlayerState::AutoPaused);
             return;
         }
-        match self.track.as_mut() {
+        let ready = match self.track.as_mut() {
             Some(track) if track.started => {
                 track.missed = 0;
-                self.set_state(AudioPlayerState::Playing {
-                    since: std::time::Instant::now(),
-                });
+                track.fill()
             }
-            _ => self.set_state(AudioPlayerState::Buffering),
+            _ => false,
+        };
+        if ready {
+            self.set_state(AudioPlayerState::Playing {
+                since: std::time::Instant::now(),
+            });
+        } else {
+            self.set_state(AudioPlayerState::Buffering);
         }
     }
 
@@ -1631,7 +1824,9 @@ impl PlayerTask {
                 }
             }
             PlayerCommand::Subscribe { id, sink } => {
-                self.subscribers.insert(id, Subscriber::spawn(id, sink));
+                let predecessor = self.take_over(connection_key(&sink));
+                self.subscribers
+                    .insert(id, Subscriber::spawn(id, sink, predecessor));
                 tracing::debug!(
                     subscribers = self.subscribers.len(),
                     "connection subscribed"
@@ -1642,8 +1837,7 @@ impl PlayerTask {
             }
             PlayerCommand::Unsubscribe { id } => {
                 if let Some(subscriber) = self.subscribers.remove(&id) {
-                    self.retiring
-                        .push(subscriber.close(Instant::now() + SINK_CLOSE_GRACE));
+                    self.retire_subscriber(subscriber);
                     tracing::debug!(
                         subscribers = self.subscribers.len(),
                         "connection unsubscribed"
@@ -1658,7 +1852,8 @@ impl PlayerTask {
     /// Forgets finished retiring tasks and detaches connections whose task
     /// died, which happens only if their sink panicked.
     fn reap(&mut self) {
-        self.retiring.retain(|task| !task.is_finished());
+        self.retiring
+            .retain(|retiring| !retiring.task.is_finished());
         self.subscribers.retain(|id, subscriber| {
             let alive = !subscriber.worker.is_finished();
             if !alive {
@@ -1772,7 +1967,8 @@ impl PlayerTask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::task::{Context, Poll};
+    use std::sync::atomic::AtomicUsize;
+    use std::task::Context;
 
     use tokio::io::{AsyncWriteExt, ReadBuf};
     use tokio::sync::{oneshot, Semaphore};
@@ -1993,6 +2189,112 @@ mod tests {
 
         fn update_speaking(&self, _speaking: bool) -> Result<(), DiscordError> {
             Err(voice_error("synthetic speaking failure"))
+        }
+    }
+
+    /// A stalled connection that records, for each audio frame it
+    /// transmits, the player state at that moment.
+    struct WitnessSink {
+        gate: Semaphore,
+        attempts: AtomicUsize,
+        player_state: watch::Receiver<AudioPlayerState>,
+        transmitted: Mutex<Vec<(i16, AudioPlayerState)>>,
+    }
+
+    impl VoiceFrameSink for WitnessSink {
+        fn send_opus_packet<'a>(
+            &'a self,
+            opus_frame: &'a [u8],
+            _timing: VoiceFrameTiming,
+        ) -> VoiceSinkFuture<'a> {
+            Box::pin(async move {
+                self.attempts.fetch_add(1, Ordering::SeqCst);
+                self.gate
+                    .acquire()
+                    .await
+                    .map_err(|_| voice_error("gate closed"))?
+                    .forget();
+                if let Ok(index) = <[u8; 2]>::try_from(opus_frame) {
+                    let state = self.player_state.borrow().clone();
+                    self.transmitted
+                        .lock()
+                        .expect("witness mutex poisoned")
+                        .push((i16::from_le_bytes(index), state));
+                }
+                Ok(())
+            })
+        }
+
+        fn update_speaking(&self, _speaking: bool) -> Result<(), DiscordError> {
+            Ok(())
+        }
+    }
+
+    /// Passes audio through but holds every silence frame forever.
+    #[derive(Default)]
+    struct SilenceStallingSink {
+        inner: RecordingSink,
+    }
+
+    impl VoiceFrameSink for SilenceStallingSink {
+        fn send_opus_packet<'a>(
+            &'a self,
+            opus_frame: &'a [u8],
+            timing: VoiceFrameTiming,
+        ) -> VoiceSinkFuture<'a> {
+            Box::pin(async move {
+                if opus_frame == OPUS_SILENCE_FRAME {
+                    std::future::pending::<()>().await;
+                }
+                self.inner.record(opus_frame, timing);
+                Ok(())
+            })
+        }
+
+        fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError> {
+            self.inner.update_speaking(speaking)
+        }
+    }
+
+    /// Fails its first `failures` silence sends.
+    struct FlakySilenceSink {
+        failures: AtomicUsize,
+        silence_attempts: AtomicUsize,
+        inner: RecordingSink,
+    }
+
+    impl FlakySilenceSink {
+        fn failing(failures: usize) -> Self {
+            Self {
+                failures: AtomicUsize::new(failures),
+                silence_attempts: AtomicUsize::new(0),
+                inner: RecordingSink::default(),
+            }
+        }
+    }
+
+    impl VoiceFrameSink for FlakySilenceSink {
+        fn send_opus_packet<'a>(
+            &'a self,
+            opus_frame: &'a [u8],
+            timing: VoiceFrameTiming,
+        ) -> VoiceSinkFuture<'a> {
+            Box::pin(async move {
+                if opus_frame == OPUS_SILENCE_FRAME {
+                    self.silence_attempts.fetch_add(1, Ordering::SeqCst);
+                    let left = self.failures.load(Ordering::SeqCst);
+                    if left > 0 {
+                        self.failures.store(left - 1, Ordering::SeqCst);
+                        return Err(voice_error("synthetic silence failure"));
+                    }
+                }
+                self.inner.record(opus_frame, timing);
+                Ok(())
+            })
+        }
+
+        fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError> {
+            self.inner.update_speaking(speaking)
         }
     }
 
@@ -2632,8 +2934,12 @@ mod tests {
             *state == AudioPlayerState::Paused
         })
         .await;
+        // Nothing is buffered, so unpausing waits in Buffering like a rebuffer.
         player.unpause().expect("unpause");
-        wait_for_state(&mut state, FRAME, "unpause", is_playing).await;
+        wait_for_state(&mut state, FRAME, "unpause", |state| {
+            *state == AudioPlayerState::Buffering
+        })
+        .await;
 
         player.stop().expect("stop");
         assert_eq!(
@@ -2724,6 +3030,15 @@ mod tests {
         sleep(FRAME * 10).await;
 
         assert_eq!(sink.audio_frames(), (0..8).collect::<Vec<i16>>());
+        // The first silence frame accounts for the three empty ticks; the
+        // rest of the tail and the resumed audio follow without a gap.
+        let silence: Vec<SentFrame> = sink
+            .frames()
+            .into_iter()
+            .filter(|frame| frame.payload == OPUS_SILENCE_FRAME)
+            .collect();
+        assert_eq!(silence[0].timing.gap, FRAME * 3);
+        assert!(silence[1..5].iter().all(|frame| frame.timing.gap.is_zero()));
         let resumed = sink.audio()[4].clone();
         assert_eq!(
             resumed.timing.gap,
@@ -3185,6 +3500,203 @@ mod tests {
             TrackEndReason::Finished
         );
         within(SINK_CLOSE_GRACE, "shutdown", player.shutdown()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_never_transmits_a_send_superseded_by_stop() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let sink = Arc::new(WitnessSink {
+            gate: Semaphore::new(0),
+            attempts: AtomicUsize::new(0),
+            player_state: player.state_watch(),
+            transmitted: Mutex::new(Vec::new()),
+        });
+        let _subscription = subscribe(&player, sink.clone());
+        let mut events = player.events();
+
+        player
+            .play(pcm_resource(numbered_pcm(0..500)))
+            .expect("play");
+        wait_until(FRAME * 10, "a send in progress", || {
+            sink.attempts.load(Ordering::SeqCst) > 0
+        })
+        .await;
+        // The pending send becomes ready in the same instant the stop lands:
+        // the control task runs first and supersedes it, then the
+        // connection's task wakes with the send ready to complete.
+        player.stop().expect("stop");
+        sink.gate.add_permits(1);
+        assert_eq!(
+            within(FRAME, "stop", wait_for_track_end(&mut events)).await,
+            TrackEndReason::Stopped
+        );
+        sink.gate.add_permits(100);
+        sleep(FRAME * 10).await;
+
+        let transmitted = sink
+            .transmitted
+            .lock()
+            .expect("witness mutex poisoned")
+            .clone();
+        assert!(
+            transmitted
+                .iter()
+                .all(|(_, state)| *state != AudioPlayerState::Idle),
+            "audio transmitted after the track ended: {transmitted:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_keeps_the_gap_reference_when_unsent_silence_is_superseded() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let sink = Arc::new(SilenceStallingSink::default());
+        let _subscription = subscribe(&player, sink.clone());
+        let mut events = player.events();
+        let mut state = player.state_watch();
+        let (mut writer, reader) = tokio::io::duplex(PLAYER_FRAME_BYTES * 8);
+
+        writer
+            .write_all(&numbered_pcm(0..4))
+            .await
+            .expect("write first frames");
+        player
+            .play(AudioResource::new(AudioInput::raw_pcm(reader)))
+            .expect("play");
+        wait_until(FRAME * 20, "the first four frames", || {
+            sink.inner.audio_frames().len() == 4
+        })
+        .await;
+        // Three empty ticks: the player rebuffers and the first silence
+        // frame of the tail is pending, never transmitted.
+        wait_for_state(&mut state, FRAME * 5, "rebuffering", |state| {
+            *state == AudioPlayerState::Buffering
+        })
+        .await;
+        sleep(FRAME * 3).await;
+
+        // New audio supersedes the pending silence frame.
+        writer
+            .write_all(&numbered_pcm(4..8))
+            .await
+            .expect("write more frames");
+        drop(writer);
+        within(
+            FRAME * 20,
+            "the track finishing",
+            wait_for_track_end(&mut events),
+        )
+        .await;
+
+        assert_eq!(sink.inner.silence_frames(), 0);
+        let audio = sink.inner.audio();
+        assert_eq!(sink.inner.audio_frames(), (0..8).collect::<Vec<i16>>());
+        // Nothing went out between frames 3 and 4, so frame 4 still counts
+        // from frame 3: the three empty ticks are its gap.
+        assert_eq!(audio[4].timing.gap, FRAME * 3);
+        assert_eq!(sink.inner.speaking(), vec![true]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_retries_failed_silence_and_gives_up_on_a_failing_connection() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let flaky = Arc::new(FlakySilenceSink::failing(2));
+        let broken = Arc::new(FlakySilenceSink::failing(usize::MAX));
+        let _flaky_subscription = subscribe(&player, flaky.clone());
+        let _broken_subscription = subscribe(&player, broken.clone());
+        let mut events = player.events();
+
+        player.play(silent_pcm_resource(3)).expect("play");
+        within(
+            FRAME * 10,
+            "the track finishing",
+            wait_for_track_end(&mut events),
+        )
+        .await;
+        sleep(FRAME * 20).await;
+
+        // Failed silence frames are not counted: the full tail still arrives.
+        assert_eq!(flaky.silence_attempts.load(Ordering::SeqCst), 7);
+        assert_eq!(flaky.inner.silence_frames(), 5);
+        assert_eq!(flaky.inner.speaking(), vec![true, false]);
+        // A connection that keeps failing gives up after five attempts and
+        // still gets speaking off.
+        assert_eq!(broken.silence_attempts.load(Ordering::SeqCst), 5);
+        assert_eq!(broken.inner.silence_frames(), 0);
+        assert_eq!(broken.inner.speaking(), vec![true, false]);
+    }
+
+    /// Asserts a connection saw: audio, then exactly one silence tail, then
+    /// audio again, with strictly increasing frame indices throughout.
+    fn assert_single_handover(frames: &[SentFrame]) {
+        let indices: Vec<i16> = frames.iter().filter_map(SentFrame::index).collect();
+        assert!(
+            indices.windows(2).all(|pair| pair[1] > pair[0]),
+            "duplicated or reordered audio: {indices:?}"
+        );
+        let first_silence = frames
+            .iter()
+            .position(|frame| frame.payload == OPUS_SILENCE_FRAME)
+            .expect("a silence tail");
+        let tail = &frames[first_silence..first_silence + 5];
+        assert!(tail.iter().all(|frame| frame.payload == OPUS_SILENCE_FRAME));
+        assert!(
+            frames[first_silence + 5..]
+                .iter()
+                .all(|frame| frame.index().is_some()),
+            "silence interleaved with the new subscription's audio"
+        );
+        assert!(frames.len() > first_silence + 5, "audio resumed");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_resubscribing_a_connection_hands_it_over_without_interleaving() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let sink = Arc::new(RecordingSink::default());
+        let first = subscribe(&player, sink.clone());
+
+        player
+            .play(pcm_resource(numbered_pcm(0..500)))
+            .expect("play");
+        wait_until(FRAME * 10, "audio playing", || {
+            sink.audio_frames().len() >= 5
+        })
+        .await;
+        first.unsubscribe();
+        let _second = subscribe(&player, sink.clone());
+        sleep(FRAME * 20).await;
+
+        assert_single_handover(&sink.frames());
+        // The retiring task finished (speaking off) before the new one began.
+        assert_eq!(sink.speaking(), vec![true, false, true]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_subscribing_a_connection_twice_replaces_the_earlier_subscription() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let sink = Arc::new(RecordingSink::default());
+        let first = subscribe(&player, sink.clone());
+
+        player
+            .play(pcm_resource(numbered_pcm(0..500)))
+            .expect("play");
+        wait_until(FRAME * 10, "audio playing", || {
+            sink.audio_frames().len() >= 5
+        })
+        .await;
+        let second = subscribe(&player, sink.clone());
+        sleep(FRAME * 20).await;
+        assert_single_handover(&sink.frames());
+
+        // The replaced subscription no longer controls the connection.
+        let before = sink.audio_frames().len();
+        drop(first);
+        sleep(FRAME * 5).await;
+        assert!(sink.audio_frames().len() > before);
+        assert_eq!(sink.speaking(), vec![true, false, true]);
+
+        drop(second);
+        sleep(FRAME * 10).await;
+        assert_eq!(sink.speaking(), vec![true, false, true, false]);
     }
 
     #[tokio::test]

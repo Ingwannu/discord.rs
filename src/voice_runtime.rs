@@ -1352,8 +1352,30 @@ impl VoiceRuntimeHandle {
     where
         E: VoiceDaveFrameEncryptor + ?Sized,
     {
+        self.send_opus_frame_with_dave_after_gap(opus_frame, duration, Duration::ZERO, encryptor)
+            .await
+    }
+
+    /// Like [`Self::send_opus_frame_with_dave`], for a frame that follows
+    /// `gap` of media that was never transmitted; see
+    /// [`Self::send_opus_frame_after_gap`].
+    ///
+    /// The DAVE encryptor runs before the RTP state is locked, so a frame
+    /// whose send fails or is cancelled has still used up one DAVE frame
+    /// counter; DAVE receivers tolerate such gaps like packet loss.
+    #[cfg(feature = "dave")]
+    pub async fn send_opus_frame_with_dave_after_gap<E>(
+        &self,
+        opus_frame: &[u8],
+        duration: Duration,
+        gap: Duration,
+        encryptor: &mut E,
+    ) -> Result<VoiceOutboundPacket, DiscordError>
+    where
+        E: VoiceDaveFrameEncryptor + ?Sized,
+    {
         let encrypted = encryptor.encrypt_opus(opus_frame)?;
-        self.send_opus_payload(&encrypted, Duration::ZERO, duration, true)
+        self.send_opus_payload(&encrypted, gap, duration, true)
             .await
     }
 
@@ -2019,6 +2041,8 @@ mod tests {
     use tokio::time::Duration;
     use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
+    #[cfg(feature = "dave")]
+    use super::VoiceDaveFrameEncryptor;
     use super::{
         build_heartbeat_payload, build_identify_payload, connect, decrypt_transport_payload,
         gap_increment, next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header,
@@ -2028,6 +2052,8 @@ mod tests {
     };
     #[cfg(feature = "voice-encode")]
     use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
+    #[cfg(feature = "dave")]
+    use crate::error::DiscordError;
     #[cfg(feature = "dave")]
     use crate::voice::VoiceGatewayCommand;
     use crate::voice::{
@@ -2789,6 +2815,138 @@ mod tests {
             assert_eq!(&datagram[..received], expected.bytes.as_slice());
         }
 
+        handle.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    /// Runs a minimal voice gateway (HELLO, READY, UDP discovery, then
+    /// SESSION_DESCRIPTION with `dave_protocol_version`) that answers
+    /// heartbeats until the client closes, and returns the connected handle
+    /// with the UDP socket that receives its media.
+    #[cfg(feature = "dave")]
+    async fn connect_mock_voice_session(
+        dave_protocol_version: u8,
+    ) -> (
+        super::VoiceRuntimeHandle,
+        Arc<UdpSocket>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let udp_listener = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let udp_port = udp_listener.local_addr().unwrap().port();
+        let media = Arc::clone(&udp_listener);
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ws_port = tcp_listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            let (tcp_stream, _) = tcp_listener.accept().await.unwrap();
+            let mut ws = accept_async(tcp_stream).await.unwrap();
+            let send_json = |payload: Value| WsMessage::Text(payload.to_string().into());
+
+            ws.send(send_json(serde_json::json!({
+                "op": 8,
+                "d": { "heartbeat_interval": 20 }
+            })))
+            .await
+            .unwrap();
+            let _identify = ws.next().await.unwrap().unwrap();
+            ws.send(send_json(serde_json::json!({
+                "op": 2,
+                "d": {
+                    "ssrc": 42,
+                    "ip": "127.0.0.1",
+                    "port": udp_port,
+                    "modes": ["aead_aes256_gcm_rtpsize"]
+                }
+            })))
+            .await
+            .unwrap();
+
+            let mut discovery = [0_u8; VoiceUdpDiscoveryPacket::LEN];
+            let (_, remote_addr) = udp_listener.recv_from(&mut discovery).await.unwrap();
+            let mut response = VoiceUdpDiscoveryPacket::request(42);
+            response[..2].copy_from_slice(&VoiceUdpDiscoveryPacket::RESPONSE_TYPE.to_be_bytes());
+            response[2..4].copy_from_slice(&VoiceUdpDiscoveryPacket::BODY_LEN.to_be_bytes());
+            response[8..17].copy_from_slice(b"127.0.0.1");
+            response[72..74].copy_from_slice(&remote_addr.port().to_be_bytes());
+            udp_listener.send_to(&response, remote_addr).await.unwrap();
+
+            let _select_protocol = ws.next().await.unwrap().unwrap();
+            ws.send(send_json(serde_json::json!({
+                "op": 4,
+                "d": {
+                    "mode": "aead_aes256_gcm_rtpsize",
+                    "secret_key": vec![7_u8; 32],
+                    "dave_protocol_version": dave_protocol_version
+                }
+            })))
+            .await
+            .unwrap();
+
+            while let Some(Ok(message)) = ws.next().await {
+                match message {
+                    WsMessage::Text(text) => {
+                        let payload: Value = serde_json::from_str(&text).unwrap();
+                        if payload["op"] == serde_json::json!(3) {
+                            let ack = serde_json::json!({ "op": 6, "d": payload["d"].clone() });
+                            ws.send(send_json(ack)).await.unwrap();
+                        }
+                    }
+                    WsMessage::Close(frame) => {
+                        let _ = ws.send(WsMessage::Close(frame)).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let handle = connect(VoiceRuntimeConfig::new(
+            "1",
+            "2",
+            "session",
+            "token",
+            format!("ws://127.0.0.1:{ws_port}"),
+        ))
+        .await
+        .unwrap();
+        (handle, media, server)
+    }
+
+    #[cfg(feature = "dave")]
+    #[tokio::test]
+    async fn voice_runtime_dave_sends_move_the_timestamp_across_gaps() {
+        /// Stands in for DAVE by tagging the frame.
+        struct TaggingEncryptor;
+
+        impl VoiceDaveFrameEncryptor for TaggingEncryptor {
+            fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError> {
+                Ok([&[0xDA], opus_frame].concat())
+            }
+        }
+
+        let (handle, media, server) = connect_mock_voice_session(1).await;
+        let frame = Duration::from_millis(20);
+        let mut encryptor = TaggingEncryptor;
+
+        // Plain sends are refused on a DAVE session and use up nothing.
+        assert!(handle.send_opus_frame(&[1], frame).await.is_err());
+        let first = handle
+            .send_opus_frame_with_dave(&[1, 2, 3], frame, &mut encryptor)
+            .await
+            .unwrap();
+        let second = handle
+            .send_opus_frame_with_dave_after_gap(&[4, 5, 6], frame, frame * 2, &mut encryptor)
+            .await
+            .unwrap();
+        assert_eq!((first.rtp.sequence, first.rtp.timestamp), (0, 0));
+        assert_eq!((second.rtp.sequence, second.rtp.timestamp), (1, 960 * 3));
+        assert_eq!(first.opus_frame, vec![0xDA, 1, 2, 3]);
+
+        let mut datagram = [0_u8; 128];
+        for expected in [&first, &second] {
+            let (received, _) = media.recv_from(&mut datagram).await.unwrap();
+            assert_eq!(&datagram[..received], expected.bytes.as_slice());
+        }
         handle.close().await.unwrap();
         server.await.unwrap();
     }
