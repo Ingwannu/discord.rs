@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **External cache backend mirror is ordered, fenced, and self-healing.** One worker per client applies writes in order; a dropped or failed write quarantines that shard and runs an ordered resync with backoff. The store keeps one epoch: clears are compare-and-set with an idempotent `CacheClearId`, every write carries its epoch and is ignored when stale, so a delayed write or clear from an old client cannot resurrect or erase data. `Context::cache_backend_health()` reports health; shutdown reports unrecovered shards. The mirror supports one writing client per store, which deployments must enforce. MESSAGE_UPDATE is merged into the stored message (or skipped when no full copy exists), and the in-memory merge covers every message field.
 - **Prompt, complete shard shutdown.** The supervisor watches all shards concurrently, stops the others on the first fatal error (also halting pending boot waves), returns that error from `start()`/`wait()`, aborts and joins tasks past `handler_shutdown_timeout`, and protects against cancellation from the moment the future is created. `ShardingManager::broadcast` reaches every shard even if one channel is closed, and guild-scoped gateway commands go to the shard that owns the guild.
 
+- **Audio playback no longer blocks on stalled inputs or connections.** `AudioPlayer` reads each resource and drives each connection on separate tasks and handles commands immediately. Stop, pause, and replacement flush every connection before `TrackEnd`/`Paused` is published, so a sink honouring the `VoiceFrameSink` contract transmits no old-track audio afterwards. Every connection gets five silence frames and then speaking off when its audio stops, even after lagging; re-subscribing a sink hands the connection over serially.
+- **Real-time voice delivery.** A frame must start sending within 60 ms and a send stalled for 60 ms is cancelled (audio is at most 120 ms late); a full queue drops the oldest frame; a recovering connection catches up at about twice real time. Untransmitted media becomes an RTP timestamp gap: `VoiceRuntimeHandle` advances sequence and timestamp only after a datagram is sent and never reuses a nonce (DAVE included). Underruns rebuffer, `unpause()` follows the same 60 ms rule, `AudioResource::next_pcm_frame` is cancel-safe, and panicking sinks/inputs are contained.
+
 ### Added
 - `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
 - **Channel obfuscation readiness** (mandatory for all bots from 2026-11-16): `ChannelFlags` with `CHANNEL_OBFUSCATED` and the other documented channel flags, `Channel::channel_flags()` / `Channel::is_obfuscated()`, and IDENTIFY `capabilities` via `GatewayCapabilities`, `GatewayConnectionConfig::capabilities(...)`, and `ClientBuilder::gateway_capabilities(...)` for Discord's temporary early opt-in.
@@ -54,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ClientBuilder::{event_queue_capacity, max_concurrent_handlers, max_concurrent_interactions, interaction_admission_timeout, on_interaction_overload, handler_shutdown_timeout}`, `Context::{event_received_at, cache_backend_health}`, `CacheHandle::clear_shard`, `CollectorHub::{cursor, subscribe_from, *_collector_from}`.
 
+- `AudioPlayer::shutdown().await`, `VoiceFrameTiming`, `VoiceRuntimeHandle::send_opus_frame_after_gap` / `send_opus_frame_with_dave_after_gap`.
+
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
 - CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
@@ -65,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `From<CreateMessage> for InteractionReplyData` is replaced by `TryFrom`, which keeps `poll` and every other field interaction responses accept and rejects channel-only fields (`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`) instead of dropping them. `InteractionResponder` methods return `Send` futures so generic code can `tokio::spawn` them; `is_acknowledged()` / `is_replied()` / `is_deferred()` report only what Discord confirmed.
 
 - `CacheBackend` (breaking): clears are `clear_cache(expected_epoch, clear_id)` / `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` returning `CacheClear::{Applied, Rejected}`, and every write takes the epoch it was issued under. In Serial mode the cache a handler reads may already include later events.
+
+- Voice (breaking): `VoiceFrameSink::send_opus_packet` takes `VoiceFrameTiming` and has a documented cancellation contract; without `voice-encode`, `AudioPlayer::play` returns `DiscordError::Voice` instead of silently advancing; `Buffering` also covers rebuffering and unpausing; subscribing an already-subscribed sink replaces the earlier subscription.
 
 ### Deprecated
 - `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.
