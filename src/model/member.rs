@@ -2,9 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AvatarDecorationData, ChannelId, PermissionsBitField, RoleId, User, UserCollectibles, UserId,
-};
+use super::{AvatarDecorationData, ChannelId, Permissions, RoleId, User, UserCollectibles, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Member`.
@@ -18,7 +16,7 @@ pub struct Member {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub joined_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionsBitField>,
+    pub permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deaf: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

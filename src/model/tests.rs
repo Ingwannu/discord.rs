@@ -21,8 +21,8 @@ use super::{
     ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
     ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
     ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OnboardingMode, OverwriteType,
-    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
-    PollAnswerId, PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
+    PermissionOverwrite, Permissions, PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId,
+    PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
     RecurrenceRuleWeekday, ResolvedData, Role, RoleColors, SeparatorSpacing, SessionStartLimit,
     Sku, SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerItem,
     Subscription, SubscriptionStatus, ThreadListResponse, ThreadMember, ThreadMetadata, User,
@@ -42,11 +42,11 @@ fn snowflake_deserializes_from_string_and_number() {
 
 #[test]
 fn permissions_round_trip_through_string_wire_format() {
-    let permissions = PermissionsBitField(8);
+    let permissions = Permissions::from_bits(8);
     let json = serde_json::to_value(permissions).unwrap();
     assert_eq!(json, json!("8"));
 
-    let parsed: PermissionsBitField = serde_json::from_value(json).unwrap();
+    let parsed: Permissions = serde_json::from_value(json).unwrap();
     assert_eq!(parsed.bits(), 8);
 }
 
@@ -130,21 +130,44 @@ fn generic_id_construction_is_checked_and_round_trips_as_a_string() {
 }
 
 #[test]
-fn permissions_bitfield_helpers_cover_mutation_and_invalid_wire_values() {
-    let mut permissions = PermissionsBitField(0b0011);
+fn model_permission_fields_use_the_unified_permissions_type() {
+    // The 2.x in-place `insert`/`remove` map to `|=` and `set = set.remove(..)`.
+    let mut permissions = Permissions::from_bits(0b0011);
     assert!(permissions.contains(0b0001));
     assert!(!permissions.contains(0b0100));
 
-    permissions.insert(0b0100);
+    permissions |= 0b0100;
     assert_eq!(permissions.bits(), 0b0111);
     assert!(permissions.contains(0b0110));
 
-    permissions.remove(0b0010);
+    permissions = permissions.remove(0b0010);
     assert_eq!(permissions.bits(), 0b0101);
     assert!(!permissions.contains(0b0010));
 
-    let error = serde_json::from_value::<PermissionsBitField>(json!("oops")).unwrap_err();
-    assert!(error.to_string().contains("invalid permission bitfield"));
+    // Strings or non-negative integers in; strings out. Unknown bits stay.
+    let role: Role = serde_json::from_value(json!({
+        "id": "1",
+        "name": "r",
+        "permissions": "9223372036854775808"
+    }))
+    .unwrap();
+    assert_eq!(role.permissions.map(Permissions::bits), Some(1 << 63));
+    assert_eq!(
+        serde_json::to_value(&role).unwrap()["permissions"],
+        json!("9223372036854775808")
+    );
+    assert_eq!(
+        serde_json::from_value::<Permissions>(json!(8)).unwrap(),
+        Permissions::from_bits(8)
+    );
+    let error = serde_json::from_value::<Permissions>(json!("oops")).unwrap_err();
+    assert!(error.to_string().contains("invalid bitfield value"));
+    assert!(serde_json::from_value::<Permissions>(json!(-8)).is_err());
+
+    // The deprecated 2.x name is the same type.
+    #[expect(deprecated, reason = "checks the deprecated alias")]
+    let alias: super::PermissionsBitField = Permissions::from_bits(4);
+    assert_eq!(alias.bits(), 4);
 }
 
 #[test]
@@ -494,7 +517,7 @@ fn guild_request_bodies_keep_nullable_wire_shape() {
 
     let modify_role = ModifyGuildRole {
         name: Some(None),
-        permissions: Some(Some(PermissionsBitField(8))),
+        permissions: Some(Some(Permissions::from_bits(8))),
         colors: Some(None),
         unicode_emoji: Some(None),
         mentionable: Some(Some(true)),
@@ -539,7 +562,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
         topic: Some(Some("read first".to_string())),
         permission_overwrites: Some(Some(vec![PermissionOverwrite {
             target: super::OverwriteTarget::Role(test_id(300)),
-            allow: Some(PermissionsBitField(1024)),
+            allow: Some(Permissions::from_bits(1024)),
             deny: None,
         }])),
         parent_id: Some(None),
@@ -1253,14 +1276,14 @@ fn current_application_request_body_keeps_wire_shape() {
         role_connections_verification_url: Some(None),
         install_params: Some(ApplicationInstallParams {
             scopes: vec!["bot".to_string(), "applications.commands".to_string()],
-            permissions: PermissionsBitField(2048),
+            permissions: Permissions::from_bits(2048),
         }),
         integration_types_config: Some(HashMap::from([(
             "0".to_string(),
             ApplicationIntegrationTypeConfig {
                 oauth2_install_params: Some(ApplicationInstallParams {
                     scopes: vec!["applications.commands".to_string()],
-                    permissions: PermissionsBitField(0),
+                    permissions: Permissions::from_bits(0),
                 }),
             },
         )])),
@@ -1433,7 +1456,7 @@ fn embed_presence_and_permissions_cover_optional_and_numeric_serde_paths() {
         user_id: Some(test_id(777)),
         ..Presence::default()
     };
-    let numeric_permissions: PermissionsBitField = serde_json::from_value(json!(16)).unwrap();
+    let numeric_permissions: Permissions = serde_json::from_value(json!(16)).unwrap();
 
     let embed_json = serde_json::to_value(&embed).unwrap();
     let presence_json = serde_json::to_value(&presence).unwrap();

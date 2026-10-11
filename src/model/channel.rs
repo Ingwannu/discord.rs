@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ApplicationId, AttachmentId, ChannelId, ChannelType, EmojiId, ForumLayout, ForumSortOrder,
-    ForumTagId, GenericId, GuildId, MessageId, OverwriteType, PermissionsBitField, RoleId,
-    ThreadMetadata, UserId, VideoQualityMode, WebhookId,
+    ForumTagId, GenericId, GuildId, MessageId, OverwriteType, Permissions, RoleId, ThreadMetadata,
+    UserId, VideoQualityMode, WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,9 +141,9 @@ pub struct PermissionOverwrite {
     /// The role or member the overwrite applies to (wire `id` and `type`).
     pub target: OverwriteTarget,
     /// Permissions explicitly allowed.
-    pub allow: Option<PermissionsBitField>,
+    pub allow: Option<Permissions>,
     /// Permissions explicitly denied.
-    pub deny: Option<PermissionsBitField>,
+    pub deny: Option<Permissions>,
 }
 
 impl PermissionOverwrite {
@@ -164,9 +164,9 @@ struct PermissionOverwriteWire {
     #[serde(rename = "type")]
     kind: OverwriteType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    allow: Option<PermissionsBitField>,
+    allow: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    deny: Option<PermissionsBitField>,
+    deny: Option<Permissions>,
 }
 
 impl From<PermissionOverwriteWire> for PermissionOverwrite {
@@ -245,9 +245,9 @@ pub struct EditChannelPermission {
     #[serde(rename = "type")]
     pub kind: OverwriteType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow: Option<PermissionsBitField>,
+    pub allow: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deny: Option<PermissionsBitField>,
+    pub deny: Option<Permissions>,
 }
 
 impl EditChannelPermission {

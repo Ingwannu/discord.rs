@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{IntegrationId, PermissionsBitField, RoleId, UserId};
+use super::{IntegrationId, Permissions, RoleId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `RoleTags`.
@@ -39,7 +39,7 @@ pub struct Role {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentionable: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionsBitField>,
+    pub permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,7 +73,7 @@ pub struct CreateGuildRole {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionsBitField>,
+    pub permissions: Option<Permissions>,
     /// Deprecated integer RGB color. Prefer `colors` for new requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<u64>,
@@ -98,7 +98,7 @@ pub struct ModifyGuildRole {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<Option<PermissionsBitField>>,
+    pub permissions: Option<Option<Permissions>>,
     /// Deprecated integer RGB color. Prefer `colors` for new requests.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<Option<u64>>,

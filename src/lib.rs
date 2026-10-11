@@ -166,18 +166,17 @@ pub use model::{
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
     ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget,
-    PartialApplication, PermissionOverwrite, PermissionsBitField, Poll, PollAnswer,
-    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, PresenceStatus, PrimaryProfileData,
-    ProfileMedia, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, ResolvedData,
-    Role, RoleColors, RoleSubscriptionData, RoleTags, SearchGuildMembersQuery,
-    SearchGuildMessagesQuery, SearchGuildMessagesResponse, SetVoiceChannelStatus,
-    SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList, StageInstance, Sticker,
-    StickerItem, StickerPack, StickerPackList, Subscription, SubscriptionQuery, ThreadListResponse,
-    ThreadMember, ThreadMemberQuery, UnfurledMediaItem, UpdateApplicationIdentityProfile,
-    UpdatePresence, UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection,
-    UserCollectibles, UserConnection, UserContextMenuInteraction, UserNameplate, UserPrimaryGuild,
-    VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
+    PartialApplication, PermissionOverwrite, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters,
+    PollMedia, PollResults, PresenceStatus, PrimaryProfileData, ProfileMedia, ReactionCountDetails,
+    RequestChannelInfo, RequestGuildMembers, ResolvedData, Role, RoleColors, RoleSubscriptionData,
+    RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
+    SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
+    StageInstance, Sticker, StickerItem, StickerPack, StickerPackList, Subscription,
+    SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, UnfurledMediaItem,
+    UpdateApplicationIdentityProfile, UpdatePresence, UpdateUserApplicationRoleConnection, User,
+    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserContextMenuInteraction,
+    UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
+    Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
 };
 // Phase 3 primitives (typed IDs, open discriminants, patch fields). Since
 // series 2 step B every ID has its per-resource alias and since series 3
@@ -207,11 +206,12 @@ pub use model::{
     TextInputStyle, UploadId, UserId, UserPremiumType, VerificationLevel, VideoQualityMode,
     VoiceChannelEffectAnimationType, WebhookId, WebhookType, WidgetUserId,
 };
-// The deprecated 2.x names, kept so `discordrs::Snowflake` and
-// `discordrs::MessageSelectDefaultValue` users get a deprecation note
-// pointing at the new types instead of "not found".
+// The deprecated 2.x names, kept so `discordrs::Snowflake`,
+// `discordrs::MessageSelectDefaultValue`, and `discordrs::PermissionsBitField`
+// users get a deprecation note pointing at the new types instead of "not
+// found".
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
-pub use model::{MessageSelectDefaultValue, Snowflake};
+pub use model::{MessageSelectDefaultValue, PermissionsBitField, Snowflake};
 pub use oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,

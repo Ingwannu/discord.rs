@@ -124,7 +124,11 @@ pub use monetization::{
     CreateTestEntitlement, Entitlement, EntitlementOwner, EntitlementQuery, Sku, Subscription,
     SubscriptionQuery,
 };
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use permissions::PermissionsBitField;
+// The permission set type of every model field. Not re-exported here: its
+// public paths are `discordrs::Permissions` and `bitfield::Permissions`.
+use crate::bitfield::Permissions;
 pub use poll::{
     CreatePoll, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia, PollResults,
 };

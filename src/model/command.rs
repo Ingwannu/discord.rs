@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::{
     ApplicationCommandHandlerType, ApplicationId, ApplicationIntegrationType, ChannelId,
     ChannelType, CommandId, CommandOptionType, CommandPermissionType, CommandType,
-    CommandVersionId, GenericId, GuildId, InteractionContextType, InvalidId, PermissionsBitField,
-    RoleId, UserId,
+    CommandVersionId, GenericId, GuildId, InteractionContextType, InvalidId, Permissions, RoleId,
+    UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -140,7 +140,7 @@ pub struct ApplicationCommand {
     #[serde(default)]
     pub options: Vec<ApplicationCommandOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_member_permissions: Option<PermissionsBitField>,
+    pub default_member_permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dm_permission: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

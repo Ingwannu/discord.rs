@@ -22,6 +22,7 @@ use super::rate_limit::RateLimitState;
 use super::{
     discord_api_error, discord_rate_limit_error, sleep_for_retry_after, FileAttachment, RestClient,
 };
+use crate::bitfield::Permissions;
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
@@ -38,11 +39,10 @@ use crate::model::{
     ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget,
-    PermissionsBitField, PollAnswerId, RoleColors, SearchGuildMembersQuery,
-    SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery, ThreadMemberQuery,
-    UpdateUserApplicationRoleConnection, WebhookExecuteQuery, WebhookMessageQuery,
-    WelcomeScreenChannel,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId,
+    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus,
+    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
+    WebhookMessageQuery, WelcomeScreenChannel,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -3540,7 +3540,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
             OverwriteTarget::Member(test_id(201)),
             &EditChannelPermission {
                 kind: OverwriteType::MEMBER,
-                allow: Some(PermissionsBitField(8)),
+                allow: Some(Permissions::from_bits(8)),
                 deny: None,
             },
         )
@@ -3975,8 +3975,8 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
             OverwriteTarget::Role(test_id(300)),
             &EditChannelPermission {
                 kind: OverwriteType::ROLE,
-                allow: Some(PermissionsBitField(1024)),
-                deny: Some(PermissionsBitField(2048)),
+                allow: Some(Permissions::from_bits(1024)),
+                deny: Some(Permissions::from_bits(2048)),
             },
         )
         .await
@@ -6152,7 +6152,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
             test_id(300),
             &ModifyGuildRole {
                 name: Some(Some("muted".to_string())),
-                permissions: Some(Some(PermissionsBitField(8))),
+                permissions: Some(Some(Permissions::from_bits(8))),
                 unicode_emoji: Some(None),
                 mentionable: Some(Some(true)),
                 ..Default::default()

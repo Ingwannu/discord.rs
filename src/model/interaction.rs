@@ -10,8 +10,8 @@ use super::{
     ApplicationId, Attachment, AttachmentId, Channel, ChannelId, CommandId, CommandOptionType,
     CommandType, ComponentType, Entitlement, GenericId, GuildId, GuildInstallOwner,
     InteractionContextType, InteractionId, InteractionResponseState, InteractionResponseType,
-    InteractionType, Member, MentionableId, Message, MessageId, PermissionsBitField, Role, RoleId,
-    User, UserId,
+    InteractionType, Member, MentionableId, Message, MessageId, Permissions, Role, RoleId, User,
+    UserId,
 };
 
 /// `authorizing_integration_owners` of an interaction (or of a message's
@@ -150,7 +150,7 @@ pub struct InteractionContextData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub app_permissions: Option<PermissionsBitField>,
+    pub app_permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

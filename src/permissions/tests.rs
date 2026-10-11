@@ -11,7 +11,7 @@ use crate::cache::CacheHandle;
 use crate::error::DiscordError;
 use crate::model::{
     Channel, ChannelType, Guild, GuildId, Id, IdMarker, Member, OverwriteTarget, OverwriteType,
-    PermissionOverwrite, PermissionsBitField, Role, RoleId, User, UserId,
+    PermissionOverwrite, Role, RoleId, User, UserId,
 };
 
 const GUILD: u64 = 100;
@@ -50,8 +50,8 @@ fn overwrite(
 ) -> PermissionOverwrite {
     PermissionOverwrite {
         target: OverwriteTarget::from_wire(kind, sf(id)),
-        allow: Some(PermissionsBitField(allow.bits())),
-        deny: Some(PermissionsBitField(deny.bits())),
+        allow: Some(Permissions::from_bits(allow.bits())),
+        deny: Some(Permissions::from_bits(deny.bits())),
     }
 }
 
@@ -637,7 +637,7 @@ fn role(id: u64, permissions: Permissions) -> Role {
     Role {
         id: sf(id),
         name: format!("role-{id}"),
-        permissions: Some(PermissionsBitField(permissions.bits())),
+        permissions: Some(Permissions::from_bits(permissions.bits())),
         ..Role::fixture()
     }
 }

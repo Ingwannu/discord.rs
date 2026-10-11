@@ -7,8 +7,8 @@ use crate::types::Emoji;
 use super::{
     ApplicationId, Channel, ChannelId, ChannelType, DefaultMessageNotificationLevel,
     ExplicitContentFilterLevel, GuildId, GuildNsfwLevel, Member, MfaLevel, OverwriteType,
-    PermissionsBitField, PremiumTier, Presence, Role, SoundboardSound, StageInstance, Sticker,
-    UserId, VerificationLevel, VoiceState,
+    Permissions, PremiumTier, Presence, Role, SoundboardSound, StageInstance, Sticker, UserId,
+    VerificationLevel, VoiceState,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -87,7 +87,7 @@ pub struct CreateGuildPlaceholderRole {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hoist: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<PermissionsBitField>,
+    pub permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mentionable: Option<bool>,
 }
@@ -119,9 +119,9 @@ pub struct CreateGuildPlaceholderOverwrite {
     #[serde(rename = "type")]
     pub kind: OverwriteType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow: Option<PermissionsBitField>,
+    pub allow: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deny: Option<PermissionsBitField>,
+    pub deny: Option<Permissions>,
 }
 
 /// Request body for creating a guild from a guild template
@@ -358,8 +358,10 @@ pub struct CurrentUserGuild {
     pub banner: Option<String>,
     #[serde(default)]
     pub owner: bool,
+    /// The current user's total permissions in the guild (a string on the
+    /// wire, like every permission set).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub permissions: Option<String>,
+    pub permissions: Option<Permissions>,
     #[serde(default)]
     pub features: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ActivityLaunchId, ApplicationEventWebhookStatus, ApplicationId, ChannelId, GuildId,
-    PermissionsBitField, RoleConnectionMetadataType, SkuId, User, UserId,
+    Permissions, RoleConnectionMetadataType, SkuId, User, UserId,
 };
 
 /// Partial application object attached to messages sent by an app
@@ -126,7 +126,7 @@ pub struct Application {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApplicationInstallParams {
     pub scopes: Vec<String>,
-    pub permissions: PermissionsBitField,
+    pub permissions: Permissions,
 }
 
 /// Default install settings for one application integration type.

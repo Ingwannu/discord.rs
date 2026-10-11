@@ -13,6 +13,15 @@ pub trait BitFieldFlags:
 {
     /// All defined flag bits as `(bit_value, name)` pairs.
     const BITS: &'static [(u64, &'static str)];
+
+    /// Whether the set is written to JSON as a decimal string (`"8"`) rather
+    /// than a number (`8`).
+    ///
+    /// Discord sends and expects permissions as strings (they exceed what
+    /// some JSON parsers hold exactly) and every other bitfield (message,
+    /// channel, user flags, intents, capabilities) as numbers. Only
+    /// [`PermissionFlags`] sets this. Reading accepts both shapes either way.
+    const STRING_ENCODED: bool = false;
 }
 
 /// A generic bitfield type with named flags, paralleling discord.js's `BitField`.
@@ -59,17 +68,26 @@ impl<T: BitFieldFlags> BitField<T> {
         self.contains(flag)
     }
 
-    /// Sets the specified flag bit, returning a new BitField.
+    /// Sets the specified flag bit, returning a new BitField (`self` is not
+    /// changed; use `|=` to update in place).
+    #[must_use = "add returns a new set; use `|=` to change this one"]
     pub const fn add(self, flag: u64) -> Self {
         Self(self.0 | flag, PhantomData)
     }
 
-    /// Clears the specified flag bit, returning a new BitField.
+    /// Clears the specified flag bit, returning a new BitField (`self` is not
+    /// changed; write `set = set.remove(flag)` or `set = set - flag`).
+    ///
+    /// The 2.x `PermissionsBitField::remove` changed the set in place; with
+    /// the deprecated alias this method takes its place, so `#[must_use]`
+    /// flags old call sites that drop the result.
+    #[must_use = "remove returns a new set; it does not change this one"]
     pub const fn remove(self, flag: u64) -> Self {
         Self(self.0 & !flag, PhantomData)
     }
 
     /// Returns a new BitField with the union of this and another.
+    #[must_use = "merge returns a new set; use `|=` to change this one"]
     pub const fn merge(self, other: Self) -> Self {
         Self(self.0 | other.0, PhantomData)
     }
@@ -80,6 +98,7 @@ impl<T: BitFieldFlags> BitField<T> {
     }
 
     /// Returns the bits that are set in `other` but not in `self`.
+    #[must_use]
     pub const fn missing(self, other: Self) -> Self {
         Self((!self.0) & other.0, PhantomData)
     }
@@ -226,14 +245,30 @@ impl<T: BitFieldFlags> From<BitField<T>> for u64 {
     }
 }
 
-// --- Serde: string-based serialization (Discord API format) ---
+// --- Serde: the wire shape Discord uses for each kind of set ---
 
+// [Decision Log]
+// - 목적과 의도: 비트필드를 Discord가 쓰는 JSON 모양 그대로 읽고 쓴다(설계 §2 권한 문단).
+// - 기존 구현 및 제약 조건: 2.x는 모든 BitField를 문자열로 썼다. Discord는 권한만 문자열이고
+//   메시지·채널·사용자 플래그, 인텐트, 게이트웨이 capabilities는 숫자다. 읽기는 문자열과
+//   정수를 모두 받았고 음수 i64는 2의 보수 비트로 받아들였다.
+// - 검토한 주요 대안: (1) 필드마다 `serialize_with`, (2) 별도 타입(StringBitField 등),
+//   (3) `BitFieldFlags`의 연관 상수 `STRING_ENCODED`(기본 false).
+// - 선택한 방식: (3). PermissionFlags만 true. 읽기는 두 모양을 계속 받고, 음수는 거부한다.
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 필드마다 잊기 쉽다. (2)는 같은 연산을 두 번
+//   구현한다. (3)은 플래그 종류가 와이어 모양을 정하므로 쓰는 곳에서 고를 일이 없다.
+// - 장점, 단점 및 영향: 사용자 정의 BitFieldFlags와 MessageFlags 등은 이제 숫자로 쓴다(2.x는
+//   문자열). 음수 입력은 Discord가 보내지 않는 값이라 디코딩 오류다(2.x는 비트를 그대로 썼다).
 impl<T: BitFieldFlags> Serialize for BitField<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.0.to_string())
+        if T::STRING_ENCODED {
+            serializer.serialize_str(&self.0.to_string())
+        } else {
+            serializer.serialize_u64(self.0)
+        }
     }
 }
 
@@ -262,9 +297,11 @@ impl<'de, T: BitFieldFlags> Deserialize<'de> for BitField<T> {
             where
                 E: de::Error,
             {
-                // A negative value keeps its two's-complement bits, so a set
-                // with bit 63 stored as a signed BIGINT still round-trips.
-                Ok(BitField::from_bits(value.cast_unsigned()))
+                // Discord never sends negative sets; reading one as its
+                // two's-complement bits (2.x) would invent bit 63 and up.
+                u64::try_from(value)
+                    .map(BitField::from_bits)
+                    .map_err(|_| E::custom("invalid bitfield value: negative"))
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
@@ -412,6 +449,7 @@ pub mod gateway_intents {
 pub struct PermissionFlags;
 
 impl BitFieldFlags for PermissionFlags {
+    const STRING_ENCODED: bool = true;
     const BITS: &'static [(u64, &'static str)] = &[
         (1 << 0, "CREATE_INSTANT_INVITE"),
         (1 << 1, "KICK_MEMBERS"),
@@ -701,28 +739,6 @@ pub mod gateway_capabilities {
     pub const CHANNEL_OBFUSCATION: BitField<GatewayCapabilityBits> = BitField::from_bits(1 << 15);
 }
 
-/// Interaction callback type constants.
-pub mod interaction_callback_type {
-    /// Bit flag constant for `PONG`.
-    pub const PONG: u8 = 1;
-    /// Bit flag constant for `CHANNEL_MESSAGE`.
-    pub const CHANNEL_MESSAGE: u8 = 4;
-    /// Bit flag constant for `DEFERRED_CHANNEL_MESSAGE`.
-    pub const DEFERRED_CHANNEL_MESSAGE: u8 = 5;
-    /// Bit flag constant for `DEFERRED_UPDATE_MESSAGE`.
-    pub const DEFERRED_UPDATE_MESSAGE: u8 = 6;
-    /// Bit flag constant for `UPDATE_MESSAGE`.
-    pub const UPDATE_MESSAGE: u8 = 7;
-    /// Bit flag constant for `AUTOCOMPLETE_RESULT`.
-    pub const AUTOCOMPLETE_RESULT: u8 = 8;
-    /// Bit flag constant for `MODAL`.
-    pub const MODAL: u8 = 9;
-    /// Bit flag constant for `PREMIUM_REQUIRED`.
-    pub const PREMIUM_REQUIRED: u8 = 10;
-    /// Bit flag constant for `LAUNCH_ACTIVITY`.
-    pub const LAUNCH_ACTIVITY: u8 = 12;
-}
-
 #[cfg(test)]
 mod tests {
     use serde::de::{value::Error as ValueError, value::StringDeserializer};
@@ -834,7 +850,8 @@ mod tests {
     #[test]
     fn serde_accepts_numeric_and_string_shapes() {
         let field = TestBitField::from_bits(9);
-        assert_eq!(serde_json::to_string(&field).unwrap(), "\"9\"");
+        // Flags other than permissions are written as numbers.
+        assert_eq!(serde_json::to_string(&field).unwrap(), "9");
 
         let from_number: TestBitField = serde_json::from_str("9").unwrap();
         let from_string: TestBitField = serde_json::from_str("\"9\"").unwrap();
@@ -848,9 +865,12 @@ mod tests {
     }
 
     #[test]
-    fn serde_rejects_invalid_values_and_currently_wraps_negative_i64() {
-        let negative: TestBitField = serde_json::from_str("-1").unwrap();
-        assert_eq!(negative.bits(), u64::MAX);
+    fn serde_rejects_invalid_and_negative_values() {
+        let negative = serde_json::from_str::<TestBitField>("-1").unwrap_err();
+        assert!(negative.to_string().contains("negative"));
+        assert!(serde_json::from_str::<TestBitField>("\"-1\"").is_err());
+        assert!(serde_json::from_str::<super::Permissions>("-8").is_err());
+        assert!(serde_json::from_str::<super::Permissions>("\"-8\"").is_err());
 
         let invalid_value = serde_json::from_str::<TestBitField>("\"abc\"").unwrap_err();
         assert!(invalid_value.to_string().contains("invalid bitfield value"));
@@ -859,6 +879,48 @@ mod tests {
         assert!(invalid_type
             .to_string()
             .contains("a bitfield encoded as a string or integer"));
+    }
+
+    #[test]
+    fn each_kind_of_set_uses_discords_json_shape() {
+        use super::{ChannelFlags, GatewayCapabilities, Intents, MessageFlags, Permissions};
+
+        // Permissions are strings on the wire; everything else is a number.
+        let permissions = Permissions::from_bits((1 << 52) | 8);
+        assert_eq!(
+            serde_json::to_value(permissions).unwrap(),
+            serde_json::json!(((1_u64 << 52) | 8).to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(MessageFlags::from_bits(1 << 15)).unwrap(),
+            serde_json::json!(1 << 15)
+        );
+        assert_eq!(
+            serde_json::to_value(ChannelFlags::from_bits(1 << 17)).unwrap(),
+            serde_json::json!(1 << 17)
+        );
+        assert_eq!(
+            serde_json::to_value(Intents::from_bits(513)).unwrap(),
+            serde_json::json!(513)
+        );
+        assert_eq!(
+            serde_json::to_value(GatewayCapabilities::from_bits(1 << 15)).unwrap(),
+            serde_json::json!(1 << 15)
+        );
+
+        // Bits this crate has no name for survive a round trip.
+        let unknown = Permissions::from_bits(1 << 63 | 1 << 60);
+        let wire = serde_json::to_value(unknown).unwrap();
+        assert_eq!(
+            serde_json::from_value::<Permissions>(wire).unwrap(),
+            unknown
+        );
+        let unknown_flags = MessageFlags::from_bits(1 << 40);
+        let wire = serde_json::to_value(unknown_flags).unwrap();
+        assert_eq!(
+            serde_json::from_value::<MessageFlags>(wire).unwrap(),
+            unknown_flags
+        );
     }
 
     #[test]

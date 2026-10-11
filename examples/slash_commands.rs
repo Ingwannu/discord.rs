@@ -4,14 +4,14 @@
 )]
 
 use discordrs::{
-    ApplicationId, CommandOptionBuilder, PermissionsBitField, RestClient, SlashCommandBuilder,
+    ApplicationId, CommandOptionBuilder, Permissions, RestClient, SlashCommandBuilder,
     UserCommandBuilder,
 };
 
 fn command_definitions() -> Vec<discordrs::CommandDefinition> {
     let ping = SlashCommandBuilder::new("ping", "Ping the bot")
         .string_option("target", "Optional target label", false)
-        .default_member_permissions(PermissionsBitField(0))
+        .default_member_permissions(Permissions::from_bits(0))
         .build();
 
     let inspect = UserCommandBuilder::new("Inspect User").build();

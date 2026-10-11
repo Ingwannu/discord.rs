@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bitfield::Permissions;
 use crate::error::DiscordError;
 use crate::model::{
     ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
     ApplicationCommandOptionChoice, ApplicationIntegrationType, ChannelType, CommandOptionType,
-    CommandType, InteractionContextType, PermissionsBitField,
+    CommandType, InteractionContextType,
 };
 
 /// Discord's documented application-command limits, used by the builders'
@@ -726,7 +727,7 @@ pub struct CommandDefinition {
     #[serde(default)]
     pub options: Vec<ApplicationCommandOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_member_permissions: Option<PermissionsBitField>,
+    pub default_member_permissions: Option<Permissions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dm_permission: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1012,7 +1013,7 @@ impl SlashCommandBuilder {
         self.option(option)
     }
 
-    pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
+    pub fn default_member_permissions(mut self, permissions: Permissions) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
@@ -1198,7 +1199,7 @@ impl UserCommandBuilder {
         }
     }
 
-    pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
+    pub fn default_member_permissions(mut self, permissions: Permissions) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
@@ -1246,7 +1247,7 @@ impl MessageCommandBuilder {
         }
     }
 
-    pub fn default_member_permissions(mut self, permissions: PermissionsBitField) -> Self {
+    pub fn default_member_permissions(mut self, permissions: Permissions) -> Self {
         self.inner.default_member_permissions = Some(permissions);
         self
     }
@@ -1285,9 +1286,10 @@ mod tests {
         ensure_unique_option_names, limits, CommandOptionBuilder, MessageCommandBuilder,
         PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
     };
+    use crate::bitfield::Permissions;
     use crate::model::{
         ApplicationCommand, ApplicationCommandHandlerType, ApplicationIntegrationType, ChannelType,
-        CommandOptionType, CommandType, InteractionContextType, PermissionsBitField,
+        CommandOptionType, CommandType, InteractionContextType,
     };
 
     #[test]
@@ -1421,7 +1423,7 @@ mod tests {
 
     #[test]
     fn command_definition_converts_into_application_command() {
-        let permissions = PermissionsBitField(8);
+        let permissions = Permissions::from_bits(8);
         let command = SlashCommandBuilder::new("ban", "Ban a member")
             .integer_option("days", "Delete days", false)
             .default_member_permissions(permissions)
@@ -1450,7 +1452,7 @@ mod tests {
         assert_eq!(
             application_command
                 .default_member_permissions
-                .map(PermissionsBitField::bits),
+                .map(Permissions::bits),
             Some(8)
         );
         assert_eq!(application_command.dm_permission, Some(false));
@@ -1661,11 +1663,11 @@ mod tests {
     #[test]
     fn user_and_message_command_builders_apply_command_kinds_and_permissions() {
         let user_command = UserCommandBuilder::new("Inspect")
-            .default_member_permissions(PermissionsBitField(16))
+            .default_member_permissions(Permissions::from_bits(16))
             .dm_permission(true)
             .build();
         let message_command = MessageCommandBuilder::new("Quote")
-            .default_member_permissions(PermissionsBitField(32))
+            .default_member_permissions(Permissions::from_bits(32))
             .dm_permission(false)
             .build();
 

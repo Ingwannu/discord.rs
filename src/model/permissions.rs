@@ -1,78 +1,21 @@
-use std::fmt::Formatter;
+//! The 2.x permission set name, kept as a deprecated alias.
 
-use serde::de::{self, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-/// Typed Discord API object for `PermissionsBitField`.
-pub struct PermissionsBitField(pub u64);
-
-impl PermissionsBitField {
-    pub fn bits(self) -> u64 {
-        self.0
-    }
-
-    pub fn contains(self, permission: u64) -> bool {
-        self.0 & permission == permission
-    }
-
-    pub fn insert(&mut self, permission: u64) {
-        self.0 |= permission;
-    }
-
-    pub fn remove(&mut self, permission: u64) {
-        self.0 &= !permission;
-    }
-}
-
-impl Serialize for PermissionsBitField {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for PermissionsBitField {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct PermissionsVisitor;
-
-        impl<'de> Visitor<'de> for PermissionsVisitor {
-            type Value = PermissionsBitField;
-
-            fn expecting(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a Discord permission bitfield encoded as a string or integer")
-            }
-
-            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(PermissionsBitField(value))
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                value
-                    .parse()
-                    .map(PermissionsBitField)
-                    .map_err(|error| E::custom(format!("invalid permission bitfield: {error}")))
-            }
-
-            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                self.visit_str(&value)
-            }
-        }
-
-        deserializer.deserialize_any(PermissionsVisitor)
-    }
-}
+/// The 2.x name of [`Permissions`](crate::bitfield::Permissions).
+///
+/// 2.x had two permission set types: this one (`PermissionsBitField(pub
+/// u64)`, used by model fields) and `bitfield::Permissions` (with named
+/// constants and set operations). Since 3.0 every field and parameter uses
+/// [`Permissions`](crate::bitfield::Permissions); this alias only points old
+/// code at it.
+///
+/// Migration: `PermissionsBitField(bits)` → `Permissions::from_bits(bits)`,
+/// `.0` → `.bits()`, `set.insert(flag)` → `set |= flag`, and
+/// `set.remove(flag)` (which changed `set` in place) → `set = set.remove(flag)`
+/// (it returns the new set; the compiler warns when the result is dropped).
+/// The JSON shape is unchanged: a decimal string, reading strings or
+/// non-negative integers.
+#[deprecated(
+    since = "3.0.0",
+    note = "use discordrs::Permissions (bitfield::Permissions); see the alias docs for the method changes"
+)]
+pub type PermissionsBitField = crate::bitfield::Permissions;

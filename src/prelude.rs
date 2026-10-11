@@ -64,23 +64,23 @@ pub use crate::model::{
     ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionsBitField,
-    PollAnswerVoters, ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, ResolvedData,
-    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SessionStartLimit,
-    SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
-    Subscription, SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery,
-    UpdatePresence, UpdateUserApplicationRoleConnection, UserApplicationRoleConnection,
-    UserConnection, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState, WebhookExecuteQuery,
-    WebhookMessageQuery,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PollAnswerVoters,
+    ReactionCountDetails, RequestChannelInfo, RequestGuildMembers, ResolvedData, RoleColors,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SessionStartLimit, SetVoiceChannelStatus,
+    SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList, Subscription, SubscriptionQuery,
+    ThreadListResponse, ThreadMember, ThreadMemberQuery, UpdatePresence,
+    UpdateUserApplicationRoleConnection, UserApplicationRoleConnection, UserConnection, VanityUrl,
+    VoiceRegion, VoiceServerUpdate, VoiceState, WebhookExecuteQuery, WebhookMessageQuery,
 };
 // Typed IDs (docs/design/3.0-types-events-requests.md §1): the common
 // resource kinds, plus `InvalidId` for annotating checked parsing. The other
 // aliases (and `GenericId`, used only where Discord leaves the kind open) are
 // imported from the crate root.
 pub use crate::model::{ApplicationId, ChannelId, GuildId, InvalidId, MessageId, RoleId, UserId};
-// Deprecated 2.x name; glob importers get a note pointing at the typed IDs.
+// Deprecated 2.x names; glob importers get a note pointing at the typed IDs
+// and at `Permissions`.
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
-pub use crate::model::Snowflake;
+pub use crate::model::{PermissionsBitField, Snowflake};
 pub use crate::oauth2::{
     OAuth2AuthorizationRequest, OAuth2Client, OAuth2CodeExchange, OAuth2RefreshToken, OAuth2Scope,
     OAuth2TokenResponse,
@@ -131,7 +131,7 @@ mod tests {
         let _application_edit = ModifyCurrentApplication {
             install_params: Some(ApplicationInstallParams {
                 scopes: vec!["bot".to_string()],
-                permissions: crate::prelude::PermissionsBitField(0),
+                permissions: crate::prelude::Permissions::from_bits(0),
             }),
             integration_types_config: Some(std::collections::HashMap::from([(
                 "0".to_string(),
