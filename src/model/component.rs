@@ -1,6 +1,10 @@
 //! Message components (legacy and Components V2) and their parts.
 
+use std::fmt;
+
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::value::RawValue;
 
 use crate::types::Emoji;
 
@@ -89,6 +93,21 @@ pub struct MessageComponent {
     /// submitted radio groups, a boolean for submitted checkboxes. `None`
     /// when absent, and for a radio group submitted with nothing selected
     /// (`null`). Read it with [`Self::value_str`] / [`Self::value_bool`].
+    // [Decision Log]
+    // - 목적과 의도: `null`과 키 생략을 구분해 보존할지(무손실 왕복) 정한다.
+    // - 기존 구현 및 제약 조건: `Option`이라 `"value": null`은 `None`이 되고 다시 쓰면 키가
+    //   빠진다. Discord는 라디오 그룹 제출에서만 `value: ?string`(항상 있음, 선택 없음이면
+    //   null)을 보내고, 다른 종류는 값이 없으면 키를 생략한다. 같은 종류에서 두 상태가 함께
+    //   나오지 않고 둘 다 "값 없음"이다. 이 구조체는 수신 모델이고 제출 값은 Discord로 다시
+    //   보내지 않는다.
+    // - 검토한 주요 대안: (1) `Option` 유지, (2) `NullablePatch<MessageComponentValue>`,
+    //   (3) `MessageComponentValue::Null` 변형 + `deserialize_with`.
+    // - 선택한 방식: (1).
+    // - 다른 대안 대신 이 방식을 선택한 이유: 보존할 의미가 없다. (2)는 모든 독자가 세
+    //   상태를 다루게 하고(§3은 패치 DTO와 필수 null 가능 스냅샷 필드용), (3)은 `value_str()`
+    //   등과 같은 결과를 내는 상태를 하나 더 만든다. 와이어 형식이 필요한 모달 제출은
+    //   `V2ModalComponent::RadioGroup`이 `value: null`을 그대로 쓴다.
+    // - 장점, 단점 및 영향: 바이트 단위 왕복은 아니다(`null` → 키 생략). 의미 차이는 없다.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<MessageComponentValue>,
     /// `values` of a submitted select menu, checkbox group, or file upload
@@ -265,8 +284,9 @@ impl<'a> Iterator for MessageComponentIter<'a> {
 /// checkbox sends a boolean.
 ///
 /// Reads and writes the bare JSON value. Any other JSON type (a component
-/// Discord adds later) is kept in [`Other`](Self::Other) and written back
-/// unchanged, so decoding never fails on it.
+/// Discord adds later) is kept as JSON text in [`Other`](Self::Other) and
+/// written back unchanged, so decoding never fails on it. Strings and
+/// booleans are read directly; only an `Other` value is buffered.
 ///
 /// ```
 /// use discordrs::{MessageComponent, MessageComponentValue};
@@ -293,15 +313,30 @@ impl<'a> Iterator for MessageComponentIter<'a> {
 //   접근자가 가능했던 것과 다르다). (3)은 와이어의 JSON 타입이 이미 종류를 구분하므로 종류를 다시
 //   확인할 필요가 없고, Other로 넓은 구조체의 "디코딩은 실패하지 않는다" 원칙을 지킨다.
 // - 장점, 단점 및 영향: 파괴적 변경(`value.as_deref()` → `value_str()`). Other는 `Box`로 두어
-//   `Option<MessageComponentValue>` 크기가 `Option<String>`과 같다.
-#[derive(Clone, Debug, PartialEq)]
+//   `Option<MessageComponentValue>` 크기가 `Option<String>`과 같다. 4단계(2026-10-11)에서
+//   Other를 `Box<Value>`에서 `Box<RawValue>`로 바꿨다: 트리 없이 텍스트로 보관하고, 문자열·
+//   불은 Value를 거치지 않고 바로 읽는다.
+#[derive(Clone, Debug)]
 pub enum MessageComponentValue {
     /// A text input's text or a radio group's selected option value.
     String(String),
     /// A submitted checkbox: `true` when checked.
     Bool(bool),
-    /// A JSON value of another type, kept as sent.
-    Other(Box<serde_json::Value>),
+    /// A JSON value of another type (number, array, object), kept as its
+    /// JSON text. Read it with `serde_json::from_str(raw.get())`.
+    Other(Box<RawValue>),
+}
+
+/// `Other` values compare by JSON text.
+impl PartialEq for MessageComponentValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::String(left), Self::String(right)) => left == right,
+            (Self::Bool(left), Self::Bool(right)) => left == right,
+            (Self::Other(left), Self::Other(right)) => left.get() == right.get(),
+            _ => false,
+        }
+    }
 }
 
 impl MessageComponentValue {
@@ -358,11 +393,67 @@ impl<'de> Deserialize<'de> for MessageComponentValue {
     where
         D: Deserializer<'de>,
     {
-        Ok(match serde_json::Value::deserialize(deserializer)? {
-            serde_json::Value::String(value) => Self::String(value),
-            serde_json::Value::Bool(value) => Self::Bool(value),
-            other => Self::Other(Box::new(other)),
-        })
+        deserializer.deserialize_any(ComponentValueVisitor)
+    }
+}
+
+/// Reads strings and booleans directly; anything else is re-encoded as
+/// JSON text for [`MessageComponentValue::Other`].
+struct ComponentValueVisitor;
+
+impl ComponentValueVisitor {
+    fn other<E: de::Error>(value: &impl Serialize) -> Result<MessageComponentValue, E> {
+        serde_json::value::to_raw_value(value)
+            .map(MessageComponentValue::Other)
+            .map_err(E::custom)
+    }
+}
+
+impl<'de> Visitor<'de> for ComponentValueVisitor {
+    type Value = MessageComponentValue;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a component value")
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(MessageComponentValue::String(value.to_owned()))
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
+        Ok(MessageComponentValue::String(value))
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(MessageComponentValue::Bool(value))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Self::other(&value)
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        Self::other(&value)
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        Self::other(&value)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+        Self::other(&())
+    }
+
+    // Arrays and objects: a value no documented component sends, so the
+    // one-off tree is acceptable.
+    fn visit_seq<A: SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+        let value = serde_json::Value::deserialize(de::value::SeqAccessDeserializer::new(seq))?;
+        Self::other(&value)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        let value = serde_json::Value::deserialize(de::value::MapAccessDeserializer::new(map))?;
+        Self::other(&value)
     }
 }
 

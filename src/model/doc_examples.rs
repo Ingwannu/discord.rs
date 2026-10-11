@@ -458,8 +458,11 @@ fn documented_submitted_component_values_keep_their_types() {
         r#"{"type":99,"custom_id":"f","value":{"level":3}}"#,
     );
     assert_eq!(
-        future.value,
-        Some(MessageComponentValue::Other(Box::new(json!({"level": 3}))))
+        future.value.as_ref().map(|value| match value {
+            MessageComponentValue::Other(raw) => raw.get(),
+            _ => "not other",
+        }),
+        Some(r#"{"level":3}"#)
     );
 
     // The create-side initial state of a checkbox is `default`.

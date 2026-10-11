@@ -2138,3 +2138,40 @@ fn required_id_request_bodies_have_constructors_instead_of_default() {
         json!({ "id": "42" })
     );
 }
+
+#[test]
+fn component_values_read_strings_and_booleans_directly_and_keep_other_json_as_text() {
+    use super::MessageComponentValue;
+
+    let read = |json: &str| serde_json::from_str::<MessageComponentValue>(json).unwrap();
+    assert_eq!(read(r#""text""#), MessageComponentValue::from("text"));
+    assert_eq!(read("false"), MessageComponentValue::Bool(false));
+    for json in ["3", "-3", "1.5", r#"[1,"a"]"#, r#"{"level":3}"#, "null"] {
+        let value = read(json);
+        match &value {
+            MessageComponentValue::Other(raw) => assert_eq!(raw.get(), json),
+            other => panic!("{json}: read as {other:?}"),
+        }
+        assert_eq!(serde_json::to_string(&value).unwrap(), json);
+        assert_eq!(value.as_str(), None);
+        assert_eq!(value.as_bool(), None);
+    }
+    assert_ne!(read("3"), read("4"));
+    assert_eq!(read("[1]"), read("[1]"));
+
+    // Through a Value (the 2.x decode path) the same holds.
+    let component: MessageComponent =
+        serde_json::from_value(json!({ "type": 99, "value": { "level": 3 } })).unwrap();
+    assert_eq!(
+        component.value.as_ref().map(|value| match value {
+            MessageComponentValue::Other(raw) => raw.get().to_string(),
+            other => format!("{other:?}"),
+        }),
+        Some(r#"{"level":3}"#.to_string())
+    );
+    // `null` and an absent key both read as no value (see the decision log
+    // on `MessageComponent::value`).
+    let empty_radio: MessageComponent =
+        serde_json::from_value(json!({ "type": 21, "custom_id": "r", "value": null })).unwrap();
+    assert_eq!(empty_radio.value, None);
+}
