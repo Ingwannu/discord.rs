@@ -46,7 +46,7 @@ pub struct ShardSupervisor {
     pub(super) boot_scheduler: Option<JoinHandle<()>>,
     /// Client-wide background work (the external cache backend worker),
     /// drained after every shard stopped.
-    pub(super) background: Option<JoinHandle<()>>,
+    pub(super) background: Option<JoinHandle<Result<(), String>>>,
     /// Raised by the first shard that fails, before it drains its handlers,
     /// so the boot schedule and `wait*` react without waiting for the drain.
     pub(super) failures: Option<FleetFailure>,
@@ -187,7 +187,7 @@ fn earliest_deadline(duration: Duration, limit: Option<Instant>) -> Option<Insta
 
 /// Waits for background work until `deadline`, then aborts and joins it.
 async fn finish_background(
-    background: Option<AbortOnDrop<()>>,
+    background: Option<AbortOnDrop<Result<(), String>>>,
     deadline: Option<Instant>,
 ) -> Result<(), String> {
     let Some(mut background) = background else {
@@ -201,7 +201,10 @@ async fn finish_background(
         Some(Err(error)) if error.is_panic() => {
             Err(format!("cache backend worker panicked: {error}"))
         }
-        Some(_) => Ok(()),
+        // The worker reports recovery it could not finish, or that another
+        // client took over the store.
+        Some(Ok(result)) => result,
+        Some(Err(_)) => Ok(()),
         None => {
             background.0.abort();
             match tokio::time::timeout(ABORT_CONFIRM_GRACE, &mut background.0).await {
@@ -372,7 +375,7 @@ struct SupervisedShards {
     stop_timeout: Duration,
     timeout: Option<Duration>,
     boot_scheduler: Option<AbortOnDrop<()>>,
-    background: Option<AbortOnDrop<()>>,
+    background: Option<AbortOnDrop<Result<(), String>>>,
     failures: Option<watch::Receiver<Option<(u32, String)>>>,
 }
 

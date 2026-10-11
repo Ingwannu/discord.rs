@@ -293,33 +293,6 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
-/// Waits up to `timeout` for `task`, then aborts it and waits up to
-/// [`ABORT_CONFIRM_GRACE`] for confirmation. Errors describe a task that
-/// panicked, had to be aborted, or did not confirm.
-#[cfg(feature = "cache")]
-pub(super) async fn stop_task(
-    task: &mut AbortOnDrop<()>,
-    timeout: Duration,
-    what: &str,
-) -> Result<(), String> {
-    match tokio::time::timeout(timeout, task.join()).await {
-        Ok(Some(Err(error))) if error.is_panic() => Err(format!("{what} panicked: {error}")),
-        Ok(_) => Ok(()),
-        Err(_) => {
-            task.abort();
-            match tokio::time::timeout(ABORT_CONFIRM_GRACE, task.join()).await {
-                Ok(_) => Err(format!(
-                    "{what} did not finish within {timeout:?} and was aborted"
-                )),
-                Err(_) => Err(format!(
-                    "{what} did not finish within {timeout:?} and did not confirm cancellation \
-                     within {ABORT_CONFIRM_GRACE:?} of being aborted"
-                )),
-            }
-        }
-    }
-}
-
 /// A processed event on its way to a handler call.
 pub(super) struct HandlerDelivery {
     pub(super) event: Event,

@@ -7,37 +7,16 @@ use crate::model::{Member, Message, Presence, Snowflake};
 
 use super::CacheHandle;
 
-/// The shard generation a [`CacheBackend`] write belongs to.
-///
-/// Every successful [`CacheBackend::clear_shard_cache`] starts a new
-/// generation for that `(shard_id, shard_count)` and returns its epoch. The
-/// gateway runtime stamps every later write for the shard with that epoch,
-/// and a backend must not apply a write whose epoch is older than the
-/// shard's latest clear.
-///
-/// Why: stopping a client cannot retract writes it already submitted to a
-/// remote store. Without a fence, a delayed write from a stopped client can
-/// land after a replacement client cleared the shard and resurrect stale
-/// data. With it, the store itself rejects the late write.
+/// Result of a conditional clear: see the [`CacheBackend`] epoch contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CacheFence {
-    /// Shard the written entry belongs to.
-    pub shard_id: u32,
-    /// Shard count the shard id refers to.
-    pub shard_count: u32,
-    /// Epoch returned by the clear that started the current generation.
-    pub epoch: u64,
-}
-
-impl CacheFence {
-    /// Creates a fence for `shard_id` of `shard_count` at `epoch`.
-    pub fn new(shard_id: u32, shard_count: u32, epoch: u64) -> Self {
-        Self {
-            shard_id,
-            shard_count,
-            epoch,
-        }
-    }
+pub enum CacheClear {
+    /// The store's epoch matched the expected one; the entries were cleared
+    /// and the store's epoch is now this (incremented) value.
+    Applied(u64),
+    /// The store's epoch did not match — another client cleared the store
+    /// since this caller last observed it. Nothing was changed; carries the
+    /// store's current epoch.
+    Rejected(u64),
 }
 
 /// Async extension point for external cache stores.
@@ -47,37 +26,42 @@ impl CacheFence {
 /// Valkey, or another shared store while preserving the `Arc`-returning read
 /// shape used by the in-memory cache.
 ///
-/// # Epoch fencing contract
+/// # Epoch contract (normative)
 ///
-/// - The store keeps one epoch per `(shard_id, shard_count)`, starting at 0.
-/// - [`clear_shard_cache`](Self::clear_shard_cache) atomically deletes the
-///   shard's entries, increments its epoch, and returns the new value. The
-///   epoch must be strictly greater than every epoch previously returned for
-///   that shard, by any client sharing the store.
-/// - Every write (`put_*`, `delete_*`) carries a [`CacheFence`]. A write
-///   whose `fence.epoch` is lower than the shard's current epoch must be
-///   ignored and reported as `Ok(())` (an error would make the stale client
-///   schedule another clear and wipe the newer generation). The check and the
-///   write must be atomic with respect to a concurrent clear (for example a
-///   Lua script or a transaction in Redis).
-/// - Changing the shard count needs a full [`clear_cache`](Self::clear_cache):
-///   fences of different shard counts do not order against each other.
+/// 1. The store keeps **one** epoch for all of its entries, starting at 0.
+/// 2. [`clear_cache`](Self::clear_cache) and
+///    [`clear_shard_cache`](Self::clear_shard_cache) are conditional: if the
+///    store's epoch equals `expected_epoch`, delete the entries in scope,
+///    increment the epoch, and return [`CacheClear::Applied`] with the new
+///    epoch; otherwise change nothing and return [`CacheClear::Rejected`]
+///    with the current epoch. Compare, delete, and increment must be atomic
+///    (for example one Lua script or `MULTI`/`EXEC` transaction in Redis).
+/// 3. Every write (`put_*`, `delete_*`) carries the epoch it was issued
+///    under. If that epoch is lower than the store's current epoch the write
+///    must be ignored and reported as `Ok(())`; the comparison and the write
+///    must be atomic with respect to a concurrent clear.
+/// 4. Any clear — full or per shard — therefore invalidates every earlier
+///    epoch, so a shard-count change (which the gateway runtime always
+///    starts with a full clear) leaves no old-layout writer able to insert
+///    or delete data.
 ///
+/// The gateway runtime writes from exactly one client per store: its first
+/// clear is a full clear that claims the store, and if a later clear is
+/// rejected it concludes another client has taken over and stops writing.
+/// Do not point two running clients at one store (or one key namespace).
 /// [`CacheHandle`] implements this contract for the in-memory store.
 #[async_trait]
 pub trait CacheBackend: Send + Sync {
-    async fn clear_cache(&self) -> Result<(), DiscordError>;
+    /// Conditionally clears every entry; see the epoch contract.
+    async fn clear_cache(&self, expected_epoch: u64) -> Result<CacheClear, DiscordError>;
 
-    /// Drops the entries owned by gateway shard `shard_id` of `shard_count`
-    /// and starts a new generation for it, returning the new epoch (see the
-    /// trait docs).
+    /// Conditionally clears the entries owned by gateway shard `shard_id`
+    /// of `shard_count`; see the epoch contract.
     ///
-    /// The gateway runtime calls this instead of
-    /// [`CacheBackend::clear_cache`] when that shard starts a new session
+    /// The gateway runtime calls this when that shard starts a new session
     /// (READY), when the shard stops after losing events, and to resync the
-    /// shard after a write was dropped or failed — so the mirror is never
-    /// left stale. One shard's call must not erase data other shards (or
-    /// other processes sharing the store) are still serving.
+    /// shard after a write was dropped or failed, so the mirror is never
+    /// left stale.
     ///
     /// Ownership follows [`CacheHandle::clear_shard`]: a guild belongs to
     /// shard `(guild_id >> 22) % shard_count`, DMs belong to shard 0, and
@@ -86,15 +70,19 @@ pub trait CacheBackend: Send + Sync {
     /// messages of the shard's guilds (and DM messages on shard 0); there is
     /// deliberately no default, because silently keeping entries would make
     /// the mirror stale.
-    async fn clear_shard_cache(&self, shard_id: u32, shard_count: u32)
-        -> Result<u64, DiscordError>;
+    async fn clear_shard_cache(
+        &self,
+        expected_epoch: u64,
+        shard_id: u32,
+        shard_count: u32,
+    ) -> Result<CacheClear, DiscordError>;
 
     async fn purge_expired_entries(&self) -> Result<(), DiscordError>;
 
-    /// Stores a member unless `fence` is older than the shard's last clear.
+    /// Stores a member unless `epoch` is older than the store's epoch.
     async fn put_member(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         member: Member,
@@ -108,16 +96,16 @@ pub trait CacheBackend: Send + Sync {
 
     async fn list_members(&self, guild_id: &Snowflake) -> Result<Vec<Arc<Member>>, DiscordError>;
 
-    /// Deletes a member unless `fence` is older than the shard's last clear.
+    /// Deletes a member unless `epoch` is older than the store's epoch.
     async fn delete_member(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), DiscordError>;
 
-    /// Stores a message unless `fence` is older than the shard's last clear.
-    async fn put_message(&self, fence: CacheFence, message: Message) -> Result<(), DiscordError>;
+    /// Stores a message unless `epoch` is older than the store's epoch.
+    async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError>;
 
     async fn get_message(
         &self,
@@ -130,18 +118,18 @@ pub trait CacheBackend: Send + Sync {
         channel_id: &Snowflake,
     ) -> Result<Vec<Arc<Message>>, DiscordError>;
 
-    /// Deletes a message unless `fence` is older than the shard's last clear.
+    /// Deletes a message unless `epoch` is older than the store's epoch.
     async fn delete_message(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         channel_id: &Snowflake,
         message_id: &Snowflake,
     ) -> Result<(), DiscordError>;
 
-    /// Stores a presence unless `fence` is older than the shard's last clear.
+    /// Stores a presence unless `epoch` is older than the store's epoch.
     async fn put_presence(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         presence: Presence,
@@ -158,11 +146,10 @@ pub trait CacheBackend: Send + Sync {
         guild_id: &Snowflake,
     ) -> Result<Vec<Arc<Presence>>, DiscordError>;
 
-    /// Deletes a presence unless `fence` is older than the shard's last
-    /// clear.
+    /// Deletes a presence unless `epoch` is older than the store's epoch.
     async fn delete_presence(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), DiscordError>;
@@ -170,17 +157,19 @@ pub trait CacheBackend: Send + Sync {
 
 #[async_trait]
 impl CacheBackend for CacheHandle {
-    async fn clear_cache(&self) -> Result<(), DiscordError> {
-        self.clear().await;
-        Ok(())
+    async fn clear_cache(&self, expected_epoch: u64) -> Result<CacheClear, DiscordError> {
+        Ok(self.clear_if_epoch(expected_epoch, None).await)
     }
 
     async fn clear_shard_cache(
         &self,
+        expected_epoch: u64,
         shard_id: u32,
         shard_count: u32,
-    ) -> Result<u64, DiscordError> {
-        Ok(self.clear_shard_generation(shard_id, shard_count).await)
+    ) -> Result<CacheClear, DiscordError> {
+        Ok(self
+            .clear_if_epoch(expected_epoch, Some((shard_id, shard_count)))
+            .await)
     }
 
     async fn purge_expired_entries(&self) -> Result<(), DiscordError> {
@@ -190,12 +179,12 @@ impl CacheBackend for CacheHandle {
 
     async fn put_member(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         member: Member,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_member(fence, guild_id, user_id, member)
+        self.fenced_upsert_member(epoch, guild_id, user_id, member)
             .await;
         Ok(())
     }
@@ -214,16 +203,16 @@ impl CacheBackend for CacheHandle {
 
     async fn delete_member(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), DiscordError> {
-        self.fenced_remove_member(fence, guild_id, user_id).await;
+        self.fenced_remove_member(epoch, guild_id, user_id).await;
         Ok(())
     }
 
-    async fn put_message(&self, fence: CacheFence, message: Message) -> Result<(), DiscordError> {
-        self.fenced_upsert_message(fence, message).await;
+    async fn put_message(&self, epoch: u64, message: Message) -> Result<(), DiscordError> {
+        self.fenced_upsert_message(epoch, message).await;
         Ok(())
     }
 
@@ -244,23 +233,23 @@ impl CacheBackend for CacheHandle {
 
     async fn delete_message(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         channel_id: &Snowflake,
         message_id: &Snowflake,
     ) -> Result<(), DiscordError> {
-        self.fenced_remove_message(fence, channel_id, message_id)
+        self.fenced_remove_message(epoch, channel_id, message_id)
             .await;
         Ok(())
     }
 
     async fn put_presence(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: Snowflake,
         user_id: Snowflake,
         presence: Presence,
     ) -> Result<(), DiscordError> {
-        self.fenced_upsert_presence(fence, guild_id, user_id, presence)
+        self.fenced_upsert_presence(epoch, guild_id, user_id, presence)
             .await;
         Ok(())
     }
@@ -282,11 +271,11 @@ impl CacheBackend for CacheHandle {
 
     async fn delete_presence(
         &self,
-        fence: CacheFence,
+        epoch: u64,
         guild_id: &Snowflake,
         user_id: &Snowflake,
     ) -> Result<(), DiscordError> {
-        self.fenced_remove_presence(fence, guild_id, user_id).await;
+        self.fenced_remove_presence(epoch, guild_id, user_id).await;
         Ok(())
     }
 }

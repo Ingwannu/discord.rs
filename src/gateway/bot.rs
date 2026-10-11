@@ -1260,16 +1260,24 @@ impl ClientBuilder {
     /// applies for gateway events.
     ///
     /// Writes go through one ordered worker per client, so a backend sees
-    /// them in gateway order (a delayed put can no longer land after a later
-    /// delete). The queue holds 8,192 writes; while it is full, new writes
-    /// are dropped and counted in a rate-limited warning rather than
-    /// stalling gateway processing, so give backend entries a TTL to heal
-    /// from dropped writes. A READY calls
-    /// [`CacheBackend::clear_shard_cache`] for that shard only. A
-    /// MESSAGE_UPDATE is merged into the backend's stored message (or the
-    /// in-memory copy when the backend has none) and skipped when neither
-    /// holds the full message, because the payload may be partial. Writes
-    /// still queued when the client stops are flushed in the background.
+    /// them in gateway order. The backend must implement the epoch contract
+    /// documented on [`CacheBackend`]: one store-wide epoch, conditional
+    /// (compare-and-set) clears, and writes that carry their epoch. Only one
+    /// running client may mirror into a store: the client's first clear
+    /// claims it with a full clear, and a later rejected clear makes the
+    /// client stop mirroring (see [`Context::cache_backend_health`]).
+    ///
+    /// The queue holds 8,192 writes and never stalls gateway processing. A
+    /// write that does not fit, or that the backend rejects or panics on,
+    /// starts recovery for its shard: queued writes of the shard admitted
+    /// before that point are discarded, new ones are discarded until the
+    /// shard has been cleared, and failed clears are retried on a backoff
+    /// timer. A READY clears that shard only. A MESSAGE_UPDATE is merged
+    /// into the backend's stored message (or the in-memory copy when the
+    /// backend has none) and skipped when neither holds the full message.
+    /// When the client stops, queued writes and pending recoveries are
+    /// finished within [`ClientBuilder::handler_shutdown_timeout`]; shards
+    /// left unrecovered are reported in the returned error.
     #[cfg(feature = "cache")]
     pub fn cache_backend(mut self, backend: Arc<dyn CacheBackend>) -> Self {
         self.cache_backend = Some(backend);
@@ -1473,7 +1481,8 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
+        let (runtime, backend_worker) =
+            runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
         #[cfg(feature = "cache")]
         let backend_flush_timeout = dispatch.shutdown_timeout;
         let result = start_gateway_shard(
@@ -1580,7 +1589,8 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
+        let (runtime, backend_worker) =
+            runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
             token,
             intents,
@@ -1632,7 +1642,8 @@ impl ClientBuilder {
             default_allowed_mentions,
         );
         #[cfg(feature = "cache")]
-        let (runtime, backend_worker) = runtime.with_cache_backend(cache_backend);
+        let (runtime, backend_worker) =
+            runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
         let gateway_config = gateway_config.with_base_url(gateway_bot.url);
 
         spawn_shard_supervisor(SpawnShardSupervisorConfig {
@@ -1752,12 +1763,16 @@ impl SharedRuntime {
     fn with_cache_backend(
         mut self,
         cache_backend: Option<Arc<dyn CacheBackend>>,
+        drain_timeout: Duration,
     ) -> (Self, Option<CacheBackendWorker>) {
         let Some(backend) = cache_backend else {
             return (self, None);
         };
-        let (forwarder, worker) =
-            CacheBackendForwarder::spawn(backend, backend::CACHE_BACKEND_QUEUE_CAPACITY);
+        let (forwarder, worker) = CacheBackendForwarder::spawn(
+            backend,
+            backend::CACHE_BACKEND_QUEUE_CAPACITY,
+            drain_timeout,
+        );
         self.cache_backend = Some(forwarder);
         (self, Some(worker))
     }
@@ -1812,7 +1827,7 @@ struct SpawnShardSupervisorConfig {
     presence: Option<crate::model::UpdatePresence>,
     dispatch: DispatchConfig,
     /// The client's cache backend worker, handed to the supervisor.
-    background: Option<tokio::task::JoinHandle<()>>,
+    background: Option<tokio::task::JoinHandle<Result<(), String>>>,
 }
 
 #[cfg(feature = "sharding")]

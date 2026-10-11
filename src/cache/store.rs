@@ -138,10 +138,9 @@ pub(super) struct CacheStore {
     /// When the last full TTL sweep ran; used to throttle sweeps triggered
     /// from hot upsert paths.
     pub(super) last_prune: Option<Instant>,
-    /// Current generation per `(shard_id, shard_count)` for writes that go
-    /// through the [`super::CacheBackend`] fencing contract. Never reset by
-    /// `clear()`: epochs must only grow.
-    pub(super) shard_epochs: HashMap<(u32, u32), u64>,
+    /// Store-wide epoch of the [`super::CacheBackend`] contract. Never reset
+    /// by `clear()`: it must only grow.
+    pub(super) backend_epoch: u64,
 }
 
 /// Thin wrapper kept for call-site compatibility: insert-or-move-to-back.

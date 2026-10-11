@@ -115,7 +115,7 @@ fn configure(token: &str, intents: u64, backend: Arc<dyn CacheBackend>) {
 }
 ```
 
-3.0부터 백엔드는 쓰기를 게이트웨이 순서대로 받습니다. `CacheBackend::clear_shard_cache`는 기본 구현이 없는 필수 메서드이며 READY(와 모든 재동기화)는 한 샤드에 대해서만 이를 호출하고, 저장소가 정한 epoch를 돌려받습니다. 모든 쓰기는 그 epoch를 담은 `CacheFence`를 가지므로 저장소가 이전 클라이언트의 늦은 쓰기를 거부할 수 있습니다. 큐에 못 들어가거나 실패·패닉한 쓰기는 버려지는 대신 그 샤드를 격리하고 순서 보장 재동기화를 예약하므로 미러가 낡은 상태로 남지 않으며, `Context::cache_backend_health()`로 상태를 볼 수 있습니다. 부분 MESSAGE_UPDATE는 완전한 메시지로 저장하지 않고 병합합니다. 자세한 내용은 [캐시와 컬렉터](../../docs/api/cache-and-collectors.md) 문서의 External Cache Backend 절을 참고합니다.
+3.0부터 백엔드는 쓰기를 게이트웨이 순서대로 받으며 epoch 계약을 구현해야 합니다. 저장소 전체에 epoch 하나를 두고, 정리(`clear_cache` / `clear_shard_cache`)는 기대 epoch를 받아 일치할 때만 실행하는 비교-교체(CAS)이며 `CacheClear::Applied` 또는 `Rejected`를 돌려주고, 모든 쓰기는 자기 epoch를 가집니다. 그래서 이전 클라이언트의 늦은 쓰기·정리는 거부되고, 샤드 구성이 바뀌면 이전 구성의 모든 쓰기가 무효가 됩니다. 한 저장소에는 실행 중인 클라이언트 하나만 미러링할 수 있습니다. 큐에 못 들어가거나 실패·패닉한 쓰기는 그 샤드의 앞선 대기 쓰기를 버리고 샤드를 정리하므로 미러가 낡은 상태로 남지 않으며, `Context::cache_backend_health()`로 상태를 보고, 종료 시 복구하지 못한 샤드를 오류로 알립니다. 부분 MESSAGE_UPDATE는 완전한 메시지로 저장하지 않고 병합합니다. 자세한 내용은 [캐시와 컬렉터](../../docs/api/cache-and-collectors.md) 문서의 External Cache Backend 절을 참고합니다.
 
 REST 쪽에는 같은 기본값이 `RestClient::builder().default_allowed_mentions(...)`로 존재하며, 핸들러 안에서는 `Context::default_allowed_mentions()`로 구성된 값을 확인할 수 있습니다.
 
