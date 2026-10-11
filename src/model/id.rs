@@ -251,12 +251,20 @@ impl<'de, M: IdMarker> Deserialize<'de> for Id<M> {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(DecimalVisitor::<Self>::new())
+        deserialize_decimal(deserializer)
     }
 }
 
 impl<M: IdMarker> DecimalWire for Id<M> {
     const EXPECTING: &'static str = "a nonzero Discord snowflake as a decimal string or integer";
+
+    fn check_wire_u64(value: u64) -> Result<(), InvalidId> {
+        if value == 0 {
+            Err(InvalidId::new(InvalidIdKind::Zero))
+        } else {
+            Ok(())
+        }
+    }
 
     fn from_wire_u64(value: u64) -> Result<Self, InvalidId> {
         Self::try_new(value)
@@ -352,31 +360,53 @@ trait DecimalWire: Sized {
     /// Text for serde's "expected ..." messages.
     const EXPECTING: &'static str;
 
-    /// Builds the value from the parsed number; zero handling is up to the
-    /// type.
+    /// Rejects numbers the type never accepts (zero for [`Id`]); checked
+    /// inside the visitor, so the error carries the input position.
+    fn check_wire_u64(_value: u64) -> Result<(), InvalidId> {
+        Ok(())
+    }
+
+    /// Builds the value from a number [`check_wire_u64`](Self::check_wire_u64)
+    /// accepted.
     fn from_wire_u64(value: u64) -> Result<Self, InvalidId>;
 }
 
-struct DecimalVisitor<T>(PhantomData<fn() -> T>);
-
-impl<T> DecimalVisitor<T> {
-    const fn new() -> Self {
-        Self(PhantomData)
-    }
+/// Reads `T` from the decimal wire form through the one [`DecimalVisitor`]
+/// every ID type shares.
+///
+/// The visitor is not generic over the ID type, so each deserializer
+/// compiles `deserialize_any` for it once instead of once per marker (about
+/// 670 LLVM IR lines × 40 ID types per reader before).
+fn deserialize_decimal<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+where
+    T: DecimalWire,
+    D: Deserializer<'de>,
+{
+    let value = deserializer.deserialize_any(DecimalVisitor {
+        expecting: T::EXPECTING,
+        check: T::check_wire_u64,
+    })?;
+    T::from_wire_u64(value).map_err(de::Error::custom)
 }
 
-impl<T: DecimalWire> Visitor<'_> for DecimalVisitor<T> {
-    type Value = T;
+/// Visitor for the decimal ID encoding, returning the raw number.
+struct DecimalVisitor {
+    expecting: &'static str,
+    check: fn(u64) -> Result<(), InvalidId>,
+}
+
+impl Visitor<'_> for DecimalVisitor {
+    type Value = u64;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(T::EXPECTING)
+        formatter.write_str(self.expecting)
     }
 
     fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        T::from_wire_u64(value).map_err(E::custom)
+        (self.check)(value).map(|()| value).map_err(E::custom)
     }
 
     fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
@@ -396,7 +426,7 @@ impl<T: DecimalWire> Visitor<'_> for DecimalVisitor<T> {
         E: de::Error,
     {
         parse_decimal_u64(value)
-            .and_then(T::from_wire_u64)
+            .and_then(|value| (self.check)(value).map(|()| value))
             .map_err(E::custom)
     }
 }

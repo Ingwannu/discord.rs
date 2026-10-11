@@ -32,7 +32,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{parse_decimal_u64, DecimalVisitor, DecimalWire, GuildId, InvalidId};
+use super::{deserialize_decimal, parse_decimal_u64, DecimalWire, GuildId, InvalidId};
 
 /// Member `id` from a guild widget (`GET /guilds/{guild.id}/widget.json`).
 ///
@@ -146,7 +146,7 @@ impl<'de> Deserialize<'de> for GuildInstallOwner {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(DecimalVisitor::<Self>::new())
+        deserialize_decimal(deserializer)
     }
 }
 
