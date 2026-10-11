@@ -1616,7 +1616,7 @@ impl ChildExit {
 /// Resolves once shutdown has been requested or the sender is gone, which
 /// also means "stop".
 async fn wait_for_shutdown(shutdown_rx: &mut watch::Receiver<bool>) {
-    let _ = shutdown_rx.wait_for(|requested| *requested).await;
+    shutdown_rx.wait_for(|requested| *requested).await.ok();
 }
 
 fn shutdown_requested(shutdown_rx: &watch::Receiver<bool>) -> bool {
@@ -1836,14 +1836,17 @@ impl ParentWriter {
                     }
                     .await;
                     if let Err(error) = written {
-                        let _ = failed_tx.send(error.to_string());
+                        // Fails only if the monitor already stopped
+                        // watching this child.
+                        failed_tx.send(error.to_string()).ok();
                         return;
                     }
                 }
                 // Both queues closed by `close()`: dropping stdin sends EOF.
             })),
             None => {
-                let _ = failed_tx.send("child stdin pipe missing".to_string());
+                // The receiver is returned below, so this cannot fail.
+                failed_tx.send("child stdin pipe missing".to_string()).ok();
                 None
             }
         };
@@ -2002,7 +2005,13 @@ impl<'a> ChildSession<'a> {
             }
             ChildMessage::Response { id, payload } => match self.pending.remove(&id) {
                 Some(sender) => {
-                    let _ = sender.send(payload);
+                    if sender.send(payload).is_err() {
+                        debug!(
+                            child = context.index,
+                            request_id = id,
+                            "shard child response arrived after the request timed out"
+                        );
+                    }
                 }
                 None => debug!(
                     child = context.index,
@@ -2158,13 +2167,17 @@ impl<'a> ChildSession<'a> {
 
     /// Processes stdout lines still buffered after the child exited.
     async fn drain_stdout(&mut self, reader: &mut FrameReader<ChildStdout>) {
-        let _ = timeout(EXIT_DRAIN_TIMEOUT, async {
+        let drained = timeout(EXIT_DRAIN_TIMEOUT, async {
             while !reader.is_closed() {
                 let event = reader.next_event().await;
                 self.handle_stdout(event);
             }
         })
         .await;
+        if drained.is_err() {
+            // Something else (e.g. a grandchild) still holds the pipe open.
+            debug!("stopped draining an exited shard child's stdout after {EXIT_DRAIN_TIMEOUT:?}");
+        }
     }
 }
 
@@ -3197,7 +3210,7 @@ impl ShardChildProcess {
         async move {
             // An error means the sender is gone: nothing more will arrive,
             // so unblock the caller.
-            let _ = shutdown_rx.wait_for(|requested| *requested).await;
+            shutdown_rx.wait_for(|requested| *requested).await.ok();
         }
     }
 

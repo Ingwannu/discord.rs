@@ -486,7 +486,8 @@ impl GatewayClient {
             loop {
                 if !ack_received.load(Ordering::Relaxed) {
                     warn!("Heartbeat ACK not received - zombie connection");
-                    let _ = heartbeat_tx.send("zombie".to_string()).await;
+                    // Fails only if the read loop already ended.
+                    heartbeat_tx.send("zombie".to_string()).await.ok();
                     break;
                 }
 
@@ -510,7 +511,8 @@ impl GatewayClient {
         let (outbound_error_tx, mut outbound_error_rx) = mpsc::unbounded_channel();
         let mut outbound_task = AbortOnDrop::new(tokio::spawn(async move {
             if let Err(error) = run_gateway_outbound_worker(write, outbound_rx).await {
-                let _ = outbound_error_tx.send(error.to_string());
+                // Fails only if the read loop already ended.
+                outbound_error_tx.send(error.to_string()).ok();
             }
         }));
 
@@ -653,10 +655,12 @@ impl GatewayClient {
                 command = recv_control_command(&mut self.command_rx, &mut self.deferred_commands) => {
                     match command {
                         Some(GatewayCommand::Shutdown) => {
-                            let _ = outbound_tx.send(GatewayOutboundMessage::Close(Some(CloseFrame {
+                            // Fails only if the outbound worker already
+                            // ended, and then the socket is closing anyway.
+                            outbound_tx.send(GatewayOutboundMessage::Close(Some(CloseFrame {
                                     code: CloseCode::Normal,
                                     reason: "supervisor shutdown".into(),
-                                })));
+                                }))).ok();
                             break ReconnectAction::Shutdown;
                         }
                         Some(GatewayCommand::Reconnect) => break ReconnectAction::Resume,

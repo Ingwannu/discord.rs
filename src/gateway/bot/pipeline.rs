@@ -854,7 +854,8 @@ struct SignalOnExit(Option<tokio::sync::oneshot::Sender<()>>);
 impl Drop for SignalOnExit {
     fn drop(&mut self) {
         if let Some(finished) = self.0.take() {
-            let _ = finished.send(());
+            // Nobody waiting for the hook thread is not an error.
+            finished.send(()).ok();
         }
     }
 }
@@ -1019,6 +1020,8 @@ fn route_member_chunk(waiters: &MemberChunkWaiters, event: &Event) {
         return;
     };
     if let Some(waiter) = lock_member_chunk_waiters(waiters).get(nonce) {
-        let _ = waiter.chunks.send(chunk.data.clone());
+        // Fails only if `fetch_members` already gave up; its guard then
+        // removes the waiter.
+        waiter.chunks.send(chunk.data.clone()).ok();
     }
 }

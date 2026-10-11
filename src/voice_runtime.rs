@@ -1428,7 +1428,8 @@ impl VoiceRuntimeHandle {
 
     pub async fn close(mut self) -> Result<(), DiscordError> {
         if let Some(close_tx) = self.close_tx.take() {
-            let _ = close_tx.send(());
+            // Fails only if the task already ended; awaited just below.
+            close_tx.send(()).ok();
         }
 
         match self.task.await {
@@ -1577,7 +1578,10 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
                     }
                 }
                 _ = &mut close_rx => {
-                    let _ = write.send(WsMessage::Close(None)).await;
+                    // Closing either way; the peer just misses the frame.
+                    if let Err(error) = write.send(WsMessage::Close(None)).await {
+                        tracing::debug!("voice gateway close frame not sent: {error}");
+                    }
                     break;
                 }
                 message = read.next() => {

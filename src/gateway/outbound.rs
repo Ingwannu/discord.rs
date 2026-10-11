@@ -181,7 +181,11 @@ where
             Ok(false)
         }
         GatewayOutboundMessage::Close(frame) => {
-            let _ = write.send(WsMessage::Close(frame)).await;
+            // The connection ends either way; a failed close frame only
+            // means the peer will not see the close code.
+            if let Err(error) = write.send(WsMessage::Close(frame)).await {
+                tracing::debug!("gateway close frame not sent: {error}");
+            }
             Ok(true)
         }
     }

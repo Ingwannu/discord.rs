@@ -664,9 +664,11 @@ impl PlayerSubscription {
 
 impl Drop for PlayerSubscription {
     fn drop(&mut self) {
-        let _ = self
-            .command_tx
-            .send(PlayerCommand::Unsubscribe { id: self.id });
+        // Fails only if the player already stopped, which unsubscribed
+        // every connection.
+        self.command_tx
+            .send(PlayerCommand::Unsubscribe { id: self.id })
+            .ok();
     }
 }
 
@@ -856,7 +858,9 @@ impl AudioPlayer {
     /// Afterwards every command on any handle fails. Calling it again, or
     /// after the player has stopped, returns immediately.
     pub async fn shutdown(&self) {
-        let _ = self.command_tx.send(PlayerCommand::Shutdown);
+        // Fails only if the player already stopped; the wait below then
+        // returns at once.
+        self.command_tx.send(PlayerCommand::Shutdown).ok();
         // The control task owns the state sender, so this channel closes
         // only once the task has finished its cleanup.
         let mut state = self.state_rx.clone();
@@ -1674,13 +1678,12 @@ impl PlayerTask {
         }
         tracing::debug!(?old, ?new, "audio player state change");
         self.state_tx.send_replace(new.clone());
-        let _ = self
-            .events_tx
-            .send(AudioPlayerEvent::StateChange { old, new });
+        self.emit(AudioPlayerEvent::StateChange { old, new });
     }
 
     fn emit(&self, event: AudioPlayerEvent) {
-        let _ = self.events_tx.send(event);
+        // A broadcast send fails only when nobody is subscribed.
+        self.events_tx.send(event).ok();
     }
 
     /// Ends every connection's stretch of audio. When this returns, a flushed

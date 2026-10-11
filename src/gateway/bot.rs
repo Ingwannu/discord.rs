@@ -2369,7 +2369,9 @@ async fn release_boot_waves(
             return;
         }
         for boot_gate in wave {
-            let _ = boot_gate.send(true);
+            // Fails only if that shard's task already ended; the supervisor
+            // reports how it ended.
+            boot_gate.send(true).ok();
         }
         if wave_index + 1 < wave_count {
             tokio::select! {
@@ -2478,19 +2480,26 @@ async fn start_gateway_shard(
     #[cfg(feature = "sharding")]
     if let Some(mut boot_gate) = shard_control.boot_gate {
         if let Some(supervisor_channels) = shard_control.supervisor_channels.as_ref() {
-            let _ = supervisor_channels.publish(ShardSupervisorEvent::StateChanged {
-                shard_id: shard.0,
-                state: ShardRuntimeState::Queued,
-            });
+            // Supervisor events are best effort: `publish` updates the shard
+            // status first and fails only once nobody supervises the shard.
+            supervisor_channels
+                .publish(ShardSupervisorEvent::StateChanged {
+                    shard_id: shard.0,
+                    state: ShardRuntimeState::Queued,
+                })
+                .ok();
         }
 
         while !*boot_gate.borrow() {
             if boot_gate.changed().await.is_err() {
                 if let Some(supervisor_channels) = shard_control.supervisor_channels.as_ref() {
-                    let _ = supervisor_channels.publish(ShardSupervisorEvent::StateChanged {
-                        shard_id: shard.0,
-                        state: ShardRuntimeState::Stopped,
-                    });
+                    // Best effort, as above.
+                    supervisor_channels
+                        .publish(ShardSupervisorEvent::StateChanged {
+                            shard_id: shard.0,
+                            state: ShardRuntimeState::Stopped,
+                        })
+                        .ok();
                 }
                 return Ok(());
             }
@@ -2549,14 +2558,19 @@ async fn start_gateway_shard(
         reason = fault.raised() => {
             #[cfg(feature = "sharding")]
             if let Some(publisher) = fault_publisher.as_ref() {
-                let _ = publisher.publish(ShardSupervisorEvent::GatewayError {
-                    shard_id: shard.0,
-                    message: reason.clone(),
-                });
-                let _ = publisher.publish(ShardSupervisorEvent::StateChanged {
-                    shard_id: shard.0,
-                    state: ShardRuntimeState::Stopped,
-                });
+                // Best effort: fails only once nobody supervises the shard.
+                publisher
+                    .publish(ShardSupervisorEvent::GatewayError {
+                        shard_id: shard.0,
+                        message: reason.clone(),
+                    })
+                    .ok();
+                publisher
+                    .publish(ShardSupervisorEvent::StateChanged {
+                        shard_id: shard.0,
+                        state: ShardRuntimeState::Stopped,
+                    })
+                    .ok();
             }
             Err(DiscordError::gateway(reason))
         }
@@ -2989,11 +3003,11 @@ async fn apply_voice_updates(voice: &Arc<RwLock<VoiceManager>>, event: &Event) {
     match event {
         Event::VoiceStateUpdate(event) => {
             let mut voice = voice.write().await;
-            let _ = voice.update_voice_state(&event.state);
+            voice.update_voice_state(&event.state);
         }
         Event::VoiceServerUpdate(event) => {
             let mut voice = voice.write().await;
-            let _ = voice.update_server(event.data.clone());
+            voice.update_server(event.data.clone());
         }
         _ => {}
     }
@@ -3004,7 +3018,8 @@ fn shard_supervisor_callback(
     supervisor_channels: crate::sharding::ShardRuntimePublisher,
 ) -> SupervisorCallback {
     Arc::new(move |event| {
-        let _ = supervisor_channels.publish(event);
+        // Best effort: fails only once nobody supervises the shard.
+        supervisor_channels.publish(event).ok();
     })
 }
 
