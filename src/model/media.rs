@@ -3,7 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    EmojiId, GenericId, GuildId, SkuId, SoundboardSoundId, StickerId, StickerPackId, User,
+    EmojiId, GenericId, GuildId, SkuId, SoundboardSoundId, StickerFormatType, StickerId,
+    StickerPackId, StickerType, User,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -11,8 +12,9 @@ use super::{
 pub struct StickerItem {
     pub id: StickerId,
     pub name: String,
+    /// The sticker's `format_type`.
     #[serde(rename = "format_type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<StickerFormatType>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -27,8 +29,8 @@ pub struct Sticker {
     #[serde(default)]
     pub tags: String,
     #[serde(rename = "type")]
-    pub kind: u8,
-    pub format_type: u8,
+    pub kind: StickerType,
+    pub format_type: StickerFormatType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, GenericId, GuildId, Member, ScheduledEventId, User, UserId};
+use super::{
+    ChannelId, GenericId, GuildId, Member, ScheduledEventEntityType, ScheduledEventId,
+    ScheduledEventPrivacyLevel, ScheduledEventStatus, User, UserId,
+};
 
 /// Query options for `GET /guilds/{id}/scheduled-events`.
 #[derive(Clone, Debug, Default)]
@@ -34,9 +37,9 @@ pub struct GuildScheduledEvent {
     pub scheduled_start_time: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheduled_end_time: Option<String>,
-    pub privacy_level: u8,
-    pub status: u8,
-    pub entity_type: u8,
+    pub privacy_level: ScheduledEventPrivacyLevel,
+    pub status: ScheduledEventStatus,
+    pub entity_type: ScheduledEventEntityType,
     /// ID of an entity tied to the event. Discord documents it only as "an
     /// entity" and does not say which kind, so it stays a [`GenericId`].
     #[serde(skip_serializing_if = "Option::is_none")]

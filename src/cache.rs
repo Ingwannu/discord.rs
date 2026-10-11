@@ -1519,7 +1519,7 @@ pub use managers::{
 
 #[cfg(all(test, feature = "cache"))]
 mod tests {
-    use crate::model::{test_id, ChannelType};
+    use crate::model::{test_id, ChannelType, StageInstancePrivacyLevel};
     use crate::model::{ChannelId, GuildId, MessageId, UserId};
     use std::sync::Arc;
     use std::time::Duration;
@@ -3228,7 +3228,7 @@ mod tests {
                     guild_id,
                     channel_id: test_id(11),
                     topic: format!("stage-{id}"),
-                    privacy_level: 2,
+                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                     ..StageInstance::fixture()
                 })
                 .await;
@@ -3276,7 +3276,7 @@ mod tests {
                 guild_id,
                 channel_id: test_id(50),
                 topic: "stage".to_string(),
-                privacy_level: 2,
+                privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                 ..StageInstance::fixture()
             })
             .await;

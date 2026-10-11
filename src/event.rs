@@ -2,11 +2,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::model::{
-    Activity, ApplicationCommandPermission, ApplicationId, AuditLogEntry, AuditLogEntryId,
-    AutoModerationAction, AutoModerationRuleId, AutoModerationTriggerMetadata, Channel, ChannelId,
-    ClientStatus, CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
-    GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, Member, Message,
-    MessageId, PollAnswerId, Presence, ReactionType, Role, RoleId, ScheduledEventId,
+    Activity, ApplicationCommandPermission, ApplicationId, AuditLogActionType, AuditLogEntry,
+    AuditLogEntryId, AutoModerationAction, AutoModerationEventType, AutoModerationRuleId,
+    AutoModerationTriggerMetadata, AutoModerationTriggerType, Channel, ChannelId, ClientStatus,
+    CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
+    GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, InviteTargetType,
+    Member, Message, MessageId, PollAnswerId, Presence, ReactionType, Role, RoleId,
+    ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel, ScheduledEventStatus,
     SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User,
     UserId, VoiceServerUpdate, VoiceState,
 };
@@ -297,8 +299,8 @@ pub struct InviteEvent {
     pub temporary: Option<bool>,
     pub created_at: Option<String>,
     pub expires_at: Option<String>,
-    /// Target type for voice-channel invites (1 = stream, 2 = embedded app).
-    pub target_type: Option<u64>,
+    /// Target type for voice-channel invites (stream or embedded app).
+    pub target_type: Option<InviteTargetType>,
     pub target_user: Option<User>,
     pub raw: Value,
 }
@@ -456,9 +458,9 @@ pub struct ScheduledEvent {
     pub description: Option<String>,
     pub scheduled_start_time: Option<String>,
     pub scheduled_end_time: Option<String>,
-    pub privacy_level: Option<u64>,
-    pub status: Option<u64>,
-    pub entity_type: Option<u64>,
+    pub privacy_level: Option<ScheduledEventPrivacyLevel>,
+    pub status: Option<ScheduledEventStatus>,
+    pub entity_type: Option<ScheduledEventEntityType>,
     /// See [`GuildScheduledEvent::entity_id`](crate::model::GuildScheduledEvent::entity_id).
     pub entity_id: Option<GenericId>,
     pub entity_metadata: Option<GuildScheduledEventEntityMetadata>,
@@ -579,8 +581,8 @@ pub struct AutoModerationEvent {
     pub guild_id: Option<GuildId>,
     pub name: Option<String>,
     pub creator_id: Option<UserId>,
-    pub event_type: Option<u64>,
-    pub trigger_type: Option<u64>,
+    pub event_type: Option<AutoModerationEventType>,
+    pub trigger_type: Option<AutoModerationTriggerType>,
     pub trigger_metadata: Option<AutoModerationTriggerMetadata>,
     pub actions: Vec<AutoModerationAction>,
     pub enabled: Option<bool>,
@@ -589,7 +591,7 @@ pub struct AutoModerationEvent {
     /// The action that was executed (AUTO_MODERATION_ACTION_EXECUTION only).
     pub action: Option<AutoModerationAction>,
     pub rule_id: Option<AutoModerationRuleId>,
-    pub rule_trigger_type: Option<u64>,
+    pub rule_trigger_type: Option<AutoModerationTriggerType>,
     pub user_id: Option<UserId>,
     pub channel_id: Option<ChannelId>,
     pub message_id: Option<MessageId>,
@@ -609,7 +611,7 @@ pub struct AuditLogEntryEvent {
     pub user_id: Option<UserId>,
     /// See [`AuditLogEntry::target_id`](crate::model::AuditLogEntry::target_id).
     pub target_id: Option<GenericId>,
-    pub action_type: Option<u64>,
+    pub action_type: Option<AuditLogActionType>,
     pub changes: Option<Vec<Value>>,
     pub options: Option<Value>,
     pub reason: Option<String>,

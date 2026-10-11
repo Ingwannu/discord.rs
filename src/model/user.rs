@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{GuildId, SkuId, UserId};
+use super::{ConnectionVisibility, GuildId, SkuId, UserId, UserPremiumType};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's avatar decoration.
@@ -81,7 +81,7 @@ pub struct User {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub premium_type: Option<u8>,
+    pub premium_type: Option<UserPremiumType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_flags: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,8 +106,9 @@ pub struct ModifyCurrentUser {
     pub banner: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// OAuth2 connection attached to the current user.
+/// OAuth2 connection attached to the current user. No `Default`: `id`,
+/// `name`, `type`, and `visibility` are required.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserConnection {
     /// Provider account ID.
     pub id: String,
@@ -134,9 +135,9 @@ pub struct UserConnection {
     /// Whether the connection has a matching third-party OAuth2 token.
     #[serde(default)]
     pub two_way_link: bool,
-    /// Discord visibility setting for the connection.
-    #[serde(default)]
-    pub visibility: u8,
+    /// Who can see the connection (required; 2.x read a missing value as
+    /// `0`).
+    pub visibility: ConnectionVisibility,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]

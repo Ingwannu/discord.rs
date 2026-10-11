@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationCommand, AuditLogEntryId, AutoModerationRule, Channel, GenericId,
-    GuildScheduledEvent, Integration, User, UserId, Webhook,
+    ApplicationCommand, AuditLogActionType, AuditLogEntryId, AutoModerationRule, Channel,
+    GenericId, GuildScheduledEvent, Integration, User, UserId, Webhook,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -21,7 +21,7 @@ pub struct AuditLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_id: Option<GenericId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub action_type: Option<u64>,
+    pub action_type: Option<AuditLogActionType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<serde_json::Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -55,7 +55,7 @@ pub struct AuditLog {
 /// Typed Discord API object for `AuditLogQuery`.
 pub struct AuditLogQuery {
     pub user_id: Option<UserId>,
-    pub action_type: Option<u64>,
+    pub action_type: Option<AuditLogActionType>,
     pub before: Option<AuditLogEntryId>,
     pub after: Option<AuditLogEntryId>,
     pub limit: Option<u64>,

@@ -441,9 +441,9 @@ fn decode_scheduled_event(data: Value) -> Result<ScheduledEvent, DiscordError> {
         description: read_optional_string(&data, "description"),
         scheduled_start_time: read_optional_string(&data, "scheduled_start_time"),
         scheduled_end_time: read_optional_string(&data, "scheduled_end_time"),
-        privacy_level: read_optional_u64(&data, "privacy_level"),
-        status: read_optional_u64(&data, "status"),
-        entity_type: read_optional_u64(&data, "entity_type"),
+        privacy_level: read_optional_discriminant(&data, "privacy_level"),
+        status: read_optional_discriminant(&data, "status"),
+        entity_type: read_optional_discriminant(&data, "entity_type"),
         entity_id: read_optional_snowflake(&data, "entity_id"),
         entity_metadata: data
             .get("entity_metadata")
@@ -661,7 +661,7 @@ fn decode_invite_event(data: Value) -> InviteEvent {
         temporary: data.get("temporary").and_then(Value::as_bool),
         created_at: read_optional_string(&data, "created_at"),
         expires_at: read_optional_string(&data, "expires_at"),
-        target_type: read_optional_u64(&data, "target_type"),
+        target_type: read_optional_discriminant(&data, "target_type"),
         target_user: data
             .get("target_user")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
@@ -675,8 +675,8 @@ fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
         guild_id: read_optional_snowflake(&data, "guild_id"),
         name: read_optional_string(&data, "name"),
         creator_id: read_optional_snowflake(&data, "creator_id"),
-        event_type: read_optional_u64(&data, "event_type"),
-        trigger_type: read_optional_u64(&data, "trigger_type"),
+        event_type: read_optional_discriminant(&data, "event_type"),
+        trigger_type: read_optional_discriminant(&data, "trigger_type"),
         trigger_metadata: data
             .get("trigger_metadata")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
@@ -697,7 +697,7 @@ fn decode_auto_moderation_event(data: Value) -> AutoModerationEvent {
             .get("action")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),
         rule_id: read_optional_snowflake(&data, "rule_id"),
-        rule_trigger_type: read_optional_u64(&data, "rule_trigger_type"),
+        rule_trigger_type: read_optional_discriminant(&data, "rule_trigger_type"),
         user_id: read_optional_snowflake(&data, "user_id"),
         channel_id: read_optional_snowflake(&data, "channel_id"),
         message_id: read_optional_snowflake(&data, "message_id"),
@@ -716,7 +716,7 @@ fn decode_audit_log_entry_event(data: Value) -> AuditLogEntryEvent {
         id: read_optional_snowflake(&data, "id"),
         user_id: read_optional_snowflake(&data, "user_id"),
         target_id: read_optional_snowflake(&data, "target_id"),
-        action_type: read_optional_u64(&data, "action_type"),
+        action_type: read_optional_discriminant(&data, "action_type"),
         changes: data
             .get("changes")
             .and_then(|v| serde_json::from_value(v.clone()).ok()),

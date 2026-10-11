@@ -265,7 +265,7 @@ pub(crate) fn audit_log_query(query: &AuditLogQuery) -> String {
         params.push(format!("user_id={user_id}"));
     }
     if let Some(action_type) = query.action_type {
-        params.push(format!("action_type={action_type}"));
+        params.push(format!("action_type={}", action_type.get()));
     }
     if let Some(before) = &query.before {
         params.push(format!("before={before}"));

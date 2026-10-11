@@ -2,15 +2,17 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ApplicationId, ChannelId, GuildId, WebhookId};
+use super::{ApplicationId, ChannelId, GuildId, WebhookId, WebhookType};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Webhook`.
 pub struct Webhook {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<WebhookId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    /// Webhook type. Read from and written as `type` (2.x used the field
+    /// name `kind` on the wire, so Discord's value was never decoded).
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<WebhookType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
     #[serde(skip_serializing_if = "Option::is_none")]

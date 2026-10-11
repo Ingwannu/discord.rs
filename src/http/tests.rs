@@ -1,6 +1,7 @@
 use crate::model::{
-    test_id, ChannelType, CommandType, InteractionResponseType, MfaLevel, OverwriteType,
-    RoleConnectionMetadataType,
+    test_id, AuditLogActionType, ChannelType, CommandType, InteractionResponseType, MfaLevel,
+    OverwriteType, RoleConnectionMetadataType, ScheduledEventStatus, SkuAccessType,
+    StageInstancePrivacyLevel,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -1354,7 +1355,7 @@ fn new_coverage_query_helpers_build_expected_paths() {
     assert_eq!(
         audit_log_query(&AuditLogQuery {
             user_id: Some(test_id(50)),
-            action_type: Some(192),
+            action_type: Some(AuditLogActionType::VOICE_CHANNEL_STATUS_CREATE),
             before: Some(test_id(60)),
             after: Some(test_id(55)),
             limit: Some(25),
@@ -2186,7 +2187,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
             test_id(200),
             &AuditLogQuery {
                 user_id: Some(test_id(901)),
-                action_type: Some(192),
+                action_type: Some(AuditLogActionType::VOICE_CHANNEL_STATUS_CREATE),
                 before: Some(test_id(950)),
                 after: Some(test_id(850)),
                 limit: Some(25),
@@ -4263,7 +4264,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .create_stage_instance_from_request(&CreateStageInstance {
                 channel_id: test_id(400),
                 topic: "town hall".to_string(),
-                privacy_level: Some(2),
+                privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
                 send_start_notification: Some(true),
                 guild_scheduled_event_id: Some(test_id(500)),
             })
@@ -4282,13 +4283,13 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
             .modify_stage_instance_from_request(
                 test_id(400),
                 &ModifyStageInstance {
-                    privacy_level: Some(2),
+                    privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
                 },
             )
             .await
             .unwrap()
             .privacy_level,
-        2
+        StageInstancePrivacyLevel::GUILD_ONLY
     );
     client.delete_stage_instance(test_id(400)).await.unwrap();
     assert_eq!(
@@ -4651,7 +4652,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
             .await
             .unwrap()
             .status,
-        1
+        ScheduledEventStatus::SCHEDULED
     );
     assert_eq!(
         client
@@ -4791,7 +4792,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
 
     let sku = client.get_skus().await.unwrap().remove(0);
     assert_eq!(sku.slug, "premium");
-    assert_eq!(sku.access_type, Some(1));
+    assert_eq!(sku.access_type, Some(SkuAccessType::new(1)));
     assert_eq!(sku.premium, Some(false));
     assert_eq!(sku.show_age_gate, Some(false));
     assert!(sku.features.is_empty());

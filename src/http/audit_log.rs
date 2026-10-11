@@ -4,7 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
-use crate::model::{AuditLog, AuditLogEntryId, AuditLogQuery, GuildId, UserId};
+use crate::model::{AuditLog, AuditLogActionType, AuditLogEntryId, AuditLogQuery, GuildId, UserId};
 
 use super::paths::audit_log_query;
 use super::RestClient;
@@ -19,7 +19,7 @@ impl RestClient {
         &self,
         guild_id: GuildId,
         user_id: Option<UserId>,
-        action_type: Option<u64>,
+        action_type: Option<AuditLogActionType>,
         before: Option<AuditLogEntryId>,
         limit: Option<u64>,
     ) -> Result<serde_json::Value, DiscordError> {

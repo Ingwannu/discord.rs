@@ -3,8 +3,10 @@
 //! Persisted models with a required ID have no `Default` in 3.0 (no sentinel
 //! IDs, docs/design/3.0-types-events-requests.md §1 "Default"), but tests
 //! still want "a message with these three fields set". `T::fixture()` fills
-//! the required IDs with [`FIXTURE_ID`] and everything else with what
-//! `Default` used to give (empty strings, zero, `None`), so tests read as
+//! the required IDs with [`FIXTURE_ID`], required discriminants with a
+//! documented value (the 2.x `0` is not one for most of them), and
+//! everything else with what `Default` used to give (empty strings, zero,
+//! `None`), so tests read as
 //! `Message { id: test_id(5), ..Message::fixture() }`.
 //!
 //! The JSON-backed fixtures deserialize a minimal payload instead of listing
@@ -20,7 +22,8 @@ use super::{
     CommandInteractionData, CommandInteractionOption, ComponentInteraction,
     ComponentInteractionData, Entitlement, ForumTag, Guild, Id, IdMarker, Integration,
     InteractionContextData, InteractionResponseState, Message, MessageContextMenuInteraction, Role,
-    SoundboardSound, StageInstance, Sticker, Subscription, User, UserContextMenuInteraction,
+    SoundboardSound, StageInstance, Sticker, StickerType, Subscription, SubscriptionStatus, User,
+    UserContextMenuInteraction,
 };
 
 /// Placeholder for required IDs a test did not set. Large and distinctive
@@ -75,7 +78,7 @@ impl StageInstance {
             "guild_id": FIXTURE_ID,
             "channel_id": FIXTURE_ID,
             "topic": "",
-            "privacy_level": 0,
+            "privacy_level": 2,
         }))
     }
 }
@@ -88,7 +91,7 @@ impl SoundboardSound {
 
 impl Sticker {
     pub(crate) fn fixture() -> Self {
-        from_json(json!({ "id": FIXTURE_ID, "name": "", "type": 0, "format_type": 0 }))
+        from_json(json!({ "id": FIXTURE_ID, "name": "", "type": 2, "format_type": 1 }))
     }
 }
 
@@ -116,7 +119,7 @@ impl Entitlement {
             "id": FIXTURE_ID,
             "sku_id": FIXTURE_ID,
             "application_id": FIXTURE_ID,
-            "type": 0,
+            "type": 1,
             "deleted": false,
         }))
     }
@@ -228,9 +231,9 @@ fn every_fixture_builds() {
     assert_eq!(Guild::fixture().name, "");
     assert_eq!(StageInstance::fixture().topic, "");
     assert_eq!(SoundboardSound::fixture().sound_id.get(), FIXTURE_ID);
-    assert_eq!(Sticker::fixture().kind, 0);
+    assert_eq!(Sticker::fixture().kind, StickerType::GUILD);
     assert_eq!(Attachment::fixture().filename, "");
-    assert_eq!(Subscription::fixture().status, 0);
+    assert_eq!(Subscription::fixture().status, SubscriptionStatus::ACTIVE);
     assert!(!Entitlement::fixture().deleted);
     assert_eq!(Integration::fixture().kind, "");
     assert_eq!(ForumTag::fixture().name, "");

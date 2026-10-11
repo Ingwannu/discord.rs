@@ -1,4 +1,7 @@
-use crate::model::{test_id, ChannelType};
+use crate::model::{
+    test_id, AutoModerationActionType, ChannelType, EntitlementType, StageInstancePrivacyLevel,
+    SubscriptionStatus,
+};
 use serde_json::{json, Value};
 
 use super::*;
@@ -507,8 +510,8 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
                 event.scheduled_start_time.as_deref(),
                 Some("2026-04-30T01:00:00Z")
             );
-            assert_eq!(event.status, Some(1));
-            assert_eq!(event.entity_type, Some(2));
+            assert_eq!(event.status, Some(ScheduledEventStatus::SCHEDULED));
+            assert_eq!(event.entity_type, Some(ScheduledEventEntityType::VOICE));
             assert_eq!(event.entity_id, Some(snowflake("704")));
             assert_eq!(
                 event
@@ -546,15 +549,21 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
             assert_eq!(event.guild_id, Some(snowflake("711")));
             assert_eq!(event.name.as_deref(), Some("Keyword Filter"));
             assert_eq!(event.creator_id, Some(snowflake("712")));
-            assert_eq!(event.event_type, Some(1));
-            assert_eq!(event.trigger_type, Some(1));
+            assert_eq!(
+                event.event_type,
+                Some(AutoModerationEventType::MESSAGE_SEND)
+            );
+            assert_eq!(event.trigger_type, Some(AutoModerationTriggerType::KEYWORD));
             let trigger_metadata = event
                 .trigger_metadata
                 .as_ref()
                 .expect("trigger metadata should decode");
             assert_eq!(trigger_metadata.keyword_filter, vec!["bad".to_string()]);
             assert_eq!(event.actions.len(), 1);
-            assert_eq!(event.actions[0].kind, 1);
+            assert_eq!(
+                event.actions[0].kind,
+                AutoModerationActionType::BLOCK_MESSAGE
+            );
             assert_eq!(event.enabled, Some(true));
             assert_eq!(event.exempt_roles, vec![snowflake("713")]);
             assert_eq!(event.exempt_channels, vec![snowflake("714")]);
@@ -583,13 +592,16 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
         Event::AutoModerationActionExecution(event) => {
             assert_eq!(event.guild_id, Some(snowflake("720")));
             let action = event.action.as_ref().expect("action should decode");
-            assert_eq!(action.kind, 2);
+            assert_eq!(action.kind, AutoModerationActionType::SEND_ALERT_MESSAGE);
             assert_eq!(
                 action.metadata.as_ref().and_then(|m| m.channel_id),
                 Some(snowflake("721"))
             );
             assert_eq!(event.rule_id, Some(snowflake("722")));
-            assert_eq!(event.rule_trigger_type, Some(1));
+            assert_eq!(
+                event.rule_trigger_type,
+                Some(AutoModerationTriggerType::KEYWORD)
+            );
             assert_eq!(event.user_id, Some(snowflake("723")));
             assert_eq!(event.channel_id, Some(snowflake("724")));
             assert_eq!(event.message_id, Some(snowflake("725")));
@@ -621,7 +633,7 @@ fn decode_event_exposes_common_fields_for_newer_gateway_payloads() {
             assert_eq!(event.id, Some(snowflake("731")));
             assert_eq!(event.user_id, Some(snowflake("732")));
             assert_eq!(event.target_id, Some(snowflake("733")));
-            assert_eq!(event.action_type, Some(22));
+            assert_eq!(event.action_type, Some(AuditLogActionType::MEMBER_BAN_ADD));
             assert_eq!(
                 event.changes,
                 Some(vec![json!({ "key": "nick", "new_value": "new" })])
@@ -1645,7 +1657,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     id: snowflake("930"),
                     sku_id: snowflake("931"),
                     application_id: snowflake("932"),
-                    kind: 8,
+                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
                     deleted: false,
                     ..Entitlement::fixture()
                 },
@@ -1660,7 +1672,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     user_id: snowflake("941"),
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: 0,
+                    status: SubscriptionStatus::ACTIVE,
                     ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_CREATE"),
@@ -1735,7 +1747,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     id: snowflake("939"),
                     sku_id: snowflake("940"),
                     application_id: snowflake("941"),
-                    kind: 8,
+                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
                     deleted: false,
                     ..Entitlement::fixture()
                 },
@@ -1749,7 +1761,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     id: snowflake("942"),
                     sku_id: snowflake("943"),
                     application_id: snowflake("944"),
-                    kind: 8,
+                    kind: EntitlementType::APPLICATION_SUBSCRIPTION,
                     deleted: true,
                     ..Entitlement::fixture()
                 },
@@ -1764,7 +1776,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     user_id: snowflake("946"),
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: 1,
+                    status: SubscriptionStatus::INACTIVE,
                     ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_UPDATE"),
@@ -1778,7 +1790,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     user_id: snowflake("948"),
                     current_period_start: "2026-04-01T00:00:00Z".to_string(),
                     current_period_end: "2026-05-01T00:00:00Z".to_string(),
-                    status: 2,
+                    status: SubscriptionStatus::ENDING,
                     ..Subscription::fixture()
                 },
                 raw: raw("SUBSCRIPTION_DELETE"),
@@ -2034,7 +2046,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     guild_id: snowflake("136"),
                     channel_id: snowflake("137"),
                     topic: "updated".to_string(),
-                    privacy_level: 2,
+                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                     ..StageInstance::fixture()
                 },
                 raw: raw("STAGE_INSTANCE_UPDATE"),
@@ -2048,7 +2060,7 @@ fn event_kind_and_raw_cover_missing_variants() {
                     guild_id: snowflake("139"),
                     channel_id: snowflake("140"),
                     topic: "deleted".to_string(),
-                    privacy_level: 2,
+                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                     ..StageInstance::fixture()
                 },
                 raw: raw("STAGE_INSTANCE_DELETE"),
@@ -2229,7 +2241,7 @@ fn decode_event_handles_entitlement_and_soundboard_events() {
     match subscription {
         Event::SubscriptionUpdate(event) => {
             assert_eq!(event.subscription.id.get(), 30);
-            assert_eq!(event.subscription.status, 1);
+            assert_eq!(event.subscription.status, SubscriptionStatus::INACTIVE);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -2595,7 +2607,7 @@ fn invite_create_decodes_full_typed_fields() {
             assert_eq!(invite.temporary, Some(true));
             assert_eq!(invite.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
             assert_eq!(invite.expires_at.as_deref(), Some("2026-01-01T01:00:00Z"));
-            assert_eq!(invite.target_type, Some(1));
+            assert_eq!(invite.target_type, Some(InviteTargetType::STREAM));
             assert_eq!(
                 invite.target_user.as_ref().map(|user| user.id),
                 Some(snowflake("303"))

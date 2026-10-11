@@ -11,21 +11,22 @@ use super::{
     ComponentInteraction, ComponentInteractionData, ComponentType, CreateChannelInvite,
     CreateDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker,
     CreateMessage, CreatePoll, CreateStageInstance, CreateWebhook, DefaultReaction, DiscordModel,
-    Embed, EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId,
-    GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
+    Embed, EmbedField, Entitlement, EntitlementType, ForumTag, GatewayBot, GenericId, Guild,
+    GuildId, GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
     InteractionCallbackResponse, InteractionContextData, InteractionResponseType, InteractionType,
-    Invite, InviteTargetUsersJobStatus, Member, Message, MessageComponent,
-    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
-    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
-    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteType,
-    PermissionOverwrite, PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount,
-    PollAnswerId, PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
-    ResolvedData, Role, RoleColors, SeparatorSpacing, SessionStartLimit, Sku, StickerItem,
-    Subscription, ThreadListResponse, ThreadMember, ThreadMetadata, User,
-    UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
-    WelcomeScreenChannel,
+    Invite, InviteTargetUsersJobStatus, InviteTargetUsersJobStatusType, InviteType, Member,
+    Message, MessageComponent, MessageContextMenuInteraction, MessageReferenceType,
+    ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
+    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
+    ModifyWebhookWithToken, OverwriteType, PermissionOverwrite, PermissionsBitField,
+    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollLayoutType,
+    PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SeparatorSpacing,
+    SessionStartLimit, Sku, SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType,
+    StickerItem, Subscription, SubscriptionStatus, ThreadListResponse, ThreadMember,
+    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
+    WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
@@ -642,8 +643,8 @@ fn monetization_poll_and_thread_response_models_decode() {
         "show_age_gate": false
     }))
     .unwrap();
-    assert_eq!(sku.kind, 5);
-    assert_eq!(sku.access_type, Some(1));
+    assert_eq!(sku.kind, SkuType::SUBSCRIPTION);
+    assert_eq!(sku.access_type, Some(SkuAccessType::new(1)));
     assert_eq!(sku.premium, Some(false));
     assert_eq!(sku.show_age_gate, Some(false));
     assert!(sku.features.is_empty());
@@ -664,7 +665,7 @@ fn monetization_poll_and_thread_response_models_decode() {
         "subscription_id": "1019653835926409216"
     }))
     .unwrap();
-    assert_eq!(entitlement.kind, 8);
+    assert_eq!(entitlement.kind, EntitlementType::APPLICATION_SUBSCRIPTION);
     assert_eq!(entitlement.gift_code_flags, Some(0));
     assert_eq!(
         entitlement.subscription_id.map(u64::from),
@@ -684,7 +685,7 @@ fn monetization_poll_and_thread_response_models_decode() {
     }))
     .unwrap();
     assert_eq!(subscription.sku_ids[0].get(), 1158857122189168803);
-    assert_eq!(subscription.status, 0);
+    assert_eq!(subscription.status, SubscriptionStatus::ACTIVE);
 
     let voters: PollAnswerVoters = serde_json::from_value(json!({
         "users": [{ "id": "42", "username": "voter" }]
@@ -1076,10 +1077,10 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
     let sticker = StickerItem {
         id: test_id(654),
         name: "party".to_string(),
-        kind: Some(1),
+        kind: Some(StickerFormatType::PNG),
     };
     let invite = Invite {
-        kind: Some(0),
+        kind: Some(InviteType::GUILD),
         code: Some("abc".to_string()),
         approximate_member_count: Some(42),
         roles: vec![Role {
@@ -1094,7 +1095,7 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
         ..CreateChannelInvite::default()
     };
     let invite_job = InviteTargetUsersJobStatus {
-        status: 1,
+        status: InviteTargetUsersJobStatusType::PROCESSING,
         total_users: 100,
         processed_users: 41,
         created_at: "2025-01-08T12:00:00.000000+00:00".to_string(),
@@ -1160,7 +1161,7 @@ fn stage_instance_request_bodies_keep_wire_shape() {
     let create = CreateStageInstance {
         channel_id: test_id(400),
         topic: "town hall".to_string(),
-        privacy_level: Some(2),
+        privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
         send_start_notification: Some(true),
         guild_scheduled_event_id: Some(test_id(500)),
     };
@@ -1176,7 +1177,7 @@ fn stage_instance_request_bodies_keep_wire_shape() {
     );
 
     let modify = ModifyStageInstance {
-        privacy_level: Some(2),
+        privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
     };
     assert_eq!(
         serde_json::to_value(&modify).unwrap(),

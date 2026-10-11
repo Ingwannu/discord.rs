@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AutoModerationRuleId, ChannelId, GuildId, RoleId, User, UserId};
+use super::{
+    AutoModerationActionType, AutoModerationEventType, AutoModerationRuleId,
+    AutoModerationTriggerType, ChannelId, GuildId, KeywordPresetType, RoleId, User, UserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `BulkGuildBanRequest`.
@@ -39,8 +42,8 @@ pub struct AutoModerationRule {
     pub guild_id: GuildId,
     pub name: String,
     pub creator_id: UserId,
-    pub event_type: u8,
-    pub trigger_type: u8,
+    pub event_type: AutoModerationEventType,
+    pub trigger_type: AutoModerationTriggerType,
     #[serde(default)]
     pub trigger_metadata: AutoModerationTriggerMetadata,
     #[serde(default)]
@@ -61,7 +64,7 @@ pub struct AutoModerationTriggerMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regex_patterns: Option<Vec<String>>,
     #[serde(default)]
-    pub presets: Vec<u8>,
+    pub presets: Vec<KeywordPresetType>,
     #[serde(default)]
     pub allow_list: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,11 +73,12 @@ pub struct AutoModerationTriggerMetadata {
     pub mention_raid_protection_enabled: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `AutoModerationAction`.
+/// An auto moderation action. No `Default`: `type` is required and has no
+/// default.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AutoModerationAction {
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: AutoModerationActionType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<AutoModerationActionMetadata>,
 }

@@ -1,4 +1,7 @@
-use crate::model::{test_id, ChannelType, ComponentType, MessageType};
+use crate::model::{
+    test_id, ChannelType, ComponentType, MessageType, StageInstancePrivacyLevel, StickerFormatType,
+    StickerType,
+};
 use std::sync::Arc;
 #[cfg(feature = "sharding")]
 use std::sync::Mutex as StdMutex;
@@ -494,8 +497,8 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
             stickers: vec![Sticker {
                 id: sticker_id,
                 name: "ship".to_string(),
-                kind: 1,
-                format_type: 1,
+                kind: StickerType::STANDARD,
+                format_type: StickerFormatType::PNG,
                 guild_id: Some(guild_id),
                 ..Sticker::fixture()
             }],
@@ -539,7 +542,7 @@ async fn apply_cache_updates_tracks_guild_metadata_events() {
                 guild_id,
                 channel_id: stage_channel_id,
                 topic: "live".to_string(),
-                privacy_level: 2,
+                privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
                 ..StageInstance::fixture()
             },
             raw: json!({}),

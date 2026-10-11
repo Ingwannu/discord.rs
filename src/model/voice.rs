@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, GuildId, Member, ScheduledEventId, StageInstanceId, UserId};
+use super::{
+    ChannelId, GuildId, Member, ScheduledEventId, StageInstanceId, StageInstancePrivacyLevel,
+    UserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `VoiceState`.
@@ -93,7 +96,7 @@ pub struct StageInstance {
     pub guild_id: GuildId,
     pub channel_id: ChannelId,
     pub topic: String,
-    pub privacy_level: u8,
+    pub privacy_level: StageInstancePrivacyLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub discoverable_disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,7 +109,7 @@ pub struct CreateStageInstance {
     pub channel_id: ChannelId,
     pub topic: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub privacy_level: Option<u8>,
+    pub privacy_level: Option<StageInstancePrivacyLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub send_start_notification: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,5 +133,5 @@ impl CreateStageInstance {
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct ModifyStageInstance {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub privacy_level: Option<u8>,
+    pub privacy_level: Option<StageInstancePrivacyLevel>,
 }

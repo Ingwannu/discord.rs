@@ -2,13 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{ApplicationId, Role, RoleId, User, UserId};
+use super::{
+    ApplicationId, InviteTargetType, InviteTargetUsersJobStatusType, InviteType, Role, RoleId,
+    User, UserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Invite`.
 pub struct Invite {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<InviteType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -18,7 +21,7 @@ pub struct Invite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inviter: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_type: Option<u8>,
+    pub target_type: Option<InviteTargetType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user: Option<User>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,7 +62,7 @@ pub struct CreateChannelInvite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unique: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_type: Option<u8>,
+    pub target_type: Option<InviteTargetType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user_id: Option<UserId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,10 +82,11 @@ pub struct InviteTargetUserIds {
     pub user_ids: Vec<UserId>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-/// Typed Discord API object for `InviteTargetUsersJobStatus`.
+/// Progress of an invite target-users job. No `Default`: every field but
+/// the completion details is required.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InviteTargetUsersJobStatus {
-    pub status: u8,
+    pub status: InviteTargetUsersJobStatusType,
     pub total_users: u64,
     pub processed_users: u64,
     pub created_at: String,

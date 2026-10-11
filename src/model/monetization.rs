@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationId, EntitlementId, EntitlementOwnerType, GenericId, GuildId, PromotionId, SkuId,
-    SubscriptionId, UserId,
+    ApplicationId, EntitlementId, EntitlementOwnerType, EntitlementType, GenericId, GuildId,
+    PromotionId, SkuAccessType, SkuId, SkuType, SubscriptionId, SubscriptionStatus, UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12,7 +12,7 @@ use super::{
 pub struct Sku {
     pub id: SkuId,
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: SkuType,
     pub application_id: ApplicationId,
     pub name: String,
     pub slug: String,
@@ -22,7 +22,7 @@ pub struct Sku {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_labels: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_type: Option<u8>,
+    pub access_type: Option<SkuAccessType>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,7 +44,7 @@ pub struct Entitlement {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub promotion_id: Option<PromotionId>,
     #[serde(rename = "type")]
-    pub kind: u8,
+    pub kind: EntitlementType,
     pub deleted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gift_code_flags: Option<u64>,
@@ -198,7 +198,7 @@ pub struct Subscription {
     pub renewal_sku_ids: Option<Vec<SkuId>>,
     pub current_period_start: String,
     pub current_period_end: String,
-    pub status: u8,
+    pub status: SubscriptionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canceled_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
