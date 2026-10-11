@@ -8286,3 +8286,40 @@ async fn lobby_message_limit_is_checked_locally() {
             .is_err());
     }
 }
+
+#[tokio::test]
+async fn overwrite_edits_reject_a_body_type_that_contradicts_the_target() {
+    // Port 9 (discard) is never contacted: the mismatch is caught first.
+    let client = RestClient::new_with_base_url("overwrite-token", 123, "http://127.0.0.1:9");
+    let role_body = EditChannelPermission::for_target(OverwriteTarget::Role(test_id(300)));
+    let error = client
+        .edit_channel_permissions_typed(
+            test_id(100),
+            OverwriteTarget::Member(test_id(300)),
+            &role_body,
+        )
+        .await
+        .expect_err("a role body for a member target is rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("does not match the overwrite target type 1"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn rest_client_application_id_is_optional_and_shared_by_clones() {
+    let client = RestClient::new("app-token", None);
+    assert_eq!(client.application_id(), None);
+    let clone = client.clone();
+    client.set_application_id(test_id(77));
+    assert_eq!(clone.application_id(), Some(test_id(77)));
+    assert_eq!(
+        RestClient::builder("app-token", Some(test_id(5)))
+            .build()
+            .expect("default client")
+            .application_id(),
+        Some(test_id(5))
+    );
+}

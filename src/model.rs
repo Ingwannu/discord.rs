@@ -227,5 +227,8 @@ fn is_false(v: &bool) -> bool {
 }
 
 #[cfg(test)]
+#[path = "model/polymorphic_tests.rs"]
+mod polymorphic_tests;
+#[cfg(test)]
 #[path = "model/tests.rs"]
 mod tests;
