@@ -77,24 +77,26 @@ Common replacements:
 
 `Client` is the primary runtime entry point. `BotClient` remains as a compatibility alias.
 
-Prefer `EventHandler::handle_event(...)` when you want typed `Event` dispatch from a single match point. The legacy per-event convenience callbacks remain available for compatibility, and `ready`, `message_create`, and `interaction_create` now also receive typed payloads.
+Prefer `EventHandler::handle_event(...)` when you want one match point: it receives every event as the shared `Arc<Event>` (match on `event.kind()`; `event.metadata()` has the dispatch name, shard, sequence, and receive time). The per-event hooks receive the payload without copying it: `message_create` gets an `Arc<Message>`, `message_update` an `Arc<MessageUpdate>` (a partial message), member add/update an `Arc<Member>`, and most others a reference such as `&ReadyPayload` or `&Interaction`. See [Events and Handlers](discordrsdocs/docs/api/gateway.md#events-and-handlers-30) for the full table and the migration from the 2.x `Event` enum.
 
 Since 3.0 the handler traits are implemented with plain `async fn` — delete `#[async_trait]` from existing impls (before/after in the [Gateway API docs](discordrsdocs/docs/api/gateway.md#implementing-handlers-without-async_trait)). The futures must be `Send`, because handlers run on spawned Tokio tasks.
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use std::sync::Arc;
+
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler, EventKind};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => {
-                println!("READY: {}", ready.data.user.username);
+    async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => {
+                println!("READY: {}", ready.user.username);
                 println!("Shard: {:?}", ctx.shard_pair());
             }
-            Event::MessageCreate(message) => {
-                println!("MESSAGE_CREATE: {}", message.message.content);
+            EventKind::MessageCreate(message) => {
+                println!("MESSAGE_CREATE: {}", message.content);
             }
             _ => {}
         }
@@ -870,22 +872,19 @@ Other helpers: `message.edit/edit_with/delete/unreact/unpin/crosspost`, `member.
 
 ```rust
 use discordrs::{
-    defer_interaction, followup_message, gateway_intents, Client, Context, Event, EventHandler,
-    MessageBuilder,
+    defer_interaction, followup_message, gateway_intents, Client, Context, EventHandler,
+    Interaction, MessageBuilder,
 };
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, ctx: Context, event: Event) {
-        if let Event::InteractionCreate(interaction) = event {
-            let interaction = interaction.interaction;
-            let interaction_ctx = interaction.context().clone();
-            let response = MessageBuilder::new().content("Working...").build();
+    async fn interaction_create(&self, ctx: Context, interaction: &Interaction) {
+        let interaction_ctx = interaction.context().clone();
+        let response = MessageBuilder::new().content("Working...").build();
 
-            let _ = defer_interaction(&ctx.http, &interaction_ctx, true).await;
-            let _ = followup_message(&ctx.http, &interaction_ctx, response, true).await;
-        }
+        let _ = defer_interaction(&ctx.http, &interaction_ctx, true).await;
+        let _ = followup_message(&ctx.http, &interaction_ctx, response, true).await;
     }
 }
 ```
@@ -903,14 +902,12 @@ The `discordrs::response::InteractionResponder` trait puts `reply`, `defer`, `ed
 
 ```rust
 use discordrs::response::{AutocompleteChoice, InteractionResponder};
-use discordrs::{Context, Event, Interaction, ModalBuilder, TextInputBuilder, TextInputStyle};
+use discordrs::{Context, Interaction, ModalBuilder, TextInputBuilder, TextInputStyle};
 
-async fn handle(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
-    let Event::InteractionCreate(event) = event else {
-        return Ok(());
-    };
-
-    match event.interaction {
+// `interaction` is the payload of `EventKind::InteractionCreate` (or the
+// `interaction_create` hook's argument), cloned where the arm keeps it.
+async fn handle(ctx: Context, interaction: Interaction) -> Result<(), discordrs::DiscordError> {
+    match interaction {
         Interaction::ChatInputCommand(command) => match command.data.name.as_deref() {
             // Initial reply (type 4). &str, String, MessageBuilder, and
             // CreateMessage all convert into the reply data.
@@ -1975,7 +1972,7 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 - Import `discordrs::response::InteractionResponder` wherever you call `interaction.reply(...)` and the other responder methods — they are trait methods and do not resolve without the import. The `model_ext` entity methods are inherent impls and need no import.
 - Double acknowledgements fail locally: the interaction response state is shared across clones, so a second `reply(...)` or an early `follow_up(...)` returns an "already acknowledged" error without hitting Discord.
 - Prefer `try_build()` over `build()` on builders when you want Discord's documented limits enforced before the HTTP call.
-- `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy callbacks such as `ready`, `message_create`, and `interaction_create` are still available for compatibility and now receive typed payloads.
+- `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>`; the per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive their payload without a copy (an `Arc` where the cache shares it, a reference otherwise).
 - `RestClient` is the preferred REST-facing name. `DiscordHttpClient` remains available.
 - Prefer the typed `RestClient` methods for new code.
 - Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and webhook/callback path segments are validated before requests are built.

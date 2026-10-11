@@ -123,8 +123,8 @@ python3 ci/perf_diff.py --gates ci/perf-gates.json --checkpoint B --strict targe
 ```
 
 - Each scenario prints a `perf-report: {json}` line, and the run is written to `target/perf-report.json` (`DISCORDRS_PERF_REPORT=path` overrides). `ci/perf_diff.py` (standard library only, tested in `ci/tests/test_perf_diff.py`) reads either form.
-- `inbound.*` replays the private pipeline steps with public API (`decode_event`, `CacheHandle`, `Event::clone`), step by step; `e2e.*` runs the real `Client` in a child process against a fake gateway in another, so its counts and RSS belong to the bot alone. In every event type the two differ by exactly the 3 allocations the handler lane adds, which is how the replica is checked against the private code. When you change `gateway/client.rs`, `gateway/bot/pipeline.rs`, `apply_cache_updates`, or collector publishing, update the matching step in `tests/perf_report/inbound.rs`.
-- Allocation counts, bytes, retained, and peak are deterministic for the replica, cache, fan-out, outbound, and storm scenarios (identical across runs and across rustc 1.97.1 and 1.99.0); times, RSS, and end-to-end numbers are not. Timed iterations run with counting switched off, because counting costs about 65 ns per allocation. The phase 4 gates have their own scenarios: `storm.guild_create_25` (live heap after 25 large guilds, journal and cache shares), `collectors.payload_copies` (extra copies 63 non-matching collectors cause), and `layout.size_of` (`Event` size, empty `CollectorHub` heap).
+- `inbound.*` replays the private pipeline steps with public API (a copy of the read loop's shallow envelope, `Event::decode`, `CacheHandle`, `Arc<Event>`), step by step; `e2e.*` runs the real `Client` in a child process against a fake gateway in another, so its counts and RSS belong to the bot alone. In every event type the two differ by exactly the 3 allocations the handler lane adds, which is how the replica is checked against the private code. When you change `gateway/client.rs`, `gateway/bot/pipeline.rs`, `apply_cache_updates`, or collector publishing, update the matching step in `tests/perf_report/inbound.rs`.
+- Allocation counts, bytes, retained, and peak are deterministic for the replica, cache, fan-out, outbound, and storm scenarios (identical across runs and across rustc 1.97.1 and 1.99.0); times, RSS, and end-to-end numbers are not. Timed iterations run with counting switched off, because counting costs about 65 ns per allocation. The phase 4 gates have their own scenarios: `storm.guild_create_25` (live heap after 25 large guilds, journal and cache shares), `collectors.payload_copies` (extra copies 63 non-matching collectors cause), and `layout.size_of` (`Event` and `EventKind` sizes, empty `CollectorHub` heap).
 - `perf_diff.py` filters (`--scenario`, `--metric`) also decide what can fail; `--strict` fails on changed inputs or fixtures (`meta.fixtures_digest`) and on missing scenarios or gate metrics; `--gates ci/perf-gates.json --checkpoint B|C` checks the phase 4 caps.
 - The non-blocking `perf-report` workflow runs the report for each PR and its base on the same runner and posts the comparison and gate status as the job summary; a deterministic regression over 2% is a warning, never a failure. Why it does not gate yet, and how it could, is in `docs/design/perf-baseline.md` §10.
 - The current baseline (`main` at `23775d1`, committed as `docs/design/perf/23775d1.json`), the earlier `706b7ae` one, the metric definitions, and the hot spots phase 4 targets are in `docs/design/perf-baseline.md`.
@@ -172,12 +172,19 @@ Rules for new code:
   `(response, body)` type pair, down from about 275. For a crate that calls 150 endpoints this
   was 2.6% less IR and a 2.6% smaller stripped release binary; its debug compile time did not
   change measurably.
-- **One deserializer for models.** Typed responses decode through `body::decode_json_body`, which
-  goes through `serde_json::Value`, the same deserializer the gateway's `decode_event` uses. Each
-  model's `Deserialize` impl is compiled once per deserializer type, so reading REST responses with
-  `from_slice::<T>` while the gateway reads `Value` compiled every shared model twice (measured
-  +300k IR lines, +5.4%, in the all-features lib test build). Move REST and gateway decoding to a
-  new deserializer in the same change (planned with step 4's `RawValue` envelopes).
+- **One deserializer for models (open since phase 4 B).** Each model's `Deserialize` impl is
+  compiled once per deserializer type. Typed REST responses decode through
+  `body::decode_json_body`, which goes through `serde_json::Value`; since phase 4 B the gateway
+  decodes every dispatch straight from its `d` text (`serde_json::from_str`, the `&str`
+  deserializer), so the models both paths read are compiled twice. Measured on the all-features lib
+  dev build with `cargo llvm-lines --lib --all-features`: 1,147,993 IR lines on main `23775d1`,
+  1,502,341 after phase 4 B (+354k, +30.9%): 308k lines of `&str` deserializer code (about 80k of
+  it for models REST still decodes through `Value`, about 133k for gateway-only payloads and their
+  wire structs, the rest serde_json internals), while `Value` deserializer code fell only from
+  161k to 137k. Moving `decode_json_body` (and the interaction parser) to the same `&str`
+  deserializer removes the duplicate copies; it changes REST error strings and duplicate-key
+  handling, which `decode_json_body_matches_the_previous_decoder_values_and_errors` pins, so it is
+  a separate decision (see the phase 4 B record in `docs/design/3.0-types-events-requests.md`).
 - **Erase long-lived task types.** `tokio::spawn::<F>` compiles its task harness four times per
   future type, about 9,000 IR lines. Spawn long-lived `()` tasks (one per player, track,
   connection, or child process) through `crate::task::spawn_erased`, which shares one instance.

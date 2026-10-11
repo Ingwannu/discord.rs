@@ -18,15 +18,13 @@ discordrs = { version = "2.2.0", features = ["gateway"] }
 Handlers are plain `async fn` in the impl (no `#[async_trait]` since 3.0); see [Gateway API](../api/gateway.md) for the `Send` rule and migration.
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use discordrs::{gateway_intents, Client, Context, EventHandler, ReadyPayload};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
-        if let Event::Ready(ready) = event {
-            println!("READY as {}", ready.data.user.username);
-        }
+    async fn ready(&self, _ctx: Context, ready: &ReadyPayload) {
+        println!("READY as {}", ready.user.username);
     }
 }
 

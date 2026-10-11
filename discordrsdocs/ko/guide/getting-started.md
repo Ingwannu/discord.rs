@@ -34,15 +34,13 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 핸들러는 impl 안의 일반 `async fn`으로 씁니다(3.0부터 `#[async_trait]` 불필요). `Send` 규칙과 마이그레이션은 [게이트웨이 API](../api/gateway.md)를 참고합니다.
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use discordrs::{gateway_intents, Client, Context, EventHandler, ReadyPayload};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
-        if let Event::Ready(ready) = event {
-            println!("READY as {}", ready.data.user.username);
-        }
+    async fn ready(&self, _ctx: Context, ready: &ReadyPayload) {
+        println!("READY as {}", ready.user.username);
     }
 }
 

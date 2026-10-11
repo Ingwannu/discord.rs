@@ -6,7 +6,7 @@ Gateway runtime is provided behind the `gateway` feature.
 
 - `Client`: high-level typed runtime surface for Gateway bots
 - `ClientBuilder`: runtime configuration + startup
-- `Event`: typed Gateway event enum
+- `Event`: one received dispatch, shared as `Arc<Event>`: its decoded `EventKind`, `EventMetadata`, and optional raw payload (see [Events and Handlers](#events-and-handlers-30))
 - `GatewayClient`: raw websocket lifecycle management (identify, heartbeat, resume, reconnect)
 - `Context`: shared runtime handles (`http`, cache, typemap, shard info)
 - `EventHandler`: handler trait with `handle_event(ctx, event)` and typed hooks, implemented with plain `async fn`
@@ -49,15 +49,17 @@ impl EventHandler for Handler {
 }
 ```
 
-After (3.0):
+After (3.0; since phase 4 the hook receives the shared `Arc<Message>`, see [Events and Handlers](#events-and-handlers-30)):
 
 ```rust
+use std::sync::Arc;
+
 use discordrs::{Context, EventHandler, Message};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn message_create(&self, _ctx: Context, message: Message) {
+    async fn message_create(&self, _ctx: Context, message: Arc<Message>) {
         println!("{}", message.content);
     }
 }
@@ -70,6 +72,81 @@ What else to know:
 - **No `dyn EventHandler` / `dyn CacheBackend`.** The traits are no longer object safe. `ClientBuilder::event_handler(handler)` still takes any handler by value. `ClientBuilder::cache_backend` now takes `Arc<B>` for a concrete backend type `B: CacheBackend` instead of `Arc<dyn CacheBackend>`; `.cache_backend(Arc::new(MyBackend::new()))` keeps compiling, while a variable typed `Arc<dyn CacheBackend>` must become `Arc<MyBackend>` (or a generic `Arc<B>`).
 - Default methods are unchanged: implement only the hooks you need. Overriding `handle_event` replaces the default routing to the typed hooks.
 - Internally the runtime boxes each handler call once, as async-trait did; the default `handle_event` routing now allocates once per event instead of twice.
+
+## Events and Handlers (3.0)
+
+Every dispatch is decoded once and reaches the cache, the collector hub, and your handler as one shared `Arc<Event>`; nothing on the way copies the payload.
+
+```rust
+use std::sync::Arc;
+
+use discordrs::{Context, Event, EventHandler, EventKind};
+
+struct Handler;
+
+impl EventHandler for Handler {
+    async fn handle_event(&self, _ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => println!("ready as {}", ready.user.username),
+            EventKind::MessageCreate(message) => println!("{}", message.content),
+            EventKind::Unknown => println!("new dispatch {}", event.name()),
+            _ => {}
+        }
+    }
+}
+```
+
+- `event.kind()` is the decoded `EventKind`: one variant per dispatch, plus `Unknown` (a dispatch this crate has no type for) and `DecodeFailed(EventDecodeError)` (a known dispatch whose payload did not match its type). Payloads the cache keeps as they are — `MessageCreate(Arc<Message>)`, `MessageUpdate(Arc<MessageUpdate>)`, and `MemberAdd` / `MemberUpdate` (`MemberEvent { guild_id, member: Arc<Member> }`) — are `Arc`s shared with the cache and an external cache backend; other large payloads are boxed; small id and delete events are stored inline. `size_of::<Event>()` is at most 192 bytes (2.x: 4,848), checked by a layout test.
+- `event.metadata()` (`EventMetadata`) holds the dispatch `name()`, the receiving `shard()`, the gateway `sequence()`, and `received_at()`, taken when the read loop received the frame (before any queue). `event.name()` is a shortcut for the name.
+- `event.raw()` is the original `d` JSON as `Option<&RawValue>`. Known events keep it only when the client is built with `ClientBuilder::keep_raw_events(true)` (default off: raw payloads made a MESSAGE_CREATE event five times larger); unknown dispatches and decode failures always keep it, so nothing Discord sends is lost. `Debug` for `Event` prints only the raw payload's length, because payloads can carry interaction tokens.
+- **GUILD_CREATE** decodes to `GuildCreate`: `guild` (`Arc<Guild>` with the GUILD_CREATE-only collections empty) plus `channels`, `threads`, `members: Vec<Arc<Member>>`, `presences: Vec<Arc<Presence>>`, `voice_states`, `emojis`, `stickers`, `stage_instances`, `soundboard_sounds`, and `guild_scheduled_events`. Every channel, thread, and voice state already has its `guild_id`, and every presence its `user_id`. The cache stores the same `Arc`s. `to_guild()` rebuilds the 2.x `Guild` if you need it.
+- **MESSAGE_UPDATE** decodes to `MessageUpdate`, a partial message: every mutable field is a `Patch<T>` (fields that are `T` on `Message`) or `NullablePatch<T>` (fields that are `Option<T>`). An omitted field is `Missing` (keep), `null` clears, and `[]` replaces a list with an empty one; `author` is a `PartialUser` merged field by field. Apply an update to a message you hold with `update.apply_to(&mut message)`; an update is never turned into a full message on its own.
+
+The typed hooks receive each payload the way the event stores it, so no hook call copies a payload:
+
+| Hook | Receives |
+|---|---|
+| `handle_event` | `Arc<Event>` |
+| `message_create` | `Arc<Message>` |
+| `message_update` | `Arc<MessageUpdate>` |
+| `member_add`, `member_update` | `GuildId`, `Arc<Member>` |
+| `guild_create` | `&GuildCreate` |
+| `resumed` | nothing beyond `ctx` |
+| `raw_event` (unknown dispatches) | `&str` name, `&RawValue` payload |
+| `decode_failed` (new) | `&str` name, `&EventDecodeError`, `&RawValue` payload |
+| every other hook | a reference into the event, for example `&ReadyPayload`, `&Channel`, `&Interaction`, `&ReactionEvent` |
+
+An `Arc` argument can be kept or moved into a task as it is. A reference lives as long as the handler call; clone what you keep, or override `handle_event` and keep the `Arc<Event>`.
+
+### Migrating from the 2.x `Event` enum
+
+```rust
+// 2.x
+async fn handle_event(&self, ctx: Context, event: Event) {
+    match event {
+        Event::Ready(ready) => println!("{}", ready.data.user.username),
+        Event::MessageCreate(event) => println!("{}", event.message.content),
+        _ => {}
+    }
+}
+
+// 3.0
+async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
+    match event.kind() {
+        EventKind::Ready(ready) => println!("{}", ready.user.username),
+        EventKind::MessageCreate(message) => println!("{}", message.content),
+        _ => {}
+    }
+}
+```
+
+- Match on `event.kind()` (`EventKind::...`) instead of `event`. The old `Event::kind()` string is `event.name()`.
+- Wrapper structs that only held the payload are gone and the variants hold the payload directly: `ReadyEvent`, `GuildEvent`, `ChannelEvent`, `MessageEvent`, `InteractionEvent`, `VoiceStateEvent`, `VoiceServerEvent`, `UserUpdateEvent`, `EntitlementEvent`, `SubscriptionEvent`, `SoundboardSoundEvent`, `StageInstanceEvent`, `ResumedEvent`, and the `{ data, raw }` wrappers `GuildDeleteEvent`, `MemberRemoveEvent`, `GuildMembersChunkEvent`, `RoleDeleteEvent`, `MessageDeleteEvent`. No payload struct has a `raw` field any more; use `event.raw()` with `keep_raw_events(true)`.
+- `GUILD_CREATE` is a `GuildCreate`, not a `Guild`; `MESSAGE_UPDATE` is a `MessageUpdate`, not a `Message`.
+- A payload that fails to decode is `EventKind::DecodeFailed` (and goes to the `decode_failed` hook), no longer `Unknown`.
+- `decode_event(name, data: &str)` decodes JSON text into an `Event` (keeping the raw payload) for tests and tooling; the runtime uses `Event::decode(metadata, raw, keep_raw)`.
+
+How the pipeline moves an event (phase 4): the read loop parses only a shallow envelope (`op`, `s`, `t`, and `d` as a borrowed `RawValue` — no `serde_json::Value` tree) and copies `d` once into the shard's queue; the processor decodes the typed payload straight from that text, updates the cache with the payload's own `Arc`s, publishes the `Arc<Event>` to the collector hub, and hands the same `Arc` to the handler.
 
 ## Intents
 
@@ -160,7 +237,7 @@ Client::builder(&token, intents)
 
 ### Collectors Inside Handlers (3.0)
 
-The processor publishes an event to the collector hub before queueing its handler call, so by the time a handler runs, later events may already have been published. `Context::message_collector()`, `component_collector()`, `interaction_collector()`, and `modal_collector()` start at the event the handler is handling (its `Context::event_cursor()`) and replay what was published since, then continue live without a gap. The hub keeps the last 256 events; older ones are skipped and counted in the collector's `lagged_events()`. `ctx.collectors().message_collector()` and friends still start "from now".
+The processor publishes an event to the collector hub before queueing its handler call, so by the time a handler runs, later events may already have been published. `Context::message_collector()`, `message_update_collector()`, `component_collector()`, `interaction_collector()`, and `modal_collector()` start at the event the handler is handling (its `Context::event_cursor()`) and replay what was published since, then continue live without a gap. The hub keeps the last 256 events; older ones are skipped and counted in the collector's `lagged_events()`. `ctx.collectors().message_collector()` and friends still start "from now".
 
 ### Shutdown and Errors (3.0)
 
@@ -195,15 +272,15 @@ The same allowed-mentions default exists on the REST side via `RestClient::build
 
 ## Respond to Interactions from Gateway Events (2.2.0)
 
-Import `discordrs::response::InteractionResponder` and reply to `Event::InteractionCreate` payloads directly, discord.js-style:
+Import `discordrs::response::InteractionResponder` and reply to `EventKind::InteractionCreate` payloads directly, discord.js-style:
 
 ```rust
 use discordrs::response::InteractionResponder;
-use discordrs::{Context, Event, Interaction};
+use discordrs::{Context, Event, EventKind, Interaction};
 
-async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
-    if let Event::InteractionCreate(event) = event {
-        if let Interaction::ChatInputCommand(command) = event.interaction {
+async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordError> {
+    if let EventKind::InteractionCreate(interaction) = event.kind() {
+        if let Interaction::ChatInputCommand(command) = &**interaction {
             command.reply(&ctx.http, "hi").await?;
         }
     }
@@ -231,11 +308,11 @@ Since 3.0, `fetch_members` is safe to await inside any handler (see Event Pipeli
 
 ## Event Surface
 
-- Prefer `handle_event` for new code.
-- `Event` currently exposes typed variants for `READY`, message events, interaction events, guild/channel/member/role cache flows, `CHANNEL_INFO`, `RATE_LIMITED`, and `Unknown`.
+- `EventKind` has a typed variant for every documented receive dispatch (READY, guild/channel/member/role flows, messages, reactions, interactions, voice, threads, scheduled events, soundboard, entitlements, auto moderation, `CHANNEL_INFO`, `RATE_LIMITED`, ...), plus `Unknown` and `DecodeFailed`.
+- Fields that the 2.x decoder read leniently stay lenient: a malformed optional field (for example an invalid `guild_id` on TYPING_START) reads as `None` instead of failing the whole event.
 - Reaction dispatches preserve Discord's current metadata fields, including `member`, `message_author_id`, `burst`, `burst_colors`, and `reaction_type`.
 - Presence dispatches expose the documented partial user ID, activities, and `ClientStatus` platform status metadata.
-- Legacy `ready`, `message_create`, `interaction_create`, and `raw_event` hooks still exist for migration.
+- Override `handle_event` for one entry point, or the typed hooks (`ready`, `message_create`, `interaction_create`, ..., `raw_event`, `decode_failed`) for per-event methods.
 
 ## Gateway Control Helpers
 
@@ -247,7 +324,7 @@ Since 3.0, `fetch_members` is safe to await inside any handler (see Event Pipeli
 - voice state updates
 - channel info requests through `request_channel_info(RequestChannelInfo::voice_metadata(guild_id))`
 
-`RequestChannelInfo` serializes to Discord Gateway opcode 43 and currently exposes the documented `status` and `voice_start_time` fields. Incoming `CHANNEL_INFO` dispatches decode to `Event::ChannelInfo`.
+`RequestChannelInfo` serializes to Discord Gateway opcode 43 and currently exposes the documented `status` and `voice_start_time` fields. Incoming `CHANNEL_INFO` dispatches decode to `EventKind::ChannelInfo`.
 
 ## Operational Notes
 

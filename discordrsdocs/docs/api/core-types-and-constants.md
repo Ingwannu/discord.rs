@@ -170,7 +170,7 @@ Every model field, request body, query, gateway event field, and builder setter 
 
 `ChannelType` includes the thread types and provides `is_thread()`, `is_voice_based()`, and `is_text_based()` (the discord.js `isTextBased()` set); `Channel::is_thread()` and friends delegate to it. These helpers classify the channel type only: they do not mean you can send messages there, because permissions, archived or locked threads, timeouts, and obfuscated channels can still forbid it. Use `discordrs::permissions` for "can I send here".
 
-One field keeps a raw integer on purpose: `MessageComponent::style` (`Option<u8>`), because its meaning depends on `kind`; read it with `button_style()` / `text_input_style()`. Gateway event fields decoded by hand (`ReactionEvent::reaction_type`, `InviteEvent::target_type`, the `ScheduledEvent` levels, the `AutoModerationEvent` types, `AuditLogEntryEvent::action_type`) are typed but lenient like the other fields of those events: an out-of-range value reads as `None` and stays visible in `raw`.
+One field keeps a raw integer on purpose: `MessageComponent::style` (`Option<u8>`), because its meaning depends on `kind`; read it with `button_style()` / `text_input_style()`. Gateway event fields decoded by hand (`ReactionEvent::reaction_type`, `InviteEvent::target_type`, the `ScheduledEvent` levels, the `AutoModerationEvent` types, `AuditLogEntryEvent::action_type`) are typed but lenient like the other fields of those events: an out-of-range value reads as `None`; the original stays readable through `Event::raw()` when the client keeps raw payloads (`keep_raw_events(true)`).
 
 #### Presence status
 

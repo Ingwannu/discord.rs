@@ -191,8 +191,8 @@ pub(crate) fn parse_body_value(response_text: String) -> Value {
 ///   bytes -> lossy `String` copy -> [`parse_body_value`] -> `T` detour.
 /// - Constraint: `T`'s `Deserialize` impl is compiled once per deserializer
 ///   type. Gateway events decode the same models (`Message`, `Guild`,
-///   `Member`, ...) from a `Value` (`event::decode_event`), and debug builds
-///   of downstream crates reuse those instances from this crate.
+///   `Member`, ...); before phase 4 they did so from a `Value`, and debug
+///   builds of downstream crates reuse those instances from this crate.
 /// - Alternatives: (1) `serde_json::from_slice::<T>` on the bytes, with a
 ///   non-generic fallback for non-JSON bodies; (2) parse the bytes into a
 ///   `Value` and decode `T` from it.
@@ -200,10 +200,14 @@ pub(crate) fn parse_body_value(response_text: String) -> Value {
 ///   about 300k LLVM IR lines of `SliceRead` deserializers and removed only
 ///   63k of `Value` ones (+5.4% total), because every model the gateway
 ///   also decodes was instantiated twice. (2) only drops the `String` copy.
-/// - Trade-offs: responses still build a `Value` tree. When gateway decoding
-///   moves off `Value` (3.0 step 4, `RawValue` envelopes), move this function
-///   and the gateway to the same text deserializer in one change, so each
-///   model stays instantiated once; then the tree goes away here too.
+/// - Trade-offs: responses still build a `Value` tree. Since phase 4 B the
+///   gateway decodes from the `d` text (`serde_json::from_str`), so models
+///   both paths read are now instantiated twice (measured +354k IR lines in
+///   the all-features lib build, about 80k of it duplicated models; see
+///   `testing-and-coverage.md`). Moving this function to `from_str` too
+///   removes the duplicates but changes error strings and duplicate-key
+///   handling, which the decoder equivalence test pins; that decision is
+///   open (phase 4 B record in `docs/design/3.0-types-events-requests.md`).
 pub(crate) fn decode_json_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, DiscordError> {
     // A `match` instead of `map_err`, which would be one more instance per `T`.
     match serde_json::from_value(parse_body_bytes(body)) {

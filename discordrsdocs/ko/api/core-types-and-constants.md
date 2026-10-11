@@ -166,7 +166,7 @@ fn describe(channel: &Channel) -> &'static str {
 
 `ChannelType`은 스레드 타입을 포함하고 `is_thread()`, `is_voice_based()`, `is_text_based()`(discord.js `isTextBased()`와 같은 집합)를 제공합니다. `Channel::is_thread()` 등은 이 메서드에 위임합니다. 이 헬퍼는 채널 종류만 분류합니다. 권한, 보관되거나 잠긴 스레드, 타임아웃, 가려진 채널 때문에 여전히 메시지를 못 보낼 수 있으므로, 결과가 메시지를 보낼 수 있다는 뜻은 아닙니다. "여기에 보낼 수 있는가"는 `discordrs::permissions`로 확인합니다.
 
-일부러 정수로 남긴 필드는 하나입니다: `MessageComponent::style`(`Option<u8>`)은 `kind`에 따라 뜻이 달라 `button_style()` / `text_input_style()`로 읽습니다. 손으로 디코딩하는 게이트웨이 이벤트 필드(`ReactionEvent::reaction_type`, `InviteEvent::target_type`, `ScheduledEvent`의 레벨, `AutoModerationEvent`의 타입, `AuditLogEntryEvent::action_type`)는 타입이 있지만 그 이벤트의 다른 필드처럼 관대하게 읽습니다. 범위를 벗어난 값은 `None`이 되고 `raw`에 남습니다.
+일부러 정수로 남긴 필드는 하나입니다: `MessageComponent::style`(`Option<u8>`)은 `kind`에 따라 뜻이 달라 `button_style()` / `text_input_style()`로 읽습니다. 손으로 디코딩하는 게이트웨이 이벤트 필드(`ReactionEvent::reaction_type`, `InviteEvent::target_type`, `ScheduledEvent`의 레벨, `AutoModerationEvent`의 타입, `AuditLogEntryEvent::action_type`)는 타입이 있지만 그 이벤트의 다른 필드처럼 관대하게 읽습니다. 범위를 벗어난 값은 `None`이 되고, 원본은 클라이언트가 원본 payload를 보관할 때(`keep_raw_events(true)`) `Event::raw()`로 읽을 수 있습니다.
 
 #### 프레즌스 status
 

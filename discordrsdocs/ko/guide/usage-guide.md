@@ -49,17 +49,16 @@ if let RawInteraction::Command { name, .. } = parse_raw_interaction(payload)? {
 
 ```rust
 use discordrs::response::InteractionResponder;
-use discordrs::{Context, Event, Interaction};
+use discordrs::{Context, Event, EventKind, Interaction};
 
-async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
-    match event {
-        Event::InteractionCreate(event) => {
-            if let Interaction::ChatInputCommand(command) = event.interaction {
+async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordError> {
+    match event.kind() {
+        EventKind::InteractionCreate(interaction) => {
+            if let Interaction::ChatInputCommand(command) = &**interaction {
                 command.reply(&ctx.http, "안녕하세요").await?;
             }
         }
-        Event::MessageCreate(event) => {
-            let message = event.message;
+        EventKind::MessageCreate(message) => {
             if message.content == "!ping" {
                 message.reply(&ctx.http, "pong").await?;
             }

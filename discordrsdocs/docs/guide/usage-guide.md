@@ -36,15 +36,17 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ## 2. Start a typed Gateway client
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use std::sync::Arc;
+
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler, EventKind};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => println!("READY: {}", ready.data.user.username),
-            Event::MessageCreate(message) => println!("MESSAGE_CREATE: {}", message.message.id),
+    async fn handle_event(&self, _ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => println!("READY: {}", ready.user.username),
+            EventKind::MessageCreate(message) => println!("MESSAGE_CREATE: {}", message.id),
             _ => {}
         }
     }
@@ -67,19 +69,18 @@ Import `discordrs::response::InteractionResponder` and respond to interactions d
 
 ```rust
 use discordrs::response::InteractionResponder;
-use discordrs::{Context, Event, Interaction};
+use discordrs::{Context, Event, EventKind, Interaction};
 
-async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
-    match event {
-        Event::InteractionCreate(event) => {
-            if let Interaction::ChatInputCommand(command) = event.interaction {
+async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordError> {
+    match event.kind() {
+        EventKind::InteractionCreate(interaction) => {
+            if let Interaction::ChatInputCommand(command) = &**interaction {
                 command.reply(&ctx.http, "hi").await?;
                 // also: reply_ephemeral, defer + edit_reply, follow_up,
                 // show_modal(ModalBuilder), respond_autocomplete
             }
         }
-        Event::MessageCreate(event) => {
-            let message = event.message;
+        EventKind::MessageCreate(message) => {
             if message.content == "!ping" {
                 message.reply(&ctx.http, "pong").await?;
             }
@@ -205,5 +206,5 @@ Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport d
 
 - `parse_raw_interaction(...)` still exists
 - `BotClient` still exists as a compatibility alias
-- `EventHandler::handle_event(...)` is the typed gateway entry point; legacy callbacks such as `ready`, `message_create`, and `interaction_create` remain available for compatibility and now accept typed payloads too
+- `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>` (match on `event.kind()`); the per-event hooks such as `ready`, `message_create`, and `interaction_create` receive their payload without a copy (see [Events and Handlers](../api/gateway.md#events-and-handlers-30))
 - New code should prefer `Client`, `Event`, `RestClient`, and `parse_interaction(...)`

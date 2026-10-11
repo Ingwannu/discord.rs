@@ -52,18 +52,20 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 ## Quick Example
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use std::sync::Arc;
+
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler, EventKind};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => {
-                println!("Bot ready! User: {}", ready.data.user.username);
+    async fn handle_event(&self, _ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => {
+                println!("Bot ready! User: {}", ready.user.username);
             }
-            Event::MessageCreate(message) => {
-                println!("Message: {}", message.message.content);
+            EventKind::MessageCreate(message) => {
+                println!("Message: {}", message.content);
             }
             _ => {}
         }
@@ -161,7 +163,7 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 ## Notes
 
 - `discord.rs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
-- `EventHandler::handle_event(...)` is the typed gateway entry point. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` remain available and now receive typed payloads too.
+- `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>`; the per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive their payload without a copy.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
 - Default `voice` provides Opus-frame RTP send, transport-decrypted received Opus frames, and PCM decode. `voice-encode` adds PCM-to-Opus playback. DAVE/MLS is exposed through the `dave` feature with live gateway MLS transition validation recorded for 2.0.0.
 

@@ -23,6 +23,16 @@ The managers prefer cache hits and fall back to `RestClient` fetches.
 
 Since `2.1`, GUILD_CREATE populates the channel, thread, member, user, voice-state, presence, emoji, sticker, and stage-instance caches under a single write lock; the cached `Guild` is stored with the bulk collections stripped (`Guild::without_create_collections()`) to avoid double storage. GUILD_MEMBERS_CHUNK payloads (including those collected by `Context::fetch_members(...)`) and THREAD_* events are cached too, so cache-aware managers are warm right after a guild becomes available.
 
+Since 3.0 (phase 4) `CacheHandle::apply_guild_create` takes the gateway's `GuildCreate` payload and stores its guild, members, and presences as the same `Arc`s the event holds instead of copying them; build one from a REST `Guild` with `GuildCreate::from(guild)`. `apply_guild_update(&Guild)` applies GUILD_UPDATE.
+
+### Shared Entries and Copy-on-Write Updates (3.0)
+
+The cache keeps messages, members, presences, and guilds as `Arc`s and shares them with the events that delivered them:
+
+- `upsert_message`, `upsert_member`, `upsert_presence`, and `upsert_guild` take `impl Into<Arc<T>>`: pass the `Arc` an event holds (`EventKind::MessageCreate(message)` → `upsert_message(Arc::clone(message))`) to share it, or a plain value, which is wrapped as before.
+- `apply_message_update(&MessageUpdate)` merges a MESSAGE_UPDATE into the cached message under the write lock and returns the merged `Arc<Message>`; a message that is not cached stays uncached, because an update alone is never stored. The merge is copy-on-write: in place when the cache holds the only reference, otherwise into a new snapshot, so an earlier event, collector, or handler that still holds the old `Arc<Message>` keeps seeing the message as it was.
+- Cached objects are never mutated behind a shared `Arc`; there is no interior mutability on them.
+
 ### READY Invalidation per Shard (3.0)
 
 All shards of a process share one cache, so a READY (a new session, not a RESUME) only drops what that shard's new session replaces — `CacheHandle::clear_shard(shard_id, shard_count)`:
@@ -81,7 +91,8 @@ Since `2.2.0`, `ClientBuilder::cache_backend(...)` registers an external `CacheB
 - **Overload and errors: discard-then-clear recovery.** The worker queue holds 8,192 writes. A write that does not fit, or that the backend rejects or panics on (panics are caught, so backend code cannot take the worker down), starts recovery for its shard: the boundary is frozen at the last write admitted so far, every queued write of that shard below it is discarded instead of applied, writes forwarded during recovery are discarded, and the shard is cleared once the worker has passed the boundary. Nothing from before the clear can be replayed after it, and further losses never move the boundary. A failed clear is retried on its own backoff timer (0.5 s doubling to 30 s). The mirror may be temporarily incomplete and refills from later events.
 - **Health.** `Context::cache_backend_health()` returns a `CacheBackendHealth` snapshot: `healthy` (no recovery pending, worker running, not superseded), `worker_running`, `superseded`, `dropped_writes`, `quarantined_writes`, `failed_writes`, `resyncs`, `pending_resync_shards`, and `last_error`.
 - **Bounded shutdown.** When the client stops, the worker applies the queued writes and keeps retrying pending recoveries for up to `handler_shutdown_timeout`, then exits; if a shard is still unrecovered (or the client was superseded) `start()` / `ShardSupervisor::wait()` return an error naming it. A worker that overruns the bound is aborted and joined, so it issues no backend call after the client returned.
-- **MESSAGE_UPDATE.** Discord may send partial payloads. The worker merges the fields present in the payload into the backend's stored copy (`get_message`); if the backend has none it stores the in-memory cache's merged copy, and if neither knows the message it skips the write rather than storing a partial message as complete. If `get_message` fails and no in-memory copy exists, the shard is resynced. The in-memory merge covers every message field, including `components`, `poll`, `call`, `message_snapshots`, and `sticker_items`; an explicit `null` clears a field.
+- **Shared snapshots (3.0).** `put_member`, `put_message`, and `put_presence` receive `Arc<Member>` / `Arc<Message>` / `Arc<Presence>`: for MESSAGE_CREATE and member add/update events this is the same allocation the event and the in-memory cache hold, so mirroring copies nothing until your backend serializes it.
+- **MESSAGE_UPDATE.** Discord may send partial payloads, decoded as a typed `MessageUpdate`. The worker reads the backend's stored copy (`get_message`), merges the update into it copy-on-write (in place when your backend returns a unique `Arc`), and stores the result with `put_message` under the epoch fence; if the backend has none it stores the in-memory cache's merged `Arc`, and if neither knows the message it skips the write rather than storing a partial message as complete. If `get_message` fails and no in-memory copy exists, the shard is resynced. The merge covers every message field, including `components`, `poll`, `call`, `message_snapshots`, and `sticker_items`; an explicit `null` clears a field, an omitted one is kept, and `[]` empties a list.
 
 ```rust
 use std::sync::Arc;
@@ -119,13 +130,14 @@ Enable the `collectors` feature when the bot needs event-driven waiting flows.
 Main types:
 
 - `CollectorHub`
-- `MessageCollector`
+- `MessageCollector` (MESSAGE_CREATE)
+- `MessageUpdateCollector` (MESSAGE_UPDATE, as partial `MessageUpdate`s; 3.0)
 - `InteractionCollector`
 - `ComponentCollector`
 - `ModalCollector`
 - `ReactionCollector`, with `ReactionCollection`, `CollectedReaction`, and `EmojiKey` for its results
 
-Collectors subscribe to typed `Event` values and let handlers wait for the next matching runtime event.
+Collectors read the same `Arc<Event>`s the handlers receive and let handlers wait for the next matching runtime event. Filters see the shared payload by reference; only an item a collector yields from `next()` is copied out, and `next_event()` returns the matching `Arc<Event>` itself without copying anything (3.0). Before 3.0 the message collector also yielded MESSAGE_UPDATE payloads as `Message`s; an update is a partial message now, so it has its own `MessageUpdateCollector`.
 
 ### Collector Controls (2.2.0)
 
@@ -141,6 +153,7 @@ All collector types share the same control surface, mirroring discord.js's `Coll
 - `end_reason()` — why collection ended (`Limit` / `Time` / `Idle` / `User` / `ChannelDropped`, plus the reaction-only reasons below)
 - `received_count()` — how many items were collected so far
 - `lagged_events()` — how many events this collector lost to journal lag (see below)
+- `next()` — the next matching item, copied out of its event; `next_event()` — the next matching event as the shared `Arc<Event>` (no copy), counted toward the limits like `next()` (3.0)
 - `collect()` — drives the collector to the end and returns the results; it consumes the collector, so loop over `next()` instead when you also need `end_reason()` or `lagged_events()` afterwards
 
 When several outcomes are ready at once, the precedence is fixed since 3.0: stop, then the overall timeout, then idle, then events. A window that expired while `next()` was not being polled ends collection before any event buffered in the meantime is delivered, so a late event can neither be returned after the deadline nor restart an expired idle window.
@@ -225,7 +238,7 @@ Reactions need the `GUILD_MESSAGE_REACTIONS` (or `DIRECT_MESSAGE_REACTIONS`) int
 
 ### Delivery, Lag, and Loss
 
-`CollectorHub` keeps the most recent events in a sequence-numbered journal (since 3.0; it was a `tokio::sync::broadcast` channel before). The client publishes every dispatched event to it after updating the cache, and each collector reads it through its own subscription:
+`CollectorHub` keeps the most recent events in a sequence-numbered journal (since 3.0; it was a `tokio::sync::broadcast` channel before). The client publishes every dispatched event to it after updating the cache, and each collector reads it through its own subscription. The journal holds the handler's own `Arc<Event>`s, so a slot is one pointer (an empty 256-slot journal is 2 KiB) and publishing, replaying, and filtering never copy a payload:
 
 - **From now, or from the handled event.** Collectors created from the hub (`ctx.collectors().message_collector()`, `reaction_collector(...)`, ...) see only events published after they were created. Inside a handler, `ctx.message_collector()`, `ctx.reaction_collector(...)`, and the other `Context` collector methods start at the event the handler is handling: events published while the handler call was queued are replayed first, then live events follow without a gap (the hub's `*_collector_from(cursor)` methods do the same for any `EventCursor`). Older history is not kept; fetch it over REST if you need it.
 - **Bounded, lossy journal.** The journal keeps the last `capacity` events (256 by default, `CollectorHub::with_capacity(...)` to change it). It holds every event type, not only the ones a collector wants, and a collector reads it only while `next()` / `collect()` is being awaited. A collector that falls more than `capacity` events behind, or starts from a cursor older than the journal, skips the evicted events, adds them to `lagged_events()`, and continues from the oldest event still kept. Publishing never blocks the gateway.

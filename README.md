@@ -92,19 +92,18 @@ discordrs = { version = "2.2.0", features = ["gateway", "interactions"] }
 
 ```rust
 use discordrs::response::InteractionResponder;
-use discordrs::{Context, Event, Interaction};
+use discordrs::{Context, Event, EventKind, Interaction};
 
-async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordError> {
-    match event {
+async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordError> {
+    match event.kind() {
         // Reply to a slash command like discord.js: interaction.reply(...)
-        Event::InteractionCreate(event) => {
-            if let Interaction::ChatInputCommand(command) = event.interaction {
+        EventKind::InteractionCreate(interaction) => {
+            if let Interaction::ChatInputCommand(command) = &**interaction {
                 command.reply(&ctx.http, "hi").await?;
             }
         }
         // Reply to a message like discord.js: message.reply(...)
-        Event::MessageCreate(event) => {
-            let message = event.message;
+        EventKind::MessageCreate(message) => {
             if message.content == "!ping" {
                 message.reply(&ctx.http, "pong").await?;
             }
@@ -155,18 +154,21 @@ Handler traits are implemented with plain `async fn` (no `#[async_trait]`);
 the futures must be `Send` because handlers run on spawned Tokio tasks.
 
 ```rust
-use discordrs::{gateway_intents, Client, Context, Event, EventHandler};
+use std::sync::Arc;
+
+use discordrs::{gateway_intents, Client, Context, Event, EventHandler, EventKind};
 
 struct Handler;
 
 impl EventHandler for Handler {
-    async fn handle_event(&self, _ctx: Context, event: Event) {
-        match event {
-            Event::Ready(ready) => {
-                println!("Bot ready! User: {}", ready.data.user.username);
+    // Every event arrives once, shared with the cache and collectors.
+    async fn handle_event(&self, _ctx: Context, event: Arc<Event>) {
+        match event.kind() {
+            EventKind::Ready(ready) => {
+                println!("Bot ready! User: {}", ready.user.username);
             }
-            Event::MessageCreate(message) => {
-                println!("Message: {}", message.message.content);
+            EventKind::MessageCreate(message) => {
+                println!("Message: {}", message.content);
             }
             _ => {}
         }
@@ -339,7 +341,7 @@ fn app(public_key: &str) -> Router {
 - Token-authenticated `/interactions/...` and `/webhooks/...` requests intentionally omit bot `Authorization` headers, and token/path segments are validated before webhook/callback paths are built.
 - Typed slash and autocomplete interaction payloads preserve option `value`, `focused`, and nested option input through `CommandInteractionOption`.
 - Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.
-- Use `EventHandler::handle_event(...)` when you want one typed entry point for every gateway event. Legacy convenience callbacks such as `ready`, `message_create`, and `interaction_create` still exist, but they now receive typed payloads too.
+- Use `EventHandler::handle_event(...)` when you want one entry point for every gateway event: it receives the shared `Arc<Event>`; match on `event.kind()`. The per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive the payload without a copy (`Arc<Message>` for `message_create`, references for most others). The raw JSON payload is kept only with `ClientBuilder::keep_raw_events(true)` (always for unknown or undecodable dispatches).
 - Use `Context::new(...)` when tests or helper crates need a standalone context outside the live gateway runtime.
 - Use `examples/live_dave_capture_bot.rs` to capture matching bot `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` values before running the ignored live DAVE validation test.
 - Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
