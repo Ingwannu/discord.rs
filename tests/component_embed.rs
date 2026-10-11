@@ -17,10 +17,10 @@ use discordrs::request::{
     PreviewSeparator, PreviewTextDisplay, PreviewThumbnail,
 };
 use discordrs::{
-    text_input_style, ActionRowBuilder, ButtonBuilder, ComponentId, ContainerBuilder, DiscordError,
-    Emoji, FileBuilder, MediaGalleryBuilder, MediaGalleryItem, Nullable, Patch, SectionBuilder,
+    ActionRowBuilder, ButtonBuilder, ComponentId, ContainerBuilder, DiscordError, Emoji,
+    FileBuilder, MediaGalleryBuilder, MediaGalleryItem, Nullable, Patch, SectionBuilder,
     SelectMenuBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, TextInputBuilder,
-    ThumbnailBuilder,
+    TextInputStyle, ThumbnailBuilder,
 };
 use serde_json::{json, Value};
 
@@ -941,10 +941,13 @@ fn components_outside_the_preview_subset_do_not_convert() {
         unsupported(select),
         ("component.components[0].components[0]".to_owned(), 3)
     );
-    let text_input =
-        ContainerBuilder::new().add_action_row(ActionRowBuilder::new().add_text_input(
-            TextInputBuilder::new("name", "Name", text_input_style::SHORT),
-        ));
+    let text_input = ContainerBuilder::new().add_action_row(
+        ActionRowBuilder::new().add_text_input(TextInputBuilder::new(
+            "name",
+            "Name",
+            TextInputStyle::SHORT,
+        )),
+    );
     assert_eq!(unsupported(text_input).1, 4);
     let file = ContainerBuilder::new().add_file(FileBuilder::new("attachment://a.zip"));
     assert_eq!(

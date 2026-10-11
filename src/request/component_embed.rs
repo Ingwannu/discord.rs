@@ -35,9 +35,8 @@ use serde_json::{Map, Value};
 
 use crate::builders::ContainerBuilder;
 use crate::command::validation::char_count;
-use crate::constants::{button_style, component_type};
 use crate::error::DiscordError;
-use crate::model::discriminant::SeparatorSpacing;
+use crate::model::discriminant::{ButtonStyle, ComponentType, SeparatorSpacing};
 use crate::model::{ComponentId, Nullable, NullablePatch, Patch};
 use crate::types::Emoji;
 
@@ -394,7 +393,7 @@ impl PreviewContainer {
 impl Serialize for PreviewContainer {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::CONTAINER)?;
+        map.serialize_entry("type", &ComponentType::CONTAINER)?;
         serialize_some(&mut map, "id", &self.id)?;
         serialize_present(&mut map, "accent_color", &self.accent_color)?;
         serialize_some(&mut map, "spoiler", &self.spoiler)?;
@@ -522,7 +521,7 @@ impl PreviewActionRow {
 impl Serialize for PreviewActionRow {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::ACTION_ROW)?;
+        map.serialize_entry("type", &ComponentType::ACTION_ROW)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("components", &self.buttons)?;
         map.end()
@@ -615,9 +614,9 @@ impl PreviewLinkButton {
 impl Serialize for PreviewLinkButton {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::BUTTON)?;
+        map.serialize_entry("type", &ComponentType::BUTTON)?;
         serialize_some(&mut map, "id", &self.id)?;
-        map.serialize_entry("style", &button_style::LINK)?;
+        map.serialize_entry("style", &ButtonStyle::LINK)?;
         serialize_some(&mut map, "label", &self.label)?;
         serialize_some(&mut map, "emoji", &self.emoji)?;
         map.serialize_entry("url", &self.url)?;
@@ -688,7 +687,7 @@ impl PreviewSection {
 impl Serialize for PreviewSection {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::SECTION)?;
+        map.serialize_entry("type", &ComponentType::SECTION)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("components", &self.components)?;
         map.serialize_entry("accessory", &self.accessory)?;
@@ -756,7 +755,7 @@ impl PreviewTextDisplay {
 impl Serialize for PreviewTextDisplay {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::TEXT_DISPLAY)?;
+        map.serialize_entry("type", &ComponentType::TEXT_DISPLAY)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("content", &self.content)?;
         map.end()
@@ -821,7 +820,7 @@ impl PreviewThumbnail {
 impl Serialize for PreviewThumbnail {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::THUMBNAIL)?;
+        map.serialize_entry("type", &ComponentType::THUMBNAIL)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("media", &MediaRef { url: &self.url })?;
         serialize_present(&mut map, "description", &self.description)?;
@@ -882,7 +881,7 @@ impl PreviewMediaGallery {
 impl Serialize for PreviewMediaGallery {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::MEDIA_GALLERY)?;
+        map.serialize_entry("type", &ComponentType::MEDIA_GALLERY)?;
         serialize_some(&mut map, "id", &self.id)?;
         map.serialize_entry("items", &self.items)?;
         map.end()
@@ -993,7 +992,7 @@ impl PreviewSeparator {
 impl Serialize for PreviewSeparator {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("type", &component_type::SEPARATOR)?;
+        map.serialize_entry("type", &ComponentType::SEPARATOR)?;
         serialize_some(&mut map, "id", &self.id)?;
         serialize_some(&mut map, "divider", &self.divider)?;
         serialize_some(&mut map, "spacing", &self.spacing)?;
@@ -1376,22 +1375,22 @@ fn component_name(component_type: u64) -> &'static str {
     let Ok(component_type) = u8::try_from(component_type) else {
         return "unknown component";
     };
-    match component_type {
-        component_type::ACTION_ROW => "action row",
-        component_type::BUTTON => "button",
-        component_type::STRING_SELECT => "string select",
-        component_type::TEXT_INPUT => "text input",
-        component_type::USER_SELECT => "user select",
-        component_type::ROLE_SELECT => "role select",
-        component_type::MENTIONABLE_SELECT => "mentionable select",
-        component_type::CHANNEL_SELECT => "channel select",
-        component_type::SECTION => "section",
-        component_type::TEXT_DISPLAY => "text display",
-        component_type::THUMBNAIL => "thumbnail",
-        component_type::MEDIA_GALLERY => "media gallery",
-        component_type::FILE => "file",
-        component_type::SEPARATOR => "separator",
-        component_type::CONTAINER => "container",
+    match ComponentType::new(component_type) {
+        ComponentType::ACTION_ROW => "action row",
+        ComponentType::BUTTON => "button",
+        ComponentType::STRING_SELECT => "string select",
+        ComponentType::TEXT_INPUT => "text input",
+        ComponentType::USER_SELECT => "user select",
+        ComponentType::ROLE_SELECT => "role select",
+        ComponentType::MENTIONABLE_SELECT => "mentionable select",
+        ComponentType::CHANNEL_SELECT => "channel select",
+        ComponentType::SECTION => "section",
+        ComponentType::TEXT_DISPLAY => "text display",
+        ComponentType::THUMBNAIL => "thumbnail",
+        ComponentType::MEDIA_GALLERY => "media gallery",
+        ComponentType::FILE => "file",
+        ComponentType::SEPARATOR => "separator",
+        ComponentType::CONTAINER => "container",
         _ => "unknown component",
     }
 }
@@ -1576,7 +1575,7 @@ const EXPECTED_OBJECT: &str = "a JSON object";
 fn read_container(value: &Value, path: &str) -> Result<PreviewContainer, ComponentEmbedError> {
     let map = expect_object(value, path)?;
     let kind = read_type(map, path)?;
-    if kind != u64::from(component_type::CONTAINER) {
+    if kind != u64::from(ComponentType::CONTAINER.get()) {
         return Err(ComponentEmbedError::UnsupportedComponent {
             path: path.to_owned(),
             component_type: kind,
@@ -1612,17 +1611,17 @@ fn read_child(value: &Value, path: &str) -> Result<PreviewComponent, ComponentEm
     let Ok(known) = u8::try_from(kind) else {
         return Err(unsupported());
     };
-    match known {
-        component_type::ACTION_ROW => read_action_row(map, path).map(PreviewComponent::ActionRow),
-        component_type::SECTION => read_section(map, path).map(PreviewComponent::Section),
-        component_type::TEXT_DISPLAY => {
+    match ComponentType::new(known) {
+        ComponentType::ACTION_ROW => read_action_row(map, path).map(PreviewComponent::ActionRow),
+        ComponentType::SECTION => read_section(map, path).map(PreviewComponent::Section),
+        ComponentType::TEXT_DISPLAY => {
             read_text_display(map, path).map(PreviewComponent::TextDisplay)
         }
-        component_type::MEDIA_GALLERY => {
+        ComponentType::MEDIA_GALLERY => {
             read_media_gallery(map, path).map(PreviewComponent::MediaGallery)
         }
-        component_type::SEPARATOR => read_separator(map, path).map(PreviewComponent::Separator),
-        component_type::CONTAINER => Err(ComponentEmbedError::NestedContainer {
+        ComponentType::SEPARATOR => read_separator(map, path).map(PreviewComponent::Separator),
+        ComponentType::CONTAINER => Err(ComponentEmbedError::NestedContainer {
             path: path.to_owned(),
         }),
         _ => Err(unsupported()),
@@ -1641,7 +1640,7 @@ fn read_action_row(
             let child_path = format!("{path}.components[{index}]");
             let child = expect_object(child, &child_path)?;
             let kind = read_type(child, &child_path)?;
-            if kind != u64::from(component_type::BUTTON) {
+            if kind != u64::from(ComponentType::BUTTON.get()) {
                 return Err(ComponentEmbedError::UnsupportedComponent {
                     path: child_path,
                     component_type: kind,
@@ -1664,7 +1663,7 @@ fn read_link_button(
     // Style first: a custom-ID button reports "not a link button", which says
     // more than "`custom_id` is not allowed".
     let style = read_required(map, "style", path, Value::as_u64, EXPECTED_INTEGER)?;
-    if style != u64::from(button_style::LINK) {
+    if style != u64::from(ButtonStyle::LINK.get()) {
         return Err(ComponentEmbedError::ButtonNotLink {
             path: path.to_owned(),
             style,
@@ -1721,7 +1720,7 @@ fn read_section(
             let child_path = format!("{path}.components[{index}]");
             let child = expect_object(child, &child_path)?;
             let kind = read_type(child, &child_path)?;
-            if kind != u64::from(component_type::TEXT_DISPLAY) {
+            if kind != u64::from(ComponentType::TEXT_DISPLAY.get()) {
                 return Err(ComponentEmbedError::UnsupportedComponent {
                     path: child_path,
                     component_type: kind,
@@ -1734,9 +1733,9 @@ fn read_section(
     let accessory_path = format!("{path}.accessory");
     let accessory = read_required(map, "accessory", path, Value::as_object, EXPECTED_OBJECT)?;
     let kind = read_type(accessory, &accessory_path)?;
-    let accessory = if kind == u64::from(component_type::BUTTON) {
+    let accessory = if kind == u64::from(ComponentType::BUTTON.get()) {
         PreviewAccessory::Button(read_link_button(accessory, &accessory_path)?)
-    } else if kind == u64::from(component_type::THUMBNAIL) {
+    } else if kind == u64::from(ComponentType::THUMBNAIL.get()) {
         PreviewAccessory::Thumbnail(read_thumbnail(accessory, &accessory_path)?)
     } else {
         return Err(ComponentEmbedError::UnsupportedComponent {

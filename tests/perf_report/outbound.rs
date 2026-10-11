@@ -5,9 +5,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use discordrs::{
-    ActionRowBuilder, ButtonBuilder, ComponentsV2Message, ContainerBuilder,
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentsV2Message, ContainerBuilder,
     InteractionResponseBuilder, MediaGalleryBuilder, MediaGalleryItem, MessageBuilder,
-    SectionBuilder, SeparatorBuilder, TextDisplayBuilder, ThumbnailBuilder,
+    SectionBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, ThumbnailBuilder,
 };
 
 use crate::alloc::{Recorder, Uncounted};
@@ -21,7 +21,11 @@ pub(crate) fn status_card() -> ComponentsV2Message {
         .add_text_display(TextDisplayBuilder::new(
             "## Server status\nAll shards healthy. Gateway latency is normal.",
         ))
-        .add_separator(SeparatorBuilder::new().divider(true).spacing(1))
+        .add_separator(
+            SeparatorBuilder::new()
+                .divider(true)
+                .spacing(SeparatorSpacing::SMALL),
+        )
         .add_section(
             SectionBuilder::new()
                 .add_text_display(TextDisplayBuilder::new(
@@ -46,24 +50,28 @@ pub(crate) fn status_card() -> ComponentsV2Message {
                         .description("memory chart"),
                 ),
         )
-        .add_separator(SeparatorBuilder::new().divider(false).spacing(2))
+        .add_separator(
+            SeparatorBuilder::new()
+                .divider(false)
+                .spacing(SeparatorSpacing::LARGE),
+        )
         .add_action_row(
             ActionRowBuilder::new()
                 .add_button(
                     ButtonBuilder::new()
-                        .style(1)
+                        .style(ButtonStyle::PRIMARY)
                         .label("Refresh")
                         .custom_id("status:refresh"),
                 )
                 .add_button(
                     ButtonBuilder::new()
-                        .style(2)
+                        .style(ButtonStyle::SECONDARY)
                         .label("Details")
                         .custom_id("status:details"),
                 )
                 .add_button(
                     ButtonBuilder::new()
-                        .style(5)
+                        .style(ButtonStyle::LINK)
                         .label("Dashboard")
                         .url("https://example.com/dashboard"),
                 ),
