@@ -40,8 +40,10 @@
 //   flatten) 모두 newtype을 투명하게 처리하므로 와이어 형식이 바뀌지 않는다.
 // - 장점, 단점 및 영향: 필드 속성은 `default`와 `skip_serializing_if`면 충분하고, 빠뜨리면
 //   조용히 틀리는 대신 오류가 난다. serde의 비공개 missing_field 동작(Option만 특별 취급)에
-//   기대므로 serde가 이를 바꾸면 absence 테스트가 깨져 알려 준다. newtype 구조체를
-//   투명하게 다루지 않는 형식(예: RON의 기본 설정)에서는 쓰기와 읽기 형태가 다를 수 있다.
+//   기대므로 serde가 이를 바꾸면 absence 테스트가 깨져 알려 준다. 지원 형식은 JSON이다.
+//   쓰기는 serialize_none/값 그대로, 읽기는 Option<T>와 newtype 진입이라, option이나
+//   newtype을 JSON과 다르게 인코딩하는 형식(Some을 태그하는 형식, RON 기본 설정 등)에서는
+//   쓴 것을 그대로 읽지 못할 수 있다.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -103,9 +105,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 /// needs no attribute: `null` reads as `Null`, and an absent key is a
 /// "missing field" error rather than `Null`.
 ///
-/// Decoding works with serde_json (from text or from `serde_json::Value`),
-/// inside `#[serde(untagged)]` enums and `#[serde(flatten)]` structs, and
-/// with deserializers that treat newtype structs transparently.
+/// Supported format: JSON through serde_json (from text, a reader, or a
+/// `serde_json::Value`), including inside `#[serde(untagged)]`, internally
+/// tagged, and `#[serde(flatten)]` containers. Other formats are not a goal.
+/// The representation assumes JSON's encoding: `Nullable::Null` is written
+/// with `serialize_none` and a value is written bare, but reading goes
+/// through `Option<T>` and enters via `deserialize_newtype_struct`. A format
+/// whose option or newtype encoding differs (for example one that tags
+/// `Some`) may not read back what it wrote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Patch<T> {
     /// The field is omitted: keep the current value.
@@ -378,8 +385,11 @@ struct PresentVisitor<F>(PhantomData<fn() -> F>);
 
 /// `visit_newtype_struct` is the normal path. The other methods are
 /// fallbacks for deserializers that answer `deserialize_newtype_struct`
-/// through `deserialize_any` (serde's `value` deserializers and some
-/// formats); each hands the visited value back to `F` unchanged.
+/// through `deserialize_any` (serde's `value` deserializers); each hands the
+/// visited value back to `F` unchanged. Every data-model shape a
+/// self-describing `deserialize_any` can report is covered, so a type that
+/// decodes from such a deserializer on its own also decodes inside these
+/// wrappers.
 impl<'de, F: PresentField<'de>> Visitor<'de> for PresentVisitor<F> {
     type Value = F;
 
@@ -421,6 +431,14 @@ impl<'de, F: PresentField<'de>> Visitor<'de> for PresentVisitor<F> {
         from_primitive(value)
     }
 
+    fn visit_i128<E: de::Error>(self, value: i128) -> Result<F, E> {
+        from_primitive(value)
+    }
+
+    fn visit_u128<E: de::Error>(self, value: u128) -> Result<F, E> {
+        from_primitive(value)
+    }
+
     fn visit_f64<E: de::Error>(self, value: f64) -> Result<F, E> {
         from_primitive(value)
     }
@@ -457,6 +475,13 @@ impl<'de, F: PresentField<'de>> Visitor<'de> for PresentVisitor<F> {
         A: de::MapAccess<'de>,
     {
         F::from_value(value::MapAccessDeserializer::new(map))
+    }
+
+    fn visit_enum<A>(self, data: A) -> Result<F, A::Error>
+    where
+        A: de::EnumAccess<'de>,
+    {
+        F::from_value(value::EnumAccessDeserializer::new(data))
     }
 }
 
@@ -766,9 +791,9 @@ mod tests {
 
         use serde::de::value::{
             BoolDeserializer, BorrowedBytesDeserializer, BorrowedStrDeserializer,
-            BytesDeserializer, Error as ValueError, F64Deserializer, I128Deserializer,
-            I64Deserializer, MapDeserializer, SeqDeserializer, StrDeserializer, StringDeserializer,
-            U64Deserializer, UnitDeserializer,
+            BytesDeserializer, EnumAccessDeserializer, Error as ValueError, F64Deserializer,
+            I128Deserializer, I64Deserializer, MapDeserializer, SeqDeserializer, StrDeserializer,
+            StringDeserializer, U128Deserializer, U64Deserializer, UnitDeserializer,
         };
 
         // Null / unit.
@@ -843,10 +868,39 @@ mod tests {
             Some(Patch::Value(9))
         );
 
-        // Shapes with no fallback name what was expected.
-        let unsupported = Nullable::<u8>::deserialize(I128Deserializer::<ValueError>::new(5));
-        assert!(unsupported
-            .is_err_and(|error| error.to_string().contains("expected a present field value")));
+        // 128-bit integers and enums (regressions: these had no fallback).
+        assert_eq!(
+            Patch::<u128>::deserialize(U128Deserializer::<ValueError>::new(u128::MAX)).ok(),
+            Some(Patch::Value(u128::MAX))
+        );
+        assert_eq!(
+            Nullable::<i128>::deserialize(I128Deserializer::<ValueError>::new(i128::MIN)).ok(),
+            Some(Nullable::Value(i128::MIN))
+        );
+        #[derive(Debug, PartialEq, Deserialize)]
+        enum Color {
+            Red,
+            Green,
+        }
+        let red = EnumAccessDeserializer::new(StrDeserializer::<ValueError>::new("Red"));
+        assert_eq!(
+            Patch::<Color>::deserialize(red).ok(),
+            Some(Patch::Value(Color::Red))
+        );
+        let green = EnumAccessDeserializer::new(StrDeserializer::<ValueError>::new("Green"));
+        assert_eq!(
+            Nullable::<Color>::deserialize(green).ok(),
+            Some(Nullable::Value(Color::Green))
+        );
+        let unknown = EnumAccessDeserializer::new(StrDeserializer::<ValueError>::new("Blue"));
+        assert!(Patch::<Color>::deserialize(unknown).is_err());
+
+        // Error messages name what was expected.
+        let error: ValueError = serde::de::Error::invalid_type(
+            serde::de::Unexpected::Bool(true),
+            &super::PresentVisitor::<Nullable<u8>>(std::marker::PhantomData),
+        );
+        assert!(error.to_string().contains("expected a present field value"));
     }
 
     #[test]
