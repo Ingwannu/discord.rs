@@ -6,14 +6,21 @@
 //! `resolved`. The interaction `type` decides how `data` is read, and JSON
 //! does not order keys, so:
 //!
-//! - `type` before `data` (what Discord's gateway sends): `data` is decoded
-//!   in place for the known types and kept as JSON text for unknown ones;
+//! - `type` before `data` (what Discord's gateway sends): `data` of a
+//!   component, autocomplete, or modal submit interaction is decoded in
+//!   place; `data` of an unknown interaction type is kept as JSON text;
+//! - `data` of an application command is always kept as JSON text first and
+//!   decoded once the object ends, because its variant depends on the
+//!   command `type` inside it: an unknown command type keeps the bytes as
+//!   received, whatever the key order;
 //! - `data` before `type` (any other producer, or a sorted
 //!   `serde_json::Value`): `data` is kept as JSON text and decoded once the
-//!   object ends. That costs one copy of the `data` text and a second scan,
-//!   and needs a serde_json deserializer (text, slice, `Value`, or
-//!   `RawValue`); like the rest of the crate's models, JSON is the only
-//!   supported format.
+//!   object ends.
+//!
+//! Keeping `data` as text costs one copy of it and a second scan, and needs
+//! a serde_json deserializer (text, slice, `Value`, or `RawValue`; not
+//! serde's buffered `Content` inside `#[serde(flatten)]` or `untagged`).
+//! Like the rest of the crate's models, JSON is the only supported format.
 //!
 //! ```text
 //! [Decision Log]
@@ -27,16 +34,17 @@
 //! - 검토한 주요 대안: (1) `data`를 항상 RawValue로 잡고 끝에서 디코딩, (2) 모든 종류의 data
 //!   필드를 합친 구조체 하나로 읽고 끝에서 나누기, (3) `type`이 먼저 오면 바로 디코딩하고
 //!   아니면 (1)로 대체.
-//! - 선택한 방식: (3). 명령 data는 손으로 쓴 방문자가 명령 타입을 아직 모르거나 모르는
-//!   타입일 때만 모르는 키를 RawValue로 모아, 알 수 없는 명령 타입이면 data를 다시 조립한다.
+//! - 선택한 방식: (3). 단 애플리케이션 명령 data는 키 순서와 무관하게 항상 RawValue로 먼저
+//!   잡고, 객체가 끝나면 명령 타입을 보고 타입 모델로 디코딩하거나 받은 바이트 그대로 둔다
+//!   (2026-10-11 리뷰: 처음에는 모르는 키만 모아 다시 조립했는데, `type`이 먼저 오면 중첩된
+//!   모르는 필드·명시적 null·빈 배열을 잃고, 객체 옵션 값이 있으면 Unknown 대신 오류가 났다).
 //! - 다른 대안 대신 이 방식을 선택한 이유: (1)은 모든 인터랙션에 data 크기 복사와 두 번째
 //!   스캔을 더한다. (2)는 알 수 없는 인터랙션 타입의 data를 아는 필드 모양으로 읽다가 실패할
 //!   수 있고 모르는 키를 잃는다. 게이트웨이는 `type`을 `data`보다 먼저 보내므로 (3)의 흔한
 //!   경로는 복사 없이 한 번 읽는다.
 //! - 장점, 단점 및 영향: `Interaction`의 serde가 2.x의 외부 태그 형식에서 Discord 와이어
-//!   형식으로 바뀐다. `data`가 먼저 오는 입력은 data 복사 1회와 재스캔이 든다. RawValue는
-//!   serde의 Content 버퍼(untagged·flatten 안)를 통과하지 못한다. 알 수 없는 명령 타입의
-//!   `raw_data`는 `type`이 먼저 온 경우 같은 내용의 다시 쓴 JSON이다(바이트 동일 아님).
+//!   형식으로 바뀐다. 명령 인터랙션과 `data`가 먼저 오는 입력은 data 복사 1회(할당 1)와
+//!   재스캔이 든다. RawValue는 serde의 Content 버퍼(untagged·flatten 안)를 통과하지 못한다.
 //! ```
 
 use std::borrow::Cow;
@@ -51,12 +59,11 @@ use serde_json::value::RawValue;
 use crate::bitfield::Permissions;
 use crate::model::{
     ApplicationId, AuthorizingIntegrationOwners, AutocompleteInteraction, ChannelId,
-    ChatInputCommandInteraction, CommandId, CommandInteractionData, CommandInteractionOption,
-    CommandType, ComponentInteraction, ComponentInteractionData, Entitlement, GenericId, GuildId,
-    GuildInstallOwner, Interaction, InteractionContextData, InteractionContextType, InteractionId,
-    InteractionResponseState, InteractionType, Member, MessageContextMenuInteraction,
-    ModalSubmitInteraction, PingInteraction, ResolvedData, User, UserContextMenuInteraction,
-    UserId,
+    ChatInputCommandInteraction, CommandInteractionData, CommandType, ComponentInteraction,
+    ComponentInteractionData, Entitlement, GuildId, GuildInstallOwner, Interaction,
+    InteractionContextData, InteractionContextType, InteractionId, InteractionResponseState,
+    InteractionType, Member, MessageContextMenuInteraction, ModalSubmitInteraction,
+    PingInteraction, ResolvedData, User, UserContextMenuInteraction, UserId,
 };
 use crate::parsers::modal::{ModalDataRef, ModalDataSeed};
 use crate::parsers::V2ModalSubmission;
@@ -95,7 +102,10 @@ enum InteractionField {
 
 /// `data` as far as the decoder got before the object ended.
 enum Data {
-    Command(CommandData),
+    /// Application command `data` of a command type with its own variant.
+    Command(CommandKind, CommandInteractionData),
+    /// Autocomplete `data` (any command type).
+    Autocomplete(CommandInteractionData),
     Component(ComponentInteractionData),
     Modal(V2ModalSubmission, Option<ResolvedData>),
     /// Kept as text: an unknown interaction type, or `data` came before
@@ -103,14 +113,6 @@ enum Data {
     Raw(Box<RawValue>),
     /// `data` of a PING, which has none to keep.
     Ignored,
-}
-
-/// Decoded command `data`, plus the keys the typed model does not know
-/// when they may still be needed to rebuild `data` for an unknown command
-/// type (see [`CommandDataSeed`]).
-struct CommandData {
-    data: CommandInteractionData,
-    unknown_keys: Option<Vec<(String, Box<RawValue>)>>,
 }
 
 /// Reads `data` the way interaction `type` says.
@@ -124,14 +126,15 @@ impl<'de> DeserializeSeed<'de> for DataSeed {
     fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Data, D::Error> {
         match self.kind {
             InteractionType::PING => IgnoredAny::deserialize(deserializer).map(|_| Data::Ignored),
-            InteractionType::APPLICATION_COMMAND => CommandDataSeed { keep_unknown: true }
-                .deserialize(deserializer)
-                .map(Data::Command),
-            InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => CommandDataSeed {
-                keep_unknown: false,
+            // The variant depends on the command type inside `data`, and an
+            // unknown command type must keep `data` exactly as sent, so the
+            // text is kept and decoded when the object ends.
+            InteractionType::APPLICATION_COMMAND => {
+                Box::<RawValue>::deserialize(deserializer).map(Data::Raw)
             }
-            .deserialize(deserializer)
-            .map(Data::Command),
+            InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => {
+                CommandInteractionData::deserialize(deserializer).map(Data::Autocomplete)
+            }
             InteractionType::MESSAGE_COMPONENT => {
                 ComponentInteractionData::deserialize(deserializer).map(Data::Component)
             }
@@ -274,7 +277,8 @@ fn build_interaction(
     data: Option<Data>,
 ) -> Result<Interaction, String> {
     let data = match data {
-        // `data` came before `type`: decode the kept text now.
+        // `data` kept as text (an application command, or `data` came
+        // before `type`): decode it now.
         Some(Data::Raw(raw)) if is_typed(kind) => Some(decode_late(kind, raw)?),
         data => data,
     };
@@ -282,7 +286,9 @@ fn build_interaction(
     Ok(match kind {
         InteractionType::PING => Interaction::Ping(PingInteraction { context }),
         InteractionType::APPLICATION_COMMAND => match data {
-            Some(Data::Command(command)) => command_interaction(context, command)?,
+            Some(Data::Command(command_kind, data)) => {
+                command_interaction(context, command_kind, data)
+            }
             Some(Data::Raw(raw)) => Interaction::Unknown {
                 context,
                 kind,
@@ -291,10 +297,9 @@ fn build_interaction(
             _ => return Err(missing_data()),
         },
         InteractionType::APPLICATION_COMMAND_AUTOCOMPLETE => match data {
-            Some(Data::Command(command)) => Interaction::Autocomplete(AutocompleteInteraction {
-                context,
-                data: command.data,
-            }),
+            Some(Data::Autocomplete(data)) => {
+                Interaction::Autocomplete(AutocompleteInteraction { context, data })
+            }
             _ => return Err(missing_data()),
         },
         InteractionType::MESSAGE_COMPONENT => match data {
@@ -336,82 +341,80 @@ fn is_typed(kind: InteractionType) -> bool {
     )
 }
 
-/// Decodes `data` kept as text because it came before `type`. An
-/// application command of an unknown command type keeps that text as its
-/// `raw_data` unchanged.
+/// Decodes `data` kept as text. An application command of an unknown
+/// command type keeps that text as its `raw_data`, byte for byte, and is
+/// never forced through the typed model: a future command type may use
+/// shapes it rejects (an object option value, say).
 fn decode_late(kind: InteractionType, raw: Box<RawValue>) -> Result<Data, String> {
     let invalid = |error: serde_json::Error| format!("invalid interaction.data: {error}");
     if kind != InteractionType::APPLICATION_COMMAND {
         return DataSeed { kind }.deserialize(&*raw).map_err(invalid);
     }
-    let command = CommandDataSeed {
-        keep_unknown: false,
+    match CommandInteractionData::deserialize(&*raw) {
+        Ok(data) => Ok(match CommandKind::of(data.kind) {
+            Some(command_kind) => Data::Command(command_kind, data),
+            None => Data::Raw(raw),
+        }),
+        // The typed model failed: read only `type`, and keep the text when
+        // the command type is one this version does not type.
+        Err(error) => match command_type_of(&raw) {
+            Some(kind) if CommandKind::of(kind).is_none() => Ok(Data::Raw(raw)),
+            _ => Err(invalid(error)),
+        },
     }
-    .deserialize(&*raw)
-    .map_err(invalid)?;
-    Ok(if is_known_command_type(command.data.kind) {
-        Data::Command(command)
-    } else {
-        Data::Raw(raw)
-    })
 }
 
-/// The command types with their own variant. Discord treats an absent
-/// command `type` as `CHAT_INPUT`.
-fn is_known_command_type(kind: Option<CommandType>) -> bool {
-    matches!(
-        kind.unwrap_or(CommandType::CHAT_INPUT),
-        CommandType::CHAT_INPUT | CommandType::USER | CommandType::MESSAGE
-    )
+/// The command `type` of command `data`, skipping every other key without
+/// allocating; `None` when `data` is not an object with a readable `type`,
+/// `Some(None)` when it has no `type`.
+fn command_type_of(raw: &RawValue) -> Option<Option<CommandType>> {
+    #[derive(Deserialize)]
+    struct CommandHeader {
+        #[serde(rename = "type")]
+        kind: Option<CommandType>,
+    }
+    CommandHeader::deserialize(raw)
+        .ok()
+        .map(|header| header.kind)
+}
+
+/// The command types with their own [`Interaction`] variant.
+#[derive(Clone, Copy)]
+enum CommandKind {
+    ChatInput,
+    User,
+    Message,
+}
+
+impl CommandKind {
+    /// `None` for a command type this version does not type. Discord treats
+    /// an absent command `type` as `CHAT_INPUT`.
+    fn of(kind: Option<CommandType>) -> Option<Self> {
+        match kind.unwrap_or(CommandType::CHAT_INPUT) {
+            CommandType::CHAT_INPUT => Some(Self::ChatInput),
+            CommandType::USER => Some(Self::User),
+            CommandType::MESSAGE => Some(Self::Message),
+            _ => None,
+        }
+    }
 }
 
 fn command_interaction(
     context: InteractionContextData,
-    command: CommandData,
-) -> Result<Interaction, String> {
-    let CommandData { data, unknown_keys } = command;
-    Ok(match data.kind.unwrap_or(CommandType::CHAT_INPUT) {
-        CommandType::CHAT_INPUT => {
+    command_kind: CommandKind,
+    data: CommandInteractionData,
+) -> Interaction {
+    match command_kind {
+        CommandKind::ChatInput => {
             Interaction::ChatInputCommand(ChatInputCommandInteraction { context, data })
         }
-        CommandType::USER => {
+        CommandKind::User => {
             Interaction::UserContextMenu(UserContextMenuInteraction { context, data })
         }
-        CommandType::MESSAGE => {
+        CommandKind::Message => {
             Interaction::MessageContextMenu(MessageContextMenuInteraction { context, data })
         }
-        _ => Interaction::Unknown {
-            context,
-            kind: InteractionType::APPLICATION_COMMAND,
-            raw_data: Some(
-                rebuild_command_data(&data, unknown_keys.unwrap_or_default())
-                    .map_err(|error| format!("invalid interaction.data: {error}"))?,
-            ),
-        },
-    })
-}
-
-/// Writes `data` of an unknown command type back as one JSON object: the
-/// documented keys from their decoded values, then the other keys as sent.
-fn rebuild_command_data(
-    data: &CommandInteractionData,
-    unknown_keys: Vec<(String, Box<RawValue>)>,
-) -> Result<Box<RawValue>, serde_json::Error> {
-    let mut text = serde_json::to_string(data)?;
-    if !unknown_keys.is_empty() {
-        // `text` is a JSON object; reopen it to append the kept keys.
-        text.truncate(text.len().saturating_sub(1));
-        for (key, value) in &unknown_keys {
-            if text.len() > 1 {
-                text.push(',');
-            }
-            text.push_str(&serde_json::to_string(key)?);
-            text.push(':');
-            text.push_str(value.get());
-        }
-        text.push('}');
     }
-    RawValue::from_string(text)
 }
 
 /// Writes the interaction as Discord sends it: the context fields, `type`,
@@ -536,27 +539,8 @@ impl Serialize for DataRef<'_> {
 }
 
 // ---------------------------------------------------------------------------
-// Command data
+// authorizing_integration_owners
 // ---------------------------------------------------------------------------
-
-impl<'de> Deserialize<'de> for CommandInteractionData {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        CommandDataSeed {
-            keep_unknown: false,
-        }
-        .deserialize(deserializer)
-        .map(|command| command.data)
-    }
-}
-
-/// Reads command `data`. With `keep_unknown`, keys the model does not know
-/// are kept as JSON text while the command type is unknown or not yet read,
-/// so `data` of an unknown command type can be rebuilt without loss. Keys
-/// after a known `type` are skipped without allocating; Discord sends
-/// `type` first.
-struct CommandDataSeed {
-    keep_unknown: bool,
-}
 
 /// An object key, borrowed from the input when the deserializer can lend it
 /// (serde's own `Cow<str>` always copies).
@@ -589,142 +573,6 @@ impl<'de> Deserialize<'de> for KeyName<'de> {
         deserializer.deserialize_identifier(KeyNameVisitor)
     }
 }
-
-/// A command `data` key: a known field, or the name of another key (only
-/// copied when the input cannot lend it).
-enum CommandKey<'de> {
-    Id,
-    Name,
-    Type,
-    Options,
-    Resolved,
-    TargetId,
-    GuildId,
-    Other(Cow<'de, str>),
-}
-
-impl<'de> CommandKey<'de> {
-    fn from_name(name: Cow<'de, str>) -> Self {
-        match &*name {
-            "id" => Self::Id,
-            "name" => Self::Name,
-            "type" => Self::Type,
-            "options" => Self::Options,
-            "resolved" => Self::Resolved,
-            "target_id" => Self::TargetId,
-            "guild_id" => Self::GuildId,
-            _ => Self::Other(name),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for CommandKey<'de> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct KeyVisitor;
-
-        impl<'de> Visitor<'de> for KeyVisitor {
-            type Value = CommandKey<'de>;
-
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a field name")
-            }
-
-            fn visit_borrowed_str<E: de::Error>(self, name: &'de str) -> Result<Self::Value, E> {
-                Ok(CommandKey::from_name(Cow::Borrowed(name)))
-            }
-
-            fn visit_str<E: de::Error>(self, name: &str) -> Result<Self::Value, E> {
-                // Only unknown keys keep their name; known ones match here
-                // without a copy.
-                Ok(match CommandKey::from_name(Cow::Borrowed(name)) {
-                    CommandKey::Other(_) => CommandKey::Other(Cow::Owned(name.to_owned())),
-                    CommandKey::Id => CommandKey::Id,
-                    CommandKey::Name => CommandKey::Name,
-                    CommandKey::Type => CommandKey::Type,
-                    CommandKey::Options => CommandKey::Options,
-                    CommandKey::Resolved => CommandKey::Resolved,
-                    CommandKey::TargetId => CommandKey::TargetId,
-                    CommandKey::GuildId => CommandKey::GuildId,
-                })
-            }
-
-            fn visit_string<E: de::Error>(self, name: String) -> Result<Self::Value, E> {
-                Ok(CommandKey::from_name(Cow::Owned(name)))
-            }
-        }
-
-        deserializer.deserialize_identifier(KeyVisitor)
-    }
-}
-
-impl<'de> DeserializeSeed<'de> for CommandDataSeed {
-    type Value = CommandData;
-
-    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<CommandData, D::Error> {
-        deserializer.deserialize_map(self)
-    }
-}
-
-impl<'de> Visitor<'de> for CommandDataSeed {
-    type Value = CommandData;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("an application command data object")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<CommandData, A::Error> {
-        let mut id: Option<Option<CommandId>> = None;
-        let mut name: Option<Option<String>> = None;
-        let mut kind: Option<Option<CommandType>> = None;
-        let mut options: Option<Option<Vec<CommandInteractionOption>>> = None;
-        let mut resolved: Option<Option<ResolvedData>> = None;
-        let mut target_id: Option<Option<GenericId>> = None;
-        let mut guild_id: Option<Option<GuildId>> = None;
-        let mut unknown_keys = Vec::new();
-
-        while let Some(key) = map.next_key::<CommandKey<'de>>()? {
-            match key {
-                CommandKey::Id => set_once(&mut id, "id", &mut map)?,
-                CommandKey::Name => set_once(&mut name, "name", &mut map)?,
-                CommandKey::Type => {
-                    set_once(&mut kind, "type", &mut map)?;
-                    if is_known_command_type(kind.flatten()) {
-                        unknown_keys = Vec::new();
-                    }
-                }
-                CommandKey::Options => set_once(&mut options, "options", &mut map)?,
-                CommandKey::Resolved => set_once(&mut resolved, "resolved", &mut map)?,
-                CommandKey::TargetId => set_once(&mut target_id, "target_id", &mut map)?,
-                CommandKey::GuildId => set_once(&mut guild_id, "guild_id", &mut map)?,
-                CommandKey::Other(key) => {
-                    let known_type = kind.is_some_and(is_known_command_type);
-                    if self.keep_unknown && !known_type {
-                        unknown_keys.push((key.into_owned(), map.next_value()?));
-                    } else {
-                        map.next_value::<IgnoredAny>()?;
-                    }
-                }
-            }
-        }
-
-        let data = CommandInteractionData {
-            id: id.flatten(),
-            name: name.flatten(),
-            kind: kind.flatten(),
-            options: options.flatten().unwrap_or_default(),
-            resolved: resolved.flatten(),
-            target_id: target_id.flatten(),
-            guild_id: guild_id.flatten(),
-        };
-        let unknown_keys =
-            (self.keep_unknown && !is_known_command_type(data.kind)).then_some(unknown_keys);
-        Ok(CommandData { data, unknown_keys })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// authorizing_integration_owners
-// ---------------------------------------------------------------------------
 
 impl Serialize for AuthorizingIntegrationOwners {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -784,6 +632,7 @@ impl<'de> Deserialize<'de> for AuthorizingIntegrationOwners {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::value::RawValue;
     use serde_json::{json, Value};
 
     use crate::model::{CommandType, Interaction, InteractionType};
@@ -830,44 +679,81 @@ mod tests {
     }
 
     #[test]
-    fn unknown_command_types_keep_every_data_key() {
-        let data = json!({
-            "type": 99,
-            "id": "5",
-            "name": "launch",
-            "options": [{ "type": 3, "name": "o", "value": "v" }],
-            "future_key": { "nested": [true] },
-            "guild_id": "7"
-        });
-        // `type` first inside `data` (Discord's order): the documented keys
-        // are re-encoded and the others kept as sent.
-        let type_first = format!(
-            r#"{{{CONTEXT},"type":2,"data":{{"type":99,"future_key":{{"nested":[true]}},"id":"5","name":"launch","options":[{{"type":3,"name":"o","value":"v"}}],"guild_id":"7"}}}}"#
-        );
-        // `type` last, so the unknown key comes before the decoder knows
-        // the command type.
-        let type_last = format!(
-            r#"{{{CONTEXT},"type":2,"data":{{"future_key":{{"nested":[true]}},"id":"5","name":"launch","options":[{{"type":3,"name":"o","value":"v"}}],"guild_id":"7","type":99}}}}"#
-        );
-        let data_first = format!(r#"{{"data":{data},{CONTEXT},"type":2}}"#);
-        for payload in [type_first, type_last, data_first] {
-            let interaction = decode_interaction(&payload).unwrap();
-            let Interaction::Unknown { kind, .. } = &interaction else {
-                panic!("{interaction:?}");
-            };
-            assert_eq!(*kind, InteractionType::APPLICATION_COMMAND);
-            assert_eq!(raw_json(&interaction), data, "{payload}");
+    fn unknown_command_types_keep_data_byte_for_byte_in_any_key_order() {
+        // Nested unknown fields, explicit nulls, empty arrays, and an
+        // option whose value is an object (which `CommandOptionValue`
+        // rejects): none of it may be lost or turned into an error.
+        let data_type_first = r#"{"type":99,"id":"5","name":"launch","resolved":{"future":{"x":1},"users":{}},"options":[{"type":3,"name":"o","value":{"k":[1,null]}},{"type":42,"name":"p","value":null,"options":[]}],"future_key":{"nested":[true,null]},"guild_id":null,"empty":[]}"#;
+        let data_type_last = r#"{"id":"5","options":[{"type":3,"name":"o","value":{"k":[1,null]}}],"resolved":{"future":{"x":1}},"empty":[],"type":99}"#;
+        for data in [data_type_first, data_type_last] {
+            for payload in [
+                format!(r#"{{{CONTEXT},"type":2,"data":{data}}}"#),
+                format!(r#"{{"data":{data},{CONTEXT},"type":2}}"#),
+                format!(r#"{{"type":2,"data":{data},{CONTEXT}}}"#),
+            ] {
+                let interaction = decode_interaction(&payload).unwrap();
+                let Interaction::Unknown { kind, raw_data, .. } = &interaction else {
+                    panic!("{payload}: {interaction:?}");
+                };
+                assert_eq!(*kind, InteractionType::APPLICATION_COMMAND);
+                assert_eq!(
+                    raw_data.as_deref().map(RawValue::get),
+                    Some(data),
+                    "{payload}"
+                );
+                // Written back unchanged, and read back the same way.
+                let written = serde_json::to_string(&interaction).unwrap();
+                assert!(written.contains(data), "{written}");
+                let again = decode_interaction(&written).unwrap();
+                assert_eq!(serde_json::to_string(&again).unwrap(), written);
+            }
         }
 
-        // A known command type drops the unknown keys.
-        let known = decode_interaction(&format!(
-            r#"{{{CONTEXT},"type":2,"data":{{"future_key":1,"type":1,"name":"ping"}}}}"#
+        // The same through a `Value` (sorted keys, `data` first).
+        let value: Value = serde_json::from_str(&format!(
+            r#"{{{CONTEXT},"type":2,"data":{data_type_first}}}"#
         ))
         .unwrap();
-        let Interaction::ChatInputCommand(command) = known else {
-            panic!("{known:?}");
-        };
-        assert_eq!(command.data.kind, Some(CommandType::CHAT_INPUT));
+        let from_value = crate::parsers::parse_interaction(&value).unwrap();
+        assert_eq!(
+            raw_json(&from_value),
+            serde_json::from_str::<Value>(data_type_first).unwrap()
+        );
+    }
+
+    #[test]
+    fn known_command_types_decode_typed_in_any_key_order() {
+        let data = r#"{"future_key":1,"options":[{"type":4,"name":"n","value":3}],"type":1,"name":"ping"}"#;
+        for payload in [
+            format!(r#"{{{CONTEXT},"type":2,"data":{data}}}"#),
+            format!(r#"{{"data":{data},{CONTEXT},"type":2}}"#),
+        ] {
+            let interaction = decode_interaction(&payload).unwrap();
+            let Interaction::ChatInputCommand(command) = interaction else {
+                panic!("{interaction:?}");
+            };
+            assert_eq!(command.data.kind, Some(CommandType::CHAT_INPUT));
+            assert_eq!(
+                command.data.options[0]
+                    .value
+                    .as_ref()
+                    .and_then(|v| v.as_i64()),
+                Some(3)
+            );
+        }
+        // A known command type is held to the typed model: an object option
+        // value is an error, not an unknown interaction.
+        let error = decode_interaction(&format!(
+            r#"{{{CONTEXT},"type":2,"data":{{"type":1,"name":"x","options":[{{"type":3,"name":"o","value":{{}}}}]}}}}"#
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("invalid interaction.data"), "{error}");
+        // A command type that is not a number is an error too.
+        assert!(decode_interaction(&format!(
+            r#"{{{CONTEXT},"type":2,"data":{{"type":"1","name":"x"}}}}"#
+        ))
+        .is_err());
     }
 
     #[test]

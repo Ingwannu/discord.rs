@@ -278,11 +278,7 @@ impl CommandInteractionOption {
 }
 
 /// `data` of an application command or autocomplete interaction.
-///
-/// `Deserialize` is written by hand (in `parsers/interaction`) so the
-/// interaction decoder can keep the keys of an unknown command type as JSON
-/// text with the same field list; it reads the same keys a derive would.
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CommandInteractionData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<CommandId>,
@@ -292,9 +288,9 @@ pub struct CommandInteractionData {
     /// [`CommandType::CHAT_INPUT`].
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<CommandType>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<CommandInteractionOption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedData>,
     /// Target of a user or message context menu command. Its kind depends
     /// on the command type, so this shared field is untyped; use
@@ -536,13 +532,9 @@ pub enum Interaction {
         /// the `type` key of `raw_data` (2.x stored the command type here
         /// instead).
         kind: InteractionType,
-        /// The interaction's `data` object as JSON text; `None` when Discord
-        /// sent no `data`. Read it with `serde_json::from_str(raw.get())`.
-        ///
-        /// For an application command of an unknown command type whose
-        /// `type` key came before the other keys, the documented keys are
-        /// re-encoded from their decoded values and the rest are kept as
-        /// sent, so the object is equivalent but not byte-identical.
+        /// The interaction's `data` object as JSON text, exactly as
+        /// received; `None` when Discord sent no `data`. Read it with
+        /// `serde_json::from_str(raw.get())`.
         raw_data: Option<Box<RawValue>>,
     },
 }
