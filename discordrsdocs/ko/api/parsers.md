@@ -13,9 +13,9 @@
 
 키 순서: JSON 객체에는 순서가 없고 `data`의 모양은 `type`에 따라 다릅니다. `type`이 먼저 오면(Discord 게이트웨이의 순서) 컴포넌트·자동완성·모달 제출의 `data`는 그 자리에서 디코딩합니다. 애플리케이션 명령의 `data`는 변형이 그 안의 명령 `type`에 달려 있고 모르는 명령 타입은 `data`를 받은 그대로 지켜야 하므로, 항상 JSON 텍스트로 먼저 잡았다가 객체 끝에서 디코딩합니다(`data` 복사 1회). `data`가 `type`보다 먼저 와도 같은 방식입니다. 결과는 같습니다.
 
-왕복 범위: Discord Interaction Structure의 모든 필드를 읽고 다시 씁니다(`guild`·`channel` 부분 객체, `message`, `version`, `attachment_size_limit` 포함). 빠지는 것: 문서에 없는 폐기 필드 `entitlement_sku_ids`, 알려진 타입의 `data` 안에서 타입 모델에 없는 키(예: 메시지 컴포넌트의 숫자 `id`), 모달 제출의 라벨·액션 행 감싸개(입력은 평평한 목록으로 다시 씀). `Interaction::Unknown`은 `data`를 바이트 그대로 보관합니다.
+왕복 범위: Discord Interaction Structure의 모든 필드를 읽고 다시 씁니다(`guild`·`channel` 부분 객체, `message`, `version`, `attachment_size_limit` 포함). 빠지는 것: 문서에 없는 폐기 필드 `entitlement_sku_ids`, 모달 제출의 라벨·액션 행 감싸개와 컴포넌트의 숫자 `id`(입력은 평평한 목록으로 다시 씀), 생략과 같게 읽고 쓰는 `null` 값, 아래 중복 키 문단에 적은 모델에 아직 없는 키. 문서 예시를 양방향으로 비교하므로 그 밖의 키가 빠지면 테스트가 실패합니다. `Interaction::Unknown`은 `data`를 바이트 그대로 보관합니다.
 
-반복된 문서화 키는 디코더 어디서나 오류입니다(인터랙션, `data`, 모달 컴포넌트, 안의 파생 모델). 모르는 키는 이 검사 없이 건너뛰고, 모르는 타입이라 텍스트로 보관한 `data`는 검사하지 않습니다.
+디코더가 읽는 키가 반복되면 어디서나 오류입니다: 인터랙션, `data`, 모달 컴포넌트(숫자 `id` 포함), 안의 모델. 읽지 않는 키는 이 검사 없이 건너뜁니다: 문서에 없는 키(`entitlement_sku_ids`, 멤버의 `is_pending` 등)와 모델에 아직 없는 몇몇 문서화 키(사용자의 `display_name_styles`, 반응의 `burst_colors`·`me_burst`). 모르는 타입이라 텍스트로 보관한 `data`는 검사하지 않습니다. 인터랙션 `data`는 JSON 객체여야 합니다(배열은 위치로 읽지 않고 오류).
 
 길드 인터랙션에서 Discord는 `member`(`user` 포함)만 보내고 `user`는 보내지 않습니다. 디코더는 핸들러가 호출자를 한 곳에서 찾도록 `context.user`를 `member.user`의 복사본으로 채웁니다. 디코딩에 남은 유일한 복제이며 다시 쓸 때는 쓰지 않습니다.
 

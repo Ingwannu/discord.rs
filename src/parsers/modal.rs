@@ -514,6 +514,9 @@ struct NodeSeed<'a> {
 #[serde(field_identifier, rename_all = "snake_case")]
 enum NodeField {
     Type,
+    // The component's numeric ID: not kept (submissions are looked up by
+    // `custom_id`), but read so a repeated one is rejected like the rest.
+    Id,
     CustomId,
     Value,
     Values,
@@ -545,13 +548,21 @@ impl<'de> Visitor<'de> for NodeSeed<'_> {
         let mut values = None;
         let mut children_array = None;
         let mut has_child = false;
+        let mut has_id = false;
         // A repeated key is an error, as in the rest of the decoder; only
-        // unknown keys are skipped unchecked.
+        // keys the decoder does not read are skipped unchecked.
         while let Some(field) = map.next_key::<NodeField>()? {
             match field {
                 NodeField::Type => {
                     reject_duplicate(&kind, "type")?;
                     kind = Some(map.next_value::<LenientU8>()?.0);
+                }
+                NodeField::Id => {
+                    if has_id {
+                        return Err(de::Error::duplicate_field("id"));
+                    }
+                    map.next_value::<IgnoredAny>()?;
+                    has_id = true;
                 }
                 NodeField::CustomId => {
                     reject_duplicate(&custom_id, "custom_id")?;
@@ -1337,6 +1348,8 @@ mod tests {
             r#"{"type":3,"custom_id":"a","values":[],"values":["x"]}"#,
             r#"{"type":1,"components":[],"components":[]}"#,
             r#"{"type":18,"component":{"type":4,"custom_id":"a","value":"x"},"component":{"type":4,"custom_id":"b","value":"y"}}"#,
+            r#"{"type":4,"id":1,"id":2,"custom_id":"a","value":"x"}"#,
+            r#"{"type":18,"id":1,"id":1,"component":{"type":4,"custom_id":"a","value":"x"}}"#,
         ] {
             let data = format!(r#"{{"custom_id":"m","components":[{node}]}}"#);
             let error = serde_json::from_str::<V2ModalSubmission>(&data).unwrap_err();
@@ -1345,9 +1358,9 @@ mod tests {
                 "{node}: {error}"
             );
         }
-        // Unknown keys are skipped, repeated or not.
+        // Keys the decoder does not read are skipped, repeated or not.
         let submission: V2ModalSubmission = serde_json::from_str(
-            r#"{"custom_id":"m","components":[{"type":4,"id":1,"id":2,"custom_id":"a","value":"x"}]}"#,
+            r#"{"custom_id":"m","components":[{"type":4,"id":1,"future":1,"future":2,"custom_id":"a","value":"x"}]}"#,
         )
         .unwrap();
         assert_eq!(submission.get_text("a"), Some("x"));
