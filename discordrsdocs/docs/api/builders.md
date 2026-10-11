@@ -114,6 +114,66 @@ let upload = FileUploadBuilder::new("evidence").file_types(["image", ".pdf"]).tr
 let option = CommandOptionBuilder::attachment("file", "Upload a clip").file_types(["video"]);
 ```
 
+## Component Embed (link previews) (3.0)
+
+Since 2026-10-05 a website can replace its Discord link preview with a Components V2 layout by serving a `discord:component-embed` JSON document ([Discord docs](https://docs.discord.com/developers/link-previews/component-embeds)). No bot or app is involved: Discord's crawler reads the document from the page. `discordrs::request::ComponentEmbed` builds it from a restricted model, separate from these message builders and from the receiving side (`Embed::components`):
+
+- `ComponentEmbed { component: PreviewContainer }`. The container holds `PreviewComponent`s: text displays, sections (with a link button or thumbnail accessory), media galleries, separators, and action rows of link buttons.
+- `PreviewLinkButton` is the only button. It emits only `id`, `type`, `url`, `style` (always 5), `label`, `emoji`, and `disabled`. Nested containers, select menus, files, custom-ID buttons, and raw JSON cannot be expressed; `PreviewActionRow::add_button(ButtonBuilder)` does not compile.
+
+```rust
+use discordrs::request::{
+    ComponentEmbed, PreviewActionRow, PreviewLinkButton, PreviewMediaGallery, PreviewMediaItem,
+    PreviewSection, PreviewThumbnail,
+};
+
+let embed = ComponentEmbed::builder()
+    .accent_color(0x1ABC9C)
+    .add_component(
+        PreviewSection::new(PreviewThumbnail::new("https://example.com/boss.png"))
+            .add_text("# New version out!\nThe dungeon is deceptively tougher."),
+    )
+    .add_component(
+        PreviewMediaGallery::new().add_item(PreviewMediaItem::new("https://example.com/1.png")),
+    )
+    .add_component(
+        PreviewActionRow::new()
+            .add_button(PreviewLinkButton::new("https://example.com/store").label("Store")),
+    )
+    .try_build()?;
+
+// Inline: server-render into <head>. Discord does not run scripts, so a tag
+// added by client-side code is never seen.
+let script = embed.to_script_tag()?;
+
+// Or linked: serve `embed.to_json()?` from the same site and point at it.
+let link = ComponentEmbed::link_tag("https://example.com/embeds/v2.json")?;
+```
+
+Keep the page's Open Graph tags: Discord falls back to them whenever it cannot show the component embed.
+
+`build()` never validates. `try_build()`, `validate()`, `to_json()`, and `to_script_tag()` check the limits below and fail with a `ComponentEmbedError` variant that names the rule and the location (for example `component.components[2].accessory.media.url`). The limits are associated constants on `ComponentEmbed` (`MAX_PAYLOAD_BYTES`, `MAX_COMPONENTS`, ...):
+
+| Rule | Limit | Spec section |
+| --- | --- | --- |
+| Document size | 3,000 bytes of the escaped JSON, escapes counted at full length | Component Embeds, "Adding the Payload" |
+| Components | 40, the container included (buttons, section texts, and thumbnails count) | "Compatible Components" |
+| Gallery items | 10 across the whole embed, 1-10 per gallery; thumbnails do not count | "Compatible Components" |
+| Media URLs | absolute `http`/`https`, at most 2,048 characters | "Media" |
+| Link buttons | label or emoji (or both); label at most 80 characters; URL at most 512 characters | "Compatible Components", Button Structure |
+| Sections | 1-3 text displays and an accessory | Section Structure |
+| Action rows | 1-5 link buttons | Action Row Structure |
+| Media descriptions | at most 1,024 characters | Thumbnail / Media Gallery Item Structure |
+| Accent colour | at most `0xFFFFFF` | Container Structure |
+| Component `id`s | unique when nonzero | Anatomy of a Component |
+| Container | at least one child (as `ContainerBuilder::validate`) | crate rule |
+
+Not checked, because the spec does not require it or it cannot be known here: media file extensions (Discord decides by the fetched content), the host of a `link_tag` href (it must be on the page's host, a subdomain, or the parent domain), and text display length (bounded by the 3,000 bytes).
+
+Escaping: `to_json()` returns compact JSON in which every `<`, `>`, `&`, U+2028, and U+2029 inside a string is written as `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`. No `</script>` or `<!--` can end or alter the element, and the text stays well-formed inside an XHTML page (which Discord also accepts). JSON parsers read the escapes back as the same characters. The 3,000-byte limit is checked on exactly this string, and `to_script_tag()` puts it inside the element with no added whitespace. Other non-ASCII text stays UTF-8, so serve the page as UTF-8.
+
+Existing message builders convert with `TryFrom`, failing with the offending path instead of dropping anything: `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, and `ComponentEmbed::try_from(&document)` for a hand-written `{"component": ...}` file. Custom-ID or premium buttons, selects, text inputs, files, nested containers, raw components, and unknown keys fail. Conversion checks shape only; the limits are checked on output.
+
 ## Practical Advice
 
 - Keep `custom_id` values stable; they are routing keys.

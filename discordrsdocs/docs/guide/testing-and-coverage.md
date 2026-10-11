@@ -275,16 +275,19 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
 
 ## Compile-Fail Tests (trybuild)
 
-`tests/compile_fail.rs` checks that misuse of the 3.0 typed primitives and async-trait contracts stays a compile error:
+`tests/compile_fail.rs` checks that misuse of the 3.0 typed primitives, async-trait contracts, and the Component Embed model stays a compile error:
 
 - passing a `ChannelId` where a `GuildId` is required;
 - implicit `u64` → ID conversion;
 - `GuildId::default()`, or `#[derive(Default)]` on a struct that stores an ID;
 - an integer where an open discriminant (`ChannelType`, `ButtonStyle`) is expected, `Default` on a discriminant (or a struct storing one), and the 2.x tuple spelling `ActivityType(0)` / `.0`;
 - `Patch::null()` on a non-nullable `Patch<bool>`;
-- an `async fn` impl of a public async trait whose future is not `Send` (`CacheBackend`, the async trait available with default features, which this test uses).
+- an `async fn` impl of a public async trait whose future is not `Send` (`CacheBackend`, the async trait available with default features, which this test uses);
+- a custom-ID `ButtonBuilder` in a Component Embed preview row, or `custom_id` on a `PreviewLinkButton` (link buttons only).
 
 The positive side of that contract is `tests/async_traits.rs`: it implements every public async trait from outside the crate with plain `async fn` (no attribute macro) and runs the futures on spawned Tokio tasks, so a signature that `async fn` can no longer implement fails the build.
+
+The runtime side of the Component Embed contract is `tests/component_embed.rs`. Its fixtures in `tests/fixtures/component_embed/` are the spec's own example documents (copied verbatim from discord-api-docs `developers/link-previews/component-embeds.mdx`) plus the exact bytes this crate emits for them (`*.golden.*`). Every limit is tested at its boundary and one past it, and the 3,000-byte limit is tested with characters that grow when escaped. If an encoder change alters the output on purpose, regenerate the golden files and review the diff, as with the `.stderr` snapshots.
 
 Each case is a file in `tests/ui/` with an expected `.stderr` that holds rustc's diagnostic text. That text changes between Rust releases, so the snapshots are kept for one toolchain only, the pinned `RUST_TOOLCHAIN` (currently 1.99.0). The test does nothing unless `DISCORDRS_TRYBUILD=1` is set. CI sets it only in the `rust-check` job (step "Compile-fail snapshots"). The `msrv` and `stable-canary` jobs still compile the test file, and the test then skips itself.
 

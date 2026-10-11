@@ -35,7 +35,7 @@
 | 2 | 내부 이벤트 처리(캐시·청크 대기·컬렉터)와 사용자 핸들러 실행 분리, 핸들러 작업 상한, 인터랙션 응답 상태(Unacknowledged → InFlight → Acknowledged, 취소 처리), 샤드 단위 캐시 무효화, 외부 캐시 백엔드 쓰기 순서 보장 | L | 순서 보장과 과부하 동작을 지키며 교착을 푸는 것 |
 | 3 ✅ | `Id<M>(NonZeroU64)` 타입 ID, 열린 판별값 newtype(`ChannelType(u8)` 등), 권한 표현 통일, `Embed.components`·`flags` 수신 필드(Component Embed) | L | 잘못된 기본 ID, 다형 대상(역할/사용자), 허용 값 축소 |
 | 4 | 누락/null/값을 구분하는 patch 필드 타입, 캐시 병합 수정, `Arc` 이벤트 전달, 직접 타입 디코딩, raw 보관 옵션(알 수 없는 이벤트·디코드 실패는 항상 보관), 참조 기반 컬렉터 필터 | L | 누락/null 구분이나 알 수 없는 payload 손실 |
-| 5 | 타입 요청·컴포넌트 모델과 빌더 출력, REST 이름 정리(`_typed` 제거), 응답 경로 통합, Component Embed 생성 빌더(웹사이트용 payload·`<script>` 태그·제한 검증) | L | wire 형태 차이, 필드 누락 |
+| 5 | 타입 요청·컴포넌트 모델과 빌더 출력, REST 이름 정리(`_typed` 제거), 응답 경로 통합, Component Embed 생성 빌더(웹사이트용 payload·`<script>` 태그·제한 검증, 2026-10-11 완료) | L | wire 형태 차이, 필드 누락 |
 | 6 | 멀티 프로세스 샤딩 IPC·종료·IDENTIFY 조율, 취소 가능한 오디오 읽기와 sink 전달 | L | 프로세스·작업 누수, 취소로 인한 PCM 프레임 손상 |
 | 7 | 권한 계산(`permissions_for`), 포매터, 리액션 컬렉터, 커맨드 옵션 검증(아래 부록 1) | M | 불완전한 캐시를 권위 있는 권한으로 오인, 과잉 검증 |
 | 8 | 라우트 기준 drift 리포트(아래 부록 2), 마이그레이션 가이드, compile-fail 테스트, MSRV 명시·검증, 할당 벤치마크 | M | drift 오탐, 검증되지 않은 마이그레이션 경로 |
@@ -87,7 +87,11 @@ operation)를 읽고, 8단계 drift CI가 같은 메타데이터를 쓴다.
 - 생성: payload는 `{"component": Container}` 하나, 3,000바이트(이스케이프 시퀀스는 전체 길이로
   계산), 컨테이너 포함 컴포넌트 40개, 갤러리 항목은 임베드 전체 10개, 중첩 Container 금지,
   버튼은 `style: 5` 링크 버튼만 허용하며 `id`/`type`/`url`/`style`/`label`/`emoji`/`disabled`
-  외 키가 있으면 전체 무효, 미디어 URL은 http(s)·2,048자 이하(5단계).
+  외 키가 있으면 전체 무효, 미디어 URL은 http(s)·2,048자 이하. 5단계 첫 항목으로 구현 완료
+  (2026-10-11, 규격 기준 discord-api-docs `3714862`): `discordrs::request`의 `ComponentEmbed`·
+  `ComponentEmbedBuilder`·`PreviewComponent` 계열, `to_json()`/`to_script_tag()`/`link_tag()`,
+  `TryFrom<ContainerBuilder>`/`TryFrom<&Value>` 변환. 결정 기록은
+  `docs/design/3.0-types-events-requests.md` §4 "Component Embed 생성 구현".
 - 규격은 Discord가 "변경될 수 있다"고 명시하므로 한도 상수에 출처를 남기고 과잉 차단하지 않는다.
 
 ### 의존성 정리 (2026-10-11)

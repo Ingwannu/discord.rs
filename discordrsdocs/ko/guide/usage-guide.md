@@ -78,6 +78,10 @@ async fn on_event(ctx: Context, event: Event) -> Result<(), discordrs::DiscordEr
 - 구성: `RestClient::builder()`(api_base/api_version, 타임아웃, user agent, proxy, 커스텀 클라이언트, rate-limit 콜백, 기본 allowed mentions), `ClientBuilder::default_allowed_mentions(...)`/`cache_backend(...)`, `CacheConfig::sweep_interval(...)`.
 - 타입드 모델 보강: `Message.components`가 `iter()`를 제공하는 `Vec<MessageComponent>`로, 인터랙션 `resolved` 데이터가 여섯 개 조회 맵의 `ResolvedData`로, 메시지 인터랙션 메타데이터가 `MessageInteractionMetadata`로 타입화되었습니다.
 
+## 4.7 웹사이트 링크 미리보기 (3.0)
+
+봇 없이 웹사이트의 Discord 링크 미리보기를 Components V2 레이아웃으로 바꾸려면 `discordrs::request::ComponentEmbed`로 문서를 만들고 `to_script_tag()` 결과를 서버에서 페이지 `<head>`에 넣습니다. 허용 컴포넌트, 한도, 이스케이프 규칙은 [빌더 API: Component Embed](#/ko/api/builders)에 있습니다.
+
 ## 5. 참고
 
 영문 원문 예제 전체는 [English Usage Guide](#/docs/guide/usage-guide)에서 확인할 수 있습니다.

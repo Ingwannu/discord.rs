@@ -63,7 +63,7 @@ Fields and flags:
 - `CurrentUserGuildsQuery::shard` — required since 2026-09-15 for large bot sharding
 - `CreateChannelInvite::target_user_ids`
 - `file_types` on `FileUploadBuilder` and `CommandOptionBuilder` (`ATTACHMENT` options)
-- `Embed::components` / `Embed::flags` and `Embed::is_component_embed()` for Component Embed link previews
+- `Embed::components` / `Embed::flags` and `Embed::is_component_embed()` for Component Embed link previews; `discordrs::request::ComponentEmbed` generates the website side (the `discord:component-embed` document, `<script>`/`<link>` tags, and the spec's limits)
 - `ChannelFlags` (`CHANNEL_OBFUSCATED`, `IS_SPOILER_CHANNEL`, ...), `Channel::is_obfuscated()`, and IDENTIFY `capabilities` (`GatewayCapabilities`, `ClientBuilder::gateway_capabilities(...)`) for channel obfuscation, mandatory from 2026-11-16
 
 ## Routes and Options Added in 2.1
