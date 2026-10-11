@@ -148,7 +148,9 @@ mod tests {
         let _webhook_execute_query = WebhookExecuteQuery::default();
         let _webhook_message_query = WebhookMessageQuery::default();
         let _gateway = Gateway::default();
-        let _authorization = AuthorizationInformation::default();
+        // No `Default` since its `application` became a typed partial
+        // application; naming the type is enough to check the export.
+        let _authorization: Option<AuthorizationInformation> = None;
         let _allowed_mentions = AllowedMentions::default();
         let _reaction_count_details = ReactionCountDetails::default();
     }

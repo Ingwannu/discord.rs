@@ -666,6 +666,17 @@ open_discriminant! {
     }
 }
 
+open_discriminant! {
+    /// Team member `membership_state` (Discord docs: Teams › Membership
+    /// State Enum). Added with the typed `Application::team`.
+    pub struct TeamMembershipState(u8) {
+        /// Invited, not yet a member.
+        INVITED = 1,
+        /// Accepted the invite.
+        ACCEPTED = 2,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Guilds
 // ---------------------------------------------------------------------------
@@ -1392,7 +1403,7 @@ mod tests {
             BaseTheme: u8, ApplicationEventWebhookStatus: u8, OnboardingMode: u8,
             IntegrationExpireBehavior: u8, RecurrenceRuleFrequency: u8,
             RecurrenceRuleWeekday: u8, RecurrenceRuleMonth: u8,
-            VoiceChannelEffectAnimationType: u8,
+            VoiceChannelEffectAnimationType: u8, TeamMembershipState: u8,
         }
     }
 

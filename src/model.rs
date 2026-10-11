@@ -47,7 +47,7 @@ mod webhook;
 pub use application::{
     ActivityInstance, ActivityLocation, Application, ApplicationInstallParams,
     ApplicationIntegrationTypeConfig, ApplicationRoleConnectionMetadata, AuthorizationInformation,
-    ModifyCurrentApplication, PartialApplication,
+    ModifyCurrentApplication, PartialApplication, Team, TeamMember,
 };
 pub use application_identity::{
     ApplicationIdentities, ApplicationIdentity, ApplicationIdentityProfile,
@@ -193,8 +193,8 @@ pub use discriminant::{
     RecurrenceRuleMonth, RecurrenceRuleWeekday, RoleConnectionMetadataType,
     ScheduledEventEntityType, ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing,
     SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerType,
-    SubscriptionStatus, TextInputStyle, UserPremiumType, VerificationLevel, VideoQualityMode,
-    VoiceChannelEffectAnimationType, WebhookPayloadType, WebhookType,
+    SubscriptionStatus, TeamMembershipState, TextInputStyle, UserPremiumType, VerificationLevel,
+    VideoQualityMode, VoiceChannelEffectAnimationType, WebhookPayloadType, WebhookType,
 };
 pub use id::{
     marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,

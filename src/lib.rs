@@ -177,11 +177,12 @@ pub use model::{
     RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
     SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
     StageInstance, Sticker, StickerItem, StickerPack, StickerPackList, Subscription,
-    SubscriptionQuery, ThreadListResponse, ThreadMember, ThreadMemberQuery, UnfurledMediaItem,
-    UpdateApplicationIdentityProfile, UpdatePresence, UpdateUserApplicationRoleConnection, User,
-    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserContextMenuInteraction,
-    UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
-    Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
+    SubscriptionQuery, Team, TeamMember, ThreadListResponse, ThreadMember, ThreadMemberQuery,
+    UnfurledMediaItem, UpdateApplicationIdentityProfile, UpdatePresence,
+    UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection, UserCollectibles,
+    UserConnection, UserContextMenuInteraction, UserNameplate, UserPrimaryGuild, VanityUrl,
+    VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WebhookExecuteQuery, WebhookMessageQuery,
+    WelcomeScreen, WelcomeScreenChannel,
 };
 // Phase 3 primitives (typed IDs, open discriminants, patch fields). Since
 // series 2 step B every ID has its per-resource alias and since series 3
@@ -208,8 +209,8 @@ pub use model::{
     ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuId,
     SkuType, SoundboardSoundId, StageInstanceId, StageInstancePrivacyLevel, StickerFormatType,
     StickerId, StickerPackId, StickerType, SubscriptionId, SubscriptionStatus, TeamId,
-    TextInputStyle, UploadId, UserId, UserPremiumType, VerificationLevel, VideoQualityMode,
-    VoiceChannelEffectAnimationType, WebhookId, WebhookType, WidgetUserId,
+    TeamMembershipState, TextInputStyle, UploadId, UserId, UserPremiumType, VerificationLevel,
+    VideoQualityMode, VoiceChannelEffectAnimationType, WebhookId, WebhookType, WidgetUserId,
 };
 // The deprecated 2.x names, kept so `discordrs::Snowflake`,
 // `discordrs::MessageSelectDefaultValue`, and `discordrs::PermissionsBitField`
