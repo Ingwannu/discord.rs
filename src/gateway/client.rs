@@ -41,6 +41,13 @@ const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
 /// HELLO gives it back (as abandoned) and retries through the normal
 /// backoff, instead of holding the bucket until the gate's own watchdog.
 const GATED_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Most non-presence commands kept while waiting for an IDENTIFY permit.
+/// That wait can last hours (until a daily budget reset), so the backlog is
+/// bounded: presence updates coalesce to the newest one, and beyond this
+/// many other commands the oldest is dropped. Its caller has most likely
+/// timed out by then (e.g. `fetch_members`), while newer requests may
+/// still be answered.
+const MAX_DEFERRED_WHILE_GATED: usize = 32;
 /// A connection that dies faster than this is treated as unhealthy and
 /// re-dialed with escalating backoff instead of immediately.
 const SHORT_SESSION_THRESHOLD: Duration = Duration::from_secs(30);
@@ -266,11 +273,49 @@ impl GatewayClient {
                 }, if listening => match command {
                     Some(GatewayCommand::Shutdown) => return Ok(PermitWait::Shutdown),
                     Some(GatewayCommand::Reconnect) => {}
-                    Some(command) => self.deferred_commands.push_back(command),
+                    Some(command) => self.defer_while_gated(command),
                     None => listening = false,
                 },
             }
         }
+    }
+
+    /// Queues a command that arrived while waiting for an IDENTIFY permit,
+    /// with the bounded backlog policy of [`MAX_DEFERRED_WHILE_GATED`].
+    /// `Shutdown` never comes here; it ends the wait instead.
+    fn defer_while_gated(&mut self, command: GatewayCommand) {
+        fn is_presence(command: &GatewayCommand) -> bool {
+            matches!(
+                command,
+                GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_)
+            )
+        }
+        if is_presence(&command) {
+            // Presence is state: only the newest update matters.
+            self.deferred_commands.retain(|queued| !is_presence(queued));
+            self.deferred_commands.push_back(command);
+            return;
+        }
+        let queued = self
+            .deferred_commands
+            .iter()
+            .filter(|queued| !is_presence(queued))
+            .count();
+        if queued >= MAX_DEFERRED_WHILE_GATED {
+            if let Some(oldest) = self
+                .deferred_commands
+                .iter()
+                .position(|queued| !is_presence(queued))
+            {
+                if let Some(dropped) = self.deferred_commands.remove(oldest) {
+                    warn!(
+                        "dropping deferred gateway command {dropped:?} while waiting for an \
+                         IDENTIFY permit (backlog limit {MAX_DEFERRED_WHILE_GATED})"
+                    );
+                }
+            }
+        }
+        self.deferred_commands.push_back(command);
     }
 
     async fn connect_and_run(
@@ -2273,6 +2318,74 @@ mod tests {
             Some(GatewayCommand::UpdatePresence(status)) if status == "idle"
         ));
         assert_eq!(client.deferred_commands.len(), 1);
+    }
+
+    /// Regression: commands that arrived during a long permit wait were
+    /// drained into an unbounded backlog.
+    #[tokio::test]
+    async fn pending_identify_gate_bounds_and_coalesces_deferred_commands() {
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let gate: Arc<dyn crate::ws::IdentifyGate> = Arc::new(PendingGate);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::default().identify_gate(gate))
+            .control(command_rx);
+        let extra = 8;
+        command_tx
+            .send(GatewayCommand::UpdatePresence("idle".into()))
+            .await
+            .unwrap();
+        for index in 0..(super::MAX_DEFERRED_WHILE_GATED + extra) {
+            command_tx
+                .send(GatewayCommand::SendPayload(
+                    serde_json::json!({ "n": index }),
+                ))
+                .await
+                .unwrap();
+            if index == 3 {
+                command_tx
+                    .send(GatewayCommand::UpdatePresenceData(
+                        UpdatePresence::online_with_activity("busy"),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+        command_tx
+            .send(GatewayCommand::UpdatePresence("dnd".into()))
+            .await
+            .unwrap();
+        command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_, _| {})))
+            .await
+            .expect("Shutdown must still end the wait");
+        assert!(result.is_ok());
+
+        // One presence update survives: the newest.
+        let presences: Vec<&GatewayCommand> = client
+            .deferred_commands
+            .iter()
+            .filter(|command| {
+                matches!(
+                    command,
+                    GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_)
+                )
+            })
+            .collect();
+        assert_eq!(presences.len(), 1);
+        assert!(matches!(presences[0], GatewayCommand::UpdatePresence(status) if status == "dnd"));
+        // Other commands are capped, keeping the newest.
+        let payloads: Vec<u64> = client
+            .deferred_commands
+            .iter()
+            .filter_map(|command| match command {
+                GatewayCommand::SendPayload(payload) => payload["n"].as_u64(),
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<u64> =
+            (extra as u64..(super::MAX_DEFERRED_WHILE_GATED + extra) as u64).collect();
+        assert_eq!(payloads, expected);
     }
 
     /// Regression: only the TCP/TLS connect was bounded while a permit was

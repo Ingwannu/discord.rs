@@ -143,8 +143,9 @@
 // - Chosen approach: (3), plus a conservative budget: every grant takes a
 //   reservation that is settled exactly once (`Abandoned` refunds it, which
 //   wakes a waiting reserver). A refresh from `/gateway/bot` counts all
-//   still-outstanding reservations against the new window, and the count
-//   may go negative, so refunds never create starts Discord lacks. A failed
+//   still-outstanding reservations, plus those that settled `Sent` while
+//   the request was in flight, against the new window. The count may go
+//   negative, so refunds never create starts Discord lacks. A failed
 //   refresh keeps the budget closed and retries with backoff.
 // - Why: lease IDs and expiry cannot stop a process that is merely slow;
 //   only its confirmed death proves it will not IDENTIFY later. Asking per
@@ -760,6 +761,10 @@ pub struct ChildStatus {
 /// refreshes. `available` may go negative to remember that debt; without
 /// that, a refund after a refresh could hand out a start Discord no longer
 /// has.
+///
+/// A reservation that settles `Sent` while a refresh request is in flight
+/// stays charged against that response. Discord may have computed
+/// `remaining` before that IDENTIFY happened.
 struct SessionBudget {
     state: StdMutex<BudgetState>,
     /// Serializes reservers: one of them waits for a refund or the reset
@@ -784,6 +789,13 @@ struct BudgetState {
     reset_at: Instant,
     /// Consecutive failed refreshes, for the retry backoff.
     refresh_failures: u32,
+    /// Set while a `/gateway/bot` request is in flight.
+    refreshing: bool,
+    /// Reservations that settled `Sent` while the request was in flight.
+    /// Discord may have computed `remaining` before that IDENTIFY, so these
+    /// stay charged against the response even though they are no longer
+    /// outstanding.
+    sent_during_refresh: u32,
 }
 
 impl BudgetState {
@@ -794,14 +806,21 @@ impl BudgetState {
             outstanding: 0,
             reset_at: deadline_after(Duration::from_millis(limit.reset_after)),
             refresh_failures: 0,
+            refreshing: false,
+            sent_during_refresh: 0,
         }
     }
 
-    /// Takes Discord's fresh numbers while keeping every outstanding
-    /// reservation counted against the new window.
+    /// Takes Discord's fresh numbers while keeping every reservation that
+    /// may not be reflected in them counted against the new window: those
+    /// still outstanding, and those that settled `Sent` while the request
+    /// was in flight. (Reservations abandoned meanwhile never reached
+    /// Discord and need no charge; no new ones can start, because the
+    /// refreshing reserver holds `reserve_lock`.)
     fn reconcile(&mut self, limit: &SessionStartLimit, retry_delay: Duration) {
         self.total = limit.total.max(limit.remaining).max(1);
-        self.available = i64::from(limit.remaining) - i64::from(self.outstanding);
+        let unaccounted = i64::from(self.outstanding) + i64::from(self.sent_during_refresh);
+        self.available = i64::from(limit.remaining) - unaccounted;
         self.refresh_failures = 0;
         let mut reset_in = Duration::from_millis(limit.reset_after);
         if self.available <= 0 {
@@ -899,8 +918,14 @@ impl SessionBudget {
             state.reset_at = deadline_after(BUDGET_FALLBACK_WINDOW);
             return;
         };
+        {
+            let mut state = lock_or_recover(&self.state);
+            state.refreshing = true;
+            state.sent_during_refresh = 0;
+        }
         let fetched = rest.get_gateway_bot().await;
         let mut state = lock_or_recover(&self.state);
+        state.refreshing = false;
         match fetched {
             Ok(gateway_bot) => {
                 state.reconcile(&gateway_bot.session_start_limit, self.retry_delay);
@@ -924,12 +949,16 @@ impl SessionBudget {
                 );
             }
         }
+        state.sent_during_refresh = 0;
     }
 
     fn settle(&self, outcome: IdentifyOutcome) {
         let refunded = {
             let mut state = lock_or_recover(&self.state);
             state.outstanding = state.outstanding.saturating_sub(1);
+            if outcome == IdentifyOutcome::Sent && state.refreshing {
+                state.sent_during_refresh = state.sent_during_refresh.saturating_add(1);
+            }
             if outcome == IdentifyOutcome::Abandoned {
                 state.available += 1;
                 true
@@ -3681,6 +3710,18 @@ mod tests {
         assert_eq!((state.available, state.total), (0, 1));
     }
 
+    fn budget_state(available: i64, total: u32, reset_in: Duration) -> BudgetState {
+        BudgetState {
+            available,
+            total,
+            outstanding: 0,
+            reset_at: Instant::now() + reset_in,
+            refresh_failures: 0,
+            refreshing: false,
+            sent_during_refresh: 0,
+        }
+    }
+
     fn budget_counts(budget: &SessionBudget) -> (i64, u32) {
         let state = lock_or_recover(&budget.state);
         (state.available, state.outstanding)
@@ -3755,13 +3796,7 @@ mod tests {
         .await;
         let setup = || {
             let budget = Arc::new(SessionBudget::new(
-                BudgetState {
-                    available: 1,
-                    total: 1000,
-                    outstanding: 0,
-                    reset_at: Instant::now() + Duration::from_millis(150),
-                    refresh_failures: 0,
-                },
+                budget_state(1, 1000, Duration::from_millis(150)),
                 Some(rest_for(port)),
             ));
             let scheduler = IdentifyScheduler::new(2, 2, Duration::ZERO, Some(Arc::clone(&budget)));
@@ -3822,6 +3857,60 @@ mod tests {
         assert_eq!(server.await.unwrap().len(), 3);
     }
 
+    /// Regression: a reservation that settled `Sent` while the refresh
+    /// request was in flight left `outstanding` before reconciliation, so
+    /// Discord's `remaining`, computed before that IDENTIFY, was installed in
+    /// full and over-allocated. The mock holds its response until the
+    /// outstanding grant has settled.
+    #[tokio::test]
+    async fn sent_settlement_during_a_refresh_stays_charged() {
+        use tokio::io::AsyncReadExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (received_tx, received_rx) = oneshot::channel::<()>();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0_u8; 4096];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            let _ = received_tx.send(());
+            let _ = release_rx.await;
+            let body = gateway_bot_body(1);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let budget = Arc::new(SessionBudget::new(
+            budget_state(1, 1000, Duration::from_millis(100)),
+            Some(rest_for(port)),
+        ));
+        let scheduler = IdentifyScheduler::new(2, 2, Duration::ZERO, Some(Arc::clone(&budget)));
+        let first = scheduler.acquire(0).await;
+        let mut second = Box::pin(scheduler.acquire(1));
+
+        // Drive the second acquisition until its refresh reaches Discord.
+        tokio::select! {
+            _ = &mut second => panic!("granted before the refresh"),
+            received = received_rx => received.unwrap(),
+        }
+        // The outstanding grant IDENTIFYs while the response is in flight,
+        // and the response (`remaining: 1`) predates that IDENTIFY.
+        first.finish(IdentifyOutcome::Sent);
+        release_tx.send(()).unwrap();
+        assert!(
+            timeout(Duration::from_millis(400), &mut second)
+                .await
+                .is_err(),
+            "the refresh over-allocated a start already used"
+        );
+        assert_eq!(budget_counts(&budget), (0, 0));
+        drop(second);
+        server.await.unwrap();
+    }
+
     /// Regression: a failed refresh assumed a full reset, granting starts
     /// Discord might refuse. It now stays closed until a refresh succeeds.
     #[tokio::test]
@@ -3833,13 +3922,7 @@ mod tests {
         ])
         .await;
         let mut budget = SessionBudget::new(
-            BudgetState {
-                available: 0,
-                total: 5,
-                outstanding: 0,
-                reset_at: Instant::now() + Duration::from_millis(100),
-                refresh_failures: 0,
-            },
+            budget_state(0, 5, Duration::from_millis(100)),
             Some(rest_for(port)),
         );
         budget.retry_delay = Duration::from_millis(300);
