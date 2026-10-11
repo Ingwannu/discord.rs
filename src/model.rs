@@ -4,8 +4,8 @@
 // docs/design/3.0-types-events-requests.md section 5). New model types go in
 // the matching domain file plus one re-export line below; the submodules stay
 // private so the flat `model::X` path remains the only public spelling. The
-// one public exception is `discriminant`, whose 2.x name clashes are reachable
-// only as `model::discriminant::X` until series 3 (see that module's docs).
+// one public exception is `discriminant`, the canonical module of the open
+// discriminants (series 3 swapped its types in at these paths).
 
 mod application;
 mod application_identity;
@@ -54,15 +54,14 @@ pub use application_identity::{
 };
 pub use audit_log::{AuditLog, AuditLogEntry, AuditLogQuery};
 pub use channel::{
-    AddGroupDmRecipient, Attachment, Channel, ChannelType, CreateDmChannel, CreateGroupDmChannel,
+    AddGroupDmRecipient, Attachment, Channel, CreateDmChannel, CreateGroupDmChannel,
     CreateGuildChannel, DefaultReaction, EditChannelPermission, FollowedChannel, ForumTag,
     ModifyGuildChannelPosition, OverwriteTarget, PermissionOverwrite,
 };
 pub use command::{
-    ApplicationCommand, ApplicationCommandHandlerType, ApplicationCommandOption,
-    ApplicationCommandOptionChoice, ApplicationCommandPermission, ApplicationIntegrationType,
-    CommandPermissionTarget, CommandPermissionsId, EditApplicationCommandPermissions,
-    GuildApplicationCommandPermissions, InteractionContextType,
+    ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice,
+    ApplicationCommandPermission, CommandPermissionTarget, CommandPermissionsId,
+    EditApplicationCommandPermissions, GuildApplicationCommandPermissions,
 };
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use component::MessageSelectDefaultValue;
@@ -112,9 +111,8 @@ pub use member::{
 pub use message::{
     AllowedMentions, ChannelMention, ChannelPins, ChannelPinsQuery, CreateMessage, Message,
     MessageActivity, MessageCall, MessageInteraction, MessageInteractionMetadata, MessagePin,
-    MessageReference, MessageReferenceType, MessageSnapshot, MessageSnapshotMessage, Reaction,
-    ReactionCountDetails, RoleSubscriptionData, SearchGuildMessagesQuery,
-    SearchGuildMessagesResponse, SharedClientTheme,
+    MessageReference, MessageSnapshot, MessageSnapshotMessage, Reaction, ReactionCountDetails,
+    RoleSubscriptionData, SearchGuildMessagesQuery, SearchGuildMessagesResponse, SharedClientTheme,
 };
 pub use moderation::{
     AutoModerationAction, AutoModerationActionMetadata, AutoModerationRule,
@@ -131,7 +129,7 @@ pub use poll::{
 };
 pub use presence::{
     Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
-    ActivityType, ClientStatus, Presence, PresenceUser, UpdatePresence,
+    ClientStatus, Presence, PresenceUser, UpdatePresence,
 };
 pub use role::{
     CreateGuildRole, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleColors, RoleTags,
@@ -160,22 +158,23 @@ pub use webhook::{
 };
 
 // Phase 3 primitives. Since series 2 step B every ID field and parameter has
-// its per-resource alias (`GenericId` only where the kind is unknown). Raw `u8`
-// discriminants and `Option<Option<T>>` stay until series 3–4 migrate them;
-// discriminants whose names are still taken by 2.x types stay under
-// `model::discriminant` (see that module's staging plan).
+// its per-resource alias (`GenericId` only where the kind is unknown); since
+// series 3 every discriminant field uses its open newtype from
+// `discriminant` (the canonical module, also public). `Option<Option<T>>`
+// stays until series 4 migrates it.
 pub use discriminant::{
-    AuditLogActionType, AutoModerationActionType, AutoModerationEventType,
-    AutoModerationTriggerType, ButtonStyle, CommandOptionType, CommandPermissionType, CommandType,
-    ComponentType, ConnectionVisibility, DefaultMessageNotificationLevel, EntitlementOwnerType,
-    EntitlementType, ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
-    InteractionResponseType, InteractionType, InviteTargetType, InviteTargetUsersJobStatusType,
-    InviteType, KeywordPresetType, MessageActivityType, MessageType, MfaLevel, OverwriteType,
-    PollLayoutType, PremiumTier, ReactionType, RoleConnectionMetadataType,
-    ScheduledEventEntityType, ScheduledEventPrivacyLevel, ScheduledEventStatus, SeparatorSpacing,
-    SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerType,
-    SubscriptionStatus, TextInputStyle, UserPremiumType, VerificationLevel, VideoQualityMode,
-    WebhookType,
+    ActivityType, ApplicationCommandHandlerType, ApplicationIntegrationType, AuditLogActionType,
+    AutoModerationActionType, AutoModerationEventType, AutoModerationTriggerType, ButtonStyle,
+    ChannelType, CommandOptionType, CommandPermissionType, CommandType, ComponentType,
+    ConnectionVisibility, DefaultMessageNotificationLevel, EntitlementOwnerType, EntitlementType,
+    ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
+    InteractionContextType, InteractionResponseType, InteractionType, InviteTargetType,
+    InviteTargetUsersJobStatusType, InviteType, KeywordPresetType, MessageActivityType,
+    MessageReferenceType, MessageType, MfaLevel, OverwriteType, PollLayoutType, PremiumTier,
+    ReactionType, RoleConnectionMetadataType, ScheduledEventEntityType, ScheduledEventPrivacyLevel,
+    ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuType, StageInstancePrivacyLevel,
+    StickerFormatType, StickerType, SubscriptionStatus, TextInputStyle, UserPremiumType,
+    VerificationLevel, VideoQualityMode, WebhookPayloadType, WebhookType,
 };
 pub use id::{
     marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,

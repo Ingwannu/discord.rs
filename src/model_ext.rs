@@ -756,7 +756,7 @@ impl Message {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::test_id;
+    use crate::model::{test_id, MessageReferenceType};
 
     fn user(id: u64) -> User {
         User {
@@ -799,7 +799,7 @@ mod tests {
         let body = reply_body(&message, "hi");
         assert_eq!(body.content.as_deref(), Some("hi"));
         let reference = body.message_reference.clone().expect("reply reference");
-        assert_eq!(reference.kind, Some(0));
+        assert_eq!(reference.kind, Some(MessageReferenceType::DEFAULT));
         assert_eq!(reference.message_id, Some(test_id(42)));
         // Same-channel reply: channel_id omitted, fail_if_not_exists left at
         // Discord's default.

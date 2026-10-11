@@ -6,8 +6,7 @@
 //! never fails decoding or gets rewritten.
 //!
 //! ```
-//! use discordrs::model::discriminant::ChannelType;
-//! use discordrs::MessageType;
+//! use discordrs::{ChannelType, MessageType};
 //!
 //! let kind = ChannelType::PUBLIC_THREAD;
 //! assert!(kind.is_thread());
@@ -18,27 +17,35 @@
 //! assert_eq!(format!("{future:?}"), "Unknown(250)");
 //! ```
 //!
-//! # Staging plan (phase 3, series 1 → 3)
+//! # Where these types live
 //!
-//! Series 1 only adds these types; no model field uses them yet. Types whose
-//! names are free are re-exported from [`crate::model`] and the crate root.
-//! Seven names are still taken by the 2.x definitions, so their new versions
-//! are reachable only through this module path until series 3 swaps them in
-//! and deletes the old ones:
+//! This module is the canonical home of every discriminant. All of them are
+//! also re-exported from [`crate::model`] and the crate root, so
+//! `discordrs::ChannelType` and `discordrs::model::discriminant::ChannelType`
+//! name the same type. [`WebhookPayloadType`] is additionally re-exported from
+//! [`crate::webhook_events`], its 2.x home.
 //!
-//! | Here | Currently re-exported 2.x type |
+//! Since phase 3 series 3 every model field, request body, query, event
+//! field, and builder setter that carries one of these values uses the
+//! newtype. Seven names replaced 2.x types of the same name; the 2.x
+//! versions are gone, not deprecated:
+//!
+//! | Type | 2.x definition it replaced |
 //! |---|---|
-//! | [`ChannelType`] | closed `model::ChannelType` enum (no thread values) |
-//! | [`MessageReferenceType`] | `model::MessageReferenceType(pub u8)` |
-//! | [`ApplicationIntegrationType`] | `model::ApplicationIntegrationType(pub u8)` with `Default` |
-//! | [`InteractionContextType`] | `model::InteractionContextType(pub u8)` with `Default` |
-//! | [`ApplicationCommandHandlerType`] | `model::ApplicationCommandHandlerType(pub u8)` with `Default` |
-//! | [`ActivityType`] | `model::ActivityType(pub u8)` with `Default` |
+//! | [`ChannelType`] | closed `#[non_exhaustive]` enum without the thread values (`Text`, `News`, ...) |
+//! | [`MessageReferenceType`] | `MessageReferenceType(pub u8)` |
+//! | [`ApplicationIntegrationType`] | `ApplicationIntegrationType(pub u8)` with `Default` |
+//! | [`InteractionContextType`] | `InteractionContextType(pub u8)` with `Default` |
+//! | [`ApplicationCommandHandlerType`] | `ApplicationCommandHandlerType(pub u8)` with `Default` |
+//! | [`ActivityType`] | `ActivityType(pub u8)` with `Default` |
 //! | [`WebhookPayloadType`] | `webhook_events::WebhookPayloadType(pub u8)` without serde |
 //!
-//! The swap is a breaking change on purpose: the 2.x versions expose their
-//! storage (`.0`) and some implement `Default` with a value Discord does not
-//! define as a default, which the design removes.
+//! The swap is a breaking change on purpose: the 2.x versions exposed their
+//! storage (`.0`) and some implemented `Default` with a value Discord does
+//! not define as a default. Replace `.0` with `get()`, `Type(n)` with
+//! `Type::new(n)`, and the closed enum's variants with the constants
+//! (`ChannelType::Text` → `ChannelType::GUILD_TEXT`, `News` →
+//! `GUILD_ANNOUNCEMENT`, `StageVoice` → `GUILD_STAGE_VOICE`, ...).
 //!
 //! Classification helpers such as [`ChannelType::is_text_based`] describe
 //! what a kind of channel supports. They are not permission checks.
@@ -132,9 +139,6 @@ macro_rules! open_discriminant {
 
 open_discriminant! {
     /// Channel `type` (Discord docs: Channel Object › Channel Types).
-    ///
-    /// Not yet re-exported: `model::ChannelType` is still the closed 2.x enum
-    /// until phase 3 series 3 (see the module docs).
     pub struct ChannelType(u8) {
         /// Text channel within a server.
         GUILD_TEXT = 0,
@@ -426,9 +430,6 @@ open_discriminant! {
 open_discriminant! {
     /// Message reference `type` (Discord docs: Message Reference Types). When
     /// absent, Discord says `DEFAULT` can be assumed.
-    ///
-    /// Not yet re-exported: `model::MessageReferenceType(pub u8)` stays until
-    /// phase 3 series 3 (see the module docs).
     pub struct MessageReferenceType(u8) {
         /// Standard reference used by replies.
         DEFAULT = 0,
@@ -576,9 +577,6 @@ open_discriminant! {
 open_discriminant! {
     /// Where an application can be installed (Discord docs: Application
     /// Integration Types).
-    ///
-    /// Not yet re-exported: `model::ApplicationIntegrationType(pub u8)` stays
-    /// until phase 3 series 3 (see the module docs).
     pub struct ApplicationIntegrationType(u8) {
         /// Installable to servers.
         GUILD_INSTALL = 0,
@@ -590,9 +588,6 @@ open_discriminant! {
 open_discriminant! {
     /// Where an interaction can be used (Discord docs: Interaction Context
     /// Types).
-    ///
-    /// Not yet re-exported: `model::InteractionContextType(pub u8)` stays
-    /// until phase 3 series 3 (see the module docs).
     pub struct InteractionContextType(u8) {
         /// Within servers.
         GUILD = 0,
@@ -606,9 +601,6 @@ open_discriminant! {
 open_discriminant! {
     /// Primary entry point command `handler` (Discord docs: Entry Point
     /// Command Handler Types).
-    ///
-    /// Not yet re-exported: `model::ApplicationCommandHandlerType(pub u8)`
-    /// stays until phase 3 series 3 (see the module docs).
     pub struct ApplicationCommandHandlerType(u8) {
         /// The application handles the interaction using its token.
         APP_HANDLER = 1,
@@ -1036,9 +1028,6 @@ open_discriminant! {
 open_discriminant! {
     /// Webhook Events payload `type` (Discord docs: Webhook Event Payloads ›
     /// Webhook Types).
-    ///
-    /// Not yet re-exported: `WebhookPayloadType(pub u8)` in
-    /// `webhook_events` stays until phase 3 series 3 (see the module docs).
     pub struct WebhookPayloadType(u8) {
         /// Verifies that the Webhook Events URL is active.
         PING = 0,
@@ -1173,9 +1162,6 @@ open_discriminant! {
 
 open_discriminant! {
     /// Presence activity `type` (Discord docs: Activity Types).
-    ///
-    /// Not yet re-exported: `model::ActivityType(pub u8)` stays until phase 3
-    /// series 3 (see the module docs).
     pub struct ActivityType(u8) {
         /// "Playing {name}".
         PLAYING = 0,
@@ -1362,41 +1348,28 @@ mod tests {
     }
 
     #[test]
-    fn staged_types_match_the_2x_wire_values() {
-        // Series 3 swaps these in for the 2.x definitions; the numbers must
-        // not change when it does.
-        assert_eq!(
-            ChannelType::GUILD_ANNOUNCEMENT.get(),
-            crate::model::ChannelType::News as u8
-        );
-        assert_eq!(
-            ChannelType::GUILD_MEDIA.get(),
-            crate::model::ChannelType::GuildMedia as u8
-        );
-        assert_eq!(
-            InteractionContextType::PRIVATE_CHANNEL.get(),
-            crate::model::InteractionContextType::PRIVATE_CHANNEL.0
-        );
-        assert_eq!(
-            ActivityType::COMPETING.get(),
-            crate::model::ActivityType::COMPETING.0
-        );
-        assert_eq!(
-            WebhookPayloadType::EVENT.get(),
-            crate::webhook_events::WebhookPayloadType::EVENT.0
-        );
-        assert_eq!(
-            super::MessageReferenceType::FORWARD.get(),
-            crate::model::MessageReferenceType::FORWARD.0
-        );
-        assert_eq!(
-            super::ApplicationIntegrationType::USER_INSTALL.get(),
-            crate::model::ApplicationIntegrationType::USER_INSTALL.0
-        );
-        assert_eq!(
-            super::ApplicationCommandHandlerType::DISCORD_LAUNCH_ACTIVITY.get(),
-            crate::model::ApplicationCommandHandlerType::DISCORD_LAUNCH_ACTIVITY.0
-        );
+    fn swapped_types_keep_the_2x_wire_values() {
+        // Series 3 replaced the 2.x definitions of these names; the numbers
+        // 2.x code sent (its enum discriminants and `Type(n)` constants) must
+        // be what the new constants send.
+        let pairs: [(u8, u8); 10] = [
+            (ChannelType::GUILD_TEXT.get(), 0), // 2.x ChannelType::Text
+            (ChannelType::GUILD_ANNOUNCEMENT.get(), 5), // 2.x ChannelType::News
+            (ChannelType::GUILD_STAGE_VOICE.get(), 13), // 2.x ChannelType::StageVoice
+            (ChannelType::GUILD_MEDIA.get(), 16), // 2.x ChannelType::GuildMedia
+            (InteractionContextType::PRIVATE_CHANNEL.get(), 2),
+            (ActivityType::COMPETING.get(), 5),
+            (WebhookPayloadType::EVENT.get(), 1),
+            (super::MessageReferenceType::FORWARD.get(), 1),
+            (super::ApplicationIntegrationType::USER_INSTALL.get(), 1),
+            (
+                super::ApplicationCommandHandlerType::DISCORD_LAUNCH_ACTIVITY.get(),
+                2,
+            ),
+        ];
+        for (new, old) in pairs {
+            assert_eq!(new, old);
+        }
     }
 
     #[test]

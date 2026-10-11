@@ -9,16 +9,8 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-/// Typed Discord API object for `WebhookPayloadType`.
-pub struct WebhookPayloadType(pub u8);
-
-impl WebhookPayloadType {
-    /// Public API item `PING`.
-    pub const PING: Self = Self(0);
-    /// Public API item `EVENT`.
-    pub const EVENT: Self = Self(1);
-}
+/// Re-exported from its canonical home, [`crate::model::discriminant`].
+pub use crate::model::discriminant::WebhookPayloadType;
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `WebhookEventPayload`.
@@ -127,7 +119,7 @@ pub struct WebhookDeletedMessage {
 pub fn parse_webhook_event_payload(payload: Value) -> Result<WebhookEventPayload, DiscordError> {
     let version = required_u8(&payload, "version")?;
     let application_id = required_snowflake(&payload, "application_id")?;
-    let kind = WebhookPayloadType(required_u8(&payload, "type")?);
+    let kind = WebhookPayloadType::new(required_u8(&payload, "type")?);
     let event = if kind == WebhookPayloadType::PING {
         None
     } else {

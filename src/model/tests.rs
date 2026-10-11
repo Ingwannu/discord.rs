@@ -14,16 +14,16 @@ use super::{
     EmbedField, Entitlement, ForumTag, GatewayBot, GenericId, Guild, GuildId, GuildInstallOwner,
     GuildScheduledEvent, GuildWidget, Integration, Interaction, InteractionCallbackResponse,
     InteractionContextData, Invite, InviteTargetUsersJobStatus, Member, Message, MessageComponent,
-    MessageContextMenuInteraction, ModalSubmitInteraction, ModifyCurrentApplication,
-    ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember,
-    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState,
-    ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite, PermissionsBitField,
-    PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId, PollAnswerVoters, PollMedia,
-    PollResults, Presence, Reaction, ResolvedData, Role, RoleColors, SessionStartLimit, Sku,
-    StickerItem, Subscription, ThreadListResponse, ThreadMember, ThreadMetadata, User,
-    UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
-    WelcomeScreenChannel,
+    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
+    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
+    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, PermissionOverwrite,
+    PermissionsBitField, PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId,
+    PollAnswerVoters, PollMedia, PollResults, Presence, Reaction, ResolvedData, Role, RoleColors,
+    SessionStartLimit, Sku, StickerItem, Subscription, ThreadListResponse, ThreadMember,
+    ThreadMetadata, User, UserContextMenuInteraction, UserId, WebhookExecuteQuery,
+    WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::parsers::V2ModalSubmission;
 
@@ -531,7 +531,7 @@ fn guild_admin_request_bodies_keep_nullable_wire_shape() {
 
     let channel = CreateGuildChannel {
         name: "rules".to_string(),
-        kind: Some(ChannelType::Text as u8),
+        kind: Some(ChannelType::GUILD_TEXT.get()),
         topic: Some(Some("read first".to_string())),
         permission_overwrites: Some(Some(vec![PermissionOverwrite {
             target: super::OverwriteTarget::Role(test_id(300)),
@@ -819,7 +819,10 @@ fn message_resource_extended_fields_decode() {
         .role_subscription_data
         .as_ref()
         .is_some_and(|data| data.is_renewal));
-    assert_eq!(message.message_reference.unwrap().kind, Some(1));
+    assert_eq!(
+        message.message_reference.unwrap().kind,
+        Some(MessageReferenceType::FORWARD)
+    );
     assert_eq!(message.message_snapshots[0].message.content, "snapshot");
     assert_eq!(
         message.message_snapshots[0].message.sticker_items[0]

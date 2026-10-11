@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
 
-use super::{ApplicationId, UserId};
+use super::{ActivityType, ApplicationId, UserId};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Presence`.
@@ -43,32 +43,6 @@ pub struct ClientStatus {
     pub mobile: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-/// Typed Discord API object for `ActivityType`.
-pub struct ActivityType(pub u8);
-
-impl ActivityType {
-    /// Public API item `PLAYING`.
-    pub const PLAYING: Self = Self(0);
-    /// Public API item `STREAMING`.
-    pub const STREAMING: Self = Self(1);
-    /// Public API item `LISTENING`.
-    pub const LISTENING: Self = Self(2);
-    /// Public API item `WATCHING`.
-    pub const WATCHING: Self = Self(3);
-    /// Public API item `CUSTOM`.
-    pub const CUSTOM: Self = Self(4);
-    /// Public API item `COMPETING`.
-    pub const COMPETING: Self = Self(5);
-}
-
-impl Default for ActivityType {
-    fn default() -> Self {
-        Self::PLAYING
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -120,11 +94,15 @@ pub struct ActivityButton {
     pub url: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `Activity`.
+/// A presence activity.
+///
+/// No `Default`: Discord requires `type` and defines no default for it
+/// (2.x defaulted to `PLAYING`). Start from [`Activity::new`] and fill the
+/// optional fields with struct update syntax.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Activity {
     pub name: String,
-    #[serde(default, rename = "type")]
+    #[serde(rename = "type")]
     pub kind: ActivityType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -150,6 +128,27 @@ pub struct Activity {
     pub buttons: Option<Vec<ActivityButton>>,
 }
 
+impl Activity {
+    /// An activity of `kind` named `name`, with every optional field unset.
+    pub fn new(kind: ActivityType, name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            url: None,
+            created_at: None,
+            timestamps: None,
+            application_id: None,
+            details: None,
+            state: None,
+            emoji: None,
+            party: None,
+            assets: None,
+            secrets: None,
+            buttons: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `UpdatePresence`.
 pub struct UpdatePresence {
@@ -167,11 +166,7 @@ impl UpdatePresence {
     pub fn online_with_activity(name: impl Into<String>) -> Self {
         Self {
             since: None,
-            activities: vec![Activity {
-                name: name.into(),
-                kind: ActivityType::PLAYING,
-                ..Activity::default()
-            }],
+            activities: vec![Activity::new(ActivityType::PLAYING, name)],
             status: "online".to_string(),
             afk: false,
         }

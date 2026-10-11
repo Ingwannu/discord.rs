@@ -36,33 +36,6 @@ pub struct Attachment {
     pub title: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[repr(u8)]
-#[non_exhaustive]
-/// Typed Discord API enum for `ChannelType`.
-pub enum ChannelType {
-    /// Discord API enum variant `Text`.
-    Text = 0,
-    /// Discord API enum variant `Dm`.
-    Dm = 1,
-    /// Discord API enum variant `Voice`.
-    Voice = 2,
-    /// Discord API enum variant `GroupDm`.
-    GroupDm = 3,
-    /// Discord API enum variant `Category`.
-    Category = 4,
-    /// Discord API enum variant `News`.
-    News = 5,
-    /// Discord API enum variant `StageVoice`.
-    StageVoice = 13,
-    /// Discord API enum variant `GuildDirectory`.
-    GuildDirectory = 14,
-    /// Discord API enum variant `GuildForum`.
-    GuildForum = 15,
-    /// Discord API enum variant `GuildMedia`.
-    GuildMedia = 16,
-}
-
 /// Who a channel permission overwrite applies to: the overwrite's wire `id`
 /// and `type` read together.
 ///

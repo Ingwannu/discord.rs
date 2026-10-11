@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize, Serializer};
 
 use super::{
-    ApplicationId, ChannelId, CommandId, CommandPermissionType, CommandVersionId, GenericId,
-    GuildId, InvalidId, PermissionsBitField, RoleId, UserId,
+    ApplicationCommandHandlerType, ApplicationId, ApplicationIntegrationType, ChannelId, CommandId,
+    CommandPermissionType, CommandVersionId, GenericId, GuildId, InteractionContextType, InvalidId,
+    PermissionsBitField, RoleId, UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -81,62 +82,6 @@ pub struct ApplicationCommandOption {
     /// Channel types a `CHANNEL` option offers (raw channel type values).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_types: Option<Vec<u8>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-/// Typed Discord API object for `ApplicationIntegrationType`.
-pub struct ApplicationIntegrationType(pub u8);
-
-impl ApplicationIntegrationType {
-    /// Public API item `GUILD_INSTALL`.
-    pub const GUILD_INSTALL: Self = Self(0);
-    /// Public API item `USER_INSTALL`.
-    pub const USER_INSTALL: Self = Self(1);
-}
-
-impl Default for ApplicationIntegrationType {
-    fn default() -> Self {
-        Self::GUILD_INSTALL
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-/// Typed Discord API object for `InteractionContextType`.
-pub struct InteractionContextType(pub u8);
-
-impl InteractionContextType {
-    /// Public API item `GUILD`.
-    pub const GUILD: Self = Self(0);
-    /// Public API item `BOT_DM`.
-    pub const BOT_DM: Self = Self(1);
-    /// Public API item `PRIVATE_CHANNEL`.
-    pub const PRIVATE_CHANNEL: Self = Self(2);
-}
-
-impl Default for InteractionContextType {
-    fn default() -> Self {
-        Self::GUILD
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-/// Typed Discord API object for `ApplicationCommandHandlerType`.
-pub struct ApplicationCommandHandlerType(pub u8);
-
-impl ApplicationCommandHandlerType {
-    /// Public API item `APP_HANDLER`.
-    pub const APP_HANDLER: Self = Self(1);
-    /// Public API item `DISCORD_LAUNCH_ACTIVITY`.
-    pub const DISCORD_LAUNCH_ACTIVITY: Self = Self(2);
-}
-
-impl Default for ApplicationCommandHandlerType {
-    fn default() -> Self {
-        Self::APP_HANDLER
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

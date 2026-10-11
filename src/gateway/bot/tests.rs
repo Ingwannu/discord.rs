@@ -52,7 +52,7 @@ use crate::model::{
 // Only the cache-update tests build these models.
 #[cfg(feature = "cache")]
 use crate::model::{
-    Activity, ComponentInteraction, ComponentInteractionData, InteractionContextData,
+    Activity, ActivityType, ComponentInteraction, ComponentInteractionData, InteractionContextData,
     SoundboardSound, StageInstance, Sticker, UserId,
 };
 #[cfg(feature = "sharding")]
@@ -310,10 +310,7 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
             user_id: Some(user_id),
             guild_id: Some(guild_id),
             status: Some("online".to_string()),
-            activities: vec![Activity {
-                name: "testing".to_string(),
-                ..Activity::default()
-            }],
+            activities: vec![Activity::new(ActivityType::PLAYING, "testing")],
             raw: json!({
                 "user": { "id": user_id },
                 "guild_id": guild_id,

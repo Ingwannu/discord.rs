@@ -7,8 +7,9 @@ use crate::types::Emoji;
 use super::{
     is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, Channel, ChannelId,
     CreatePoll, Embed, GuildId, InteractionId, Member, MessageComponent, MessageId,
-    PartialApplication, Poll, ResolvedData, RoleId, RoleSubscriptionListingId, Sticker, StickerId,
-    StickerItem, ThreadMember, User, UserId, WebhookId,
+    MessageReferenceType, PartialApplication, Poll, ResolvedData, RoleId,
+    RoleSubscriptionListingId, Sticker, StickerId, StickerItem, ThreadMember, User, UserId,
+    WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -312,23 +313,13 @@ pub struct ChannelMention {
     pub name: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-/// Message reference type: distinguishes replies from forwards.
-pub struct MessageReferenceType(pub u8);
-
-impl MessageReferenceType {
-    /// A standard reply or crosspost reference.
-    pub const DEFAULT: Self = Self(0);
-    /// A forwarded message; the target message is copied as a snapshot.
-    pub const FORWARD: Self = Self(1);
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MessageReference`.
 pub struct MessageReference {
+    /// Reply (`DEFAULT`) or forward. Discord treats an absent `type` as
+    /// [`MessageReferenceType::DEFAULT`].
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<u8>,
+    pub kind: Option<MessageReferenceType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<MessageId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,7 +334,7 @@ impl MessageReference {
     /// Builds a reply reference to a message in the same channel.
     pub fn reply(message_id: MessageId) -> Self {
         Self {
-            kind: Some(MessageReferenceType::DEFAULT.0),
+            kind: Some(MessageReferenceType::DEFAULT),
             message_id: Some(message_id),
             ..Self::default()
         }
@@ -353,7 +344,7 @@ impl MessageReference {
     /// to the new message as a `message_snapshots` entry.
     pub fn forward(channel_id: ChannelId, message_id: MessageId) -> Self {
         Self {
-            kind: Some(MessageReferenceType::FORWARD.0),
+            kind: Some(MessageReferenceType::FORWARD),
             channel_id: Some(channel_id),
             message_id: Some(message_id),
             ..Self::default()

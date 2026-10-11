@@ -334,7 +334,7 @@ mod tests {
     use super::{
         parse_interaction, parse_interaction_context, parse_raw_interaction, RawInteraction,
     };
-    use crate::model::Interaction;
+    use crate::model::{Interaction, InteractionContextType};
     use crate::response::AckKind;
 
     #[test]
@@ -598,7 +598,10 @@ mod tests {
         {
             Interaction::UserContextMenu(interaction) => {
                 assert_eq!(interaction.data.target_id.unwrap().get(), 99);
-                assert_eq!(interaction.context.context.unwrap().0, 1);
+                assert_eq!(
+                    interaction.context.context,
+                    Some(InteractionContextType::BOT_DM)
+                );
                 assert_eq!(interaction.context.entitlements.unwrap().len(), 1);
                 assert_eq!(
                     interaction
