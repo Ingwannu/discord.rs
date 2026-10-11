@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The merged 2.2.0 sources are now rustfmt-clean, so CI's `cargo fmt --check` passes.
-- CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints. async-trait is 0.1.92 so Rust 1.99's `double_must_use` lint passes.
+- CI's blocking jobs build with a pinned Rust toolchain (1.99.0) instead of the moving stable channel; a non-blocking canary job reports new stable lints.
 - The published crate excludes `ci/`, `.github/`, `discordrsdocs/`, and `docs/`.
 
 - `CollectorEndReason` is `#[non_exhaustive]` and gains `EmojiLimit`, `UserLimit`, `MessageDelete`, `ChannelDelete`, `ThreadDelete`, and `GuildDelete`. Collectors no longer yield an event, or restart the idle window, after their timeout or idle window expired; when several outcomes are ready the order is stop, timeout, idle, then events (a 2.2.0 bug).
@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Voice (breaking): `VoiceFrameSink::send_opus_packet` takes `VoiceFrameTiming` and has a documented cancellation contract; without `voice-encode`, `AudioPlayer::play` returns `DiscordError::Voice` instead of silently advancing; `Buffering` also covers rebuffering and unpausing; subscribing an already-subscribed sink replaces the earlier subscription.
 
 - Process sharding (breaking): the IPC wire format requires the frame prefix (2.x parents and children cannot talk to 3.0 ones); `ParentMessage`/`ChildMessage` are `#[non_exhaustive]` with identify variants; `ShardChildProcess::serve` returns `Result`; the `spawn_stagger` default is 0 (pacing comes from permits); `broadcast` errors when a payload exceeds the frame cap; `wait()`/`shutdown()` return errors for respawn exhaustion and unsuccessful exits.
+
+- **No more `async-trait`** (breaking). `EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, and `CachedManager` declare `fn … -> impl Future<Output = T> + Send`; implement them with plain `async fn` and delete `#[async_trait]` (a leftover attribute fails with E0195). Futures must be `Send`, enforced by a compile-fail test. The traits are not object safe: `ClientBuilder::cache_backend` takes `Arc<B>` for a concrete `B: CacheBackend`. The default `handle_event` routing allocates once per event instead of twice. Default features now build with no duplicate crates (previously `syn` 2 and 3).
+- The `hex` dependency is replaced by a private helper (`From<hex::FromHexError> for DiscordError` is removed; malformed hex stays `DiscordError::Model` and names the input), and the `interactions` feature uses axum 0.8.
 
 ### Deprecated
 - `RestClient::create_guild`, `delete_guild`, `create_guild_from_template`, and `modify_guild_mfa_level`, plus `Guild::delete` and `Guild::set_mfa_level`: Discord removed guild creation by applications on 2025-07-15 and transferred bot-owned guilds to users, and dropped these routes from its docs. They will be removed in the next major release.
