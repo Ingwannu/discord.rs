@@ -60,6 +60,7 @@ let script = embed.to_script_tag()?;
 
 // 또는 링크: `embed.to_json()?`을 같은 사이트에서 제공하고 가리킵니다.
 let link = ComponentEmbed::link_tag("https://example.com/embeds/v2.json")?;
+// <link rel="discord:component-embed" type="application/json" href="…" />
 ```
 
 Open Graph 태그는 그대로 두세요. Component Embed를 보여 줄 수 없을 때 Discord가 그 태그로 돌아갑니다.
@@ -82,6 +83,6 @@ Open Graph 태그는 그대로 두세요. Component Embed를 보여 줄 수 없�
 
 규격이 요구하지 않거나 여기서 알 수 없는 것은 검사하지 않습니다. 미디어 확장자(Discord가 받은 내용으로 판단), `link_tag` href의 호스트(페이지 호스트, 서브도메인, 상위 도메인이어야 함), 텍스트 디스플레이 길이(어차피 3,000바이트로 묶임)입니다.
 
-이스케이프: `to_json()`은 문자열 안의 `<`, `>`, `&`, U+2028, U+2029를 `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`로 쓴 compact JSON을 돌려줍니다. 그래서 `</script>`나 `<!--`가 요소를 끝내거나 바꿀 수 없고, Discord가 함께 받는 XHTML 페이지에서도 올바른 XML로 남습니다. JSON 파서는 이스케이프를 원래 문자로 읽습니다. 3,000바이트 한도는 바로 이 문자열로 재며, `to_script_tag()`는 공백 없이 그대로 요소 안에 넣습니다. 그 밖의 비ASCII 문자는 UTF-8 그대로이므로 페이지를 UTF-8로 제공하세요.
+이스케이프: `to_json()`은 문자열 안의 `<`, `>`, `&`, U+2028, U+2029, U+FFFE, U+FFFF를 `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`, `\ufffe`, `\uffff`로 쓴 compact JSON을 돌려줍니다. C0 제어 문자는 JSON이 이미 이스케이프합니다. 그래서 `</script>`나 `<!--`가 요소를 끝내거나 바꿀 수 없고, Discord가 함께 받는 XHTML 페이지에서도 올바른 XML로 남습니다. Rust 문자열에 들어갈 수 있는 문자 중 XML 1.0이 금지하는 것은 C0 제어 문자와 U+FFFE/U+FFFF뿐입니다. JSON 파서는 이스케이프를 원래 문자로 읽습니다. 3,000바이트 한도는 바로 이 문자열로 재며, `to_script_tag()`는 공백 없이 그대로 요소 안에 넣습니다. 그 밖의 비ASCII 문자는 UTF-8 그대로이므로 페이지를 UTF-8로 제공하세요.
 
-기존 메시지 빌더는 `TryFrom`으로 바꿀 수 있고, 무엇도 버리지 않고 문제 위치와 함께 실패합니다. `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, 손으로 쓴 `{"component": ...}` 파일용 `ComponentEmbed::try_from(&document)`가 있습니다. custom-ID·프리미엄 버튼, 선택 메뉴, 텍스트 입력, 파일, 중첩 컨테이너, raw 컴포넌트, 알 수 없는 키는 실패합니다. 변환은 형태만 검사하고 한도는 출력할 때 검사합니다.
+기존 메시지 빌더는 `TryFrom`으로 바꿀 수 있고, 무엇도 버리지 않고 문제 위치와 함께 실패합니다. `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, 손으로 쓴 `{"component": ...}` 파일용 `ComponentEmbed::try_from(&document)`가 있습니다. custom-ID·프리미엄 버튼, 선택 메뉴, 텍스트 입력, 파일, 중첩 컨테이너, raw 컴포넌트, 알 수 없는 키는 실패합니다. 변환은 손실 없이 하거나 실패합니다. 규격상 null이 허용되는 필드(`accent_color`, 썸네일과 갤러리 항목의 `description`)는 `NullablePatch`라서 명시적 `null`과 생략을 구분해 보존하고, 그 밖의 `null`은 경로와 함께 `NullNotAllowed`로 실패합니다(공용 `Emoji` 타입이 `null`을 담을 수 없으므로 emoji 키도 마찬가지). 변환은 형태만 검사하고, 구분선 `spacing`이 1 또는 2인지를 포함한 한도는 출력할 때 검사합니다.

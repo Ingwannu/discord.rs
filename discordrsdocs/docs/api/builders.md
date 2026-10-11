@@ -148,6 +148,7 @@ let script = embed.to_script_tag()?;
 
 // Or linked: serve `embed.to_json()?` from the same site and point at it.
 let link = ComponentEmbed::link_tag("https://example.com/embeds/v2.json")?;
+// <link rel="discord:component-embed" type="application/json" href="…" />
 ```
 
 Keep the page's Open Graph tags: Discord falls back to them whenever it cannot show the component embed.
@@ -170,9 +171,9 @@ Keep the page's Open Graph tags: Discord falls back to them whenever it cannot s
 
 Not checked, because the spec does not require it or it cannot be known here: media file extensions (Discord decides by the fetched content), the host of a `link_tag` href (it must be on the page's host, a subdomain, or the parent domain), and text display length (bounded by the 3,000 bytes).
 
-Escaping: `to_json()` returns compact JSON in which every `<`, `>`, `&`, U+2028, and U+2029 inside a string is written as `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`. No `</script>` or `<!--` can end or alter the element, and the text stays well-formed inside an XHTML page (which Discord also accepts). JSON parsers read the escapes back as the same characters. The 3,000-byte limit is checked on exactly this string, and `to_script_tag()` puts it inside the element with no added whitespace. Other non-ASCII text stays UTF-8, so serve the page as UTF-8.
+Escaping: `to_json()` returns compact JSON in which every `<`, `>`, `&`, U+2028, U+2029, U+FFFE, and U+FFFF inside a string is written as `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`, `\ufffe`, `\uffff`; JSON already escapes the C0 controls. No `</script>` or `<!--` can end or alter the element, and the text stays well-formed inside an XHTML page (which Discord also accepts): with the C0 controls, U+FFFE and U+FFFF are the only characters XML 1.0 forbids that a Rust string can hold. JSON parsers read the escapes back as the same characters. The 3,000-byte limit is checked on exactly this string, and `to_script_tag()` puts it inside the element with no added whitespace. Other non-ASCII text stays UTF-8, so serve the page as UTF-8.
 
-Existing message builders convert with `TryFrom`, failing with the offending path instead of dropping anything: `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, and `ComponentEmbed::try_from(&document)` for a hand-written `{"component": ...}` file. Custom-ID or premium buttons, selects, text inputs, files, nested containers, raw components, and unknown keys fail. Conversion checks shape only; the limits are checked on output.
+Existing message builders convert with `TryFrom`, failing with the offending path instead of dropping anything: `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, and `ComponentEmbed::try_from(&document)` for a hand-written `{"component": ...}` file. Custom-ID or premium buttons, selects, text inputs, files, nested containers, raw components, and unknown keys fail. Conversion is lossless or fails: the spec's nullable fields (`accent_color`, thumbnail and gallery item `description`) are `NullablePatch` and keep an explicit `null` apart from an omitted key, and `null` anywhere else fails with `NullNotAllowed` and its path (emoji keys included, since the shared `Emoji` type cannot hold `null`). Conversion checks shape only; the limits, including separator `spacing` being 1 or 2, are checked on output.
 
 ## Practical Advice
 
