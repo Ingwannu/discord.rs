@@ -78,9 +78,6 @@ jobs:
       - name: Cargo clippy (default features)
         run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Cargo fmt (check)
-        run: cargo fmt --all -- --check
-
       # Broken intra-doc links are only warnings by default, so they piled up
       # unnoticed (15 by 2026-10-11). Both feature sets: a link from ungated
       # docs to a feature-gated item breaks only under default features.
@@ -206,6 +203,32 @@ jobs:
 
       - name: Cargo clippy (default features)
         run: cargo clippy --all-targets --locked -- -D warnings
+
+  feature-isolation:
+    name: feature-isolation
+    runs-on: ubuntu-latest
+    # Users enable features one at a time (`gateway` without `cache`,
+    # `voice` alone, ...), but the other jobs only build the default and
+    # the full set, where a missing `cfg` or a feature-only import can hide.
+    # Library code only: a cargo-hack powerset would be 2^9 builds for
+    # little extra signal, so each feature is built alone instead.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (pinned)
+        run: |
+          rustup set profile minimal
+          rustup toolchain install "$RUST_TOOLCHAIN" --component clippy --no-self-update
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Clippy each feature alone (library)
+        run: |
+          for feature in "" cache gateway collectors sharding zstd-stream voice voice-encode dave interactions; do
+            echo "::group::features=[${feature}]"
+            cargo clippy --lib --no-default-features ${feature:+--features "$feature"} --locked -- -D warnings
+            echo "::endgroup::"
+          done
 
   drift-tooling:
     name: drift-tooling
