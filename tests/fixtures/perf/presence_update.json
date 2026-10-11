@@ -1,0 +1,35 @@
+{
+  "user": {"id": "302050872383242240"},
+  "status": "online",
+  "guild_id": "1159812345678901248",
+  "client_status": {"desktop": "online", "mobile": "idle"},
+  "activities": [
+    {
+      "type": 4,
+      "state": "raiding tonight",
+      "name": "Custom Status",
+      "id": "custom",
+      "emoji": {"name": "🎮"},
+      "created_at": 1791796500000
+    },
+    {
+      "type": 0,
+      "timestamps": {"start": 1791792900000},
+      "state": "In a fireteam",
+      "session_id": "7c2d1c0f8e5b4a3fa1b2c3d4e5f60718",
+      "party": {"id": "party:7c2d1c0f", "size": [3, 6]},
+      "name": "Destiny 2",
+      "id": "8d2ab1d2c0e4f0a1",
+      "details": "Salvation's Edge",
+      "created_at": 1791796520000,
+      "assets": {
+        "large_text": "Salvation's Edge",
+        "large_image": "1159812345678909999",
+        "small_text": "Hunter",
+        "small_image": "1159812345678909998"
+      },
+      "application_id": "1159812345678900000",
+      "flags": 0
+    }
+  ]
+}

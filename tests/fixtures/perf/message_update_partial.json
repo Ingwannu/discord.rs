@@ -1,0 +1,23 @@
+{
+  "id": "1426543210987654321",
+  "channel_id": "1159812345678901251",
+  "guild_id": "1159812345678901248",
+  "content": "hey <@302050872383242240> are we still on for the raid tonight? moved to 21:30 KST",
+  "edited_timestamp": "2026-10-11T09:18:55.004000+00:00",
+  "mentions": [
+    {
+      "id": "302050872383242240",
+      "username": "kestrel",
+      "global_name": "Kestrel",
+      "discriminator": "0",
+      "avatar": "f00dbabe0123456789abcdef01234567",
+      "public_flags": 64
+    }
+  ],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "embeds": [],
+  "attachments": [],
+  "components": [],
+  "flags": 0
+}

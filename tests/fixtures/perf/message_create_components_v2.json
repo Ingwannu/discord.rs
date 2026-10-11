@@ -1,0 +1,122 @@
+{
+  "type": 0,
+  "tts": false,
+  "timestamp": "2026-10-11T09:17:21.904000+00:00",
+  "pinned": false,
+  "mentions": [],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "member": {
+    "roles": ["1159812345678901270"],
+    "premium_since": null,
+    "pending": false,
+    "nick": null,
+    "mute": false,
+    "joined_at": "2024-02-14T11:00:00.000000+00:00",
+    "flags": 0,
+    "deaf": false,
+    "communication_disabled_until": null,
+    "banner": null,
+    "avatar": null
+  },
+  "id": "1426543377777777777",
+  "flags": 32768,
+  "embeds": [],
+  "edited_timestamp": null,
+  "content": "",
+  "components": [
+    {
+      "type": 17,
+      "id": 1,
+      "accent_color": 5814783,
+      "spoiler": false,
+      "components": [
+        {"type": 10, "id": 2, "content": "## Server status\nAll shards healthy. Gateway latency is normal."},
+        {"type": 14, "id": 3, "divider": true, "spacing": 1},
+        {
+          "type": 9,
+          "id": 4,
+          "components": [
+            {"type": 10, "id": 5, "content": "**Shard 0-7**: 1,204 guilds, p50 41 ms"},
+            {"type": 10, "id": 6, "content": "**Shard 8-15**: 1,188 guilds, p50 39 ms"}
+          ],
+          "accessory": {
+            "type": 11,
+            "id": 7,
+            "description": "status icon",
+            "spoiler": false,
+            "media": {
+              "url": "https://example.com/static/status-ok.png",
+              "proxy_url": "https://media.discordapp.net/external/jkl/https/example.com/static/status-ok.png",
+              "width": 128,
+              "height": 128,
+              "content_type": "image/png",
+              "placeholder": "3PcNDQJ2d3eHd4h3d4iId3iHiIiAZ3cI",
+              "placeholder_version": 1,
+              "loading_state": 2,
+              "flags": 0
+            }
+          }
+        },
+        {
+          "type": 12,
+          "id": 8,
+          "items": [
+            {
+              "description": "latency chart",
+              "spoiler": false,
+              "media": {
+                "url": "https://example.com/charts/latency-24h.png",
+                "proxy_url": "https://media.discordapp.net/external/mno/https/example.com/charts/latency-24h.png",
+                "width": 1200,
+                "height": 600,
+                "content_type": "image/png",
+                "loading_state": 2,
+                "flags": 0
+              }
+            },
+            {
+              "description": "memory chart",
+              "spoiler": false,
+              "media": {
+                "url": "https://example.com/charts/memory-24h.png",
+                "proxy_url": "https://media.discordapp.net/external/pqr/https/example.com/charts/memory-24h.png",
+                "width": 1200,
+                "height": 600,
+                "content_type": "image/png",
+                "loading_state": 2,
+                "flags": 0
+              }
+            }
+          ]
+        },
+        {"type": 14, "id": 9, "divider": false, "spacing": 2},
+        {
+          "type": 1,
+          "id": 10,
+          "components": [
+            {"type": 2, "id": 11, "style": 1, "label": "Refresh", "custom_id": "status:refresh"},
+            {"type": 2, "id": 12, "style": 2, "label": "Details", "custom_id": "status:details"},
+            {"type": 2, "id": 13, "style": 5, "label": "Dashboard", "url": "https://example.com/dashboard"}
+          ]
+        }
+      ]
+    },
+    {"type": 10, "id": 14, "content": "-# Updated <t:1791796641:R>"}
+  ],
+  "channel_type": 0,
+  "channel_id": "1159812345678901251",
+  "author": {
+    "id": "1290011223344556677",
+    "username": "raid-planner",
+    "global_name": null,
+    "discriminator": "4821",
+    "avatar": "0123456789abcdef0123456789abcdef",
+    "bot": true,
+    "public_flags": 65536,
+    "flags": 65536
+  },
+  "attachments": [],
+  "application_id": "1290011223344556677",
+  "guild_id": "1159812345678901248"
+}

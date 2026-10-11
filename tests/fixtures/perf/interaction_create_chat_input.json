@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "type": 2,
+  "token": "aW50ZXJhY3Rpb246MTQyNjU0MzQwMDAwMDAwMDAwMDpzaWduVXBUb2tlbkZvclBlcmZSZXBvcnRPbmx5VGhpc0lzTm90QVJlYWxUb2tlbkJ1dEl0SGFzVGhlUmlnaHRMZW5ndGhGb3JNZWFzdXJpbmdBbGxvY2F0aW9uc0luVGhlSW50ZXJhY3Rpb25QYXJzZXJBbmRUaGVFdmVudERlY29kZXI",
+  "member": {
+    "user": {
+      "id": "419834729384729600",
+      "username": "ari.k",
+      "global_name": "Ari",
+      "discriminator": "0",
+      "avatar": "a_0123456789abcdef0123456789abcdef",
+      "avatar_decoration_data": null,
+      "public_flags": 0,
+      "flags": 0,
+      "clan": null,
+      "primary_guild": null,
+      "collectibles": null
+    },
+    "unusual_dm_activity_until": null,
+    "roles": ["1159812345678901260", "1159812345678901263"],
+    "premium_since": null,
+    "permissions": "2251799813685247",
+    "pending": false,
+    "nick": "Ari",
+    "mute": false,
+    "joined_at": "2023-10-02T18:40:01.003000+00:00",
+    "flags": 0,
+    "deaf": false,
+    "communication_disabled_until": null,
+    "banner": null,
+    "avatar": null
+  },
+  "locale": "ko",
+  "id": "1426543400000000000",
+  "guild_locale": "en-US",
+  "guild_id": "1159812345678901248",
+  "guild": {
+    "locale": "en-US",
+    "id": "1159812345678901248",
+    "features": ["COMMUNITY", "NEWS", "WELCOME_SCREEN_ENABLED", "MEMBER_VERIFICATION_GATE_ENABLED"]
+  },
+  "entitlements": [],
+  "entitlement_sku_ids": [],
+  "data": {
+    "type": 1,
+    "name": "raid",
+    "id": "1290011223344556700",
+    "guild_id": "1159812345678901248",
+    "options": [
+      {
+        "type": 1,
+        "name": "invite",
+        "options": [
+          {"type": 6, "name": "player", "value": "302050872383242240"},
+          {"type": 7, "name": "channel", "value": "1159812345678901252"},
+          {"type": 8, "name": "role", "value": "1159812345678901263"},
+          {"type": 3, "name": "note", "value": "bring the raid banner and a spare exotic"},
+          {"type": 4, "name": "slots", "value": 6},
+          {"type": 11, "name": "loadout", "value": "1426543400000000099"}
+        ]
+      }
+    ],
+    "resolved": {
+      "users": {
+        "302050872383242240": {
+          "id": "302050872383242240",
+          "username": "kestrel",
+          "global_name": "Kestrel",
+          "discriminator": "0",
+          "avatar": "f00dbabe0123456789abcdef01234567",
+          "avatar_decoration_data": null,
+          "public_flags": 64,
+          "flags": 64,
+          "clan": null,
+          "primary_guild": null,
+          "collectibles": null
+        }
+      },
+      "members": {
+        "302050872383242240": {
+          "roles": ["1159812345678901260"],
+          "premium_since": null,
+          "permissions": "1071698660929",
+          "pending": false,
+          "nick": null,
+          "joined_at": "2023-10-02T18:44:10.512000+00:00",
+          "flags": 0,
+          "communication_disabled_until": null,
+          "banner": null,
+          "avatar": null
+        }
+      },
+      "channels": {
+        "1159812345678901252": {
+          "id": "1159812345678901252",
+          "name": "raid-voice",
+          "type": 2,
+          "permissions": "2251799813685247",
+          "parent_id": "1159812345678901250",
+          "guild_id": "1159812345678901248",
+          "flags": 0,
+          "nsfw": false,
+          "position": 3,
+          "rate_limit_per_user": 0,
+          "bitrate": 64000,
+          "user_limit": 6,
+          "rtc_region": null,
+          "last_message_id": null,
+          "topic": null
+        }
+      },
+      "roles": {
+        "1159812345678901263": {
+          "id": "1159812345678901263",
+          "name": "Raiders",
+          "description": null,
+          "color": 3447003,
+          "colors": {"primary_color": 3447003, "secondary_color": null, "tertiary_color": null},
+          "hoist": true,
+          "icon": null,
+          "unicode_emoji": null,
+          "position": 7,
+          "permissions": "1071698660929",
+          "managed": false,
+          "mentionable": true,
+          "flags": 0
+        }
+      },
+      "attachments": {
+        "1426543400000000099": {
+          "id": "1426543400000000099",
+          "filename": "loadout.png",
+          "size": 482113,
+          "url": "https://cdn.discordapp.com/ephemeral-attachments/1290011223344556700/1426543400000000099/loadout.png?ex=6720a1b2&is=671f5032&hm=0123456789abcdef",
+          "proxy_url": "https://media.discordapp.net/ephemeral-attachments/1290011223344556700/1426543400000000099/loadout.png?ex=6720a1b2&is=671f5032&hm=0123456789abcdef",
+          "content_type": "image/png",
+          "width": 1920,
+          "height": 1080,
+          "placeholder": "3PcNDQJ2d3eHd4h3d4iId3iHiIiAZ3cI",
+          "placeholder_version": 1,
+          "ephemeral": true
+        }
+      }
+    }
+  },
+  "context": 0,
+  "channel_id": "1159812345678901251",
+  "channel": {
+    "type": 0,
+    "topic": "raid planning and banter",
+    "rate_limit_per_user": 0,
+    "position": 1,
+    "permissions": "2251799813685247",
+    "parent_id": "1159812345678901250",
+    "nsfw": false,
+    "name": "raid-planning",
+    "last_message_id": "1426543377777777777",
+    "id": "1159812345678901251",
+    "guild_id": "1159812345678901248",
+    "flags": 0
+  },
+  "authorizing_integration_owners": {"0": "1159812345678901248"},
+  "attachment_size_limit": 10485760,
+  "app_permissions": "2251799813685247",
+  "application_id": "1290011223344556677"
+}

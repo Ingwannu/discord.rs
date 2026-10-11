@@ -1,0 +1,28 @@
+{
+  "guild_id": "1159812345678901248",
+  "request": {
+    "id": "1426543500000000000",
+    "user_id": "302050872383242241",
+    "guild_id": "1159812345678901248",
+    "application_status": "SUBMITTED",
+    "created_at": "2026-10-11T09:20:00.000000+00:00",
+    "last_seen": null,
+    "actioned_at": null,
+    "actioned_by_user": null,
+    "rejection_reason": null,
+    "form_responses": [
+      {"field_type": "TERMS", "label": "Read and agree to the server rules", "required": true, "response": true, "values": ["Be kind", "No spoilers outside #spoilers", "No selling accounts"]},
+      {"field_type": "TEXT_INPUT", "label": "What brings you here?", "required": true, "response": "looking for a raid group on weekday evenings"},
+      {"field_type": "MULTIPLE_CHOICE", "label": "Which region?", "required": true, "response": 2, "choices": ["NA", "EU", "Asia"]}
+    ],
+    "user": {
+      "id": "302050872383242241",
+      "username": "newcomer",
+      "global_name": "Newcomer",
+      "discriminator": "0",
+      "avatar": null,
+      "public_flags": 0
+    }
+  },
+  "status": "SUBMITTED"
+}

@@ -1,0 +1,144 @@
+{
+  "type": 19,
+  "tts": false,
+  "timestamp": "2026-10-11T09:16:03.540000+00:00",
+  "pinned": false,
+  "mentions": [
+    {
+      "id": "419834729384729600",
+      "username": "ari.k",
+      "global_name": "Ari",
+      "discriminator": "0",
+      "avatar": "a_0123456789abcdef0123456789abcdef",
+      "public_flags": 0,
+      "flags": 0
+    }
+  ],
+  "mention_roles": [],
+  "mention_everyone": false,
+  "member": {
+    "roles": ["1159812345678901270"],
+    "premium_since": null,
+    "pending": false,
+    "nick": null,
+    "mute": false,
+    "joined_at": "2024-02-14T11:00:00.000000+00:00",
+    "flags": 0,
+    "deaf": false,
+    "communication_disabled_until": null,
+    "banner": null,
+    "avatar": null
+  },
+  "id": "1426543299876543210",
+  "flags": 0,
+  "embeds": [
+    {
+      "type": "rich",
+      "title": "Weekly raid schedule",
+      "description": "Sign up below. Slots are first come, first served; tanks and healers get priority.",
+      "url": "https://example.com/raids/2026-41",
+      "color": 5814783,
+      "timestamp": "2026-10-11T09:16:03.000000+00:00",
+      "author": {
+        "name": "Raid Planner",
+        "icon_url": "https://cdn.discordapp.com/avatars/1290011223344556677/0123456789abcdef0123456789abcdef.png",
+        "proxy_icon_url": "https://images-ext-1.discordapp.net/external/abc/https/cdn.discordapp.com/avatars/1290011223344556677/0123456789abcdef0123456789abcdef.png"
+      },
+      "thumbnail": {
+        "url": "https://example.com/static/raid-thumb.png",
+        "proxy_url": "https://images-ext-1.discordapp.net/external/def/https/example.com/static/raid-thumb.png",
+        "width": 256,
+        "height": 256,
+        "content_type": "image/png",
+        "flags": 0
+      },
+      "fields": [
+        {"name": "Monday", "value": "21:00 KST - Vault of Glass (normal)", "inline": true},
+        {"name": "Wednesday", "value": "21:00 KST - King's Fall (master)", "inline": true},
+        {"name": "Friday", "value": "22:00 KST - Salvation's Edge (contest)", "inline": true},
+        {"name": "Tanks", "value": "2 / 2", "inline": true},
+        {"name": "Healers", "value": "1 / 2", "inline": true},
+        {"name": "DPS", "value": "3 / 6", "inline": true}
+      ],
+      "footer": {
+        "text": "Reply with /signup to join",
+        "icon_url": "https://example.com/static/footer.png",
+        "proxy_icon_url": "https://images-ext-1.discordapp.net/external/ghi/https/example.com/static/footer.png"
+      },
+      "content_scan_version": 2
+    },
+    {
+      "type": "rich",
+      "title": "Loot rules",
+      "description": "Need before greed. Masterwork drops rotate weekly. Disputes go to the officers channel.",
+      "color": 15105570,
+      "fields": [
+        {"name": "Officers", "value": "<@302050872383242240>, <@419834729384729600>", "inline": false}
+      ],
+      "content_scan_version": 2
+    }
+  ],
+  "edited_timestamp": null,
+  "content": "",
+  "components": [
+    {
+      "type": 1,
+      "id": 1,
+      "components": [
+        {"type": 2, "id": 2, "style": 3, "label": "Sign up", "custom_id": "raid:signup:2026-41", "emoji": {"name": "✅"}},
+        {"type": 2, "id": 3, "style": 4, "label": "Withdraw", "custom_id": "raid:withdraw:2026-41"},
+        {"type": 2, "id": 4, "style": 5, "label": "Calendar", "url": "https://example.com/raids/2026-41/ics"}
+      ]
+    },
+    {
+      "type": 1,
+      "id": 5,
+      "components": [
+        {
+          "type": 3,
+          "id": 6,
+          "custom_id": "raid:role:2026-41",
+          "placeholder": "Pick your role",
+          "min_values": 1,
+          "max_values": 1,
+          "options": [
+            {"label": "Tank", "value": "tank", "description": "Hold aggro", "emoji": {"name": "🛡️"}},
+            {"label": "Healer", "value": "healer", "description": "Keep everyone alive"},
+            {"label": "DPS", "value": "dps", "description": "Do the damage"}
+          ]
+        }
+      ]
+    }
+  ],
+  "channel_type": 0,
+  "channel_id": "1159812345678901251",
+  "author": {
+    "id": "1290011223344556677",
+    "username": "raid-planner",
+    "global_name": null,
+    "discriminator": "4821",
+    "avatar": "0123456789abcdef0123456789abcdef",
+    "bot": true,
+    "public_flags": 65536,
+    "flags": 65536
+  },
+  "attachments": [],
+  "application_id": "1290011223344556677",
+  "interaction_metadata": {
+    "id": "1426543290000000000",
+    "type": 2,
+    "user": {
+      "id": "419834729384729600",
+      "username": "ari.k",
+      "global_name": "Ari",
+      "discriminator": "0",
+      "avatar": "a_0123456789abcdef0123456789abcdef",
+      "public_flags": 0
+    },
+    "authorizing_integration_owners": {"0": "1159812345678901248"},
+    "name": "raid schedule",
+    "command_type": 1
+  },
+  "webhook_id": "1290011223344556677",
+  "guild_id": "1159812345678901248"
+}
