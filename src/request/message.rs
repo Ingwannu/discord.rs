@@ -374,9 +374,10 @@ macro_rules! patch_setters {
 
         /// Replaces the components and adds `IS_COMPONENTS_V2` to the flags
         /// this edit sets. The flag cannot be removed again, and Discord
-        /// rejects the edit unless the message's content, embeds, and poll
-        /// are cleared in the same request ([`Self::clear_content`],
-        /// [`Self::clear_embeds`]).
+        /// rejects the edit unless the content, embeds, stickers, and poll
+        /// the message has are cleared in the same request
+        /// ([`Self::clear_content`], [`Self::clear_embeds`], and
+        /// `clear_stickers` / `clear_poll` where the type has them).
         pub fn components_v2(mut self, components: Vec<Component>) -> Self {
             self.components = set(components);
             let flags = match self.flags {
@@ -617,6 +618,14 @@ pub struct EditMessage {
     pub components: NullablePatch<Vec<Component>>,
     /// Every attachment the message keeps (existing and newly uploaded).
     pub attachments: NullablePatch<Vec<MessageAttachment>>,
+    /// Writes `"sticker_ids": []`, removing the message's stickers. Discord
+    /// requires it when an edit sets `IS_COMPONENTS_V2` on a message that
+    /// has stickers; stickers cannot be added or replaced by an edit.
+    pub clear_sticker_ids: bool,
+    /// Writes `"poll": null`, removing the message's poll. Discord requires
+    /// it when an edit sets `IS_COMPONENTS_V2` on a message that has a poll;
+    /// a poll cannot be added or replaced by an edit.
+    pub clear_poll: bool,
 }
 
 impl EditMessage {
@@ -626,6 +635,22 @@ impl EditMessage {
     }
 
     patch_setters!();
+
+    /// Removes the message's stickers (`"sticker_ids": []`), as Discord
+    /// requires when this edit turns a message with stickers into a
+    /// Components V2 message.
+    pub fn clear_stickers(mut self) -> Self {
+        self.clear_sticker_ids = true;
+        self
+    }
+
+    /// Removes the message's poll (`"poll": null`), as Discord requires
+    /// when this edit turns a message with a poll into a Components V2
+    /// message.
+    pub fn clear_poll(mut self) -> Self {
+        self.clear_poll = true;
+        self
+    }
 
     /// Checks the values this edit sets against Discord's limits.
     pub fn validate(&self) -> Result<(), DiscordError> {
@@ -656,6 +681,12 @@ impl EditMessage {
         entry_patch_mentions(&mut map, &self.allowed_mentions, default_mentions)?;
         entry_patch(&mut map, "components", &self.components)?;
         entry_patch(&mut map, "attachments", &self.attachments)?;
+        if self.clear_sticker_ids {
+            map.serialize_entry("sticker_ids", &[(); 0])?;
+        }
+        if self.clear_poll {
+            map.serialize_entry("poll", &None::<()>)?;
+        }
         map.end()
     }
 }
@@ -980,6 +1011,14 @@ impl EditWebhookMessage {
     /// Adds a poll (only when completing a deferred interaction response).
     pub fn poll(mut self, poll: CreatePoll) -> Self {
         self.poll = set(poll);
+        self
+    }
+
+    /// Removes the message's poll (`"poll": null`), as Discord requires
+    /// when this edit turns a message with a poll into a Components V2
+    /// message.
+    pub fn clear_poll(mut self) -> Self {
+        self.poll = Patch::Value(Nullable::Null);
         self
     }
 
@@ -1313,6 +1352,8 @@ impl TryFrom<CreateMessage> for EditMessage {
             allowed_mentions: into_patch(allowed_mentions),
             components: into_patch(components),
             attachments: into_patch(attachments),
+            clear_sticker_ids: false,
+            clear_poll: false,
         })
     }
 }
@@ -1435,9 +1476,13 @@ impl TryFrom<InteractionMessage> for EditWebhookMessage {
     }
 }
 
-/// Lossless: an [`EditMessage`] is an [`EditWebhookMessage`] without a poll.
-impl From<EditMessage> for EditWebhookMessage {
-    fn from(edit: EditMessage) -> Self {
+/// An [`EditMessage`] as a webhook message edit; `clear_poll` becomes
+/// `"poll": null`. Fails when it clears stickers, which webhook messages
+/// cannot have and the webhook edit cannot express.
+impl TryFrom<EditMessage> for EditWebhookMessage {
+    type Error = DiscordError;
+
+    fn try_from(edit: EditMessage) -> Result<Self, Self::Error> {
         let EditMessage {
             content,
             embeds,
@@ -1445,16 +1490,27 @@ impl From<EditMessage> for EditWebhookMessage {
             allowed_mentions,
             components,
             attachments,
+            clear_sticker_ids,
+            clear_poll,
         } = edit;
-        Self {
+        if clear_sticker_ids {
+            return Err(DiscordError::model(
+                "EditWebhookMessage does not accept EditMessage fields: sticker_ids",
+            ));
+        }
+        Ok(Self {
             content,
             embeds,
             flags,
             allowed_mentions,
             components,
             attachments,
-            poll: Patch::Missing,
-        }
+            poll: if clear_poll {
+                Patch::Value(Nullable::Null)
+            } else {
+                Patch::Missing
+            },
+        })
     }
 }
 
@@ -1506,6 +1562,34 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("IS_COMPONENTS_V2 flag cannot set content"));
+    }
+
+    #[test]
+    fn components_v2_edits_can_clear_stickers_and_poll() {
+        use crate::request::TextDisplay;
+
+        let edit = EditMessage::new()
+            .components_v2(vec![TextDisplay::new("now v2").into()])
+            .clear_content()
+            .clear_embeds()
+            .clear_stickers()
+            .clear_poll();
+        edit.validate().expect("the documented transition body");
+        assert_eq!(
+            serde_json::to_string(&edit).unwrap(),
+            r#"{"content":null,"embeds":[],"flags":32768,"components":[{"type":10,"content":"now v2"}],"sticker_ids":[],"poll":null}"#
+        );
+        assert!(EditWebhookMessage::try_from(edit.clone()).is_err());
+        let webhook = EditWebhookMessage::try_from(EditMessage {
+            clear_sticker_ids: false,
+            ..edit
+        })
+        .unwrap();
+        assert_eq!(webhook.poll, Patch::Value(Nullable::Null));
+        assert_eq!(
+            serde_json::to_string(&EditWebhookMessage::new().clear_poll()).unwrap(),
+            r#"{"poll":null}"#
+        );
     }
 
     #[test]
