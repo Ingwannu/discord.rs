@@ -11,7 +11,13 @@ mod modal;
 
 /// Select menu defaults are the model type, shared with received components.
 pub use crate::model::SelectDefaultValue;
-pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
+// The 2.x generic button builder; use the three split builders.
+#[expect(deprecated, reason = "deliberate re-export of a deprecated item")]
+pub use components::ButtonBuilder;
+pub use components::{
+    ActionRowBuilder, ComponentsV2Message, CustomButtonBuilder, LinkButtonBuilder,
+    PremiumButtonBuilder, SelectMenuBuilder,
+};
 pub use container::{
     create_container, create_default_buttons, ContainerBuilder, SeparatorBuilder,
     TextDisplayBuilder,

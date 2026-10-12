@@ -368,7 +368,7 @@ fn received_select_components_and_builders_share_the_wire_shape() {
         .default_mentionable(MentionableId::from(test_id::<super::marker::Role>(8)))
         .build();
     assert_eq!(
-        built["default_values"],
+        serde_json::to_value(built).unwrap()["default_values"],
         json!([{ "id": "7", "type": "user" }, { "id": "8", "type": "role" }])
     );
 }

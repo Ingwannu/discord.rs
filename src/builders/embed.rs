@@ -1,9 +1,9 @@
-use serde_json::Value;
+//! [`EmbedBuilder`], which builds a typed [`Embed`].
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::limits;
-use crate::command::validation;
 use crate::error::DiscordError;
+use crate::request::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedImage};
 
 /// Builder for Discord rich embeds, paralleling discord.js's `EmbedBuilder`.
 ///
@@ -18,112 +18,93 @@ use crate::error::DiscordError;
 ///     .field("Name", "Value", false)
 ///     .footer("Footer text", None)
 ///     .build();
+/// assert_eq!(embed.title.as_deref(), Some("Hello"));
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct EmbedBuilder {
-    title: Option<String>,
-    description: Option<String>,
-    url: Option<String>,
-    color: Option<u32>,
-    fields: Vec<EmbedFieldData>,
-    author: Option<Value>,
-    thumbnail: Option<Value>,
-    image: Option<Value>,
-    footer: Option<Value>,
-    timestamp: Option<String>,
-    video: Option<Value>,
-    provider: Option<Value>,
-}
-
-#[derive(Clone, Debug)]
-struct EmbedFieldData {
-    name: String,
-    value: String,
-    inline: bool,
+    inner: Embed,
 }
 
 impl EmbedBuilder {
-    /// Creates a `new` value.
+    /// An empty embed.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Sets the title (up to 256 characters).
     pub fn title(mut self, title: impl Into<String>) -> Self {
-        self.title = Some(title.into());
+        self.inner.title = Some(title.into());
         self
     }
 
+    /// Sets the description (up to 4096 characters).
     pub fn description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
+        self.inner.description = Some(description.into());
         self
     }
 
+    /// Sets the URL the title links to.
     pub fn url(mut self, url: impl Into<String>) -> Self {
-        self.url = Some(url.into());
+        self.inner.url = Some(url.into());
         self
     }
 
+    /// Sets the sidebar colour as RGB.
     pub fn color(mut self, color: u32) -> Self {
-        self.color = Some(color);
+        self.inner.color = Some(color);
         self
     }
 
+    /// Appends a field (up to 25; name 1-256, value 1-1024 characters).
     pub fn field(
         mut self,
         name: impl Into<String>,
         value: impl Into<String>,
         inline: bool,
     ) -> Self {
-        self.fields.push(EmbedFieldData {
-            name: name.into(),
-            value: value.into(),
-            inline,
-        });
+        self.inner.fields.push(EmbedField::new(name, value, inline));
         self
     }
 
-    pub fn blank_field(mut self, inline: bool) -> Self {
-        self.fields.push(EmbedFieldData {
-            name: "\u{200B}".to_string(),
-            value: "\u{200B}".to_string(),
-            inline,
-        });
-        self
+    /// Appends a field whose name and value are a zero-width space, used
+    /// to break a row of inline fields.
+    pub fn blank_field(self, inline: bool) -> Self {
+        self.field("\u{200B}", "\u{200B}", inline)
     }
 
+    /// Sets the author line.
     pub fn author(
         mut self,
         name: impl Into<String>,
         url: Option<String>,
         icon_url: Option<String>,
     ) -> Self {
-        let mut author = serde_json::json!({ "name": name.into() });
-        if let Some(url) = url {
-            author["url"] = Value::String(url);
-        }
-        if let Some(icon_url) = icon_url {
-            author["icon_url"] = Value::String(icon_url);
-        }
-        self.author = Some(author);
+        self.inner.author = Some(EmbedAuthor {
+            url,
+            icon_url,
+            ..EmbedAuthor::new(name)
+        });
         self
     }
 
+    /// Sets the small image beside the description.
     pub fn thumbnail(mut self, url: impl Into<String>) -> Self {
-        self.thumbnail = Some(serde_json::json!({ "url": url.into() }));
+        self.inner.thumbnail = Some(EmbedImage::new(url));
         self
     }
 
+    /// Sets the large image.
     pub fn image(mut self, url: impl Into<String>) -> Self {
-        self.image = Some(serde_json::json!({ "url": url.into() }));
+        self.inner.image = Some(EmbedImage::new(url));
         self
     }
 
+    /// Sets the footer.
     pub fn footer(mut self, text: impl Into<String>, icon_url: Option<String>) -> Self {
-        let mut footer = serde_json::json!({ "text": text.into() });
-        if let Some(icon_url) = icon_url {
-            footer["icon_url"] = Value::String(icon_url);
-        }
-        self.footer = Some(footer);
+        self.inner.footer = Some(EmbedFooter {
+            icon_url,
+            ..EmbedFooter::new(text)
+        });
         self
     }
 
@@ -133,157 +114,49 @@ impl EmbedBuilder {
     /// use discordrs::builders::EmbedBuilder;
     ///
     /// let embed = EmbedBuilder::new().timestamp_now().build();
-    /// if let Some(timestamp) = embed.get("timestamp").and_then(|value| value.as_str()) {
-    ///     assert_eq!(timestamp.len(), 24);
-    ///     assert_eq!(&timestamp[10..11], "T");
-    ///     assert!(timestamp.ends_with('Z'));
-    /// } else {
-    ///     panic!("timestamp should be present");
-    /// }
+    /// let timestamp = embed.timestamp.unwrap_or_default();
+    /// assert_eq!(timestamp.len(), 24);
+    /// assert_eq!(&timestamp[10..11], "T");
+    /// assert!(timestamp.ends_with('Z'));
     /// ```
     pub fn timestamp_now(mut self) -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
-        self.timestamp = Some(format_unix_timestamp(now));
+        self.inner.timestamp = Some(format_unix_timestamp(now));
         self
     }
 
+    /// Sets an ISO 8601 timestamp.
     pub fn timestamp_iso(mut self, iso: impl Into<String>) -> Self {
-        self.timestamp = Some(iso.into());
+        self.inner.timestamp = Some(iso.into());
         self
     }
 
     /// Validates the embed against Discord's limits without consuming the
     /// builder: title <= 256, description <= 4096, up to 25 fields (name
-    /// <= 256, value <= 1024), footer text <= 2048, author name <= 256, and
+    /// 1-256, value 1-1024), footer text <= 2048, author name <= 256, and
     /// a combined total of at most 6000 characters.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        let mut total = 0usize;
-
-        if let Some(title) = &self.title {
-            validation::ensure_max_len("embed title", title, limits::MAX_EMBED_TITLE_LENGTH)?;
-            total += validation::char_count(title);
-        }
-        if let Some(description) = &self.description {
-            validation::ensure_max_len(
-                "embed description",
-                description,
-                limits::MAX_EMBED_DESCRIPTION_LENGTH,
-            )?;
-            total += validation::char_count(description);
-        }
-        validation::ensure_max_count("embed fields", self.fields.len(), limits::MAX_EMBED_FIELDS)?;
-        for (index, field) in self.fields.iter().enumerate() {
-            validation::ensure_len(
-                &format!("embed field {index} name"),
-                &field.name,
-                1,
-                limits::MAX_EMBED_FIELD_NAME_LENGTH,
-            )?;
-            validation::ensure_len(
-                &format!("embed field {index} value"),
-                &field.value,
-                1,
-                limits::MAX_EMBED_FIELD_VALUE_LENGTH,
-            )?;
-            total += validation::char_count(&field.name) + validation::char_count(&field.value);
-        }
-        if let Some(text) = self
-            .footer
-            .as_ref()
-            .and_then(|footer| footer.get("text"))
-            .and_then(Value::as_str)
-        {
-            validation::ensure_max_len(
-                "embed footer text",
-                text,
-                limits::MAX_EMBED_FOOTER_TEXT_LENGTH,
-            )?;
-            total += validation::char_count(text);
-        }
-        if let Some(name) = self
-            .author
-            .as_ref()
-            .and_then(|author| author.get("name"))
-            .and_then(Value::as_str)
-        {
-            validation::ensure_max_len(
-                "embed author name",
-                name,
-                limits::MAX_EMBED_AUTHOR_NAME_LENGTH,
-            )?;
-            total += validation::char_count(name);
-        }
-        if total > limits::MAX_EMBED_TOTAL_LENGTH {
-            return Err(DiscordError::model(format!(
-                "embed total length must be at most {} characters, got {total}",
-                limits::MAX_EMBED_TOTAL_LENGTH
-            )));
-        }
-        Ok(())
+        self.inner.validate()
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
     /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    pub fn try_build(self) -> Result<Embed, DiscordError> {
         self.validate()?;
-        Ok(self.build())
+        Ok(self.inner)
     }
 
-    /// Build the embed into a serde_json::Value for use in API requests.
-    pub fn build(self) -> Value {
-        let mut embed = serde_json::json!({});
+    /// The embed, without checking limits.
+    pub fn build(self) -> Embed {
+        self.inner
+    }
+}
 
-        if let Some(title) = self.title {
-            embed["title"] = Value::String(title);
-        }
-        if let Some(description) = self.description {
-            embed["description"] = Value::String(description);
-        }
-        if let Some(url) = self.url {
-            embed["url"] = Value::String(url);
-        }
-        if let Some(color) = self.color {
-            embed["color"] = Value::Number(color.into());
-        }
-        if !self.fields.is_empty() {
-            embed["fields"] = Value::Array(
-                self.fields
-                    .into_iter()
-                    .map(|f| {
-                        serde_json::json!({
-                            "name": f.name,
-                            "value": f.value,
-                            "inline": f.inline,
-                        })
-                    })
-                    .collect(),
-            );
-        }
-        if let Some(author) = self.author {
-            embed["author"] = author;
-        }
-        if let Some(thumbnail) = self.thumbnail {
-            embed["thumbnail"] = thumbnail;
-        }
-        if let Some(image) = self.image {
-            embed["image"] = image;
-        }
-        if let Some(footer) = self.footer {
-            embed["footer"] = footer;
-        }
-        if let Some(timestamp) = self.timestamp {
-            embed["timestamp"] = Value::String(timestamp);
-        }
-        if let Some(video) = self.video {
-            embed["video"] = video;
-        }
-        if let Some(provider) = self.provider {
-            embed["provider"] = provider;
-        }
-
-        embed
+impl From<EmbedBuilder> for Embed {
+    fn from(builder: EmbedBuilder) -> Self {
+        builder.build()
     }
 }
 
@@ -336,10 +209,7 @@ mod tests {
     #[test]
     fn timestamp_now_builds_iso8601_utc_timestamp() {
         let embed = EmbedBuilder::new().timestamp_now().build();
-        let timestamp = embed
-            .get("timestamp")
-            .and_then(|value| value.as_str())
-            .expect("timestamp should be present");
+        let timestamp = embed.timestamp.expect("timestamp should be present");
 
         assert_eq!(timestamp.len(), 24);
         assert_eq!(timestamp.as_bytes()[4], b'-');
@@ -382,104 +252,27 @@ mod tests {
             .timestamp_iso("2026-04-12T03:04:05.678Z")
             .build();
 
-        let fields = embed
-            .get("fields")
-            .and_then(|value| value.as_array())
-            .expect("fields array");
-
         assert_eq!(
-            embed.get("title").and_then(|value| value.as_str()),
-            Some("Release")
-        );
-        assert_eq!(
-            embed.get("description").and_then(|value| value.as_str()),
-            Some("Shipped")
-        );
-        assert_eq!(
-            embed.get("url").and_then(|value| value.as_str()),
-            Some("https://example.com/release")
-        );
-        assert_eq!(
-            embed.get("color").and_then(|value| value.as_u64()),
-            Some(0x5865F2)
-        );
-        assert_eq!(fields.len(), 2);
-        assert_eq!(
-            fields[0].get("name").and_then(|value| value.as_str()),
-            Some("Status")
-        );
-        assert_eq!(
-            fields[0].get("value").and_then(|value| value.as_str()),
-            Some("Green")
-        );
-        assert_eq!(
-            fields[0].get("inline").and_then(|value| value.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            fields[1].get("name").and_then(|value| value.as_str()),
-            Some("\u{200B}")
-        );
-        assert_eq!(
-            fields[1].get("value").and_then(|value| value.as_str()),
-            Some("\u{200B}")
-        );
-        assert_eq!(
-            fields[1].get("inline").and_then(|value| value.as_bool()),
-            Some(false)
-        );
-        assert_eq!(
-            embed
-                .get("author")
-                .and_then(|value| value.get("name"))
-                .and_then(|value| value.as_str()),
-            Some("discordrs")
-        );
-        assert_eq!(
-            embed
-                .get("author")
-                .and_then(|value| value.get("url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com")
-        );
-        assert_eq!(
-            embed
-                .get("author")
-                .and_then(|value| value.get("icon_url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com/icon.png")
-        );
-        assert_eq!(
-            embed
-                .get("thumbnail")
-                .and_then(|value| value.get("url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com/thumb.png")
-        );
-        assert_eq!(
-            embed
-                .get("image")
-                .and_then(|value| value.get("url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com/image.png")
-        );
-        assert_eq!(
-            embed
-                .get("footer")
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str()),
-            Some("Footer")
-        );
-        assert_eq!(
-            embed
-                .get("footer")
-                .and_then(|value| value.get("icon_url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com/footer.png")
-        );
-        assert_eq!(
-            embed.get("timestamp").and_then(|value| value.as_str()),
-            Some("2026-04-12T03:04:05.678Z")
+            serde_json::to_value(&embed).unwrap(),
+            json!({
+                "title": "Release",
+                "description": "Shipped",
+                "url": "https://example.com/release",
+                "color": 0x5865F2,
+                "fields": [
+                    {"name": "Status", "value": "Green", "inline": true},
+                    {"name": "\u{200B}", "value": "\u{200B}", "inline": false}
+                ],
+                "author": {
+                    "name": "discordrs",
+                    "url": "https://example.com",
+                    "icon_url": "https://example.com/icon.png"
+                },
+                "thumbnail": {"url": "https://example.com/thumb.png"},
+                "image": {"url": "https://example.com/image.png"},
+                "footer": {"text": "Footer", "icon_url": "https://example.com/footer.png"},
+                "timestamp": "2026-04-12T03:04:05.678Z"
+            })
         );
     }
 
@@ -489,58 +282,13 @@ mod tests {
             .author("discordrs", None, None)
             .footer("Footer", None)
             .build();
-
         assert_eq!(
-            embed
-                .get("author")
-                .and_then(|value| value.get("name"))
-                .and_then(|value| value.as_str()),
-            Some("discordrs")
-        );
-        assert!(embed
-            .get("author")
-            .and_then(|value| value.get("url"))
-            .is_none());
-        assert!(embed
-            .get("author")
-            .and_then(|value| value.get("icon_url"))
-            .is_none());
-        assert_eq!(
-            embed
-                .get("footer")
-                .and_then(|value| value.get("text"))
-                .and_then(|value| value.as_str()),
-            Some("Footer")
-        );
-        assert!(embed
-            .get("footer")
-            .and_then(|value| value.get("icon_url"))
-            .is_none());
-        assert!(embed.get("fields").is_none());
-    }
-
-    #[test]
-    fn embed_build_includes_direct_video_and_provider_fields() {
-        let embed = EmbedBuilder {
-            video: Some(json!({ "url": "https://example.com/video.mp4" })),
-            provider: Some(json!({ "name": "discordrs" })),
-            ..EmbedBuilder::default()
-        }
-        .build();
-
-        assert_eq!(
-            embed
-                .get("video")
-                .and_then(|value| value.get("url"))
-                .and_then(|value| value.as_str()),
-            Some("https://example.com/video.mp4")
+            serde_json::to_value(&embed).unwrap(),
+            json!({"author": {"name": "discordrs"}, "footer": {"text": "Footer"}})
         );
         assert_eq!(
-            embed
-                .get("provider")
-                .and_then(|value| value.get("name"))
-                .and_then(|value| value.as_str()),
-            Some("discordrs")
+            serde_json::to_string(&EmbedBuilder::new().build()).unwrap(),
+            "{}"
         );
     }
 

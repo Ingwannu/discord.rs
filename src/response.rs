@@ -195,32 +195,32 @@ impl From<String> for InteractionReplyData {
     }
 }
 
-/// Lossless: `MessageBuilder` only has setters for fields interaction
-/// responses accept (content, components, flags). If a setter for a
-/// channel-message-only field is ever added, this conversion must become
-/// fallible like the `CreateMessage` one.
+/// Temporary adapter (phase 5 worker A): `MessageBuilder` now builds the
+/// typed `request::CreateMessage`, while this 2.x payload still holds JSON.
+/// Worker C replaces `InteractionReplyData` with `request::InteractionMessage`
+/// (which converts from `MessageBuilder` losslessly); until then the typed
+/// embeds and components are encoded here. `tts` and attachment metadata,
+/// which this type has no field for, are not carried.
 impl From<MessageBuilder> for InteractionReplyData {
     fn from(builder: MessageBuilder) -> Self {
-        let CreateMessage {
-            content,
-            components,
-            flags,
-            embeds,
-            allowed_mentions,
-            poll,
-            // Never set by `MessageBuilder` (see above).
-            message_reference: _,
-            sticker_ids: _,
-            nonce: _,
-            enforce_nonce: _,
-        } = builder.build();
+        let message = builder.build();
         Self {
-            content,
-            embeds,
-            components,
-            flags,
-            allowed_mentions,
-            poll,
+            content: message.content,
+            embeds: message.embeds.map(|embeds| {
+                embeds
+                    .into_iter()
+                    .map(crate::types::to_json_value)
+                    .collect()
+            }),
+            components: message.components.map(|components| {
+                components
+                    .into_iter()
+                    .map(crate::types::to_json_value)
+                    .collect()
+            }),
+            flags: message.flags.map(|flags| flags.bits()),
+            allowed_mentions: message.allowed_mentions,
+            poll: message.poll.map(Into::into),
         }
     }
 }
@@ -1620,14 +1620,20 @@ mod tests {
             .ephemeral(true)
             .build();
 
-        assert_eq!(message.flags, Some((1 << 15) | (1 << 6)));
+        assert_eq!(
+            message.flags.map(|flags| flags.bits()),
+            Some((1 << 15) | (1 << 6))
+        );
     }
 
     #[test]
     fn message_builder_serializes_components_and_preserves_existing_flags() {
         let message = MessageBuilder::new()
             .content("hello")
-            .components(vec![json!({"type": 1, "components": []})])
+            .add_component(
+                crate::request::RawComponent::from_value(&json!({"type": 1, "components": []}))
+                    .unwrap(),
+            )
             .flags(1 << 3)
             .ephemeral(true)
             .build();

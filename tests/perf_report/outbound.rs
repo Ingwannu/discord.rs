@@ -5,9 +5,10 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use discordrs::{
-    ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentsV2Message, ContainerBuilder,
-    InteractionResponseBuilder, MediaGalleryBuilder, MediaGalleryItem, MessageBuilder,
-    SectionBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, ThumbnailBuilder,
+    ActionRowBuilder, ButtonStyle, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder,
+    InteractionResponseBuilder, LinkButtonBuilder, MediaGalleryBuilder, MediaGalleryItem,
+    MessageBuilder, SectionBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder,
+    ThumbnailBuilder,
 };
 
 use crate::alloc::{Recorder, Uncounted};
@@ -58,22 +59,17 @@ pub(crate) fn status_card() -> ComponentsV2Message {
         .add_action_row(
             ActionRowBuilder::new()
                 .add_button(
-                    ButtonBuilder::new()
+                    CustomButtonBuilder::new("status:refresh")
                         .style(ButtonStyle::PRIMARY)
-                        .label("Refresh")
-                        .custom_id("status:refresh"),
+                        .label("Refresh"),
                 )
                 .add_button(
-                    ButtonBuilder::new()
+                    CustomButtonBuilder::new("status:details")
                         .style(ButtonStyle::SECONDARY)
-                        .label("Details")
-                        .custom_id("status:details"),
+                        .label("Details"),
                 )
                 .add_button(
-                    ButtonBuilder::new()
-                        .style(ButtonStyle::LINK)
-                        .label("Dashboard")
-                        .url("https://example.com/dashboard"),
+                    LinkButtonBuilder::new("https://example.com/dashboard").label("Dashboard"),
                 ),
         );
     ComponentsV2Message::new()

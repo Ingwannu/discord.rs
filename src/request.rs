@@ -27,6 +27,8 @@ mod embed;
 mod message;
 mod poll;
 
+pub(crate) use component::{check_message_components, ComponentsMode};
+
 pub use attachment::{AttachmentUpload, ExistingAttachment, MessageAttachment};
 pub use component::{
     ActionRow, Button, ButtonRow, ChannelSelect, Component, Container, ContainerComponent,

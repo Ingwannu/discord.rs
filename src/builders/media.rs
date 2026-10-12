@@ -1,287 +1,282 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+//! Media gallery, thumbnail, file, and section builders. Each holds its
+//! typed request model ([`MediaGallery`], [`Thumbnail`], [`FileComponent`],
+//! [`Section`]).
 
-use crate::command::validation;
 use crate::error::DiscordError;
-use crate::model::{ComponentId, ComponentType};
-use crate::types::{to_json_value, MediaGalleryItem, MediaInfo};
+use crate::model::ComponentId;
+use crate::request::{
+    Button, Component, ContainerComponent, FileComponent, MediaGallery, Section, SectionAccessory,
+    TextDisplay, Thumbnail,
+};
+use crate::types::MediaGalleryItem;
 
-use super::components::ButtonBuilder;
 use super::container::TextDisplayBuilder;
-use super::limits;
 
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `MediaGalleryBuilder`.
+/// Builds a [`MediaGallery`] (type 12) of 1-10 items.
+#[derive(Clone, Debug, Default)]
 pub struct MediaGalleryBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    items: Vec<MediaGalleryItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: MediaGallery,
 }
 
 impl MediaGalleryBuilder {
-    /// Creates a `new` value.
+    /// An empty gallery.
     pub fn new() -> Self {
-        Self {
-            component_type: ComponentType::MEDIA_GALLERY,
-            items: Vec::new(),
-            id: None,
-        }
+        Self::default()
     }
 
+    /// Appends an item.
     pub fn add_item(mut self, item: MediaGalleryItem) -> Self {
-        self.items.push(item);
+        self.inner.items.push(item);
         self
     }
 
+    /// Appends items.
     pub fn add_items(mut self, items: Vec<MediaGalleryItem>) -> Self {
-        self.items.extend(items);
+        self.inner.items.extend(items);
         self
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// The gallery, without checking limits.
+    pub fn build(self) -> MediaGallery {
+        self.inner
     }
 
-    /// Validates the gallery against Discord's limits without consuming the
-    /// builder: 1-10 items, item descriptions at most 1024 characters.
+    /// Checks the gallery: 1-10 items, descriptions up to 1024 characters.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count(
-            "media gallery items",
-            self.items.len(),
-            1,
-            limits::MAX_MEDIA_GALLERY_ITEMS,
-        )?;
-        for (index, item) in self.items.iter().enumerate() {
-            if let Some(description) = &item.description {
-                validation::ensure_max_len(
-                    &format!("media gallery item {index} description"),
-                    description,
-                    limits::MAX_MEDIA_DESCRIPTION_LENGTH,
-                )?;
-            }
-        }
-        Ok(())
+        self.inner.validate()
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// [`Self::build`] after [`Self::validate`].
+    pub fn try_build(self) -> Result<MediaGallery, DiscordError> {
         self.validate()?;
-        Ok(self.build())
+        Ok(self.inner)
     }
 }
 
-/// Same as [`MediaGalleryBuilder::new`]: an empty builder that already carries its
-/// component `type`.
-impl Default for MediaGalleryBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `ThumbnailBuilder`.
+/// Builds a [`Thumbnail`] (type 11), a [`SectionBuilder`] accessory.
+#[derive(Clone, Debug)]
 pub struct ThumbnailBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    media: MediaInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    spoiler: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: Thumbnail,
 }
 
 impl ThumbnailBuilder {
-    /// Creates a `new` value.
-    pub fn new(url: &str) -> Self {
+    /// A thumbnail of the image at `url` (`https://` or
+    /// `attachment://<filename>`).
+    pub fn new(url: impl Into<String>) -> Self {
         Self {
-            component_type: ComponentType::THUMBNAIL,
-            media: MediaInfo {
-                url: url.to_string(),
-            },
-            description: None,
-            spoiler: None,
-            id: None,
+            inner: Thumbnail::new(url),
         }
     }
 
-    pub fn description(mut self, desc: &str) -> Self {
-        self.description = Some(desc.to_string());
+    /// Sets the alt text (up to 1024 characters).
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.inner.description = Some(description.into());
         self
     }
 
+    /// Blurs the image as a spoiler.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
-        self.spoiler = Some(spoiler);
+        self.inner.spoiler = Some(spoiler);
         self
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// The thumbnail, without checking limits.
+    pub fn build(self) -> Thumbnail {
+        self.inner
     }
 
-    /// Validates the thumbnail against Discord's limits without consuming
-    /// the builder: description at most 1024 characters.
+    /// Checks the description length (up to 1024 characters).
     pub fn validate(&self) -> Result<(), DiscordError> {
-        if let Some(description) = &self.description {
-            validation::ensure_max_len(
-                "thumbnail description",
-                description,
-                limits::MAX_MEDIA_DESCRIPTION_LENGTH,
-            )?;
-        }
-        Ok(())
+        self.inner.validate()
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// [`Self::build`] after [`Self::validate`].
+    pub fn try_build(self) -> Result<Thumbnail, DiscordError> {
         self.validate()?;
-        Ok(self.build())
+        Ok(self.inner)
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `FileBuilder`.
+/// Builds a [`FileComponent`] (type 13), which shows a file uploaded with
+/// the message.
+#[derive(Clone, Debug)]
 pub struct FileBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    file: MediaInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    spoiler: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: FileComponent,
 }
 
 impl FileBuilder {
-    /// Creates a `new` value.
-    pub fn new(url: &str) -> Self {
+    /// A file component for `attachment://<filename>`.
+    pub fn new(url: impl Into<String>) -> Self {
         Self {
-            component_type: ComponentType::FILE,
-            file: MediaInfo {
-                url: url.to_string(),
-            },
-            spoiler: None,
-            id: None,
+            inner: FileComponent::new(url),
         }
     }
 
+    /// Blurs the file as a spoiler.
     pub fn spoiler(mut self, spoiler: bool) -> Self {
-        self.spoiler = Some(spoiler);
+        self.inner.spoiler = Some(spoiler);
         self
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// The file component, without checking limits.
+    pub fn build(self) -> FileComponent {
+        self.inner
+    }
+
+    /// Checks that the URL is an `attachment://` reference.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        self.inner.validate()
+    }
+
+    /// [`Self::build`] after [`Self::validate`].
+    pub fn try_build(self) -> Result<FileComponent, DiscordError> {
+        self.validate()?;
+        Ok(self.inner)
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `SectionBuilder`.
-pub struct SectionBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    components: Vec<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    accessory: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+/// Builds a [`Section`] (type 9): 1-3 text displays and an accessory.
+///
+/// Discord requires the accessory, so the builder tracks it in its type:
+/// [`SectionBuilder::new`] starts as `SectionBuilder<()>`, and
+/// [`set_thumbnail_accessory`](Self::set_thumbnail_accessory) or
+/// [`set_button_accessory`](Self::set_button_accessory) turn it into
+/// `SectionBuilder<SectionAccessory>`, the only state with `build()`. A
+/// section without an accessory therefore does not compile where a section
+/// is added, instead of failing at Discord.
+#[derive(Clone, Debug, Default)]
+pub struct SectionBuilder<A = ()> {
     id: Option<ComponentId>,
+    components: Vec<TextDisplay>,
+    accessory: A,
 }
 
-impl SectionBuilder {
-    /// Creates a `new` value.
+impl SectionBuilder<()> {
+    /// A section without text or an accessory yet.
     pub fn new() -> Self {
-        Self {
-            component_type: ComponentType::SECTION,
-            components: Vec::new(),
-            accessory: None,
-            id: None,
-        }
+        Self::default()
     }
+}
 
+impl<A> SectionBuilder<A> {
+    /// Appends a text display (1-3 per section).
     pub fn add_text_display(mut self, text: TextDisplayBuilder) -> Self {
         self.components.push(text.build());
         self
     }
 
-    pub fn set_thumbnail_accessory(mut self, thumbnail: ThumbnailBuilder) -> Self {
-        self.accessory = Some(thumbnail.build());
-        self
+    /// Sets a thumbnail as the accessory, replacing any earlier one.
+    pub fn set_thumbnail_accessory(
+        self,
+        thumbnail: ThumbnailBuilder,
+    ) -> SectionBuilder<SectionAccessory> {
+        self.with_accessory(SectionAccessory::Thumbnail(thumbnail.build()))
     }
 
-    pub fn set_button_accessory(mut self, button: ButtonBuilder) -> Self {
-        self.accessory = Some(button.build());
-        self
+    /// Sets a button as the accessory, replacing any earlier one.
+    pub fn set_button_accessory(
+        self,
+        button: impl Into<Button>,
+    ) -> SectionBuilder<SectionAccessory> {
+        self.with_accessory(SectionAccessory::Button(button.into()))
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
         self.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
-    }
-
-    /// Validates the section against Discord's limits without consuming the
-    /// builder: 1-3 child components and a required accessory.
-    pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_count(
-            "section components",
-            self.components.len(),
-            1,
-            limits::MAX_SECTION_COMPONENTS,
-        )?;
-        if self.accessory.is_none() {
-            return Err(DiscordError::model(
-                "section accessory is required (set a thumbnail or button accessory)",
-            ));
+    fn with_accessory(self, accessory: SectionAccessory) -> SectionBuilder<SectionAccessory> {
+        SectionBuilder {
+            id: self.id,
+            components: self.components,
+            accessory,
         }
-        Ok(())
+    }
+}
+
+impl SectionBuilder<SectionAccessory> {
+    /// The section, without checking limits.
+    pub fn build(self) -> Section {
+        Section {
+            id: self.id,
+            components: self.components,
+            ..Section::new(self.accessory)
+        }
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// Checks the section: 1-3 text displays and a valid accessory.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        self.clone().build().validate()
+    }
+
+    /// [`Self::build`] after [`Self::validate`].
+    pub fn try_build(self) -> Result<Section, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
 }
 
-/// Same as [`SectionBuilder::new`]: an empty builder that already carries its
-/// component `type`.
-impl Default for SectionBuilder {
-    fn default() -> Self {
-        Self::new()
+/// `From` a builder into both top-level and container-child position.
+macro_rules! builder_into_component {
+    ($($builder:ty => $variant:ident),*) => {$(
+        impl From<$builder> for Component {
+            fn from(builder: $builder) -> Self {
+                Self::$variant(builder.build())
+            }
+        }
+
+        impl From<$builder> for ContainerComponent {
+            fn from(builder: $builder) -> Self {
+                Self::$variant(builder.build())
+            }
+        }
+    )*};
+}
+
+builder_into_component!(
+    MediaGalleryBuilder => MediaGallery,
+    FileBuilder => File,
+    SectionBuilder<SectionAccessory> => Section
+);
+
+impl From<ThumbnailBuilder> for SectionAccessory {
+    fn from(builder: ThumbnailBuilder) -> Self {
+        Self::Thumbnail(builder.build())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::model::{ButtonStyle, ComponentId, ComponentType};
-    use serde_json::json;
+    use crate::model::{ButtonStyle, ComponentId};
+    use serde_json::{json, Value};
 
     use super::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
-    use crate::builders::{ButtonBuilder, TextDisplayBuilder};
+    use crate::builders::{CustomButtonBuilder, TextDisplayBuilder};
     use crate::types::MediaGalleryItem;
+
+    fn to_json<T: serde::Serialize>(value: &T) -> Value {
+        serde_json::to_value(value).expect("serializable")
+    }
 
     #[test]
     fn media_gallery_builder_serializes_items_and_id() {
@@ -293,81 +288,52 @@ mod tests {
             ])
             .id(ComponentId::new(7))
             .build();
-
-        let items = payload
-            .get("items")
-            .and_then(|value| value.as_array())
-            .expect("gallery items");
-
         assert_eq!(
-            payload.get("type").and_then(|value| value.as_u64()),
-            Some(u64::from(ComponentType::MEDIA_GALLERY.get()))
-        );
-        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(7));
-        assert_eq!(items.len(), 3);
-        assert_eq!(
-            items[1].get("description").and_then(|value| value.as_str()),
-            Some("second")
-        );
-        assert_eq!(
-            items[2].get("spoiler").and_then(|value| value.as_bool()),
-            Some(true)
+            to_json(&payload),
+            json!({
+                "type": 12, "id": 7, "items": [
+                    {"media": {"url": "https://example.com/one.png"}},
+                    {"media": {"url": "https://example.com/two.png"}, "description": "second"},
+                    {"media": {"url": "https://example.com/three.png"}, "spoiler": true}
+                ]
+            })
         );
     }
 
     #[test]
     fn thumbnail_builder_serializes_optional_fields() {
-        let default_payload = ThumbnailBuilder::new("https://example.com/thumb.png").build();
         assert_eq!(
-            default_payload,
-            json!({
-                "type": ComponentType::THUMBNAIL,
-                "media": {"url": "https://example.com/thumb.png"},
-            })
+            to_json(&ThumbnailBuilder::new("https://example.com/thumb.png").build()),
+            json!({"type": 11, "media": {"url": "https://example.com/thumb.png"}})
         );
-
         let payload = ThumbnailBuilder::new("https://example.com/thumb.png")
             .description("preview")
             .spoiler(true)
             .id(ComponentId::new(3))
             .build();
-
         assert_eq!(
-            payload,
+            to_json(&payload),
             json!({
-                "type": ComponentType::THUMBNAIL,
+                "type": 11, "id": 3,
                 "media": {"url": "https://example.com/thumb.png"},
-                "description": "preview",
-                "spoiler": true,
-                "id": 3,
+                "description": "preview", "spoiler": true
             })
         );
     }
 
     #[test]
     fn file_builder_serializes_optional_fields() {
-        let default_payload = FileBuilder::new("https://example.com/file.txt").build();
         assert_eq!(
-            default_payload,
-            json!({
-                "type": ComponentType::FILE,
-                "file": {"url": "https://example.com/file.txt"},
-            })
+            to_json(&FileBuilder::new("attachment://file.txt").build()),
+            json!({"type": 13, "file": {"url": "attachment://file.txt"}})
         );
-
-        let payload = FileBuilder::new("https://example.com/file.txt")
+        let payload = FileBuilder::new("attachment://file.txt")
             .spoiler(true)
             .id(ComponentId::new(11))
             .build();
-
         assert_eq!(
-            payload,
-            json!({
-                "type": ComponentType::FILE,
-                "file": {"url": "https://example.com/file.txt"},
-                "spoiler": true,
-                "id": 11,
-            })
+            to_json(&payload),
+            json!({"type": 13, "id": 11, "file": {"url": "attachment://file.txt"}, "spoiler": true})
         );
     }
 
@@ -388,12 +354,10 @@ mod tests {
             MediaGalleryBuilder::new().add_item(MediaGalleryItem::new("https://example.com/a.png"))
         };
         assert_eq!(make().build(), make().try_build().expect("valid gallery"));
-
         expect_model_error(
             MediaGalleryBuilder::new().try_build(),
             "media gallery items must contain 1-10 items, got 0",
         );
-
         let mut overfull = MediaGalleryBuilder::new();
         for _ in 0..11 {
             overfull = overfull.add_item(MediaGalleryItem::new("https://example.com/a.png"));
@@ -402,7 +366,6 @@ mod tests {
             overfull.try_build(),
             "media gallery items must contain 1-10 items, got 11",
         );
-
         expect_model_error(
             MediaGalleryBuilder::new()
                 .add_item(
@@ -415,15 +378,18 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_try_build_matches_build_and_rejects_long_description() {
+    fn thumbnail_and_file_try_build_check_their_rules() {
         let make = || ThumbnailBuilder::new("https://example.com/thumb.png").description("ok");
         assert_eq!(make().build(), make().try_build().expect("valid thumbnail"));
-
         expect_model_error(
             ThumbnailBuilder::new("https://example.com/thumb.png")
-                .description(&"d".repeat(1025))
+                .description("d".repeat(1025))
                 .try_build(),
             "thumbnail description must be at most 1024 characters, got 1025",
+        );
+        expect_model_error(
+            FileBuilder::new("https://example.com/file.txt").try_build(),
+            "file component url must use attachment://<filename>",
         );
     }
 
@@ -435,7 +401,6 @@ mod tests {
                 .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/t.png"))
         };
         assert_eq!(make().build(), make().try_build().expect("valid section"));
-
         expect_model_error(
             SectionBuilder::new()
                 .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/t.png"))
@@ -452,44 +417,30 @@ mod tests {
                 .try_build(),
             "section components must contain 1-3 items, got 4",
         );
-        expect_model_error(
-            SectionBuilder::new()
-                .add_text_display(TextDisplayBuilder::new("body"))
-                .try_build(),
-            "section accessory is required",
-        );
     }
 
     #[test]
-    fn section_builder_serializes_text_and_thumbnail_accessory() {
+    fn section_builder_serializes_text_and_accessory_in_any_order() {
         let payload = SectionBuilder::new()
-            .add_text_display(TextDisplayBuilder::new("title"))
             .set_thumbnail_accessory(
                 ThumbnailBuilder::new("https://example.com/thumb.png")
                     .description("preview")
                     .id(ComponentId::new(8)),
             )
+            .add_text_display(TextDisplayBuilder::new("title"))
             .id(ComponentId::new(4))
             .build();
-
         assert_eq!(
-            payload.get("type").and_then(|value| value.as_u64()),
-            Some(u64::from(ComponentType::SECTION.get()))
-        );
-        assert_eq!(payload.get("id").and_then(|value| value.as_u64()), Some(4));
-        assert_eq!(
-            payload
-                .get("components")
-                .and_then(|value| value.as_array())
-                .map(|components| components.len()),
-            Some(1)
-        );
-        assert_eq!(
-            payload
-                .get("accessory")
-                .and_then(|value| value.get("type"))
-                .and_then(|value| value.as_u64()),
-            Some(u64::from(ComponentType::THUMBNAIL.get()))
+            to_json(&payload),
+            json!({
+                "type": 9, "id": 4,
+                "components": [{"type": 10, "content": "title"}],
+                "accessory": {
+                    "type": 11, "id": 8,
+                    "media": {"url": "https://example.com/thumb.png"},
+                    "description": "preview"
+                }
+            })
         );
     }
 
@@ -498,26 +449,15 @@ mod tests {
         let payload = SectionBuilder::new()
             .set_thumbnail_accessory(ThumbnailBuilder::new("https://example.com/thumb.png"))
             .set_button_accessory(
-                ButtonBuilder::new()
+                CustomButtonBuilder::new("open")
                     .label("Open")
-                    .style(ButtonStyle::SECONDARY)
-                    .custom_id("open"),
+                    .style(ButtonStyle::SECONDARY),
             )
+            .add_text_display(TextDisplayBuilder::new("body"))
             .build();
-
         assert_eq!(
-            payload
-                .get("accessory")
-                .and_then(|value| value.get("type"))
-                .and_then(|value| value.as_u64()),
-            Some(u64::from(ComponentType::BUTTON.get()))
-        );
-        assert_eq!(
-            payload
-                .get("accessory")
-                .and_then(|value| value.get("custom_id"))
-                .and_then(|value| value.as_str()),
-            Some("open")
+            to_json(&payload)["accessory"],
+            json!({"type": 2, "style": 2, "label": "Open", "custom_id": "open"})
         );
     }
 }

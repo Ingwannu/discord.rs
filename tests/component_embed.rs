@@ -11,16 +11,17 @@
     reason = "a failed expectation fails the test"
 )]
 
+use discordrs::request::RawComponent;
 use discordrs::request::{
     ComponentEmbed, ComponentEmbedBuilder, ComponentEmbedError, PreviewActionRow, PreviewComponent,
     PreviewContainer, PreviewLinkButton, PreviewMediaGallery, PreviewMediaItem, PreviewSection,
     PreviewSeparator, PreviewTextDisplay, PreviewThumbnail,
 };
 use discordrs::{
-    ActionRowBuilder, ButtonBuilder, ComponentId, ContainerBuilder, DiscordError, Emoji,
-    FileBuilder, MediaGalleryBuilder, MediaGalleryItem, Nullable, Patch, SectionBuilder,
-    SelectMenuBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, TextInputBuilder,
-    TextInputStyle, ThumbnailBuilder,
+    ActionRowBuilder, ComponentId, ContainerBuilder, CustomButtonBuilder, DiscordError, Emoji,
+    FileBuilder, LinkButtonBuilder, MediaGalleryBuilder, MediaGalleryItem, Nullable, Patch,
+    PremiumButtonBuilder, SectionBuilder, SelectMenuBuilder, SeparatorBuilder, SeparatorSpacing,
+    TextDisplayBuilder, ThumbnailBuilder,
 };
 use serde_json::{json, Value};
 
@@ -32,6 +33,11 @@ const GOLDEN_PATCH_NOTES_TAG: &str =
 
 const SITE: &str = "https://watchanimeattheoffice.com";
 const PATCH_NOTES: &str = "# Patch Notes\n- Fixed a bug where certain treasure chests wouldn't open properly\n- Improved server stability during peak hours\n- Added a new type of gravity that will randomly apply when the moon is full\n- Every third thursday the furniture will scream its darkest secrets to nearby npcs";
+
+/// A raw component holding `value`.
+fn raw(value: Value) -> RawComponent {
+    RawComponent::from_value(&value).expect("valid JSON")
+}
 
 /// The encoder's `\uXXXX` escape for one character.
 fn escaped(character: char) -> String {
@@ -805,12 +811,12 @@ fn container_builder_with_preview_safe_parts_converts() {
     let container = ContainerBuilder::new()
         .accent_color(0x5865F2)
         .spoiler(false)
-        // Raw JSON keeps this test independent of the builders' `id` setter type.
-        .add_component(json!({"type": 10, "id": 1, "content": "hello"}))
+        // A preview-safe raw child converts through the JSON reader.
+        .add_component(raw(json!({"type": 10, "id": 1, "content": "hello"})))
         .add_section(
             SectionBuilder::new()
                 .add_text_display(TextDisplayBuilder::new("read more"))
-                .set_button_accessory(ButtonBuilder::new().label("Open").url("https://e.co/a")),
+                .set_button_accessory(LinkButtonBuilder::new("https://e.co/a").label("Open")),
         )
         .add_section(
             SectionBuilder::new()
@@ -828,10 +834,9 @@ fn container_builder_with_preview_safe_parts_converts() {
         .add_separator(SeparatorBuilder::new())
         .add_action_row(
             ActionRowBuilder::new().add_button(
-                ButtonBuilder::new()
+                LinkButtonBuilder::new("https://e.co")
                     .label("Site")
                     .emoji_unicode("🔗")
-                    .url("https://e.co")
                     .disabled(true),
             ),
         );
@@ -883,8 +888,8 @@ fn container_builder_with_preview_safe_parts_converts() {
 fn custom_id_buttons_do_not_convert() {
     let in_row = ContainerBuilder::new().add_action_row(
         ActionRowBuilder::new()
-            .add_button(ButtonBuilder::new().label("Site").url("https://e.co"))
-            .add_button(ButtonBuilder::new().label("Vote").custom_id("vote")),
+            .add_button(LinkButtonBuilder::new("https://e.co").label("Site"))
+            .add_button(CustomButtonBuilder::new("vote").label("Vote")),
     );
     assert_eq!(
         expect_error(ComponentEmbed::try_from(in_row)),
@@ -896,7 +901,7 @@ fn custom_id_buttons_do_not_convert() {
     let as_accessory = ContainerBuilder::new().add_section(
         SectionBuilder::new()
             .add_text_display(TextDisplayBuilder::new("t"))
-            .set_button_accessory(ButtonBuilder::new().label("Vote").custom_id("vote")),
+            .set_button_accessory(CustomButtonBuilder::new("vote").label("Vote")),
     );
     assert_eq!(
         expect_error(PreviewContainer::try_from(as_accessory)),
@@ -906,6 +911,16 @@ fn custom_id_buttons_do_not_convert() {
         }
     );
     // Premium (SKU) buttons are not link buttons either.
+    let premium_row = ContainerBuilder::new().add_action_row(ActionRowBuilder::new().add_button(
+        PremiumButtonBuilder::new(discordrs::model::SkuId::try_new(1).expect("nonzero")),
+    ));
+    assert_eq!(
+        expect_error(PreviewContainer::try_from(premium_row)),
+        ComponentEmbedError::ButtonNotLink {
+            path: "component.components[0].components[0]".to_owned(),
+            style: 6
+        }
+    );
     let premium = json!({"type": 1, "components": [{"type": 2, "style": 6, "sku_id": "1"}]});
     assert!(matches!(
         expect_error(PreviewComponent::try_from(&premium)),
@@ -935,36 +950,35 @@ fn components_outside_the_preview_subset_do_not_convert() {
             } => (path, component_type),
             other => panic!("expected UnsupportedComponent, got {other:?}"),
         };
-    let select = ContainerBuilder::new()
-        .add_action_row(ActionRowBuilder::new().add_select_menu(SelectMenuBuilder::string("pick")));
+    let select = ContainerBuilder::new().add_action_row(SelectMenuBuilder::string("pick"));
     assert_eq!(
         unsupported(select),
         ("component.components[0].components[0]".to_owned(), 3)
     );
-    let text_input = ContainerBuilder::new().add_action_row(
-        ActionRowBuilder::new().add_text_input(TextInputBuilder::new(
-            "name",
-            "Name",
-            TextInputStyle::SHORT,
-        )),
-    );
+    // A text input cannot be put in a message row; as raw JSON it still fails.
+    let text_input = ContainerBuilder::new().add_component(raw(json!({
+        "type": 1,
+        "components": [{"type": 4, "custom_id": "name", "label": "Name", "style": 1}]
+    })));
     assert_eq!(unsupported(text_input).1, 4);
     let file = ContainerBuilder::new().add_file(FileBuilder::new("attachment://a.zip"));
     assert_eq!(
         unsupported(file),
         ("component.components[0]".to_owned(), 13)
     );
-    let bare_thumbnail =
-        ContainerBuilder::new().add_component(ThumbnailBuilder::new("https://e.co/t.png").build());
+    // A bare thumbnail and a nested container are not container children
+    // in the typed model; raw JSON can still say them, and fails.
+    let bare_thumbnail = ContainerBuilder::new().add_component(raw(
+        json!({"type": 11, "media": {"url": "https://e.co/t.png"}}),
+    ));
     assert_eq!(unsupported(bare_thumbnail).1, 11);
-    let raw = ContainerBuilder::new().add_component(json!({"type": 255, "name": "raw"}));
-    assert_eq!(unsupported(raw).1, 255);
+    let unknown = ContainerBuilder::new().add_component(raw(json!({"type": 255, "name": "raw"})));
+    assert_eq!(unsupported(unknown).1, 255);
 
-    let nested = ContainerBuilder::new().add_component(
-        ContainerBuilder::new()
-            .add_text_display(TextDisplayBuilder::new("inner"))
-            .build(),
-    );
+    let nested = ContainerBuilder::new().add_component(raw(json!({
+        "type": 17,
+        "components": [{"type": 10, "content": "inner"}]
+    })));
     assert_eq!(
         expect_error(PreviewContainer::try_from(nested)),
         ComponentEmbedError::NestedContainer {
@@ -972,7 +986,7 @@ fn components_outside_the_preview_subset_do_not_convert() {
         }
     );
 
-    let not_a_container = ActionRowBuilder::new().build();
+    let not_a_container = serde_json::to_value(ActionRowBuilder::new().build()).expect("json");
     assert!(matches!(
         expect_error(PreviewContainer::try_from(&not_a_container)),
         ComponentEmbedError::UnsupportedComponent {
@@ -985,12 +999,13 @@ fn components_outside_the_preview_subset_do_not_convert() {
 
 #[test]
 fn malformed_payloads_name_the_field() {
-    let no_accessory = ContainerBuilder::new()
-        .add_section(SectionBuilder::new().add_text_display(TextDisplayBuilder::new("t")));
+    // The section builder cannot build a section without an accessory (it
+    // tracks the accessory in its type); as JSON the field is named.
+    let no_accessory = json!({"type": 9, "components": [{"type": 10, "content": "t"}]});
     assert_eq!(
-        expect_error(PreviewContainer::try_from(no_accessory)),
+        expect_error(PreviewComponent::try_from(&no_accessory)),
         ComponentEmbedError::InvalidPayload {
-            path: "component.components[0]".to_owned(),
+            path: "$".to_owned(),
             reason: "missing required field `accessory`".to_owned()
         }
     );
@@ -1187,7 +1202,8 @@ fn null_on_a_non_nullable_field_fails_with_its_path() {
         );
     }
     // The same through the message builders' raw escape hatch.
-    let container = ContainerBuilder::new().add_component(json!({"type": 14, "spacing": null}));
+    let container =
+        ContainerBuilder::new().add_component(raw(json!({"type": 14, "spacing": null})));
     assert_eq!(
         expect_error(PreviewContainer::try_from(container)),
         ComponentEmbedError::NullNotAllowed {

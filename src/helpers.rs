@@ -32,6 +32,7 @@ use crate::model::{
     ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionCallbackResponse,
     InteractionContextData, InteractionId, InteractionResponseType, Message, MessageId,
 };
+use crate::request::Component;
 use crate::response::InteractionReplyData;
 use crate::types::ButtonConfig;
 
@@ -44,12 +45,12 @@ fn components_v2_flags(ephemeral: bool) -> u64 {
 }
 
 struct ComponentsV2Payload {
-    components: Vec<Value>,
+    components: Vec<Component>,
     ephemeral: bool,
 }
 
 impl ComponentsV2Payload {
-    fn new(components: Vec<Value>) -> Self {
+    fn new(components: Vec<Component>) -> Self {
         Self {
             components,
             ephemeral: false,
@@ -75,7 +76,7 @@ pub async fn send_container_message(
     channel_id: ChannelId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
+    let body = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
     http.send_message_json(channel_id, &body).await
 }
 
@@ -113,7 +114,7 @@ pub async fn respond_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build()])
+    let data = ComponentsV2Payload::new(vec![container.build().into()])
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
@@ -175,7 +176,7 @@ pub async fn respond_component_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build()])
+    let data = ComponentsV2Payload::new(vec![container.build().into()])
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
@@ -199,7 +200,7 @@ pub async fn respond_modal_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build()])
+    let data = ComponentsV2Payload::new(vec![container.build().into()])
         .ephemeral(ephemeral)
         .into_value();
     let response = serde_json::json!({
@@ -225,7 +226,7 @@ pub async fn followup_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build()])
+    let body = ComponentsV2Payload::new(vec![container.build().into()])
         .ephemeral(ephemeral)
         .into_value();
     http.create_followup_message_json(interaction_token, &body)
@@ -339,7 +340,7 @@ pub async fn edit_message_with_container(
     message_id: MessageId,
     container: ContainerBuilder,
 ) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build()]).into_value();
+    let body = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
     http.edit_message_json(channel_id, message_id, &body).await
 }
 
@@ -354,7 +355,7 @@ pub async fn update_component_with_container(
     interaction_token: &str,
     container: ContainerBuilder,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build()]).into_value();
+    let data = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
     let response = serde_json::json!({
         "type": InteractionResponseType::UPDATE_MESSAGE,
         "data": data,
@@ -682,9 +683,10 @@ mod tests {
 
     #[test]
     fn components_v2_payload_serializes_components_and_flags() {
-        let component = json!({ "type": 17, "content": "hello" });
+        let component = json!({ "type": 10, "content": "hello" });
+        let typed = || vec![crate::request::TextDisplay::new("hello").into()];
 
-        let standard = ComponentsV2Payload::new(vec![component.clone()]).into_value();
+        let standard = ComponentsV2Payload::new(typed()).into_value();
         assert_eq!(
             standard,
             json!({
@@ -693,7 +695,7 @@ mod tests {
             })
         );
 
-        let ephemeral = ComponentsV2Payload::new(vec![component.clone()])
+        let ephemeral = ComponentsV2Payload::new(typed())
             .ephemeral(true)
             .into_value();
         assert_eq!(

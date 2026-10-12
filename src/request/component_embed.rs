@@ -34,6 +34,10 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::builders::ContainerBuilder;
+
+use super::component::{
+    ActionRow, Button, Container, ContainerComponent, SectionAccessory, SelectMenu,
+};
 use crate::command::validation::char_count;
 use crate::error::DiscordError;
 use crate::model::discriminant::{ButtonStyle, ComponentType, SeparatorSpacing};
@@ -1506,16 +1510,16 @@ fn escape_attribute(value: &str) -> String {
 // Conversion from message component payloads
 // ---------------------------------------------------------------------------
 
-/// Converts the output of the message builders. Fails on anything a
-/// component embed cannot carry instead of dropping it: buttons with a
-/// `custom_id` or a premium SKU, select menus, files, nested containers, raw
-/// components, and unknown keys. Limits are not checked here; call
+/// Converts the message builders' container. Fails on anything a component
+/// embed cannot carry instead of dropping it: buttons with a `custom_id` or
+/// a premium SKU, select menus, files, nested containers, and raw
+/// components that are not preview-safe. Limits are not checked here; call
 /// [`ComponentEmbed::validate`] or let [`ComponentEmbed::to_json`] do it.
 impl TryFrom<ContainerBuilder> for PreviewContainer {
     type Error = ComponentEmbedError;
 
     fn try_from(container: ContainerBuilder) -> Result<Self, Self::Error> {
-        Self::try_from(&container.build())
+        Self::try_from(container.build())
     }
 }
 
@@ -1526,6 +1530,170 @@ impl TryFrom<ContainerBuilder> for ComponentEmbed {
     fn try_from(container: ContainerBuilder) -> Result<Self, Self::Error> {
         PreviewContainer::try_from(container).map(Self::new)
     }
+}
+
+/// Converts a typed message [`Container`] field by field, with the same
+/// failures as the [`ContainerBuilder`] conversion. A
+/// [`RawComponent`](super::RawComponent) child goes through the JSON reader
+/// ([`TryFrom<&Value>`](PreviewComponent)), so a preview-safe raw child
+/// converts and anything else fails with its path.
+impl TryFrom<Container> for PreviewContainer {
+    type Error = ComponentEmbedError;
+
+    fn try_from(container: Container) -> Result<Self, Self::Error> {
+        let Container {
+            id,
+            accent_color,
+            spoiler,
+            components,
+        } = container;
+        let components = components
+            .into_iter()
+            .enumerate()
+            .map(|(index, child)| convert_child(child, &format!("{ROOT_PATH}.components[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            id,
+            accent_color: accent_color
+                .map_or(Patch::Missing, |color| Patch::Value(Nullable::Value(color))),
+            spoiler,
+            components,
+        })
+    }
+}
+
+fn convert_child(
+    child: ContainerComponent,
+    path: &str,
+) -> Result<PreviewComponent, ComponentEmbedError> {
+    Ok(match child {
+        ContainerComponent::ActionRow(ActionRow::Buttons(row)) => {
+            PreviewComponent::ActionRow(PreviewActionRow {
+                id: row.id,
+                buttons: row
+                    .buttons
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, button)| {
+                        convert_button(button, &format!("{path}.components[{index}]"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            })
+        }
+        ContainerComponent::ActionRow(ActionRow::Select(row)) => {
+            return Err(ComponentEmbedError::UnsupportedComponent {
+                path: format!("{path}.components[0]"),
+                component_type: u64::from(select_type(&row.select).get()),
+                allowed: "a link button",
+            })
+        }
+        ContainerComponent::Section(section) => {
+            let accessory_path = format!("{path}.accessory");
+            PreviewComponent::Section(PreviewSection {
+                id: section.id,
+                components: section
+                    .components
+                    .into_iter()
+                    .map(|text| PreviewTextDisplay {
+                        id: text.id,
+                        content: text.content,
+                    })
+                    .collect(),
+                accessory: match section.accessory {
+                    SectionAccessory::Button(button) => {
+                        PreviewAccessory::Button(convert_button(button, &accessory_path)?)
+                    }
+                    SectionAccessory::Thumbnail(thumbnail) => {
+                        PreviewAccessory::Thumbnail(PreviewThumbnail {
+                            id: thumbnail.id,
+                            url: thumbnail.media.url,
+                            description: present_value(thumbnail.description),
+                            spoiler: thumbnail.spoiler,
+                        })
+                    }
+                },
+            })
+        }
+        ContainerComponent::TextDisplay(text) => {
+            PreviewComponent::TextDisplay(PreviewTextDisplay {
+                id: text.id,
+                content: text.content,
+            })
+        }
+        ContainerComponent::MediaGallery(gallery) => {
+            PreviewComponent::MediaGallery(PreviewMediaGallery {
+                id: gallery.id,
+                items: gallery
+                    .items
+                    .into_iter()
+                    .map(|item| PreviewMediaItem {
+                        url: item.media.url,
+                        description: present_value(item.description),
+                        spoiler: item.spoiler,
+                    })
+                    .collect(),
+            })
+        }
+        ContainerComponent::Separator(separator) => PreviewComponent::Separator(PreviewSeparator {
+            id: separator.id,
+            divider: separator.divider,
+            spacing: separator.spacing,
+        }),
+        ContainerComponent::File(_) => {
+            return Err(ComponentEmbedError::UnsupportedComponent {
+                path: path.to_owned(),
+                component_type: u64::from(ComponentType::FILE.get()),
+                allowed: CONTAINER_CHILDREN,
+            })
+        }
+        ContainerComponent::Raw(raw) => {
+            let value: Value = serde_json::from_str(raw.get()).map_err(|error| {
+                ComponentEmbedError::InvalidPayload {
+                    path: path.to_owned(),
+                    reason: error.to_string(),
+                }
+            })?;
+            read_child(&value, path)?
+        }
+    })
+}
+
+/// A link button converts; custom-ID and premium buttons fail with their
+/// style, as their JSON would.
+fn convert_button(button: Button, path: &str) -> Result<PreviewLinkButton, ComponentEmbedError> {
+    match button {
+        Button::Link(link) => Ok(PreviewLinkButton {
+            id: link.id,
+            url: link.url,
+            label: link.label,
+            emoji: link.emoji,
+            disabled: link.disabled,
+        }),
+        Button::Custom(custom) => Err(ComponentEmbedError::ButtonNotLink {
+            path: path.to_owned(),
+            style: u64::from(custom.style.get()),
+        }),
+        Button::Premium(_) => Err(ComponentEmbedError::ButtonNotLink {
+            path: path.to_owned(),
+            style: u64::from(ButtonStyle::PREMIUM.get()),
+        }),
+    }
+}
+
+fn select_type(select: &SelectMenu) -> ComponentType {
+    match select {
+        SelectMenu::String(_) => ComponentType::STRING_SELECT,
+        SelectMenu::User(_) => ComponentType::USER_SELECT,
+        SelectMenu::Role(_) => ComponentType::ROLE_SELECT,
+        SelectMenu::Mentionable(_) => ComponentType::MENTIONABLE_SELECT,
+        SelectMenu::Channel(_) => ComponentType::CHANNEL_SELECT,
+    }
+}
+
+/// An optional message field as a nullable preview field: omitted or the
+/// value (a message builder never writes `null`).
+fn present_value<T>(value: Option<T>) -> NullablePatch<T> {
+    value.map_or(Patch::Missing, |value| Patch::Value(Nullable::Value(value)))
 }
 
 /// Reads a Container (type 17) payload, such as `ContainerBuilder::build()`

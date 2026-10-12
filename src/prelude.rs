@@ -1,7 +1,8 @@
 pub use crate::bitfield::{BitField, Intents, MessageFlags, Permissions};
 pub use crate::builders::{
-    create_container, ActionRowBuilder, ButtonBuilder, ComponentsV2Message, ContainerBuilder,
-    EmbedBuilder, ModalBuilder, SelectDefaultValue, SelectMenuBuilder, TextInputBuilder,
+    create_container, ActionRowBuilder, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder,
+    EmbedBuilder, LinkButtonBuilder, ModalBuilder, SelectDefaultValue, SelectMenuBuilder,
+    TextInputBuilder,
 };
 #[cfg(feature = "collectors")]
 pub use crate::collector::{
@@ -115,8 +116,8 @@ pub use crate::webhook_events::{
 mod tests {
     use crate::prelude::{
         gateway_intents, AllowedMentions, ApplicationInstallParams,
-        ApplicationIntegrationTypeConfig, AuthorizationInformation, ButtonBuilder, ButtonStyle,
-        CreateWebhook, Gateway, MessageBuilder, ModifyCurrentApplication, ModifyWebhook,
+        ApplicationIntegrationTypeConfig, AuthorizationInformation, ButtonStyle, CreateWebhook,
+        CustomButtonBuilder, Gateway, MessageBuilder, ModifyCurrentApplication, ModifyWebhook,
         ModifyWebhookWithToken, ReactionCountDetails, SlashCommandBuilder, WebhookExecuteQuery,
         WebhookMessageQuery,
     };
@@ -124,7 +125,7 @@ mod tests {
     #[test]
     fn prelude_surfaces_common_gateway_and_command_types() {
         let _intents = gateway_intents::GUILDS | gateway_intents::GUILD_MESSAGES;
-        let _button = ButtonBuilder::new().style(ButtonStyle::PRIMARY);
+        let _button = CustomButtonBuilder::new("id").style(ButtonStyle::PRIMARY);
         let _command =
             SlashCommandBuilder::new("ping", "Ping").string_option("target", "Target", false);
         let _message = MessageBuilder::new().content("hello");

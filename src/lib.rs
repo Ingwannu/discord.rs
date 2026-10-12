@@ -278,12 +278,15 @@ pub use ws::{
 };
 
 pub use builders::{
-    create_container, create_default_buttons, ActionRowBuilder, ButtonBuilder, CheckboxBuilder,
-    CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, EmbedBuilder, FileBuilder,
-    FileUploadBuilder, LabelBuilder, MediaGalleryBuilder, ModalBuilder, RadioGroupBuilder,
-    SectionBuilder, SelectDefaultValue, SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder,
-    TextInputBuilder, ThumbnailBuilder,
+    create_container, create_default_buttons, ActionRowBuilder, CheckboxBuilder,
+    CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder, EmbedBuilder,
+    FileBuilder, FileUploadBuilder, LabelBuilder, LinkButtonBuilder, MediaGalleryBuilder,
+    ModalBuilder, PremiumButtonBuilder, RadioGroupBuilder, SectionBuilder, SelectDefaultValue,
+    SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder, ThumbnailBuilder,
 };
+// Deprecated in 3.0 in favour of the custom/link/premium button builders.
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
+pub use builders::ButtonBuilder;
 
 pub use parsers::{
     decode_interaction, parse_interaction, parse_interaction_context, parse_modal_submission,

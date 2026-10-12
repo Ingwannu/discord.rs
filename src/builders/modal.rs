@@ -601,7 +601,7 @@ impl LabelBuilder {
             component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
-            component: select.build(),
+            component: to_json_value(select.build()),
             id: None,
         }
     }
@@ -692,8 +692,12 @@ impl ModalBuilder {
     }
 
     pub fn add_text_input(mut self, input: TextInputBuilder) -> Self {
-        let row = ActionRowBuilder::new().add_component(input.build());
-        self.components.push(row.build());
+        // The legacy modal row; message action rows are typed and hold
+        // only buttons or a select menu.
+        self.components.push(serde_json::json!({
+            "type": ComponentType::ACTION_ROW,
+            "components": [input.build()],
+        }));
         self
     }
 
@@ -783,7 +787,7 @@ impl ModalBuilder {
     }
 
     pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
-        self.components.push(row.build());
+        self.components.push(to_json_value(row.build()));
         self
     }
 
@@ -837,7 +841,7 @@ mod tests {
         CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, LabelBuilder, ModalBuilder,
         RadioGroupBuilder, TextInputBuilder,
     };
-    use crate::builders::{ActionRowBuilder, ButtonBuilder, SelectMenuBuilder};
+    use crate::builders::{ActionRowBuilder, CustomButtonBuilder, SelectMenuBuilder};
     use crate::types::SelectOption;
 
     #[test]
@@ -1170,12 +1174,8 @@ mod tests {
                 CheckboxBuilder::new("solo"),
             ))
             .add_action_row(
-                ActionRowBuilder::new().add_component(
-                    ButtonBuilder::new()
-                        .label("Ignored in modal tests")
-                        .custom_id("btn")
-                        .build(),
-                ),
+                ActionRowBuilder::new()
+                    .add_button(CustomButtonBuilder::new("btn").label("Ignored in modal tests")),
             )
             .add_component(json!({"type": 250, "custom": true}))
             .build();

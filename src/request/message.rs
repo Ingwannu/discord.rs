@@ -546,12 +546,31 @@ impl CreateMessage {
     /// components (recursively), stickers, nonce, poll, attachments, the
     /// flags this endpoint accepts, and the Components V2 exclusions.
     pub fn validate(&self) -> Result<(), DiscordError> {
+        self.check_with_flags(CREATE_MESSAGE_FLAGS, "Create Message")
+    }
+
+    /// [`Self::validate`] with the flags of channel messages and
+    /// interaction responses combined, for
+    /// [`MessageBuilder`](crate::builders::MessageBuilder), which builds
+    /// both.
+    pub(crate) fn check_message_builder(&self) -> Result<(), DiscordError> {
+        self.check_with_flags(
+            CREATE_MESSAGE_FLAGS | INTERACTION_MESSAGE_FLAGS,
+            "a message",
+        )
+    }
+
+    fn check_with_flags(
+        &self,
+        allowed_flags: u64,
+        endpoint: &'static str,
+    ) -> Result<(), DiscordError> {
         if let Some(nonce) = &self.nonce {
             check_max_len("", "message nonce", nonce, limits::MAX_NONCE_LENGTH)?;
         }
         check_body(&BodyRef {
-            allowed_flags: CREATE_MESSAGE_FLAGS,
-            endpoint: "Create Message",
+            allowed_flags,
+            endpoint,
             patch: false,
             content: self.content.as_deref(),
             embeds: self.embeds.as_deref(),
