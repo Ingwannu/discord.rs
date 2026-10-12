@@ -4779,6 +4779,34 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
+async fn upsert_guild_moves_roles_into_the_store_and_stickers_follow_guild_updates() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild: crate::model::Guild = serde_json::from_value(json!({
+        "id": "9", "name": "g",
+        "roles": [{ "id": "11", "name": "a", "position": 1 }],
+        "stickers": [{ "id": "50", "name": "s1", "type": 2, "format_type": 1 }]
+    }))
+    .unwrap();
+    cache.upsert_guild(guild).await;
+    assert_eq!(cache.role(test_id(9), test_id(11)).await.unwrap().name, "a");
+    assert_eq!(cache.guild(test_id(9)).await.unwrap().roles.len(), 1);
+
+    let mut update = crate::model::GuildUpdate::new(test_id(9));
+    update.stickers = crate::model::Patch::Value(vec![serde_json::from_value(
+        json!({ "id": "51", "name": "s2", "type": 2, "format_type": 1 }),
+    )
+    .unwrap()]);
+    let merged = cache
+        .apply_guild_update(&update)
+        .await
+        .expect("cached guild");
+    assert_eq!(merged.name, "g", "omitted fields are kept");
+    assert!(cache.sticker(test_id(9), test_id(51)).await.is_some());
+    assert!(cache.sticker(test_id(9), test_id(50)).await.is_none());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
 async fn guild_updates_keep_create_only_fields_and_replace_lists() {
     let cache = crate::cache::CacheHandle::new();
     let create = decode_event(
