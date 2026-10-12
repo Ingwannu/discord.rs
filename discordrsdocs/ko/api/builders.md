@@ -5,7 +5,7 @@
 ## 하위 모듈
 
 - `message.rs`: `MessageBuilder`(`request::CreateMessage` 생성)
-- `components.rs`: 버튼(`CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`, 2.x의 `ButtonBuilder`는 deprecated), `ActionRowBuilder`(버튼 행), `SelectMenuBuilder`, `ComponentsV2Message`
+- `components.rs`: 버튼(`CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`, 2.x의 `ButtonBuilder`는 deprecated), `ActionRowBuilder`(버튼 행), 선택 메뉴(`SelectMenuBuilder::string/user/role/mentionable/channel`이 `StringSelectBuilder`, `UserSelectBuilder`, `RoleSelectBuilder`, `MentionableSelectBuilder`, `ChannelSelectBuilder`를 돌려줌), `ComponentsV2Message`
 - `container.rs`: `ContainerBuilder`, `TextDisplayBuilder`, `SeparatorBuilder`, `create_container` 헬퍼
 - `media.rs`: `SectionBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder`
 - `embed.rs`: `EmbedBuilder`(`request::Embed` 생성)
@@ -17,7 +17,7 @@
 | `ComponentsV2Message` | `Vec<request::Component>` |
 | `ContainerBuilder` | `request::Container` |
 | `ActionRowBuilder` | `request::ActionRow`(`ButtonRow`) |
-| `SelectMenuBuilder` | `request::SelectMenu` |
+| `StringSelectBuilder` / `UserSelectBuilder` / `RoleSelectBuilder` / `MentionableSelectBuilder` / `ChannelSelectBuilder` | `StringSelect` / `UserSelect` / `RoleSelect` / `MentionableSelect` / `ChannelSelect`(각각 `SelectMenu`, `ActionRow`, `Component`로 변환) |
 | `CustomButtonBuilder` / `LinkButtonBuilder` / `PremiumButtonBuilder` | `CustomButton` / `LinkButton` / `PremiumButton` |
 | `SectionBuilder<SectionAccessory>` | `request::Section` |
 | `TextDisplayBuilder`, `SeparatorBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder` | 같은 이름의 모델(파일은 `FileComponent`) |
@@ -47,7 +47,7 @@ let message: CreateMessage = MessageBuilder::new()
     .try_build()?;
 ```
 
-`components_v2(..)`는 `IS_COMPONENTS_V2` 플래그를 켭니다. 모든 빌더는 자기 자리로 `Into` 변환되므로(컨테이너는 `Component`로, 버튼 빌더는 `Button`이나 `SectionAccessory`로, 선택 메뉴 빌더는 `SelectMenu`나 `ActionRow`로) 빌더와 타입 모델을 섞어 쓸 수 있습니다.
+`components_v2(..)`는 `IS_COMPONENTS_V2` 플래그를 켭니다. 모든 빌더는 자기 자리로 `Into` 변환되므로(컨테이너는 `Component`로, 버튼 빌더는 `Button`이나 `SectionAccessory`로, 선택 메뉴 빌더는 `SelectMenu`나 `ActionRow`로) 빌더와 타입 모델을 섞어 쓸 수 있습니다. 어떤 빌더도 값을 버리지 않습니다. 모델이 담을 수 없는 값은 setter가 없거나 변환이 실패합니다.
 
 ### 버튼
 
@@ -63,7 +63,7 @@ let message: CreateMessage = MessageBuilder::new()
 
 행에는 버튼 1-5개 또는 선택 메뉴 하나만 들어갑니다. `ActionRowBuilder`는 버튼 행을 만들고, 선택 메뉴 행은 `SelectMenuBuilder` 자체입니다. 행을 받는 곳(`add_action_row(impl Into<ActionRow>)`)에 그대로 넘깁니다. 버튼과 선택 메뉴를 섞은 행은 컴파일되지 않습니다(`tests/ui/mixed_button_select_row.rs`).
 
-`SelectMenuBuilder` 하나가 다섯 종류를 모두 만들기 때문에, 그 종류에 없는 필드(사용자 선택의 options, 역할 선택의 채널 기본값)를 setter로 지정할 수 있습니다. `build()`는 2.x처럼 그런 필드를 빼고, `validate()` / `try_build()`는 보고합니다. 타입 모델(`StringSelect`, `UserSelect`, `RoleSelect`, `MentionableSelect`, `ChannelSelect`)은 아예 담을 수 없습니다. `required`는 모달 전용(메시지에서는 Discord가 무시), `disabled`는 메시지 전용(모달에서는 오류)입니다.
+`SelectMenuBuilder::string(..)`, `::user(..)`, `::role(..)`, `::mentionable(..)`, `::channel(..)`은 종류마다 다른 빌더를 돌려주고, 각 빌더에는 그 종류가 받는 setter만 있습니다. `add_option` / `add_options`는 문자열 선택, `default_user`는 사용자·mentionable 선택, `default_role`은 역할·mentionable 선택, `default_mentionable`은 mentionable 선택, `default_channel`과 `channel_types`는 채널 선택에만 있고, `default_values(ids)`는 그 종류의 id 타입을 받습니다. 종류가 담을 수 없는 값은 컴파일되지 않으므로(`tests/ui/select_menu_wrong_kind_fields.rs`) 빌더에서 와이어까지 사라지는 값이 없습니다. `required`는 모달 전용(메시지에서는 Discord가 무시), `disabled`는 메시지 전용(모달에서는 오류)입니다.
 
 ### 섹션
 
@@ -199,5 +199,7 @@ Open Graph 태그는 그대로 두세요. Component Embed를 보여 줄 수 없�
 | `MessageBuilder::build() -> model::CreateMessage`, `components(Vec<Value>)` | `-> request::CreateMessage`, `components(Vec<Component>)` / `add_component(..)` |
 | `MessageBuilder::flags(u64)` | `flags(impl Into<MessageFlags>)`(`u64`도 그대로 받음) |
 | `EmbedBuilder::build() -> Value` | `-> request::Embed`, `MessageBuilder::add_embed(builder)` |
-| `SelectMenuBuilder`가 다른 종류의 필드를 조용히 버림 | `build()`는 여전히 버리고, `validate()`가 보고함 |
+| `SelectMenuBuilder`(타입 하나)가 다른 종류의 필드를 조용히 버림 | 생성자가 종류별 빌더(`StringSelectBuilder` 등)를 돌려주고 그 setter가 없음. 잘못된 종류의 값은 컴파일되지 않음 |
+| `default_value(SelectDefaultValue::role(id))`, `default_values(vec![SelectDefaultValue::..])` | `default_role(id)`(또는 `default_user`, `default_channel`, `default_mentionable`), 종류의 id 타입으로 `default_values(ids)` |
+| `SelectMenuBuilder`를 매개변수·반환 타입으로 사용 | 종류별 빌더 또는 `impl Into<SelectMenu>` |
 | `message_flags::SUPPRESS_NOTIFICATIONS` = 1 << 10, `IS_VOICE_MESSAGE` = 1 << 12 | Discord 값인 1 << 12, 1 << 13. `HAS_SNAPSHOT` = 1 << 14 추가 |

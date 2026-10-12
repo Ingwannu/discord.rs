@@ -562,14 +562,15 @@ Auto-populated select menus preserve Discord's current `default_values`, compone
 
 ```rust
 use discordrs::request::ActionRow;
-use discordrs::{ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::{ComponentId, RoleId, SelectMenuBuilder};
 
-// Default values carry typed IDs, so a role cannot be listed as a user.
-// A select menu is its own action row.
+// Default values carry typed IDs, so a role cannot be listed as a user:
+// each select kind has only the setters it takes. A select menu is its own
+// action row.
 let moderators: RoleId = "701".parse()?;
 let row: ActionRow = SelectMenuBuilder::mentionable("notify_targets")
     .id(ComponentId::new(12))
-    .default_value(SelectDefaultValue::role(moderators))
+    .default_role(moderators)
     .min_values(0)
     .max_values(2)
     .into();

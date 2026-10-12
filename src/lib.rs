@@ -278,11 +278,13 @@ pub use ws::{
 };
 
 pub use builders::{
-    create_container, create_default_buttons, ActionRowBuilder, CheckboxBuilder,
-    CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder, EmbedBuilder,
-    FileBuilder, FileUploadBuilder, LabelBuilder, LinkButtonBuilder, MediaGalleryBuilder,
-    ModalBuilder, PremiumButtonBuilder, RadioGroupBuilder, SectionBuilder, SelectDefaultValue,
-    SelectMenuBuilder, SeparatorBuilder, TextDisplayBuilder, TextInputBuilder, ThumbnailBuilder,
+    create_container, create_default_buttons, ActionRowBuilder, ChannelSelectBuilder,
+    CheckboxBuilder, CheckboxGroupBuilder, ComponentsV2Message, ContainerBuilder,
+    CustomButtonBuilder, EmbedBuilder, FileBuilder, FileUploadBuilder, LabelBuilder,
+    LinkButtonBuilder, MediaGalleryBuilder, MentionableSelectBuilder, ModalBuilder,
+    PremiumButtonBuilder, RadioGroupBuilder, RoleSelectBuilder, SectionBuilder, SelectDefaultValue,
+    SelectMenuBuilder, SeparatorBuilder, StringSelectBuilder, TextDisplayBuilder, TextInputBuilder,
+    ThumbnailBuilder, UserSelectBuilder,
 };
 // Deprecated in 3.0 in favour of the custom/link/premium button builders.
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]

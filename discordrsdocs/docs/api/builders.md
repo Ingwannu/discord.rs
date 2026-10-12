@@ -5,7 +5,7 @@ The builders module gives a fluent API for message bodies, Components V2 layouts
 ## Key Submodules
 
 - `message.rs`: `MessageBuilder` (builds a `request::CreateMessage`)
-- `components.rs`: buttons (`CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`; the 2.x `ButtonBuilder` is deprecated), `ActionRowBuilder` (a row of buttons), `SelectMenuBuilder`, `ComponentsV2Message`
+- `components.rs`: buttons (`CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`; the 2.x `ButtonBuilder` is deprecated), `ActionRowBuilder` (a row of buttons), select menus (`SelectMenuBuilder::string/user/role/mentionable/channel` return `StringSelectBuilder`, `UserSelectBuilder`, `RoleSelectBuilder`, `MentionableSelectBuilder`, `ChannelSelectBuilder`), `ComponentsV2Message`
 - `container.rs`: `ContainerBuilder`, `TextDisplayBuilder`, `SeparatorBuilder`, and the `create_container` helper
 - `media.rs`: `SectionBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder`
 - `embed.rs`: `EmbedBuilder` (builds a `request::Embed`)
@@ -17,7 +17,7 @@ The builders module gives a fluent API for message bodies, Components V2 layouts
 | `ComponentsV2Message` | `Vec<request::Component>` |
 | `ContainerBuilder` | `request::Container` |
 | `ActionRowBuilder` | `request::ActionRow` (a `ButtonRow`) |
-| `SelectMenuBuilder` | `request::SelectMenu` |
+| `StringSelectBuilder` / `UserSelectBuilder` / `RoleSelectBuilder` / `MentionableSelectBuilder` / `ChannelSelectBuilder` | `StringSelect` / `UserSelect` / `RoleSelect` / `MentionableSelect` / `ChannelSelect` (each converts into `SelectMenu`, `ActionRow`, `Component`) |
 | `CustomButtonBuilder` / `LinkButtonBuilder` / `PremiumButtonBuilder` | `CustomButton` / `LinkButton` / `PremiumButton` |
 | `SectionBuilder<SectionAccessory>` | `request::Section` |
 | `TextDisplayBuilder`, `SeparatorBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder` | the model of the same name (`FileComponent` for files) |
@@ -47,7 +47,7 @@ let message: CreateMessage = MessageBuilder::new()
     .try_build()?;
 ```
 
-`components_v2(..)` sets the `IS_COMPONENTS_V2` flag. Every builder also converts into its position with `Into` (a container into a `Component`, a button builder into a `Button` or `SectionAccessory`, a select builder into a `SelectMenu` or `ActionRow`), so builders and typed models mix freely.
+`components_v2(..)` sets the `IS_COMPONENTS_V2` flag. Every builder also converts into its position with `Into` (a container into a `Component`, a button builder into a `Button` or `SectionAccessory`, a select builder into a `SelectMenu` or `ActionRow`), so builders and typed models mix freely. No builder drops a value: what its model cannot hold either has no setter or fails a conversion.
 
 ### Buttons
 
@@ -66,22 +66,21 @@ A row holds 1-5 buttons or exactly one select menu. `ActionRowBuilder` builds a 
 Auto-populated selects support Discord's `default_values`, `id`, and modal `required` fields:
 
 ```rust
-use discordrs::{ComponentId, ComponentsV2Message, RoleId, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::{ComponentId, ComponentsV2Message, RoleId, SelectMenuBuilder};
 
-// Default values carry typed IDs (`SelectDefaultValue::{User, Role, Channel}`),
-// so a role cannot be listed as a user; `default_user`, `default_role`,
-// `default_channel`, and `default_mentionable` are shorthands.
+// Default values carry typed IDs: a mentionable select takes users and
+// roles, a user select only users, a channel select only channels.
 let moderators: RoleId = "701".parse()?;
 let message = ComponentsV2Message::new().add_action_row(
     SelectMenuBuilder::mentionable("notify_targets")
         .id(ComponentId::new(12))
-        .default_value(SelectDefaultValue::role(moderators))
+        .default_role(moderators)
         .min_values(0)
         .max_values(2),
 );
 ```
 
-One `SelectMenuBuilder` covers all five kinds, so a setter can name a field the kind does not have (options on a user select, a channel default on a role select). `build()` leaves those out, as 2.x did; `validate()` / `try_build()` report them. The typed models (`StringSelect`, `UserSelect`, `RoleSelect`, `MentionableSelect`, `ChannelSelect`) cannot hold them at all. `required` is modal-only (Discord ignores it in messages); `disabled` is message-only (a modal rejects it).
+`SelectMenuBuilder::string(..)`, `::user(..)`, `::role(..)`, `::mentionable(..)`, and `::channel(..)` return one builder per kind, and each has only the setters its kind takes: `add_option` / `add_options` on string selects, `default_user` on user and mentionable selects, `default_role` on role and mentionable selects, `default_mentionable` on mentionable selects, `default_channel` and `channel_types` on channel selects, and `default_values(ids)` with the kind's own id type. A value the kind cannot carry does not compile (`tests/ui/select_menu_wrong_kind_fields.rs`), so nothing is dropped between the builder and the wire. `required` is modal-only (Discord ignores it in messages); `disabled` is message-only (a modal rejects it).
 
 ### Sections
 
@@ -281,7 +280,9 @@ Existing message builders convert with `TryFrom`, failing with the offending pat
 | `MessageBuilder::build() -> model::CreateMessage`, `components(Vec<Value>)` | `-> request::CreateMessage`, `components(Vec<Component>)` / `add_component(..)` |
 | `MessageBuilder::flags(u64)` | `flags(impl Into<MessageFlags>)` (`u64` still works) |
 | `EmbedBuilder::build() -> Value` | `-> request::Embed`; `MessageBuilder::add_embed(builder)` |
-| `SelectMenuBuilder` silently dropped fields of other kinds | still dropped by `build()`, now reported by `validate()` |
+| `SelectMenuBuilder` (one type) silently dropped fields of other kinds | its constructors return per-kind builders (`StringSelectBuilder`, ...) without those setters; a wrong-kind value does not compile |
+| `default_value(SelectDefaultValue::role(id))`, `default_values(vec![SelectDefaultValue::..])` | `default_role(id)` (or `default_user`, `default_channel`, `default_mentionable`), `default_values(ids)` with the kind's id type |
+| `SelectMenuBuilder` as a parameter or return type | the per-kind builder, or `impl Into<SelectMenu>` |
 | `message_flags::SUPPRESS_NOTIFICATIONS` = 1 << 10, `IS_VOICE_MESSAGE` = 1 << 12 | 1 << 12 and 1 << 13 (Discord's values); `HAS_SNAPSHOT` = 1 << 14 added |
 
 ## Practical Advice

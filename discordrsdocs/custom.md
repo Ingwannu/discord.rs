@@ -64,7 +64,7 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
 - **Purpose:** Build individual interactive components and assemble component messages.
 - **Key Types:**
   - `CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`: the three button kinds, each with only the fields Discord allows it (the 2.x `ButtonBuilder` is deprecated and converts only with `Button::try_from`).
-  - `SelectMenuBuilder`: create dropdown menus with options, placeholder, limits; a select menu is its own action row.
+  - `SelectMenuBuilder::{string, user, role, mentionable, channel}`: return a builder per select kind with only that kind's setters (options, typed defaults, channel types); a select menu is its own action row.
   - `ActionRowBuilder`: a row of up to five buttons.
   - `ComponentsV2Message`: the top-level components of a Components V2 message.
   - Every `build()` returns the typed model from `discordrs::request` (no `serde_json::Value`); see the Builders API page.
@@ -115,8 +115,9 @@ Re-exports the supported builder surface for ergonomic import. Use `discordrs::b
 ```rust
 pub use components::ButtonBuilder; // deprecated
 pub use components::{
-    ActionRowBuilder, ComponentsV2Message, CustomButtonBuilder, LinkButtonBuilder,
-    PremiumButtonBuilder, SelectMenuBuilder,
+    ActionRowBuilder, ChannelSelectBuilder, ComponentsV2Message, CustomButtonBuilder,
+    LinkButtonBuilder, MentionableSelectBuilder, PremiumButtonBuilder, RoleSelectBuilder,
+    SelectMenuBuilder, StringSelectBuilder, UserSelectBuilder,
 };
 pub use embed::EmbedBuilder;
 pub use message::MessageBuilder;

@@ -31,11 +31,11 @@ error[E0599]: no method named `add_select_menu` found for struct `ActionRowBuild
    | |_________|
    |
 
-error[E0277]: the trait bound `discordrs::request::Button: From<SelectMenuBuilder>` is not satisfied
+error[E0277]: the trait bound `discordrs::request::Button: From<StringSelectBuilder>` is not satisfied
   --> tests/ui/mixed_button_select_row.rs:12:48
    |
 12 |     let _ = ActionRowBuilder::new().add_button(SelectMenuBuilder::string("pick"));
-   |                                     ---------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<SelectMenuBuilder>` is not implemented for `discordrs::request::Button`
+   |                                     ---------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<StringSelectBuilder>` is not implemented for `discordrs::request::Button`
    |                                     |
    |                                     required by a bound introduced by this call
    |
@@ -46,7 +46,7 @@ error[E0277]: the trait bound `discordrs::request::Button: From<SelectMenuBuilde
              From<LinkButtonBuilder>
              From<PremiumButton>
              From<PremiumButtonBuilder>
-   = note: required for `SelectMenuBuilder` to implement `Into<discordrs::request::Button>`
+   = note: required for `StringSelectBuilder` to implement `Into<discordrs::request::Button>`
 note: required by a bound in `ActionRowBuilder::add_button`
   --> src/builders/components.rs
    |

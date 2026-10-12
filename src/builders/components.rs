@@ -1,23 +1,27 @@
 //! Button, action row, and select menu builders, and [`ComponentsV2Message`].
 //!
-//! Each builder holds the typed request model from [`crate::request`] (or,
-//! for [`SelectMenuBuilder`], typed fields it turns into one), so `build()`
-//! returns data that serializes straight to JSON bytes. `build()` does not
-//! check limits; `try_build()` checks them and returns the same type.
+//! Each builder holds the typed request model from [`crate::request`], so
+//! `build()` returns data that serializes straight to JSON bytes. `build()`
+//! does not check limits; `try_build()` checks them and returns the same
+//! type. No builder drops a value its model cannot hold: such a value either
+//! has no setter on that builder or fails a conversion.
 //!
 //! The 2.x [`ButtonBuilder`] described custom, link, and premium buttons with
 //! one set of optional fields; it is deprecated in favour of
 //! [`CustomButtonBuilder`], [`LinkButtonBuilder`], and
 //! [`PremiumButtonBuilder`], and converts to a [`Button`] only through a
 //! fallible conversion. [`ActionRowBuilder`] builds a row of buttons; a
-//! select menu row is the [`SelectMenuBuilder`] itself, passed wherever an
-//! action row is accepted (`impl Into<ActionRow>`), so a row mixing buttons
-//! and a select menu does not compile.
+//! select menu row is the select builder itself, passed wherever an action
+//! row is accepted (`impl Into<ActionRow>`), so a row mixing buttons and a
+//! select menu does not compile. [`SelectMenuBuilder`]'s constructors return
+//! one builder per select kind ([`StringSelectBuilder`],
+//! [`UserSelectBuilder`], [`RoleSelectBuilder`],
+//! [`MentionableSelectBuilder`], [`ChannelSelectBuilder`]), each with only the
+//! setters its kind takes.
 
 use crate::error::DiscordError;
 use crate::model::{
-    ButtonStyle, ChannelId, ChannelType, ComponentId, ComponentType, MentionableId, RoleId,
-    SelectDefaultValue, SkuId, UserId,
+    ButtonStyle, ChannelId, ChannelType, ComponentId, MentionableId, RoleId, SkuId, UserId,
 };
 use crate::request::{
     ActionRow, Button, ButtonRow, ChannelSelect, Component, CustomButton, LinkButton,
@@ -461,297 +465,288 @@ impl From<ActionRowBuilder> for Component {
 // Select menus
 // ---------------------------------------------------------------------------
 
-/// Builds one of the five select menus.
+/// The 2.x entry point for select menus: each constructor returns the
+/// builder for one kind, which has only the setters that kind takes.
 ///
-/// One builder covers every kind, as in 2.x, so a setter can name a field
-/// the chosen kind does not have (options on a user select, a channel
-/// default on a role select). [`Self::build`] leaves those out, as 2.x did;
-/// [`Self::validate`] and [`Self::try_build`] report them.
-#[derive(Clone, Debug)]
-pub struct SelectMenuBuilder {
-    kind: ComponentType,
-    id: Option<ComponentId>,
-    custom_id: String,
-    placeholder: Option<String>,
-    min_values: Option<u8>,
-    max_values: Option<u8>,
-    required: Option<bool>,
-    disabled: Option<bool>,
-    options: Vec<SelectOption>,
-    default_values: Vec<SelectDefaultValue>,
-    channel_types: Option<Vec<ChannelType>>,
-}
+/// ```
+/// use discordrs::builders::SelectMenuBuilder;
+/// use discordrs::SelectOption;
+///
+/// let pick = SelectMenuBuilder::string("topic").add_option(SelectOption::new("Billing", "billing"));
+/// let who = SelectMenuBuilder::mentionable("notify").max_values(2);
+/// ```
+///
+/// A user select has no `default_role`, a role select no `add_option`, a
+/// string select no `channel_types`: a field the kind cannot carry does not
+/// compile, so nothing is dropped between the builder and the wire.
+///
+/// ```text
+/// [Decision Log]
+/// - 목적과 의도: 선택 메뉴 종류가 담을 수 없는 값(사용자 선택의 역할 기본값, 문자열 외 종류의
+///   options, 채널 외 종류의 channel_types)이 조용히 사라지지 않게 한다.
+/// - 기존 구현 및 제약 조건: 2.x SelectMenuBuilder 하나가 다섯 종류를 만들고 build()가 그런
+///   필드를 버렸다. 5단계 A 첫 구현은 validate()로만 보고해, 부모의 try_build()는 이미 버려진 뒤라
+///   통과했다(astra 리뷰 P2). 2.x 호출 모양(SelectMenuBuilder::string(..).add_option(..))은 유지한다.
+///   C의 모달 레이블도 선택 메뉴를 받는다.
+/// - 검토한 주요 대안: (1) build()를 Result로 바꾸고 TryFrom 변환(ButtonBuilder 방식), (2) 종류별
+///   빌더로 나눠 표현 자체를 막기, (3) 빌더에 오류를 쌓아 두고 부모 검증에서 꺼내기.
+/// - 선택한 방식: (2). SelectMenuBuilder는 생성자 모음이고 string/user/role/mentionable/channel이
+///   StringSelectBuilder 등 종류별 빌더를 돌려준다.
+/// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 add_action_row(select)와 모달 레이블 같은 무실패
+///   경로마다 `?`를 요구하고, 잘못된 값이 여전히 실행 시점에만 드러난다. (3)은 타입 모델로
+///   바뀌는 순간 오류 정보가 사라져 같은 구멍이 남는다. (2)는 유효한 2.x 체인은 그대로 컴파일되고
+///   잘못된 체인은 컴파일되지 않는다(tests/ui/select_menu_wrong_kind_fields.rs).
+/// - 장점, 단점 및 영향: build()가 무손실·무실패다. 대신 SelectMenuBuilder를 타입으로 쓰던 코드
+///   (매개변수·반환 타입)와 범용 default_value(SelectDefaultValue)/default_values(Vec<..>) 호출은
+///   종류별 타입과 타입 있는 id(default_user 등, default_values(ids))로 옮겨야 한다.
+/// ```
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SelectMenuBuilder;
 
 impl SelectMenuBuilder {
-    fn with_kind(kind: ComponentType, custom_id: impl Into<String>) -> Self {
-        Self {
-            kind,
-            id: None,
-            custom_id: custom_id.into(),
-            placeholder: None,
-            min_values: None,
-            max_values: None,
-            required: None,
-            disabled: None,
-            options: Vec::new(),
-            default_values: Vec::new(),
-            channel_types: None,
-        }
-    }
-
     /// A string select (type 3) of developer-defined options.
-    pub fn string(custom_id: impl Into<String>) -> Self {
-        Self::with_kind(ComponentType::STRING_SELECT, custom_id)
-    }
-
-    /// A role select (type 6).
-    pub fn role(custom_id: impl Into<String>) -> Self {
-        Self::with_kind(ComponentType::ROLE_SELECT, custom_id)
-    }
-
-    /// A channel select (type 8).
-    pub fn channel(custom_id: impl Into<String>) -> Self {
-        Self::with_kind(ComponentType::CHANNEL_SELECT, custom_id)
+    pub fn string(custom_id: impl Into<String>) -> StringSelectBuilder {
+        StringSelectBuilder::new(custom_id)
     }
 
     /// A user select (type 5).
-    pub fn user(custom_id: impl Into<String>) -> Self {
-        Self::with_kind(ComponentType::USER_SELECT, custom_id)
+    pub fn user(custom_id: impl Into<String>) -> UserSelectBuilder {
+        UserSelectBuilder::new(custom_id)
+    }
+
+    /// A role select (type 6).
+    pub fn role(custom_id: impl Into<String>) -> RoleSelectBuilder {
+        RoleSelectBuilder::new(custom_id)
     }
 
     /// A mentionable (user and role) select (type 7).
-    pub fn mentionable(custom_id: impl Into<String>) -> Self {
-        Self::with_kind(ComponentType::MENTIONABLE_SELECT, custom_id)
+    pub fn mentionable(custom_id: impl Into<String>) -> MentionableSelectBuilder {
+        MentionableSelectBuilder::new(custom_id)
     }
 
-    /// Sets the component `id`.
-    pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
-        self
+    /// A channel select (type 8).
+    pub fn channel(custom_id: impl Into<String>) -> ChannelSelectBuilder {
+        ChannelSelectBuilder::new(custom_id)
     }
+}
 
-    /// Sets the placeholder (up to 150 characters).
-    pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
-        self.placeholder = Some(placeholder.into());
-        self
-    }
-
-    /// Appends an option (string selects).
-    pub fn add_option(mut self, option: SelectOption) -> Self {
-        self.options.push(option);
-        self
-    }
-
-    /// Appends options (string selects).
-    pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
-        self.options.extend(options);
-        self
-    }
-
-    /// Pre-selects a value (user, role, mentionable, and channel selects).
-    pub fn default_value(mut self, value: SelectDefaultValue) -> Self {
-        self.default_values.push(value);
-        self
-    }
-
-    /// Pre-selects values.
-    pub fn default_values(mut self, values: Vec<SelectDefaultValue>) -> Self {
-        self.default_values.extend(values);
-        self
-    }
-
-    /// Pre-selects a user (user and mentionable selects).
-    pub fn default_user(self, id: UserId) -> Self {
-        self.default_value(SelectDefaultValue::User(id))
-    }
-
-    /// Pre-selects a role (role and mentionable selects).
-    pub fn default_role(self, id: RoleId) -> Self {
-        self.default_value(SelectDefaultValue::Role(id))
-    }
-
-    /// Pre-selects a channel (channel selects).
-    pub fn default_channel(self, id: ChannelId) -> Self {
-        self.default_value(SelectDefaultValue::Channel(id))
-    }
-
-    /// Pre-selects a user or role in a mentionable select.
-    pub fn default_mentionable(self, id: MentionableId) -> Self {
-        self.default_value(SelectDefaultValue::from(id))
-    }
-
-    /// Restricts a channel select to these channel types.
-    pub fn channel_types(mut self, channel_types: impl IntoIterator<Item = ChannelType>) -> Self {
-        self.channel_types = Some(channel_types.into_iter().collect());
-        self
-    }
-
-    /// Sets the fewest items to choose (0-25).
-    pub fn min_values(mut self, min: u8) -> Self {
-        self.min_values = Some(min);
-        self
-    }
-
-    /// Sets the most items to choose (1-25).
-    pub fn max_values(mut self, max: u8) -> Self {
-        self.max_values = Some(max);
-        self
-    }
-
-    /// Whether an answer is required (modals only; ignored in messages).
-    pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
-        self
-    }
-
-    /// Shows the menu disabled (messages only; modals reject it).
-    pub fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = Some(disabled);
-        self
-    }
-
-    /// The fields set on this builder that its kind does not have, which
-    /// [`Self::build`] leaves out.
-    fn stray_fields(&self) -> Vec<String> {
-        let mut stray = Vec::new();
-        let is_string = self.kind == ComponentType::STRING_SELECT;
-        if !is_string && !self.options.is_empty() {
-            stray.push("options".to_owned());
+/// One select builder per kind: the shared setters, `build()` /
+/// `validate()` / `try_build()`, and the conversions into every position a
+/// select menu can take.
+macro_rules! select_builder {
+    ($(#[$meta:meta])* $builder:ident => $model:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, Debug)]
+        pub struct $builder {
+            inner: $model,
         }
-        if self.kind != ComponentType::CHANNEL_SELECT && self.channel_types.is_some() {
-            stray.push("channel_types".to_owned());
-        }
-        for value in &self.default_values {
-            let fits = match value {
-                SelectDefaultValue::User(_) => matches!(
-                    self.kind,
-                    ComponentType::USER_SELECT | ComponentType::MENTIONABLE_SELECT
-                ),
-                SelectDefaultValue::Role(_) => matches!(
-                    self.kind,
-                    ComponentType::ROLE_SELECT | ComponentType::MENTIONABLE_SELECT
-                ),
-                SelectDefaultValue::Channel(_) => self.kind == ComponentType::CHANNEL_SELECT,
-                SelectDefaultValue::Unknown { .. } => false,
-            };
-            if !fits {
-                stray.push(format!("{} default value", value.kind()));
-            }
-        }
-        stray
-    }
 
-    /// The typed select menu. Fields the kind does not have (see the type
-    /// docs) are left out, as in 2.x; limits are not checked.
-    pub fn build(self) -> SelectMenu {
-        let Self {
-            kind,
-            id,
-            custom_id,
-            placeholder,
-            min_values,
-            max_values,
-            required,
-            disabled,
-            options,
-            default_values,
-            channel_types,
-        } = self;
-        macro_rules! common {
-            ($ty:ident { $($extra:ident: $value:expr),* }) => {
-                $ty {
-                    id,
-                    placeholder,
-                    min_values,
-                    max_values,
-                    required,
-                    disabled,
-                    $($extra: $value,)*
-                    ..$ty::new(custom_id)
+        impl $builder {
+            /// A select menu with this `custom_id`.
+            pub fn new(custom_id: impl Into<String>) -> Self {
+                Self {
+                    inner: $model::new(custom_id),
                 }
-            };
-        }
-        let values = default_values.iter();
-        match kind {
-            ComponentType::USER_SELECT => SelectMenu::User(common!(UserSelect {
-                default_values: values
-                    .filter_map(|value| match value {
-                        SelectDefaultValue::User(id) => Some(*id),
-                        _ => None,
-                    })
-                    .collect()
-            })),
-            ComponentType::ROLE_SELECT => SelectMenu::Role(common!(RoleSelect {
-                default_values: values
-                    .filter_map(|value| match value {
-                        SelectDefaultValue::Role(id) => Some(*id),
-                        _ => None,
-                    })
-                    .collect()
-            })),
-            ComponentType::MENTIONABLE_SELECT => {
-                SelectMenu::Mentionable(common!(MentionableSelect {
-                    default_values: values
-                        .filter_map(|value| match value {
-                            SelectDefaultValue::User(id) => Some(MentionableId::User(*id)),
-                            SelectDefaultValue::Role(id) => Some(MentionableId::Role(*id)),
-                            _ => None,
-                        })
-                        .collect()
-                }))
             }
-            ComponentType::CHANNEL_SELECT => SelectMenu::Channel(common!(ChannelSelect {
-                default_values: values
-                    .filter_map(|value| match value {
-                        SelectDefaultValue::Channel(id) => Some(*id),
-                        _ => None,
-                    })
-                    .collect(),
-                channel_types: channel_types
-            })),
-            // The constructors only make the five kinds above and this one.
-            _ => SelectMenu::String(common!(StringSelect { options: options })),
+
+            /// Sets the component `id`.
+            pub fn id(mut self, id: ComponentId) -> Self {
+                self.inner.id = Some(id);
+                self
+            }
+
+            /// Sets the placeholder (up to 150 characters).
+            pub fn placeholder(mut self, placeholder: impl Into<String>) -> Self {
+                self.inner.placeholder = Some(placeholder.into());
+                self
+            }
+
+            /// Sets the fewest items to choose (0-25; Discord's default: 1).
+            pub fn min_values(mut self, min: u8) -> Self {
+                self.inner.min_values = Some(min);
+                self
+            }
+
+            /// Sets the most items to choose (1-25; Discord's default: 1).
+            pub fn max_values(mut self, max: u8) -> Self {
+                self.inner.max_values = Some(max);
+                self
+            }
+
+            /// Whether an answer is required (modals only; ignored in
+            /// messages).
+            pub fn required(mut self, required: bool) -> Self {
+                self.inner.required = Some(required);
+                self
+            }
+
+            /// Shows the menu disabled (messages only; modals reject it).
+            pub fn disabled(mut self, disabled: bool) -> Self {
+                self.inner.disabled = Some(disabled);
+                self
+            }
+
+            /// The select menu, without checking limits.
+            pub fn build(self) -> $model {
+                self.inner
+            }
+
+            /// Checks the select menu against Discord's limits.
+            pub fn validate(&self) -> Result<(), DiscordError> {
+                self.inner.validate()
+            }
+
+            /// [`Self::build`] after [`Self::validate`].
+            pub fn try_build(self) -> Result<$model, DiscordError> {
+                self.validate()?;
+                Ok(self.inner)
+            }
         }
-    }
 
-    /// Checks the select menu against Discord's limits, and that no field
-    /// is set that its kind does not have.
-    pub fn validate(&self) -> Result<(), DiscordError> {
-        let stray = self.stray_fields();
-        if !stray.is_empty() {
-            return Err(DiscordError::model(format!(
-                "select menu of type {} does not take: {}",
-                self.kind.get(),
-                stray.join(", ")
-            )));
+        impl From<$builder> for $model {
+            fn from(builder: $builder) -> Self {
+                builder.build()
+            }
         }
-        self.clone().build().validate()
+
+        impl From<$builder> for SelectMenu {
+            fn from(builder: $builder) -> Self {
+                builder.build().into()
+            }
+        }
+
+        /// The select menu on its own row.
+        impl From<$builder> for ActionRow {
+            fn from(builder: $builder) -> Self {
+                builder.build().into()
+            }
+        }
+
+        /// The select menu on its own row.
+        impl From<$builder> for Component {
+            fn from(builder: $builder) -> Self {
+                Self::ActionRow(builder.build().into())
+            }
+        }
+    };
+}
+
+select_builder! {
+    /// Builds a [`StringSelect`] (type 3): 1-25 developer-defined options.
+    StringSelectBuilder => StringSelect
+}
+
+impl StringSelectBuilder {
+    /// Appends an option.
+    pub fn add_option(mut self, option: SelectOption) -> Self {
+        self.inner.options.push(option);
+        self
     }
 
-    /// [`Self::build`] after [`Self::validate`].
-    pub fn try_build(self) -> Result<SelectMenu, DiscordError> {
-        self.validate()?;
-        Ok(self.build())
+    /// Appends options.
+    pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
+        self.inner.options.extend(options);
+        self
     }
 }
 
-impl From<SelectMenuBuilder> for SelectMenu {
-    fn from(builder: SelectMenuBuilder) -> Self {
-        builder.build()
+select_builder! {
+    /// Builds a [`UserSelect`] (type 5).
+    UserSelectBuilder => UserSelect
+}
+
+impl UserSelectBuilder {
+    /// Pre-selects a user.
+    pub fn default_user(mut self, id: UserId) -> Self {
+        self.inner.default_values.push(id);
+        self
+    }
+
+    /// Pre-selects these users.
+    pub fn default_values(mut self, ids: impl IntoIterator<Item = UserId>) -> Self {
+        self.inner.default_values.extend(ids);
+        self
     }
 }
 
-/// The select menu on its own row.
-impl From<SelectMenuBuilder> for ActionRow {
-    fn from(builder: SelectMenuBuilder) -> Self {
-        builder.build().into()
+select_builder! {
+    /// Builds a [`RoleSelect`] (type 6).
+    RoleSelectBuilder => RoleSelect
+}
+
+impl RoleSelectBuilder {
+    /// Pre-selects a role.
+    pub fn default_role(mut self, id: RoleId) -> Self {
+        self.inner.default_values.push(id);
+        self
+    }
+
+    /// Pre-selects these roles.
+    pub fn default_values(mut self, ids: impl IntoIterator<Item = RoleId>) -> Self {
+        self.inner.default_values.extend(ids);
+        self
     }
 }
 
-/// The select menu on its own row.
-impl From<SelectMenuBuilder> for Component {
-    fn from(builder: SelectMenuBuilder) -> Self {
-        Self::ActionRow(builder.build().into())
+select_builder! {
+    /// Builds a [`MentionableSelect`] (type 7): users and roles.
+    MentionableSelectBuilder => MentionableSelect
+}
+
+impl MentionableSelectBuilder {
+    /// Pre-selects a user.
+    pub fn default_user(self, id: UserId) -> Self {
+        self.default_mentionable(MentionableId::User(id))
+    }
+
+    /// Pre-selects a role.
+    pub fn default_role(self, id: RoleId) -> Self {
+        self.default_mentionable(MentionableId::Role(id))
+    }
+
+    /// Pre-selects a user or role.
+    pub fn default_mentionable(mut self, id: MentionableId) -> Self {
+        self.inner.default_values.push(id);
+        self
+    }
+
+    /// Pre-selects these users and roles (`UserId`, `RoleId`, or
+    /// `MentionableId`).
+    pub fn default_values<I>(mut self, ids: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<MentionableId>,
+    {
+        self.inner
+            .default_values
+            .extend(ids.into_iter().map(Into::into));
+        self
+    }
+}
+
+select_builder! {
+    /// Builds a [`ChannelSelect`] (type 8).
+    ChannelSelectBuilder => ChannelSelect
+}
+
+impl ChannelSelectBuilder {
+    /// Pre-selects a channel.
+    pub fn default_channel(mut self, id: ChannelId) -> Self {
+        self.inner.default_values.push(id);
+        self
+    }
+
+    /// Pre-selects these channels.
+    pub fn default_values(mut self, ids: impl IntoIterator<Item = ChannelId>) -> Self {
+        self.inner.default_values.extend(ids);
+        self
+    }
+
+    /// Restricts the menu to these channel types.
+    pub fn channel_types(mut self, channel_types: impl IntoIterator<Item = ChannelType>) -> Self {
+        self.inner.channel_types = Some(channel_types.into_iter().collect());
+        self
     }
 }
 
@@ -850,7 +845,7 @@ mod tests {
 
     use super::{
         ActionRowBuilder, ButtonBuilder, ComponentsV2Message, CustomButtonBuilder,
-        LinkButtonBuilder, PremiumButtonBuilder, SelectDefaultValue, SelectMenuBuilder,
+        LinkButtonBuilder, PremiumButtonBuilder, SelectMenuBuilder,
     };
     use crate::builders::container::TextDisplayBuilder;
     use crate::builders::{
@@ -1073,12 +1068,12 @@ mod tests {
     }
 
     #[test]
-    fn select_menu_builder_conversions_and_remaining_kinds() {
+    fn select_builders_convert_into_every_position() {
         use crate::request::{ActionRow, Component};
 
         let role = SelectMenuBuilder::role("r")
             .default_role(test_id(1))
-            .default_mentionable(crate::model::MentionableId::Role(test_id(2)))
+            .default_values([test_id(2)])
             .max_values(2)
             .required(true);
         assert_eq!(
@@ -1095,85 +1090,93 @@ mod tests {
             ActionRow::Select(_)
         ));
         assert!(matches!(
-            Component::from(role),
+            Component::from(role.clone()),
             Component::ActionRow(ActionRow::Select(_))
         ));
-        // A default of a kind the menu cannot hold is reported, not sent.
-        let unknown = SelectMenuBuilder::channel("c").default_value(SelectDefaultValue::Unknown {
-            kind: "guild".to_owned(),
-            id: test_id(3),
-        });
-        assert!(unknown
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("does not take: guild default value"));
-        assert_eq!(
-            to_json(&unknown.build()),
-            json!({"type": 8, "custom_id": "c"})
-        );
-        let user = SelectMenuBuilder::user("u").default_role(test_id(4));
-        assert!(user.validate().is_err());
-        assert_eq!(to_json(&user.build()), json!({"type": 5, "custom_id": "u"}));
-        assert!(SelectMenuBuilder::mentionable("m")
-            .default_channel(test_id(5))
-            .validate()
-            .is_err());
+        assert_eq!(crate::request::RoleSelect::from(role.clone()), role.build());
         assert!(ComponentsV2Message::default().build().is_empty());
     }
 
     #[test]
-    fn select_menu_kinds_keep_only_their_fields() {
-        let string = SelectMenuBuilder::string("menu")
-            .add_option(SelectOption::new("One", "one"))
-            .default_channel(test_id(123))
-            .channel_types([ChannelType::GUILD_TEXT]);
-        assert!(string
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("does not take: channel_types, channel default value"));
-        assert_eq!(
-            to_json(&string.build()),
-            json!({"type": 3, "custom_id": "menu", "options": [{"label": "One", "value": "one"}]})
-        );
+    fn select_builders_carry_their_kind_fields_through_parents() {
+        use crate::builders::MessageBuilder;
 
-        let channel = SelectMenuBuilder::channel("menu")
-            .add_option(SelectOption::new("Ignored", "ignored"))
+        let string = SelectMenuBuilder::string("pick").add_options(vec![
+            SelectOption::new("One", "one"),
+            SelectOption::new("Two", "two"),
+        ]);
+        assert_eq!(
+            to_json(&string.clone().build()),
+            json!({"type": 3, "custom_id": "pick", "options": [
+                {"label": "One", "value": "one"}, {"label": "Two", "value": "two"}
+            ]})
+        );
+        let channel = SelectMenuBuilder::channel("where")
             .channel_types([ChannelType::GUILD_TEXT, ChannelType::GUILD_VOICE])
-            .build();
+            .default_channel(test_id(9))
+            .default_values([test_id(10)])
+            .max_values(2);
         assert_eq!(
-            to_json(&channel),
-            json!({"type": 8, "custom_id": "menu", "channel_types": [0, 2]})
+            to_json(&channel.clone().build()),
+            json!({"type": 8, "custom_id": "where", "max_values": 2, "channel_types": [0, 2],
+                   "default_values": [{"id": "9", "type": "channel"}, {"id": "10", "type": "channel"}]})
         );
-
-        let mentionable = SelectMenuBuilder::mentionable("menu")
+        let mentionable = SelectMenuBuilder::mentionable("notify")
             .placeholder("Pick a target")
             .default_user(test_id(42))
             .default_role(test_id(43))
+            .default_mentionable(crate::model::MentionableId::User(test_id(44)))
+            .default_values([test_id::<crate::model::marker::Role>(45)])
             .required(false)
             .min_values(1)
-            .max_values(3)
+            .max_values(4)
             .disabled(true)
-            .build();
+            .id(ComponentId::new(3));
         assert_eq!(
-            to_json(&mentionable),
+            to_json(&mentionable.clone().build()),
             json!({
-                "type": 7, "custom_id": "menu", "placeholder": "Pick a target",
-                "min_values": 1, "max_values": 3, "required": false, "disabled": true,
-                "default_values": [{"id": "42", "type": "user"}, {"id": "43", "type": "role"}]
+                "type": 7, "id": 3, "custom_id": "notify", "placeholder": "Pick a target",
+                "min_values": 1, "max_values": 4, "required": false, "disabled": true,
+                "default_values": [
+                    {"id": "42", "type": "user"}, {"id": "43", "type": "role"},
+                    {"id": "44", "type": "user"}, {"id": "45", "type": "role"}
+                ]
             })
         );
+        let user = SelectMenuBuilder::user("who")
+            .default_user(test_id(900))
+            .default_values([test_id(901)])
+            .max_values(2);
 
-        let user = SelectMenuBuilder::user("menu")
-            .id(ComponentId::new(22))
-            .default_values(vec![SelectDefaultValue::user(test_id(900))])
-            .build();
-        assert!(matches!(user, SelectMenu::User(_)));
+        // Every kind keeps its defaults through a parent's try_build: the
+        // message serializes exactly what the builders were given.
+        let message = MessageBuilder::new()
+            .add_component(string)
+            .add_component(channel)
+            .add_component(mentionable)
+            .add_component(user)
+            .try_build()
+            .expect("valid legacy message");
+        let value = to_json(&message);
+        let defaults =
+            |row: usize| value["components"][row]["components"][0]["default_values"].clone();
+        assert_eq!(defaults(1).as_array().map(Vec::len), Some(2));
+        assert_eq!(defaults(2).as_array().map(Vec::len), Some(4));
         assert_eq!(
-            to_json(&user),
-            json!({"type": 5, "id": 22, "custom_id": "menu",
-                   "default_values": [{"id": "900", "type": "user"}]})
+            defaults(3),
+            json!([{"id": "900", "type": "user"}, {"id": "901", "type": "user"}])
+        );
+
+        // Too many defaults for the bounds fails the parent too, with the
+        // path of the select.
+        let crowded = MessageBuilder::new().add_component(
+            SelectMenuBuilder::user("u")
+                .default_user(test_id(1))
+                .default_user(test_id(2)),
+        );
+        expect_model_error(
+            crowded.try_build(),
+            "components[0].components[0]: select menu default_values must contain 1-1 items",
         );
     }
 

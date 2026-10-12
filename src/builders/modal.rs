@@ -6,8 +6,9 @@ use crate::error::DiscordError;
 use crate::model::{ComponentId, ComponentType, TextInputStyle};
 use crate::types::{to_json_value, SelectOption};
 
-use super::components::{ActionRowBuilder, SelectMenuBuilder};
+use super::components::ActionRowBuilder;
 use super::limits;
+use crate::request::SelectMenu;
 
 #[derive(Clone, Serialize, Deserialize)]
 /// Typed Discord API object for `TextInputBuilder`.
@@ -596,12 +597,12 @@ pub struct LabelBuilder {
 
 impl LabelBuilder {
     /// Creates a `with_select_menu` value.
-    pub fn with_select_menu(label: &str, select: SelectMenuBuilder) -> Self {
+    pub fn with_select_menu(label: &str, select: impl Into<SelectMenu>) -> Self {
         Self {
             component_type: ComponentType::LABEL,
             label: label.to_string(),
             description: None,
-            component: to_json_value(select.build()),
+            component: to_json_value(select.into()),
             id: None,
         }
     }
@@ -705,7 +706,7 @@ impl ModalBuilder {
         mut self,
         label: &str,
         description: Option<&str>,
-        select: SelectMenuBuilder,
+        select: impl Into<SelectMenu>,
     ) -> Self {
         self.components.push(
             Self::with_optional_description(

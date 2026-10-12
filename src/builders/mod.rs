@@ -15,8 +15,9 @@ pub use crate::model::SelectDefaultValue;
 #[expect(deprecated, reason = "deliberate re-export of a deprecated item")]
 pub use components::ButtonBuilder;
 pub use components::{
-    ActionRowBuilder, ComponentsV2Message, CustomButtonBuilder, LinkButtonBuilder,
-    PremiumButtonBuilder, SelectMenuBuilder,
+    ActionRowBuilder, ChannelSelectBuilder, ComponentsV2Message, CustomButtonBuilder,
+    LinkButtonBuilder, MentionableSelectBuilder, PremiumButtonBuilder, RoleSelectBuilder,
+    SelectMenuBuilder, StringSelectBuilder, UserSelectBuilder,
 };
 pub use container::{
     create_container, create_default_buttons, ContainerBuilder, SeparatorBuilder,
