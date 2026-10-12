@@ -91,14 +91,27 @@ pub struct MemberRemovePayload {
 /// Typed Discord API object for `GuildMembersChunkPayload`.
 pub struct GuildMembersChunkPayload {
     pub guild_id: GuildId,
-    #[serde(default)]
-    pub members: Vec<Member>,
+    /// Shared with the cache, the external backend, and
+    /// `Context::fetch_members`.
+    #[serde(
+        default,
+        deserialize_with = "crate::model::shared_members",
+        serialize_with = "crate::model::shared::seq_arc::serialize"
+    )]
+    pub members: Vec<Arc<Member>>,
     pub chunk_index: u64,
     pub chunk_count: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_found: Vec<UserId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub presences: Option<Vec<Presence>>,
+    /// Each with `user_id` set from its partial `user`; shared with the
+    /// cache and the external backend.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::model::shared_presences",
+        serialize_with = "crate::model::shared::seq_arc::serialize_option"
+    )]
+    pub presences: Option<Vec<Arc<Presence>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 }

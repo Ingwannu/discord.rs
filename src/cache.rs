@@ -581,11 +581,15 @@ impl CacheHandle {
     /// so `request_guild_members` fills the cache the same way discord.js's
     /// `guild.members.fetch()` does.
     #[cfg(feature = "cache")]
+    ///
+    /// Members, their users, and presences are stored as the `Arc`s passed
+    /// in (the GUILD_MEMBERS_CHUNK event's own); a presence needs its
+    /// `user_id`, which the gateway decoder fills from the partial `user`.
     pub async fn apply_members_chunk(
         &self,
         guild_id: GuildId,
-        members: &[Member],
-        presences: Option<&[Presence]>,
+        members: &[Arc<Member>],
+        presences: Option<&[Arc<Presence>]>,
     ) {
         let mut store = self.store.write().await;
         let now = Instant::now();
@@ -598,20 +602,15 @@ impl CacheHandle {
             store.users.insert(user_id, Arc::clone(user));
             remember_key(&mut store.user_order, user_id);
             let key = (guild_id, user_id);
-            insert_member_entry(&mut store, key, Arc::new(member.clone()), now);
+            insert_member_entry(&mut store, key, Arc::clone(member), now);
         }
 
         for presence in presences.unwrap_or_default() {
-            let user_id = presence
-                .user_id
-                .or_else(|| presence.user.as_ref().map(|user| user.id));
-            let Some(user_id) = user_id else {
+            let Some(user_id) = presence.user_id else {
                 continue;
             };
-            let mut presence = presence.clone();
-            presence.user_id = Some(user_id);
             let key = (guild_id, user_id);
-            store.presences.insert(key, Arc::new(presence));
+            store.presences.insert(key, Arc::clone(presence));
             store.presence_seen.insert(key, now);
             remember_key(&mut store.presence_order, key);
         }
@@ -636,8 +635,8 @@ impl CacheHandle {
     pub async fn apply_members_chunk(
         &self,
         _guild_id: GuildId,
-        _members: &[Member],
-        _presences: Option<&[Presence]>,
+        _members: &[Arc<Member>],
+        _presences: Option<&[Arc<Presence>]>,
     ) {
     }
 

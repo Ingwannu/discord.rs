@@ -274,7 +274,7 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 
 기본 전체 시한은 60초이며 `Context::fetch_members_with_timeout(...)`으로 조정할 수 있습니다. raw 청크 처리가 필요하면 저수준 `ctx.request_guild_members(...)`를 그대로 사용할 수 있습니다.
 
-3.0부터 `fetch_members`는 어떤 핸들러 안에서든 기다려도 안전하고(위 이벤트 파이프라인 참고), 청크 번호 `0..chunk_count`가 모두 도착해야만 돌아오며(빠진 청크가 있으면 받은 개수를 밝힌 타임아웃 오류이지, 조용히 모자란 목록이 아닙니다), 호출이 끝나거나 타임아웃되거나 취소되면 청크 대기 항목이 지워지고, 샤드가 멈추면 즉시 실패합니다. 길드 단위 게이트웨이 명령(`request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice`)은 그 길드를 맡은 샤드(`(guild_id >> 22) % shard_count`)가 같은 프로세스에 있으면 그 샤드로 보내므로, 어느 샤드의 `Context`에서든 쓸 수 있습니다.
+체크포인트 C부터는 `Vec<Arc<Member>>`를 돌려줍니다. GUILD_MEMBERS_CHUNK의 `members`(와 `user_id`를 채운 `presences`)를 바로 `Arc`로 디코딩해 이벤트·캐시·외부 캐시 백엔드·`fetch_members`가 공유하므로, 큰 길드를 모아도 멤버를 복사하지 않습니다. 3.0부터 `fetch_members`는 어떤 핸들러 안에서든 기다려도 안전하고(위 이벤트 파이프라인 참고), 청크 번호 `0..chunk_count`가 모두 도착해야만 돌아오며(빠진 청크가 있으면 받은 개수를 밝힌 타임아웃 오류이지, 조용히 모자란 목록이 아닙니다), 호출이 끝나거나 타임아웃되거나 취소되면 청크 대기 항목이 지워지고, 샤드가 멈추면 즉시 실패합니다. 길드 단위 게이트웨이 명령(`request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice`)은 그 길드를 맡은 샤드(`(guild_id >> 22) % shard_count`)가 같은 프로세스에 있으면 그 샤드로 보내므로, 어느 샤드의 `Context`에서든 쓸 수 있습니다.
 
 ## 운영 노트
 

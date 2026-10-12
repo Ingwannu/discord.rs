@@ -314,6 +314,32 @@ pub(crate) fn normalize_presence(presence: &mut Presence) {
     }
 }
 
+/// GUILD_MEMBERS_CHUNK `members`, each decoded straight into an `Arc` the
+/// cache and the external backend store as they are.
+pub(crate) fn shared_members<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Arc<Member>>, D::Error> {
+    deserializer.deserialize_seq(ArcSeq::new(None))
+}
+
+/// GUILD_MEMBERS_CHUNK `presences`, each normalized ([`normalize_presence`])
+/// and wrapped once, so the cache and the backend share it.
+pub(crate) fn shared_presences<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<Arc<Presence>>>, D::Error> {
+    struct Presences(Vec<Arc<Presence>>);
+
+    impl<'de> Deserialize<'de> for Presences {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer
+                .deserialize_seq(ArcSeq::new(Some(normalize_presence)))
+                .map(Presences)
+        }
+    }
+
+    Option::<Presences>::deserialize(deserializer).map(|presences| presences.map(|list| list.0))
+}
+
 /// Number of top-level keys a GUILD_CREATE carries besides `members` and
 /// `presences` (about 55 today); sizes the borrowed key list once.
 const GUILD_CREATE_KEY_HINT: usize = 64;

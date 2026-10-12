@@ -169,7 +169,7 @@ impl Drop for MemberChunkWaiterGuard {
 struct MemberChunkProgress {
     expected: Option<u64>,
     seen: HashSet<u64>,
-    members: Vec<crate::model::Member>,
+    members: Vec<Arc<crate::model::Member>>,
 }
 
 impl MemberChunkProgress {
@@ -177,7 +177,7 @@ impl MemberChunkProgress {
     fn add(
         &mut self,
         chunk: crate::event::GuildMembersChunkPayload,
-    ) -> Result<Option<Vec<crate::model::Member>>, DiscordError> {
+    ) -> Result<Option<Vec<Arc<crate::model::Member>>>, DiscordError> {
         let count = *self.expected.get_or_insert(chunk.chunk_count);
         if chunk.chunk_count != count {
             return Err(DiscordError::gateway(format!(
@@ -417,7 +417,7 @@ impl Context {
         guild_id: GuildId,
         query: Option<String>,
         limit: Option<u32>,
-    ) -> Result<Vec<crate::model::Member>, DiscordError> {
+    ) -> Result<Vec<Arc<crate::model::Member>>, DiscordError> {
         self.fetch_members_with_timeout(guild_id, query, limit, Duration::from_secs(60))
             .await
     }
@@ -432,7 +432,7 @@ impl Context {
         query: Option<String>,
         limit: Option<u32>,
         timeout: Duration,
-    ) -> Result<Vec<crate::model::Member>, DiscordError> {
+    ) -> Result<Vec<Arc<crate::model::Member>>, DiscordError> {
         // Process-wide, so concurrent fetches get distinct chunk nonces.
         static FETCH_NONCE: AtomicU64 = AtomicU64::new(0);
         let messenger = self.messenger_for_guild(guild_id)?;

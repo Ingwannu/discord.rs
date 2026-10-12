@@ -3596,33 +3596,33 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
         EventKind::GuildMembersChunk(Box::new(crate::event::GuildMembersChunkPayload {
             guild_id: test_id(1),
             members: vec![
-                Member {
+                std::sync::Arc::new(Member {
                     user: Some(Arc::new(User {
                         id: test_id(2),
                         username: "first".to_string(),
                         ..User::fixture()
                     })),
                     ..Member::default()
-                },
-                Member {
+                }),
+                std::sync::Arc::new(Member {
                     user: Some(Arc::new(User {
                         id: test_id(3),
                         username: "second".to_string(),
                         ..User::fixture()
                     })),
                     ..Member::default()
-                },
+                }),
             ],
             chunk_index: 0,
             chunk_count: 1,
             not_found: Vec::new(),
-            presences: Some(vec![crate::model::Presence {
+            presences: Some(vec![std::sync::Arc::new(crate::model::Presence {
                 user_id: Some(test_id(2)),
                 user: None,
                 status: Some(PresenceStatus::IDLE),
                 activities: None,
                 client_status: None,
-            }]),
+            })]),
             nonce: None,
         })),
     );
@@ -3821,7 +3821,7 @@ async fn serial_handler_can_await_fetch_members_without_stalling_its_shard() {
                 .map(|members| {
                     members
                         .into_iter()
-                        .filter_map(|member| member.user.map(|user| user.id.to_string()))
+                        .filter_map(|member| member.user.as_ref().map(|user| user.id.to_string()))
                         .collect()
                 })
                 .map_err(|error| error.to_string());
@@ -4755,6 +4755,43 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
+async fn member_chunks_share_members_users_and_presences_with_the_cache() {
+    let cache = crate::cache::CacheHandle::new();
+    let chunk = decode_event(
+        "GUILD_MEMBERS_CHUNK",
+        json!({
+            "guild_id": "9", "chunk_index": 0, "chunk_count": 1,
+            "members": [{ "user": { "id": "5", "username": "a" }, "roles": [] }],
+            "presences": [{ "user": { "id": "5" }, "status": "online" }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &chunk).await;
+    let EventKind::GuildMembersChunk(payload) = chunk.kind() else {
+        panic!("unexpected {chunk:?}");
+    };
+    let presence = &payload.presences.as_ref().unwrap()[0];
+    assert_eq!(
+        presence.user_id,
+        Some(test_id(5)),
+        "normalized when decoded"
+    );
+    assert!(Arc::ptr_eq(
+        &payload.members[0],
+        &cache.member_arc(test_id(9), test_id(5)).await.unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        payload.members[0].user.as_ref().unwrap(),
+        &cache.user_arc(test_id(5)).await.unwrap()
+    ));
+    assert!(Arc::ptr_eq(
+        presence,
+        &cache.presence_arc(test_id(9), test_id(5)).await.unwrap()
+    ));
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
 async fn channels_and_roles_are_shared_and_guild_roles_follow_role_events() {
     let cache = crate::cache::CacheHandle::new();
     let guild = decode_event(
@@ -5603,13 +5640,13 @@ fn member_chunk_progress_requires_every_chunk_index() {
     fn chunk(index: u64, count: u64, user_id: &str) -> crate::event::GuildMembersChunkPayload {
         crate::event::GuildMembersChunkPayload {
             guild_id: test_id(42),
-            members: vec![Member {
+            members: vec![std::sync::Arc::new(Member {
                 user: Some(Arc::new(User {
                     id: named_id(user_id),
                     ..User::fixture()
                 })),
                 ..Member::default()
-            }],
+            })],
             chunk_index: index,
             chunk_count: count,
             not_found: Vec::new(),

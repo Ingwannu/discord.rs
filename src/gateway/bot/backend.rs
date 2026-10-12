@@ -65,7 +65,6 @@ use super::presence_from_update;
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::{Event, EventKind};
-use crate::model::normalize_presence;
 use crate::model::{
     ChannelId, GuildId, Member, Message, MessageId, MessageUpdate, Presence, UserId,
 };
@@ -1194,16 +1193,14 @@ pub(super) async fn forward_cache_backend_updates(
         }),
         EventKind::GuildMembersChunk(chunk) => Some(BackendWrite::PutMembersChunk {
             guild_id: chunk.guild_id,
-            members: chunk.members.iter().cloned().map(Arc::new).collect(),
+            // The event's own `Arc`s, normalized when they were decoded.
+            members: chunk.members.clone(),
             presences: chunk
                 .presences
                 .iter()
                 .flatten()
-                .map(|presence| {
-                    let mut presence = presence.clone();
-                    normalize_presence(&mut presence);
-                    Arc::new(presence)
-                })
+                .filter(|presence| presence.user_id.is_some())
+                .cloned()
                 .collect(),
         }),
         EventKind::MessageCreate(message) => Some(BackendWrite::PutMessage(Arc::clone(message))),

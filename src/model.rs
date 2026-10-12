@@ -81,9 +81,8 @@ pub use entity::DiscordModel;
 pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
-#[cfg(all(feature = "gateway", feature = "cache"))]
-pub(crate) use gateway_payload::normalize_presence;
 pub(crate) use gateway_payload::BorrowedKey;
+pub(crate) use gateway_payload::{shared_members, shared_presences};
 pub use gateway_payload::{
     GuildCreate, GuildCreatePayload, MessageUpdate, PartialUser, UnavailableGuild,
 };

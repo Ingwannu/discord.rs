@@ -51,3 +51,37 @@ pub(crate) mod option_arc {
         Option::<T>::deserialize(deserializer).map(|value| value.map(Arc::new))
     }
 }
+
+/// Serializes `Vec<Arc<T>>` and `Option<Vec<Arc<T>>>` as the plain lists;
+/// decoding goes through [`ArcSeq`](super::gateway_payload::ArcSeq), which
+/// wraps each element once as it is read.
+pub(crate) mod seq_arc {
+    use std::sync::Arc;
+
+    use serde::{Serialize, Serializer};
+
+    struct Items<'a, T>(&'a [Arc<T>]);
+
+    impl<T: Serialize> Serialize for Items<'_, T> {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serializer.collect_seq(self.0.iter().map(|item| &**item))
+        }
+    }
+
+    pub(crate) fn serialize<T: Serialize, S: Serializer>(
+        items: &[Arc<T>],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        Items(items).serialize(serializer)
+    }
+
+    pub(crate) fn serialize_option<T: Serialize, S: Serializer>(
+        items: &Option<Vec<Arc<T>>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match items {
+            Some(items) => serializer.serialize_some(&Items(items)),
+            None => serializer.serialize_none(),
+        }
+    }
+}
