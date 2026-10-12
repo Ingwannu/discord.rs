@@ -47,7 +47,8 @@ flowchart LR
 - `src/builders/`: Components V2, Modal 페이로드 빌더. `limits.rs`에 `validate()`가 검사하는 컴포넌트·모달·임베드 한도를 모았습니다(비공개, 커맨드용 공개 `command::limits`와 같은 방식)
 - `src/event.rs`: `Event` 봉투(`EventKind`, `EventMetadata`, 선택적 원본 payload)와 이벤트별 payload 타입. `src/event/decode.rs`는 디스패치의 `d` 텍스트를 바로 타입으로 디코딩하며, 이름 인턴 표와 디코더 분기를 정렬된 표 하나에서 만듭니다
 - `src/gateway/`: WebSocket 런타임, heartbeat/resume/reconnect. 읽기 루프(`client.rs`)는 얕은 봉투만 읽고 `d`를 `Box<RawValue>`로 큐에 넣으며, 샤드별 처리기(`bot/pipeline.rs`)가 디코딩하고 캐시·외부 백엔드(`bot/backend.rs`)를 갱신한 뒤 `Arc<Event>` 하나를 컬렉터 저널과 핸들러 호출이 공유합니다
-- `src/model/gateway_payload.rs`: 게이트웨이 전용 payload. 캐시 저장 단위로 나눈 `GuildCreate`(사용 불가 길드와 구분하는 `GuildCreatePayload`)와 `Patch` 필드를 쓰는 부분 갱신 `MessageUpdate` / `PartialUser`
+- `src/model/gateway_payload.rs`: 게이트웨이 전용 payload. 캐시 저장 단위로 나눈 `GuildCreate`(사용 불가 길드와 구분하는 `GuildCreatePayload`)와 `Patch` 필드를 쓰는 부분 갱신 `MessageUpdate` / `PartialUser` / `MemberUpdate` / `GuildUpdate`
+- `src/model/shared.rs`: 캐시가 공유하는 `Arc` 필드(`Member::user`, `Message::author`, `RoleEvent::role`, 멤버 청크)의 serde 도우미. JSON은 값 자체와 같다.
 - `src/http.rs`: REST 클라이언트 전송 루프(`RestClient::execute`, 429·재시도·토큰 가리기). 엔드포인트는 `src/http/<도메인>.rs`에 있고, 각 엔드포인트는 라우트 목록(`src/http/routes.rs`)의 `RouteId`를 넘겨 메서드와 인증을 목록에서 가져옵니다. 본문은 `serde_json::to_vec`으로 한 번 인코딩해 재시도에 그대로 씁니다. `RestClient::request(RawRequest)`(`src/http/raw.rs`)는 같은 루프를 지나는 원시 요청 탈출구입니다
 - `src/parsers/`: 인터랙션 디코딩. `interaction/wire.rs`가 `Interaction`의 와이어 형식 `Deserialize`/`Serialize`(JSON 텍스트에서 한 번에, `Value` 없이; 게이트웨이와 타입 엔드포인트의 진입점은 `decode_interaction`), `modal.rs`가 제출된 모달 값의 같은 구현, `mod.rs`의 `Value` 헬퍼는 원시 핸들러 API(`RawInteraction`, `InteractionContext`)용
 - `src/helpers.rs`: 응답 헬퍼
