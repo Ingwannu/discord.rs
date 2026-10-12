@@ -90,7 +90,7 @@ where
 | `follow_up`, `follow_up_ephemeral`, `follow_up_with_files` | `request::CreateFollowup` | `POST /webhooks/{app}/{token}` |
 | `edit_reply`, `edit_follow_up`, `edit_reply_with_files` | `request::EditInteractionResponse` | 패치 의미, `attachments`는 메시지에 남길 첨부 전체 |
 
-REST 클라이언트의 기본 `allowed_mentions`(`RestClientBuilder::default_allowed_mentions`)는 이 본문들 중 `allowed_mentions`를 비워 둔 것에 채워집니다. 명시한 값(패치의 명시적 `null` 포함)이 우선하고, defer·모달·자동완성 결과에는 넣지 않습니다. 콜백은 응답 슬롯을 선점하기 전에 한 번 인코딩하므로, 인코딩할 수 없는 본문은 상태를 건드리지 않고 실패합니다.
+REST 클라이언트의 기본 `allowed_mentions`(`RestClientBuilder::default_allowed_mentions`)는 이 본문들 중 `allowed_mentions`를 비워 둔 것에 채워집니다. 명시한 값(패치의 명시적 `null` 포함)이 우선하고, defer·모달·자동완성 결과에는 넣지 않습니다. 콜백 본문은 응답 슬롯을 선점하기 전에 한 번 준비하므로(인코딩, 빈 파일 이름, 전송과 같은 파서로 파일 content type 검사), 로컬 오류는 아무것도 보내지 않고 상태를 건드리지 않은 채 `DiscordError::Model`로 실패합니다.
 
 `request::CreateMessage`는 `InteractionMessage::try_from(message)?`로 변환합니다(`CreateFollowup`, `UpdateMessage`, `EditInteractionResponse`도 같음). 채널 메시지에만 있는 필드(`message_reference`, `sticker_ids`, `nonce`, `shared_client_theme`)가 설정되어 있으면 변환이 실패합니다. Discord 인터랙션 본문에는 해당 필드가 없어서, 조용히 버리면 메시지 의미가 바뀌기 때문입니다. `CreateMessage`를 받는 헬퍼도 요청을 보내기 전에 같은 이유로 실패합니다. 2.x의 `InteractionReplyData`는 `InteractionMessage`의 deprecated 별칭입니다.
 

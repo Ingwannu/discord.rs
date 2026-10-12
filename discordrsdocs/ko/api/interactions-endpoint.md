@@ -87,7 +87,7 @@ let app = AppFramework::builder()
 
 - 인라인 응답은 Discord가 보낸 요청에 대한 응답 본문이므로, 핸들러가 반환하는 시점에 전달된 것으로 봅니다. Discord가 그 본문을 읽기 직전에 보낸 follow-up은 Discord가 거부할 수 있습니다.
 - `EndpointReply::Accepted`를 쓰면 Discord의 3초 제한 안에 REST 응답을 보내야 하며, 그렇지 않으면 인터랙션이 실패합니다.
-- 인라인 응답을 인코딩할 수 없으면(타입 variant로는 일어나지 않음) 엔드포인트는 오류를 기록하고 `500`으로 답합니다.
+- 엔드포인트는 REST 경로와 마찬가지로 응답 상태를 선점하기 전에 인라인 응답을 인코딩합니다. 인코딩할 수 없으면(타입 variant로는 일어나지 않음) 오류를 기록하고 최초 응답을 기록하지 않은 채 `500`으로 답합니다.
 - raw 엔드포인트(`InteractionHandler`, `InteractionContext`)에는 공유 응답 상태가 없습니다. ID와 토큰만 받는 헬퍼는 상태를 공유하지 않습니다.
 - 인터랙션 컨텍스트의 `Debug` 출력(타입드·raw, raw 페이로드 포함)은 인터랙션 토큰 대신 `[redacted]`를 표시합니다.
 

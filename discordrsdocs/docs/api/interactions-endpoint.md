@@ -108,7 +108,7 @@ Notes:
 
 - The inline response is the body of Discord's own request, so it counts as delivered when the handler returns it. A follow-up sent in the instant before Discord has read that body can still be rejected by Discord.
 - With `EndpointReply::Accepted`, the REST response must be sent within Discord's 3-second window, or the interaction fails.
-- If an inline response cannot be encoded (it cannot happen with the typed variants), the endpoint logs the error and answers `500`.
+- The endpoint encodes the inline response before it claims the response state, as the REST path does. If it cannot be encoded (it cannot happen with the typed variants), the endpoint logs the error and answers `500` without recording an initial response.
 - The raw endpoint (`InteractionHandler`, `InteractionContext`) has no shared response state; helpers that take only an id and token are stateless.
 - `Debug` output of interaction contexts (typed and raw, including the raw payload) shows `[redacted]` instead of the interaction token.
 
