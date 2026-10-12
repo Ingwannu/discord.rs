@@ -740,6 +740,18 @@ impl MessageUpdate {
     /// Present values are cloned, so the update stays usable (it is shared
     /// through `Arc<Event>`).
     pub fn apply_to(&self, message: &mut Message) -> bool {
+        self.apply_with_author(message, None)
+    }
+
+    /// [`Self::apply_to`], with `shared_author` (when given) taking the place
+    /// of merging `author`: the cache passes the user it has just patched in
+    /// its user store, so the message and the store share one allocation
+    /// instead of each copying the shared user before patching it.
+    pub(crate) fn apply_with_author(
+        &self,
+        message: &mut Message,
+        shared_author: Option<Arc<User>>,
+    ) -> bool {
         if !self.targets(message) {
             return false;
         }
@@ -825,10 +837,13 @@ impl MessageUpdate {
             shared_client_theme: target_shared_client_theme,
         } = message;
         apply_nullable(target_guild_id, guild_id);
-        match author {
-            Patch::Missing => {}
-            Patch::Value(Nullable::Null) => *target_author = None,
-            Patch::Value(Nullable::Value(partial)) => partial.merge_into(target_author),
+        match (author, shared_author) {
+            (Patch::Missing, _) => {}
+            (Patch::Value(Nullable::Null), _) => *target_author = None,
+            (Patch::Value(Nullable::Value(partial)), Some(shared)) if shared.id == partial.id => {
+                *target_author = Some(shared);
+            }
+            (Patch::Value(Nullable::Value(partial)), _) => partial.merge_into(target_author),
         }
         apply_nullable(target_member, member);
         apply_patch(target_content, content);
@@ -1136,14 +1151,18 @@ impl PartialUser {
     /// Merges into an optional slot (a message's `author`): the same user is
     /// patched in place, a different or missing one is replaced only when
     /// this partial is complete, and otherwise the slot is left as it is.
-    pub(crate) fn merge_into(&self, slot: &mut Option<User>) {
+    ///
+    /// The slot's user may be shared (with the cache's user store, or an
+    /// earlier event); it is patched copy-on-write.
+    pub(crate) fn merge_into(&self, slot: &mut Option<Arc<User>>) {
         if let Some(user) = slot.as_mut() {
-            if self.apply_to(user) {
+            if user.id == self.id {
+                self.apply_to(Arc::make_mut(user));
                 return;
             }
         }
         if let Some(user) = self.to_user() {
-            *slot = Some(user);
+            *slot = Some(Arc::new(user));
         }
     }
 }

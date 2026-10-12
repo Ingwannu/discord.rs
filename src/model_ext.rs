@@ -806,10 +806,10 @@ mod tests {
     #[test]
     fn display_name_prefers_nick_then_global_name_then_username() {
         let mut member = Member {
-            user: Some(User {
+            user: Some(std::sync::Arc::new(User {
                 global_name: Some("Global".to_string()),
                 ..user(1)
-            }),
+            })),
             nick: Some("Nick".to_string()),
             ..Member::default()
         };
@@ -818,7 +818,7 @@ mod tests {
         member.nick = None;
         assert_eq!(member.display_name(), "Global");
 
-        member.user.as_mut().unwrap().global_name = None;
+        std::sync::Arc::make_mut(member.user.as_mut().unwrap()).global_name = None;
         assert_eq!(member.display_name(), "tester");
 
         member.user = None;
@@ -833,7 +833,7 @@ mod tests {
             Err(DiscordError::Model { .. })
         ));
         let member = Member {
-            user: Some(user(9)),
+            user: Some(std::sync::Arc::new(user(9))),
             ..Member::default()
         };
         assert_eq!(member_user_id(&member).unwrap(), test_id(9));

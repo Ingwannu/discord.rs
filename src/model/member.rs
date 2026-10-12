@@ -1,5 +1,7 @@
 //! Guild members and member-management request bodies.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -10,8 +12,13 @@ use super::{
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Member`.
 pub struct Member {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<User>,
+    /// Shared with the cache's user store (see `CacheHandle::user_arc`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "super::user::shared_user"
+    )]
+    pub user: Option<Arc<User>>,
     #[serde(default)]
     pub roles: Vec<RoleId>,
     #[serde(skip_serializing_if = "Option::is_none")]

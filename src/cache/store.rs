@@ -104,7 +104,8 @@ pub(super) struct CacheStore {
     /// Shared with the GUILD_CREATE events that inserted them.
     pub(super) guilds: HashMap<GuildId, Arc<Guild>>,
     pub(super) channels: HashMap<ChannelId, Channel>,
-    pub(super) users: HashMap<UserId, User>,
+    /// Shared with the members and messages that carried them.
+    pub(super) users: HashMap<UserId, Arc<User>>,
     pub(super) members: HashMap<(GuildId, UserId), Arc<Member>>,
     pub(super) messages: HashMap<(ChannelId, MessageId), Arc<Message>>,
     pub(super) roles: HashMap<(GuildId, RoleId), Role>,

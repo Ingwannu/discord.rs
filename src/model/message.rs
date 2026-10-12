@@ -1,5 +1,7 @@
 //! Messages, message references, pins, reactions, and message search.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::types::Emoji;
@@ -19,8 +21,13 @@ pub struct Message {
     pub channel_id: ChannelId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<User>,
+    /// Shared with the cache's user store (see `CacheHandle::user_arc`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "super::user::shared_user"
+    )]
+    pub author: Option<Arc<User>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<Member>,
     #[serde(default)]

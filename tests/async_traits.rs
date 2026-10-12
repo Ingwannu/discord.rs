@@ -351,7 +351,7 @@ mod cache_backend {
             }))
             .expect("minimal user");
             let member = Member {
-                user: Some(user),
+                user: Some(Arc::new(user)),
                 ..Member::default()
             };
             backend

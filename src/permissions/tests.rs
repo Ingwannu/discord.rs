@@ -666,7 +666,7 @@ fn user(id: u64) -> User {
 
 fn member_model() -> Member {
     Member {
-        user: Some(user(MEMBER)),
+        user: Some(std::sync::Arc::new(user(MEMBER))),
         roles: vec![sf(ROLE_A), sf(ROLE_B)],
         ..Member::default()
     }
@@ -802,7 +802,7 @@ fn permissions_for_parses_the_timeout() {
 #[test]
 fn owner_model_gets_everything() {
     let mut member = member_model();
-    member.user = Some(user(OWNER));
+    member.user = Some(std::sync::Arc::new(user(OWNER)));
     let computed = guild_permissions(&guild_model(), &member, now()).unwrap();
     assert_eq!(computed.source, PermissionSource::Owner);
 }
@@ -1448,7 +1448,7 @@ fn channel_and_member_delegates_compute_permissions() {
 
 fn owner_member() -> Member {
     Member {
-        user: Some(user(OWNER)),
+        user: Some(std::sync::Arc::new(user(OWNER))),
         roles: vec![sf(ROLE_A), sf(ROLE_C)],
         ..Member::default()
     }
@@ -1554,7 +1554,7 @@ fn without_admin_the_first_missing_piece_is_reported() {
         guild_permissions(&guild, &member, now()).unwrap_err(),
         PermissionDataError::MissingMemberUser
     );
-    member.user = Some(user(MEMBER));
+    member.user = Some(std::sync::Arc::new(user(MEMBER)));
     assert_eq!(
         guild_permissions(&guild, &member, now()).unwrap_err(),
         PermissionDataError::MissingGuildOwner {

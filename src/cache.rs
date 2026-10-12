@@ -12,6 +12,8 @@ use crate::model::{
     SoundboardSoundId, StageInstance, StageInstanceId, Sticker, StickerId, User, UserId,
     VoiceState,
 };
+#[cfg(feature = "cache")]
+use crate::model::{Nullable, Patch};
 use crate::types::Emoji;
 
 #[path = "cache/config.rs"]
@@ -414,7 +416,7 @@ impl CacheHandle {
                 continue;
             };
             let user_id = user.id;
-            store.users.insert(user_id, user.clone());
+            store.users.insert(user_id, Arc::clone(user));
             remember_key(&mut store.user_order, user_id);
             insert_member_entry(&mut store, (guild_id, user_id), Arc::clone(member), now);
         }
@@ -545,7 +547,7 @@ impl CacheHandle {
                 continue;
             };
             let user_id = user.id;
-            store.users.insert(user_id, user.clone());
+            store.users.insert(user_id, Arc::clone(user));
             remember_key(&mut store.user_order, user_id);
             let key = (guild_id, user_id);
             insert_member_entry(&mut store, key, Arc::new(member.clone()), now);
@@ -624,14 +626,18 @@ impl CacheHandle {
         self.channel(channel_id).await.is_some()
     }
 
+    /// Stores a user. Pass the `Arc` a member or message holds
+    /// (`Member::user`, `Message::author`) to share it, or a plain `User`,
+    /// which is wrapped.
     #[cfg(feature = "cache")]
-    pub async fn upsert_user(&self, user: User) {
+    pub async fn upsert_user(&self, user: impl Into<Arc<User>>) {
+        let user = user.into();
         let mut store = self.store.write().await;
         self.insert_user(&mut store, user);
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_user(&self, _user: User) {}
+    pub async fn upsert_user(&self, _user: impl Into<Arc<User>>) {}
 
     /// Applies a partial user (MESSAGE_UPDATE's `author`) to the cached
     /// user under the write lock: sent fields replace, `null` clears, and
@@ -643,23 +649,37 @@ impl CacheHandle {
     /// Replacing the cached user with [`PartialUser::to_user`] instead would
     /// turn every omitted field into `None` and wipe, for example, a cached
     /// avatar on a username-only update.
+    ///
+    /// The cached user is often shared with the members and messages that
+    /// carried it; the patch goes into a new snapshot then, so those keep
+    /// the user as it was (copy-on-write).
     #[cfg(feature = "cache")]
     pub async fn apply_partial_user(&self, user: &PartialUser) {
         let mut store = self.store.write().await;
+        self.patch_user_locked(&mut store, user);
+    }
+
+    /// [`Self::apply_partial_user`] under a held lock; returns the cached user
+    /// after the patch, if there is one.
+    #[cfg(feature = "cache")]
+    fn patch_user_locked(&self, store: &mut CacheStore, user: &PartialUser) -> Option<Arc<User>> {
         if let Some(cached) = store.users.get_mut(&user.id) {
-            user.apply_to(cached);
+            user.apply_to(Arc::make_mut(cached));
+            let patched = Arc::clone(cached);
             // Refresh recency as the 2.x upsert of the author did.
             remember_key(&mut store.user_order, user.id);
-        } else if let Some(complete) = user.to_user() {
-            self.insert_user(&mut store, complete);
+            return Some(patched);
         }
+        let complete = Arc::new(user.to_user()?);
+        self.insert_user(store, Arc::clone(&complete));
+        Some(complete)
     }
 
     #[cfg(not(feature = "cache"))]
     pub async fn apply_partial_user(&self, _user: &PartialUser) {}
 
     #[cfg(feature = "cache")]
-    fn insert_user(&self, store: &mut CacheStore, user: User) {
+    fn insert_user(&self, store: &mut CacheStore, user: Arc<User>) {
         let user_id = user.id;
         store.users.insert(user_id, user);
         remember_key(&mut store.user_order, user_id);
@@ -681,7 +701,23 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn user(&self, user_id: UserId) -> Option<User> {
+        self.store
+            .read()
+            .await
+            .users
+            .get(&user_id)
+            .map(|user| (**user).clone())
+    }
+
+    /// The cached user as the shared `Arc` (no copy).
+    #[cfg(feature = "cache")]
+    pub async fn user_arc(&self, user_id: UserId) -> Option<Arc<User>> {
         self.store.read().await.users.get(&user_id).cloned()
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn user_arc(&self, _user_id: UserId) -> Option<Arc<User>> {
+        None
     }
 
     #[cfg(not(feature = "cache"))]
@@ -691,7 +727,13 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn users(&self) -> Vec<User> {
-        self.store.read().await.users.values().cloned().collect()
+        self.store
+            .read()
+            .await
+            .users
+            .values()
+            .map(|user| (**user).clone())
+            .collect()
     }
 
     #[cfg(not(feature = "cache"))]
@@ -854,16 +896,25 @@ impl CacheHandle {
     /// place when the cache holds the only reference, otherwise into a new
     /// snapshot, so an earlier event, collector, or handler holding the old
     /// `Arc<Message>` keeps seeing the message as it was.
+    ///
+    /// A partial `author` is applied to the cached user first, as
+    /// [`Self::apply_partial_user`] does, whether or not the message is
+    /// cached; the merged message then shares that user instead of patching
+    /// a copy of its own.
     #[cfg(feature = "cache")]
     pub async fn apply_message_update(&self, update: &MessageUpdate) -> Option<Arc<Message>> {
         let key = (update.channel_id, update.id);
         let now = Instant::now();
         let mut store = self.store.write().await;
+        let author = match &update.author {
+            Patch::Value(Nullable::Value(author)) => self.patch_user_locked(&mut store, author),
+            _ => None,
+        };
         if seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
             return None;
         }
         let cached = store.messages.get_mut(&key)?;
-        update.apply_to(Arc::make_mut(cached));
+        update.apply_with_author(Arc::make_mut(cached), author);
         let merged = Arc::clone(cached);
         // Refresh recency and TTL as replacing the entry did in 2.x.
         store.message_seen.insert(key, now);
@@ -1708,10 +1759,10 @@ mod tests {
                 guild_id,
                 test_id(base + 3),
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: test_id(base + 3),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2199,11 +2250,11 @@ mod tests {
                 guild_id,
                 user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "discordrs".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2220,11 +2271,11 @@ mod tests {
                 other_guild_id,
                 other_user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: other_user_id,
                         username: "other".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2395,11 +2446,11 @@ mod tests {
                 guild_id,
                 user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "discordrs".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2546,11 +2597,11 @@ mod tests {
                     guild_id,
                     user_id,
                     crate::model::Member {
-                        user: Some(User {
+                        user: Some(Arc::new(User {
                             id: user_id,
                             username: id.to_string(),
                             ..User::fixture()
-                        }),
+                        })),
                         ..crate::model::Member::default()
                     },
                 )
@@ -2635,11 +2686,11 @@ mod tests {
                 guild_id,
                 user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "expired".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2693,11 +2744,11 @@ mod tests {
                 guild_id,
                 user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "fresh".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2748,11 +2799,11 @@ mod tests {
                 guild_id,
                 user_id,
                 crate::model::Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "arc member".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..crate::model::Member::default()
                 },
             )
@@ -2826,11 +2877,11 @@ mod tests {
                     guild_id,
                     user_id,
                     Arc::new(crate::model::Member {
-                        user: Some(User {
+                        user: Some(Arc::new(User {
                             id: user_id,
                             username: "backend member".to_string(),
                             ..User::fixture()
-                        }),
+                        })),
                         ..crate::model::Member::default()
                     }),
                 )
@@ -2988,11 +3039,11 @@ mod tests {
                     guild_id,
                     user_id,
                     crate::model::Member {
-                        user: Some(User {
+                        user: Some(Arc::new(User {
                             id: user_id,
                             username: "soon-expired".to_string(),
                             ..User::fixture()
-                        }),
+                        })),
                         ..crate::model::Member::default()
                     },
                 )
@@ -3047,10 +3098,10 @@ mod tests {
                         guild,
                         user_id,
                         crate::model::Member {
-                            user: Some(User {
+                            user: Some(Arc::new(User {
                                 id: user_id,
                                 ..User::fixture()
-                            }),
+                            })),
                             ..crate::model::Member::default()
                         },
                     )
@@ -3530,11 +3581,11 @@ mod tests {
                     guild,
                     user,
                     crate::model::Member {
-                        user: Some(User {
+                        user: Some(Arc::new(User {
                             id: user,
                             username: username.to_string(),
                             ..User::fixture()
-                        }),
+                        })),
                         ..crate::model::Member::default()
                     },
                 )
@@ -3627,11 +3678,11 @@ mod tests {
             ..Channel::fixture()
         };
         let member = crate::model::Member {
-            user: Some(User {
+            user: Some(Arc::new(User {
                 id: user_id,
                 username: "discordrs".to_string(),
                 ..User::fixture()
-            }),
+            })),
             ..crate::model::Member::default()
         };
         let user = User {

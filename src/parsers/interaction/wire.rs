@@ -249,9 +249,11 @@ impl<'de> Visitor<'de> for InteractionVisitor {
         let member = member.flatten();
         // Discord sends `member` in guilds and `user` elsewhere; `user` is
         // filled from `member.user` so handlers find the invoker in one place.
-        let user = user
-            .flatten()
-            .or_else(|| member.as_ref().and_then(|member| member.user.clone()));
+        let user = user.flatten().or_else(|| {
+            member
+                .as_ref()
+                .and_then(|member| member.user.as_deref().cloned())
+        });
         let context = InteractionContextData {
             id: id.ok_or_else(|| de::Error::custom("missing or invalid interaction.id"))?,
             application_id: application_id.ok_or_else(|| {

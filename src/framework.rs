@@ -642,7 +642,7 @@ mod tests {
         let mut ctx = context("16");
         let user = ctx.user.take();
         ctx.member = Some(crate::model::Member {
-            user,
+            user: user.map(std::sync::Arc::new),
             ..crate::model::Member::default()
         });
         let interaction =

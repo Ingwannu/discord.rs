@@ -819,11 +819,11 @@ fn monetization_poll_and_thread_response_models_decode() {
     let thread_member = ThreadMember {
         user_id: Some(test_id(42)),
         member: Some(Member {
-            user: Some(User {
+            user: Some(std::sync::Arc::new(User {
                 id: test_id(42),
                 username: "member".to_string(),
                 ..User::fixture()
-            }),
+            })),
             ..Member::default()
         }),
         ..ThreadMember::default()

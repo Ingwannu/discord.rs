@@ -771,10 +771,10 @@ fn member_mention_and_message_clean_content_delegate() {
     use crate::model::{Member, Message, User};
 
     let member = Member {
-        user: Some(User {
+        user: Some(std::sync::Arc::new(User {
             id: test_id(80351110224678912),
             ..User::fixture()
-        }),
+        })),
         ..Member::default()
     };
     assert_eq!(member.mention().as_deref(), Some("<@80351110224678912>"));

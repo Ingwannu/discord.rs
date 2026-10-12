@@ -162,11 +162,11 @@ async fn apply_cache_updates_merges_partial_message_update_without_wiping_cached
             id: message_id,
             channel_id,
             content: "before".to_string(),
-            author: Some(User {
+            author: Some(Arc::new(User {
                 id: test_id(3),
                 username: "alice".to_string(),
                 ..User::fixture()
-            }),
+            })),
             attachments: vec![crate::model::Attachment {
                 id: test_id(4),
                 filename: "file.txt".to_string(),
@@ -288,11 +288,11 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
                 id: message_id,
                 channel_id,
                 guild_id: Some(guild_id),
-                author: Some(User {
+                author: Some(Arc::new(User {
                     id: user_id,
                     username: "author".to_string(),
                     ..User::fixture()
-                }),
+                })),
                 content: "hello".to_string(),
                 ..Message::fixture()
             })),
@@ -331,11 +331,11 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
                 channel_id: Some(channel_id),
                 user_id: Some(user_id),
                 member: Some(Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "voice".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..Member::default()
                 }),
                 ..VoiceState::default()
@@ -1242,11 +1242,11 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
             EventKind::MemberAdd(MemberEvent {
                 guild_id,
                 member: Arc::new(Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "alice".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     nick: Some("ally".to_string()),
                     ..Member::default()
                 }),
@@ -1679,11 +1679,11 @@ async fn event_handler_routes_additional_typed_hooks() {
                 EventKind::MemberAdd(MemberEvent {
                     guild_id: test_id(1),
                     member: Arc::new(Member {
-                        user: Some(User {
+                        user: Some(Arc::new(User {
                             id: test_id(2),
                             username: "alice".to_string(),
                             ..User::fixture()
-                        }),
+                        })),
                         ..Member::default()
                     }),
                 }),
@@ -1892,11 +1892,11 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             EventKind::MemberUpdate(MemberEvent {
                 guild_id,
                 member: Arc::new(Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: user_id,
                         username: "member".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..Member::default()
                 }),
             }),
@@ -2196,11 +2196,11 @@ async fn context_manager_accessors_reuse_the_underlying_cache() {
             guild_id,
             user_id,
             Member {
-                user: Some(User {
+                user: Some(Arc::new(User {
                     id: user_id,
                     username: "alice".to_string(),
                     ..User::fixture()
-                }),
+                })),
                 ..Member::default()
             },
         )
@@ -2310,11 +2310,11 @@ fn merge_message_update_only_overwrites_fields_present_in_raw_payload() {
         channel_id: test_id(10),
         guild_id: Some(test_id(20)),
         content: "before".to_string(),
-        author: Some(User {
+        author: Some(Arc::new(User {
             id: test_id(2),
             username: "alice".to_string(),
             ..User::fixture()
-        }),
+        })),
         pinned: Some(true),
         tts: Some(true),
         flags: Some(64),
@@ -2347,11 +2347,11 @@ fn merge_message_update_replaces_only_selected_complex_fields() {
         id: test_id(1),
         channel_id: test_id(10),
         guild_id: Some(test_id(20)),
-        author: Some(User {
+        author: Some(Arc::new(User {
             id: test_id(2),
             username: "alice".to_string(),
             ..User::fixture()
-        }),
+        })),
         member: Some(Member {
             nick: Some("ally".to_string()),
             ..Member::default()
@@ -3479,11 +3479,11 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
         EventKind::MemberAdd(MemberEvent {
             guild_id: test_id(1),
             member: Arc::new(Member {
-                user: Some(User {
+                user: Some(Arc::new(User {
                     id: test_id(2),
                     username: "wumpus".to_string(),
                     ..User::fixture()
-                }),
+                })),
                 ..Member::default()
             }),
         }),
@@ -3597,19 +3597,19 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
             guild_id: test_id(1),
             members: vec![
                 Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: test_id(2),
                         username: "first".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..Member::default()
                 },
                 Member {
-                    user: Some(User {
+                    user: Some(Arc::new(User {
                         id: test_id(3),
                         username: "second".to_string(),
                         ..User::fixture()
-                    }),
+                    })),
                     ..Member::default()
                 },
             ],
@@ -4755,6 +4755,61 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
+async fn members_and_messages_share_their_user_with_the_user_store() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild = decode_event(
+        "GUILD_CREATE",
+        json!({
+            "id": "9", "name": "g",
+            "members": [{ "user": { "id": "5", "username": "member" }, "roles": [] }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &guild).await;
+    let EventKind::GuildCreate(crate::model::GuildCreatePayload::Available(created)) = guild.kind()
+    else {
+        panic!("unexpected {guild:?}");
+    };
+    let member_user = created.members[0].user.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        member_user,
+        &cache.user_arc(test_id(5)).await.unwrap()
+    ));
+
+    let message = decode_event(
+        "MESSAGE_CREATE",
+        json!({ "id": "11", "channel_id": "10", "guild_id": "9", "content": "hi",
+                "author": { "id": "6", "username": "author", "avatar": "a1" } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &message).await;
+    let EventKind::MessageCreate(created) = message.kind() else {
+        panic!("unexpected {message:?}");
+    };
+    let author = created.author.as_ref().unwrap();
+    assert!(Arc::ptr_eq(
+        author,
+        &cache.user_arc(test_id(6)).await.unwrap()
+    ));
+
+    // An author patch makes one new snapshot that the store and the merged
+    // message share; the earlier event keeps the user as it was.
+    let edit = decode_event(
+        "MESSAGE_UPDATE",
+        json!({ "id": "11", "channel_id": "10", "author": { "id": "6", "username": "renamed" } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &edit).await;
+    let stored = cache.user_arc(test_id(6)).await.unwrap();
+    let merged = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+    assert_eq!(stored.username, "renamed");
+    assert_eq!(stored.avatar.as_deref(), Some("a1"));
+    assert!(Arc::ptr_eq(merged.author.as_ref().unwrap(), &stored));
+    assert_eq!(author.username, "author");
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
 async fn message_update_authors_patch_the_cached_user_instead_of_replacing_it() {
     let cache = crate::cache::CacheHandle::new();
     let create = decode_event(
@@ -5480,10 +5535,10 @@ fn member_chunk_progress_requires_every_chunk_index() {
         crate::event::GuildMembersChunkPayload {
             guild_id: test_id(42),
             members: vec![Member {
-                user: Some(User {
+                user: Some(Arc::new(User {
                     id: named_id(user_id),
                     ..User::fixture()
-                }),
+                })),
                 ..Member::default()
             }],
             chunk_index: index,

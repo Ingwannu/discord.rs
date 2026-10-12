@@ -26,8 +26,7 @@ use crate::error::DiscordError;
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, Nullable, Patch,
-    RoleId, UserId,
+    ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, RoleId, UserId,
 };
 #[cfg(feature = "sharding")]
 use crate::sharding::{
@@ -2801,7 +2800,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         EventKind::MemberAdd(event) | EventKind::MemberUpdate(event) => {
             if let Some(user) = event.member.user.as_ref() {
-                cache.upsert_user(user.clone()).await;
+                cache.upsert_user(Arc::clone(user)).await;
                 cache
                     .upsert_member(event.guild_id, user.id, Arc::clone(&event.member))
                     .await;
@@ -2819,7 +2818,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         }
         EventKind::MessageCreate(message) => {
             if let Some(author) = message.author.as_ref() {
-                cache.upsert_user(author.clone()).await;
+                cache.upsert_user(Arc::clone(author)).await;
             }
             // Gateway messages without a guild are DMs. Recording the DM
             // channel ties the message to shard 0 (the only shard Discord
@@ -2837,13 +2836,10 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             cache.upsert_message(Arc::clone(message)).await;
         }
         EventKind::MessageUpdate(update) => {
-            // A patch on the cached user, not a replacement: the author is
-            // often partial and must not clear what it omits.
-            if let Patch::Value(Nullable::Value(author)) = &update.author {
-                cache.apply_partial_user(author).await;
-            }
-            // Merges into the cached message only; an update alone is never
-            // stored as a message (its omitted fields are unknown).
+            // Patches the cached author (a patch, not a replacement: the
+            // author is often partial and must not clear what it omits),
+            // then merges into the cached message only; an update alone is
+            // never stored as a message (its omitted fields are unknown).
             cache.apply_message_update(update).await;
         }
         EventKind::MessageDelete(data) => {
@@ -2874,7 +2870,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         EventKind::VoiceStateUpdate(state) => {
             if let Some(member) = state.member.as_ref() {
                 if let Some(user) = member.user.as_ref() {
-                    cache.upsert_user(user.clone()).await;
+                    cache.upsert_user(Arc::clone(user)).await;
                     if let Some(guild_id) = state.guild_id {
                         cache.upsert_member(guild_id, user.id, member.clone()).await;
                     }

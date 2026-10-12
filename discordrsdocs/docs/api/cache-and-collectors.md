@@ -27,11 +27,12 @@ Since 3.0 (phase 4) `CacheHandle::apply_guild_create` takes the gateway's `Guild
 
 ### Shared Entries and Copy-on-Write Updates (3.0)
 
-The cache keeps messages, members, presences, and guilds as `Arc`s and shares them with the events that delivered them:
+The cache keeps messages, members, presences, guilds, and users as `Arc`s and shares them with the events that delivered them:
 
 - `upsert_message`, `upsert_member`, `upsert_presence`, and `upsert_guild` take `impl Into<Arc<T>>`: pass the `Arc` an event holds (`EventKind::MessageCreate(message)` → `upsert_message(Arc::clone(message))`) to share it, or a plain value, which is wrapped as before.
 - `apply_message_update(&MessageUpdate)` merges a MESSAGE_UPDATE into the cached message under the write lock and returns the merged `Arc<Message>`; a message that is not cached stays uncached, because an update alone is never stored. The merge is copy-on-write: in place when the cache holds the only reference, otherwise into a new snapshot, so an earlier event, collector, or handler that still holds the old `Arc<Message>` keeps seeing the message as it was.
 - `apply_partial_user(&PartialUser)` applies MESSAGE_UPDATE's `author` to the cached user under the write lock: sent fields replace, `null` clears, omitted fields keep their cached value, whether or not the message itself is cached. A user that is not cached is stored only when the author is complete (`PartialUser::to_user`, which needs `username`); an id alone never creates one. The gateway runtime calls it for every MESSAGE_UPDATE with an author.
+- Users are shared too (checkpoint C): `Member::user` and `Message::author` are `Option<Arc<User>>`, and the user store keeps the same `Arc` the member or message carries, so a large GUILD_CREATE no longer copies every member's user. `upsert_user` takes `impl Into<Arc<User>>`, `user_arc(id)` returns the shared `Arc`, and `user(id)` still returns an owned copy. A user patch (`apply_partial_user`, a MESSAGE_UPDATE `author`) goes into a new snapshot when the user is shared, so members and messages keep the user they arrived with; `apply_message_update` patches the cached author first and the merged message shares the patched user.
 - Cached objects are never mutated behind a shared `Arc`; there is no interior mutability on them.
 
 ### READY Invalidation per Shard (3.0)

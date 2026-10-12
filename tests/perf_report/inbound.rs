@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use discordrs::model::{GuildCreatePayload, Nullable, Patch, Presence};
+use discordrs::model::{GuildCreatePayload, Presence};
 use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -144,15 +144,13 @@ async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
         }
         EventKind::MessageCreate(message) => {
             if let Some(author) = message.author.as_ref() {
-                cache.upsert_user(author.clone()).await;
+                cache.upsert_user(Arc::clone(author)).await;
             }
             // The DM channel stub is skipped: the fixtures are guild messages.
             cache.upsert_message(Arc::clone(message)).await;
         }
         EventKind::MessageUpdate(update) => {
-            if let Patch::Value(Nullable::Value(author)) = &update.author {
-                cache.apply_partial_user(author).await;
-            }
+            // `apply_message_update` patches the cached author too.
             cache.apply_message_update(update).await;
         }
         EventKind::PresenceUpdate(event) => {
