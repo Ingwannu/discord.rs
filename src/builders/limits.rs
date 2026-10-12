@@ -36,6 +36,11 @@ pub(crate) const MAX_SELECT_OPTION_TEXT_LENGTH: usize = 100;
 /// Upper bound of a select menu's `min_values` (0-25) and `max_values`
 /// (1-25).
 pub(crate) const MAX_SELECT_VALUES: u8 = 25;
+/// What Discord uses for an omitted select menu `min_values` or
+/// `max_values`: "Minimum number of items that must be chosen (defaults to
+/// 1)" and "Maximum number of items that can be chosen (defaults to 1)" in
+/// every select menu structure.
+pub(crate) const DEFAULT_SELECT_VALUES: u8 = 1;
 /// Components in a Components V2 message, nested ones included: up to 40.
 pub(crate) const MAX_COMPONENTS_V2_TOTAL: usize = 40;
 /// Text display content: 1-4000 characters.

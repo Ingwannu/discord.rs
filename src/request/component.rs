@@ -811,19 +811,32 @@ impl CommonRef<'_> {
                 ));
             }
         }
-        if let (Some(min), Some(max)) = (self.min_values, self.max_values) {
-            if min > max {
-                return Err(at(
-                    path,
-                    format!("select menu min_values ({min}) must not exceed max_values ({max})"),
-                ));
-            }
+        // An omitted bound is Discord's default (1), so `min_values: 2`
+        // alone is already out of range.
+        let min = self.min_values.unwrap_or(limits::DEFAULT_SELECT_VALUES);
+        let max = self.max_values.unwrap_or(limits::DEFAULT_SELECT_VALUES);
+        if min > max {
+            let defaulted = |value: Option<u8>| {
+                if value.is_none() {
+                    ", the default when omitted"
+                } else {
+                    ""
+                }
+            };
+            return Err(at(
+                path,
+                format!(
+                    "select menu min_values ({min}{}) must not exceed max_values ({max}{})",
+                    defaulted(self.min_values),
+                    defaulted(self.max_values),
+                ),
+            ));
         }
         // "number of default values must be in the range defined by
         // `min_values` and `max_values`" (both default to 1).
         if let Some(count) = defaults.filter(|count| *count > 0) {
-            let min = usize::from(self.min_values.unwrap_or(1));
-            let max = usize::from(self.max_values.unwrap_or(1));
+            let min = usize::from(min);
+            let max = usize::from(max);
             if count < min || count > max {
                 return Err(at(
                     path,
@@ -1742,5 +1755,43 @@ pub(crate) fn entry_patch<M: SerializeMap, T: Serialize>(
     match value {
         Patch::Missing => Ok(()),
         Patch::Value(value) => map.serialize_entry(key, value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SelectMenu, StringSelect, UserSelect};
+    use crate::types::SelectOption;
+
+    fn error(select: impl Into<SelectMenu>) -> String {
+        let error = select.into().validate().unwrap_err().to_string();
+        error
+            .strip_prefix("Model error: ")
+            .unwrap_or(&error)
+            .to_owned()
+    }
+
+    #[test]
+    fn select_bounds_use_discords_defaults_when_omitted() {
+        let mut string = StringSelect::new("menu");
+        string.options = vec![SelectOption::new("a", "a"), SelectOption::new("b", "b")];
+        string.min_values = Some(2);
+        assert_eq!(
+            error(string.clone()),
+            "select menu min_values (2) must not exceed max_values (1, the default when omitted)"
+        );
+        string.max_values = Some(2);
+        SelectMenu::from(string).validate().expect("2..=2");
+
+        let mut user = UserSelect::new("who");
+        user.max_values = Some(3);
+        SelectMenu::from(user.clone())
+            .validate()
+            .expect("default min 1 <= 3");
+        user.min_values = Some(4);
+        assert_eq!(
+            error(user),
+            "select menu min_values (4) must not exceed max_values (3)"
+        );
     }
 }
