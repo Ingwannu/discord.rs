@@ -1,0 +1,89 @@
+{
+  "components": [
+    {
+      "accent_color": 5814783,
+      "components": [
+        {
+          "content": "## Server status\nAll shards healthy. Gateway latency is normal.",
+          "type": 10
+        },
+        {
+          "divider": true,
+          "spacing": 1,
+          "type": 14
+        },
+        {
+          "accessory": {
+            "description": "status icon",
+            "media": {
+              "url": "https://example.com/static/status-ok.png"
+            },
+            "type": 11
+          },
+          "components": [
+            {
+              "content": "**Shard 0-7**: 1,204 guilds, p50 41 ms",
+              "type": 10
+            },
+            {
+              "content": "**Shard 8-15**: 1,188 guilds, p50 39 ms",
+              "type": 10
+            }
+          ],
+          "type": 9
+        },
+        {
+          "items": [
+            {
+              "description": "latency chart",
+              "media": {
+                "url": "https://example.com/charts/latency-24h.png"
+              }
+            },
+            {
+              "description": "memory chart",
+              "media": {
+                "url": "https://example.com/charts/memory-24h.png"
+              }
+            }
+          ],
+          "type": 12
+        },
+        {
+          "divider": false,
+          "spacing": 2,
+          "type": 14
+        },
+        {
+          "components": [
+            {
+              "custom_id": "status:refresh",
+              "label": "Refresh",
+              "style": 1,
+              "type": 2
+            },
+            {
+              "custom_id": "status:details",
+              "label": "Details",
+              "style": 2,
+              "type": 2
+            },
+            {
+              "label": "Dashboard",
+              "style": 5,
+              "type": 2,
+              "url": "https://example.com/dashboard"
+            }
+          ],
+          "type": 1
+        }
+      ],
+      "type": 17
+    },
+    {
+      "content": "-# Updated <t:1791796641:R>",
+      "type": 10
+    }
+  ],
+  "flags": 32768
+}

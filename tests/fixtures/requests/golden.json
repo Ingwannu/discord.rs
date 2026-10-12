@@ -1,0 +1,797 @@
+{
+  "attachment.existing.full": {
+    "description": "alt",
+    "id": "42",
+    "is_spoiler": true
+  },
+  "attachment.existing.minimal": {
+    "id": "42"
+  },
+  "attachment.upload.full": {
+    "description": "",
+    "duration_secs": 0.0,
+    "filename": "voice.ogg",
+    "id": 0,
+    "is_spoiler": false,
+    "title": "t",
+    "waveform": ""
+  },
+  "attachment.upload.minimal": {
+    "id": 3
+  },
+  "button.custom.full": {
+    "custom_id": "delete",
+    "disabled": false,
+    "emoji": {
+      "animated": false,
+      "id": "11",
+      "name": "trash"
+    },
+    "id": 0,
+    "label": "",
+    "style": 4,
+    "type": 2
+  },
+  "button.custom.minimal": {
+    "custom_id": "go",
+    "style": 1,
+    "type": 2
+  },
+  "button.link.full": {
+    "disabled": false,
+    "emoji": {
+      "name": "📘"
+    },
+    "id": 3,
+    "label": "Docs",
+    "style": 5,
+    "type": 2,
+    "url": "https://example.com"
+  },
+  "button.link.minimal": {
+    "style": 5,
+    "type": 2,
+    "url": "https://example.com"
+  },
+  "button.premium.full": {
+    "disabled": true,
+    "id": 4,
+    "sku_id": "1234567890123",
+    "style": 6,
+    "type": 2
+  },
+  "button.premium.minimal": {
+    "sku_id": "1",
+    "style": 6,
+    "type": 2
+  },
+  "container.full": {
+    "accent_color": 0,
+    "components": [
+      {
+        "content": "in",
+        "type": 10
+      },
+      {
+        "components": [
+          {
+            "custom_id": "who",
+            "default_values": [
+              {
+                "id": "7",
+                "type": "user"
+              }
+            ],
+            "type": 5
+          }
+        ],
+        "type": 1
+      },
+      {
+        "accessory": {
+          "disabled": false,
+          "emoji": {
+            "name": "📘"
+          },
+          "id": 3,
+          "label": "Docs",
+          "style": 5,
+          "type": 2,
+          "url": "https://example.com"
+        },
+        "components": [
+          {
+            "content": "a",
+            "type": 10
+          }
+        ],
+        "type": 9
+      },
+      {
+        "id": 14,
+        "items": [
+          {
+            "media": {
+              "url": "https://e.co/1.png"
+            }
+          },
+          {
+            "description": "",
+            "media": {
+              "url": "https://e.co/2.png"
+            },
+            "spoiler": false
+          }
+        ],
+        "type": 12
+      },
+      {
+        "file": {
+          "url": "attachment://a.zip"
+        },
+        "id": 15,
+        "spoiler": false,
+        "type": 13
+      },
+      {
+        "type": 14
+      },
+      {
+        "future": [
+          1,
+          null
+        ],
+        "type": 99
+      }
+    ],
+    "id": 17,
+    "spoiler": false,
+    "type": 17
+  },
+  "container.minimal": {
+    "components": [],
+    "type": 17
+  },
+  "create_followup.full": {
+    "allowed_mentions": {},
+    "attachments": [],
+    "components": [
+      {
+        "components": [
+          {
+            "custom_id": "delete",
+            "disabled": false,
+            "emoji": {
+              "animated": false,
+              "id": "11",
+              "name": "trash"
+            },
+            "id": 0,
+            "label": "",
+            "style": 4,
+            "type": 2
+          },
+          {
+            "disabled": false,
+            "emoji": {
+              "name": "📘"
+            },
+            "id": 3,
+            "label": "Docs",
+            "style": 5,
+            "type": 2,
+            "url": "https://example.com"
+          },
+          {
+            "disabled": true,
+            "id": 4,
+            "sku_id": "1234567890123",
+            "style": 6,
+            "type": 2
+          }
+        ],
+        "type": 1
+      }
+    ],
+    "content": "hi",
+    "embeds": [
+      {
+        "author": {
+          "icon_url": "https://e.co/a.png",
+          "name": "a",
+          "url": "https://e.co/a"
+        },
+        "color": 0,
+        "description": "",
+        "fields": [
+          {
+            "inline": false,
+            "name": "n",
+            "value": "v"
+          }
+        ],
+        "footer": {
+          "text": "f"
+        },
+        "image": {
+          "url": "https://e.co/i.png"
+        },
+        "thumbnail": {
+          "url": "https://e.co/t.png"
+        },
+        "timestamp": "2026-10-12T00:00:00.000Z",
+        "title": "T",
+        "url": "https://e.co"
+      }
+    ],
+    "flags": 64,
+    "poll": {
+      "answers": [
+        {
+          "poll_media": {
+            "text": "A"
+          }
+        }
+      ],
+      "question": {
+        "text": "Q"
+      }
+    },
+    "tts": false
+  },
+  "create_message.empty": {},
+  "create_message.full": {
+    "allowed_mentions": {
+      "replied_user": false,
+      "roles": [
+        "8"
+      ]
+    },
+    "attachments": [
+      {
+        "description": "alt",
+        "id": "42",
+        "is_spoiler": true
+      },
+      {
+        "description": "",
+        "duration_secs": 0.0,
+        "filename": "voice.ogg",
+        "id": 0,
+        "is_spoiler": false,
+        "title": "t",
+        "waveform": ""
+      }
+    ],
+    "components": [],
+    "content": "",
+    "embeds": [],
+    "enforce_nonce": true,
+    "flags": 0,
+    "message_reference": {
+      "message_id": "5",
+      "type": 0
+    },
+    "nonce": "n-1",
+    "poll": {
+      "allow_multiselect": false,
+      "answers": [
+        {
+          "poll_media": {
+            "text": "yes"
+          }
+        },
+        {
+          "poll_media": {
+            "emoji": {
+              "name": "👎"
+            },
+            "text": "no"
+          }
+        }
+      ],
+      "duration": 0,
+      "layout_type": 1,
+      "question": {
+        "text": "Q?"
+      }
+    },
+    "shared_client_theme": {
+      "base_mix": 58,
+      "colors": [
+        "5865F2"
+      ],
+      "gradient_angle": 0
+    },
+    "sticker_ids": [
+      "6"
+    ],
+    "tts": false
+  },
+  "edit_message.missing": {},
+  "edit_message.nulls": {
+    "allowed_mentions": null,
+    "attachments": null,
+    "components": null,
+    "content": null,
+    "embeds": null,
+    "flags": null
+  },
+  "edit_message.v2_transition": {
+    "components": [
+      {
+        "content": "x",
+        "type": 10
+      }
+    ],
+    "content": null,
+    "embeds": [],
+    "flags": 32768,
+    "poll": null,
+    "sticker_ids": []
+  },
+  "edit_message.values": {
+    "allowed_mentions": {},
+    "attachments": [
+      {
+        "id": "42"
+      }
+    ],
+    "components": [],
+    "content": "",
+    "embeds": [],
+    "flags": 4
+  },
+  "edit_webhook_message.clear_poll": {
+    "poll": null
+  },
+  "edit_webhook_message.missing": {},
+  "edit_webhook_message.values": {
+    "attachments": [],
+    "components": [
+      {
+        "content": "x",
+        "type": 10
+      }
+    ],
+    "content": "c",
+    "embeds": [],
+    "flags": 32768,
+    "poll": {
+      "answers": [
+        {
+          "poll_media": {
+            "text": "A"
+          }
+        }
+      ],
+      "question": {
+        "text": "Q"
+      }
+    }
+  },
+  "embed.empty": {},
+  "embed.full": {
+    "author": {
+      "icon_url": "https://e.co/a.png",
+      "name": "a",
+      "url": "https://e.co/a"
+    },
+    "color": 0,
+    "description": "",
+    "fields": [
+      {
+        "inline": false,
+        "name": "n",
+        "value": "v"
+      }
+    ],
+    "footer": {
+      "text": "f"
+    },
+    "image": {
+      "url": "https://e.co/i.png"
+    },
+    "thumbnail": {
+      "url": "https://e.co/t.png"
+    },
+    "timestamp": "2026-10-12T00:00:00.000Z",
+    "title": "T",
+    "url": "https://e.co"
+  },
+  "execute_webhook.empty": {},
+  "execute_webhook.full": {
+    "allowed_mentions": {},
+    "applied_tags": [
+      "10"
+    ],
+    "attachments": [],
+    "avatar_url": "https://e.co/a.png",
+    "components": [],
+    "content": "c",
+    "embeds": [],
+    "flags": 4096,
+    "poll": {
+      "answers": [
+        {
+          "poll_media": {
+            "text": "A"
+          }
+        }
+      ],
+      "question": {
+        "text": "Q"
+      }
+    },
+    "thread_name": "t",
+    "tts": false,
+    "username": "u"
+  },
+  "file.full": {
+    "file": {
+      "url": "attachment://a.zip"
+    },
+    "id": 15,
+    "spoiler": false,
+    "type": 13
+  },
+  "file.minimal": {
+    "file": {
+      "url": "attachment://a.zip"
+    },
+    "type": 13
+  },
+  "interaction_message.empty": {},
+  "interaction_message.full": {
+    "allowed_mentions": {},
+    "attachments": [],
+    "components": [
+      {
+        "components": [
+          {
+            "custom_id": "delete",
+            "disabled": false,
+            "emoji": {
+              "animated": false,
+              "id": "11",
+              "name": "trash"
+            },
+            "id": 0,
+            "label": "",
+            "style": 4,
+            "type": 2
+          },
+          {
+            "disabled": false,
+            "emoji": {
+              "name": "📘"
+            },
+            "id": 3,
+            "label": "Docs",
+            "style": 5,
+            "type": 2,
+            "url": "https://example.com"
+          },
+          {
+            "disabled": true,
+            "id": 4,
+            "sku_id": "1234567890123",
+            "style": 6,
+            "type": 2
+          }
+        ],
+        "type": 1
+      }
+    ],
+    "content": "hi",
+    "embeds": [
+      {
+        "author": {
+          "icon_url": "https://e.co/a.png",
+          "name": "a",
+          "url": "https://e.co/a"
+        },
+        "color": 0,
+        "description": "",
+        "fields": [
+          {
+            "inline": false,
+            "name": "n",
+            "value": "v"
+          }
+        ],
+        "footer": {
+          "text": "f"
+        },
+        "image": {
+          "url": "https://e.co/i.png"
+        },
+        "thumbnail": {
+          "url": "https://e.co/t.png"
+        },
+        "timestamp": "2026-10-12T00:00:00.000Z",
+        "title": "T",
+        "url": "https://e.co"
+      }
+    ],
+    "flags": 64,
+    "poll": {
+      "answers": [
+        {
+          "poll_media": {
+            "text": "A"
+          }
+        }
+      ],
+      "question": {
+        "text": "Q"
+      }
+    },
+    "tts": false
+  },
+  "media_gallery": {
+    "id": 14,
+    "items": [
+      {
+        "media": {
+          "url": "https://e.co/1.png"
+        }
+      },
+      {
+        "description": "",
+        "media": {
+          "url": "https://e.co/2.png"
+        },
+        "spoiler": false
+      }
+    ],
+    "type": 12
+  },
+  "media_gallery.empty": {
+    "items": [],
+    "type": 12
+  },
+  "poll.full": {
+    "allow_multiselect": false,
+    "answers": [
+      {
+        "poll_media": {
+          "text": "yes"
+        }
+      },
+      {
+        "poll_media": {
+          "emoji": {
+            "name": "👎"
+          },
+          "text": "no"
+        }
+      }
+    ],
+    "duration": 0,
+    "layout_type": 1,
+    "question": {
+      "text": "Q?"
+    }
+  },
+  "raw": {
+    "future": [
+      1,
+      null
+    ],
+    "type": 99
+  },
+  "row.buttons": {
+    "components": [
+      {
+        "custom_id": "delete",
+        "disabled": false,
+        "emoji": {
+          "animated": false,
+          "id": "11",
+          "name": "trash"
+        },
+        "id": 0,
+        "label": "",
+        "style": 4,
+        "type": 2
+      },
+      {
+        "disabled": false,
+        "emoji": {
+          "name": "📘"
+        },
+        "id": 3,
+        "label": "Docs",
+        "style": 5,
+        "type": 2,
+        "url": "https://example.com"
+      },
+      {
+        "disabled": true,
+        "id": 4,
+        "sku_id": "1234567890123",
+        "style": 6,
+        "type": 2
+      }
+    ],
+    "type": 1
+  },
+  "row.buttons.empty": {
+    "components": [],
+    "type": 1
+  },
+  "section.button": {
+    "accessory": {
+      "disabled": false,
+      "emoji": {
+        "name": "📘"
+      },
+      "id": 3,
+      "label": "Docs",
+      "style": 5,
+      "type": 2,
+      "url": "https://example.com"
+    },
+    "components": [
+      {
+        "content": "a",
+        "type": 10
+      }
+    ],
+    "type": 9
+  },
+  "section.thumbnail": {
+    "accessory": {
+      "description": "",
+      "id": 12,
+      "media": {
+        "url": "attachment://t.png"
+      },
+      "spoiler": false,
+      "type": 11
+    },
+    "components": [
+      {
+        "content": "a",
+        "type": 10
+      },
+      {
+        "content": "b",
+        "type": 10
+      }
+    ],
+    "id": 13,
+    "type": 9
+  },
+  "select.channel": {
+    "channel_types": [
+      0,
+      11
+    ],
+    "custom_id": "where",
+    "default_values": [
+      {
+        "id": "9",
+        "type": "channel"
+      }
+    ],
+    "type": 8
+  },
+  "select.channel.empty_types": {
+    "channel_types": [],
+    "custom_id": "where",
+    "type": 8
+  },
+  "select.mentionable": {
+    "custom_id": "any",
+    "default_values": [
+      {
+        "id": "7",
+        "type": "user"
+      },
+      {
+        "id": "8",
+        "type": "role"
+      }
+    ],
+    "max_values": 2,
+    "type": 7
+  },
+  "select.role": {
+    "custom_id": "roles",
+    "default_values": [
+      {
+        "id": "8",
+        "type": "role"
+      }
+    ],
+    "max_values": 2,
+    "type": 6
+  },
+  "select.string.full": {
+    "components": [
+      {
+        "custom_id": "pick",
+        "disabled": false,
+        "id": 5,
+        "max_values": 25,
+        "min_values": 0,
+        "options": [
+          {
+            "label": "One",
+            "value": "1"
+          },
+          {
+            "default": false,
+            "description": "second",
+            "emoji": {
+              "name": "2️⃣"
+            },
+            "label": "Two",
+            "value": "2"
+          }
+        ],
+        "placeholder": "",
+        "required": false,
+        "type": 3
+      }
+    ],
+    "type": 1
+  },
+  "select.string.minimal": {
+    "custom_id": "pick",
+    "options": [],
+    "type": 3
+  },
+  "select.user": {
+    "custom_id": "who",
+    "default_values": [
+      {
+        "id": "7",
+        "type": "user"
+      }
+    ],
+    "type": 5
+  },
+  "separator.full": {
+    "divider": false,
+    "id": 16,
+    "spacing": 2,
+    "type": 14
+  },
+  "separator.minimal": {
+    "type": 14
+  },
+  "text_display": {
+    "content": "",
+    "type": 10
+  },
+  "thumbnail.full": {
+    "description": "",
+    "id": 12,
+    "media": {
+      "url": "attachment://t.png"
+    },
+    "spoiler": false,
+    "type": 11
+  },
+  "thumbnail.minimal": {
+    "media": {
+      "url": "https://e.co/t.png"
+    },
+    "type": 11
+  },
+  "update_message.empty": {},
+  "update_message.v2": {
+    "components": [
+      {
+        "content": "x",
+        "type": 10
+      }
+    ],
+    "content": null,
+    "flags": 32768,
+    "poll": null
+  }
+}
