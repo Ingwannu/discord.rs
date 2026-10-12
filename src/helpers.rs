@@ -106,7 +106,7 @@ pub async fn send_container_message(
 pub async fn send_message(
     http: &DiscordHttpClient,
     channel_id: ChannelId,
-    body: &CreateMessage,
+    body: &crate::request::CreateMessage,
 ) -> Result<Message, DiscordError> {
     http.create_message(channel_id, body).await
 }

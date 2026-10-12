@@ -41,11 +41,11 @@ use crate::error::DiscordError;
 use crate::http::RestClient;
 use crate::model::{
     Channel, ChannelId, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateMessage, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member,
-    Message, MessageReference, MfaLevel, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role,
-    RoleId, User, UserId,
+    CreateGuildRole, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member, Message,
+    MessageReference, MfaLevel, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, RoleId,
+    User, UserId,
 };
-use crate::request::{ModifyChannel, StartThreadFromMessage};
+use crate::request::{CreateMessage, EditMessage, ModifyChannel, StartThreadFromMessage};
 
 /// Discord CDN base used by the synchronous URL helpers.
 const CDN_BASE: &str = "https://cdn.discordapp.com";
@@ -57,24 +57,16 @@ const CDN_BASE: &str = "https://cdn.discordapp.com";
 /// Builds the `CreateMessage` body for replying to `message` with `content`,
 /// keeping `fail_if_not_exists` at Discord's default.
 fn reply_body(message: &Message, content: &str) -> CreateMessage {
-    CreateMessage {
-        content: Some(content.to_string()),
-        message_reference: Some(MessageReference::reply(message.id)),
-        ..CreateMessage::default()
-    }
+    CreateMessage::new()
+        .content(content)
+        .message_reference(MessageReference::reply(message.id))
 }
 
 /// Builds a `CreateMessage` carrying only `content`.
 fn content_body(content: &str) -> CreateMessage {
-    CreateMessage {
-        content: Some(content.to_string()),
-        ..CreateMessage::default()
-    }
+    CreateMessage::new().content(content)
 }
 
-/// Builds the JSON body for `POST .../messages/{id}/threads`. The crate has
-/// no typed request struct for this route (`create_thread_from_message`
-/// takes `&Value`), so the body is assembled here in one audited place.
 /// Builds the ban request body, mapping `None` to "delete nothing".
 fn ban_body(delete_message_seconds: Option<u64>) -> CreateGuildBan {
     CreateGuildBan {
@@ -144,18 +136,22 @@ impl Message {
         http: &RestClient,
         content: impl AsRef<str>,
     ) -> Result<Message, DiscordError> {
-        http.update_message(self.channel_id, self.id, &content_body(content.as_ref()))
-            .await
+        http.edit_message(
+            self.channel_id,
+            self.id,
+            &EditMessage::new().content(content.as_ref()),
+        )
+        .await
     }
 
-    /// Edits this message with a full [`CreateMessage`] body (embeds,
+    /// Edits this message with a full [`EditMessage`] body (embeds,
     /// components, flags, ...) and returns the updated message.
     pub async fn edit_with(
         &self,
         http: &RestClient,
-        body: &CreateMessage,
+        body: &EditMessage,
     ) -> Result<Message, DiscordError> {
-        http.update_message(self.channel_id, self.id, body).await
+        http.edit_message(self.channel_id, self.id, body).await
     }
 
     /// Deletes this message.

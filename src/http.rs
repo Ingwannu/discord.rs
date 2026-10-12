@@ -53,7 +53,7 @@ mod voice;
 mod webhook;
 
 use crate::error::DiscordError;
-use crate::model::{AllowedMentions, ApplicationId, CreateMessage};
+use crate::model::{AllowedMentions, ApplicationId};
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
@@ -654,22 +654,6 @@ impl RestClient {
 }
 
 impl RestClient {
-    /// Fills `allowed_mentions` from the configured default when the typed
-    /// message body leaves it unset. Borrow-through when nothing changes.
-    pub(super) fn message_with_default_allowed_mentions<'a>(
-        &self,
-        body: &'a CreateMessage,
-    ) -> Cow<'a, CreateMessage> {
-        match (&self.default_allowed_mentions, &body.allowed_mentions) {
-            (Some(default), None) => {
-                let mut body = body.clone();
-                body.allowed_mentions = Some(default.clone());
-                Cow::Owned(body)
-            }
-            _ => Cow::Borrowed(body),
-        }
-    }
-
     /// Inserts the configured default `allowed_mentions` into a raw JSON
     /// object payload that does not already contain the key.
     pub(super) fn json_with_default_allowed_mentions<'a>(&self, body: &'a Value) -> Cow<'a, Value> {

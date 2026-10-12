@@ -295,9 +295,9 @@ route_manifest! {
     // --- Messages, reactions, pins, polls (worker A owns the bodies) --------
     GetChannelMessages: GET "/channels/{channel.id}/messages" bot, query [around, before, after, limit], body () => Vec<Message>, api [get_channel_messages, get_channel_messages_paginated];
     GetChannelMessage: GET "/channels/{channel.id}/messages/{message.id}" bot, query [], body () => Message, api [get_message];
-    CreateMessage: POST "/channels/{channel.id}/messages" bot, query [], body CreateMessage => Message, api [create_message, create_message_with_files, forward_message, send_message_json];
+    CreateMessage: POST "/channels/{channel.id}/messages" bot, query [], body crate::request::CreateMessage => Message, api [create_message, create_message_with_files, forward_message, send_message_json];
     CrosspostMessage: POST "/channels/{channel.id}/messages/{message.id}/crosspost" bot, query [], body () => Message, api [crosspost_message];
-    EditMessage: PATCH "/channels/{channel.id}/messages/{message.id}" bot, query [], body CreateMessage => Message, api [update_message, update_message_with_files, edit_message_json];
+    EditMessage: PATCH "/channels/{channel.id}/messages/{message.id}" bot, query [], body crate::request::EditMessage => Message, api [edit_message, edit_message_with_files, edit_message_json], was [update_message => edit_message, update_message_with_files => edit_message_with_files];
     DeleteMessage: DELETE "/channels/{channel.id}/messages/{message.id}" bot, query [], body () => (), api [delete_message];
     BulkDeleteMessages: POST "/channels/{channel.id}/messages/bulk-delete" bot, query [], body [MessageId] => (), api [bulk_delete_messages];
     SearchGuildMessages: GET "/guilds/{guild.id}/messages/search" bot, query [limit, offset, max_id, min_id, slop, content, channel_id, author_type, author_id, mentions, mentions_role_id, mention_everyone, replied_to_user_id, replied_to_message_id, pinned, has, embed_type, embed_provider, link_hostname, attachment_filename, attachment_extension, sort_by, sort_order, include_nsfw], body () => SearchGuildMessagesResponse, api [search_guild_messages];
@@ -486,11 +486,11 @@ route_manifest! {
     ModifyWebhookWithToken: PATCH "/webhooks/{webhook.id}/{webhook.token}" token, query [], body ModifyWebhookWithToken => Webhook, api [modify_webhook_with_token], was [modify_webhook_with_token_typed => modify_webhook_with_token, modify_webhook_with_token_from_request => modify_webhook_with_token];
     DeleteWebhook: DELETE "/webhooks/{webhook.id}" bot, query [], body () => (), api [delete_webhook];
     DeleteWebhookWithToken: DELETE "/webhooks/{webhook.id}/{webhook.token}" token, query [], body () => (), api [delete_webhook_with_token];
-    ExecuteWebhook: POST "/webhooks/{webhook.id}/{webhook.token}" token, query [wait, thread_id, with_components], body Value => Value, api [execute_webhook, execute_webhook_with_query, execute_webhook_with_files];
+    ExecuteWebhook: POST "/webhooks/{webhook.id}/{webhook.token}" token, query [wait, thread_id, with_components], body crate::request::ExecuteWebhook => Option<Message>, api [execute_webhook, execute_webhook_with_query, execute_webhook_with_files];
     ExecuteSlackCompatibleWebhook: POST "/webhooks/{webhook.id}/{webhook.token}/slack" token, query [wait, thread_id], body Value => Value, api [execute_slack_compatible_webhook];
     ExecuteGitHubCompatibleWebhook: POST "/webhooks/{webhook.id}/{webhook.token}/github" token, query [wait, thread_id], body Value => Value, api [execute_github_compatible_webhook];
     GetWebhookMessage: GET "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}" token, query [thread_id], body () => Message, api [get_webhook_message, get_webhook_message_with_query];
-    EditWebhookMessage: PATCH "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}" token, query [thread_id, with_components], body CreateMessage => Message, api [edit_webhook_message, edit_webhook_message_with_query, edit_webhook_message_with_files, edit_webhook_message_with_files_and_query];
+    EditWebhookMessage: PATCH "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}" token, query [thread_id, with_components], body crate::request::EditWebhookMessage => Message, api [edit_webhook_message, edit_webhook_message_with_query, edit_webhook_message_with_files, edit_webhook_message_with_files_and_query];
     DeleteWebhookMessage: DELETE "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}" token, query [thread_id], body () => (), api [delete_webhook_message, delete_webhook_message_with_query];
 
     // --- OAuth2 token endpoints (`OAuth2Client`, not `RestClient`) ---------

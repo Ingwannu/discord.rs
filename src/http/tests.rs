@@ -49,7 +49,8 @@ use crate::model::{
 };
 use crate::request::{
     CreateApplicationEmoji, CreateAutoModerationRule, CreateGuildEmoji, CreateGuildScheduledEvent,
-    CreateGuildSoundboardSound, CreateGuildTemplate, EditApplicationCommand,
+    CreateGuildSoundboardSound, CreateGuildTemplate, CreateMessage as RequestCreateMessage,
+    EditApplicationCommand, EditMessage, EditWebhookMessage, ExecuteWebhook,
     ModifyApplicationEmoji, ModifyAutoModerationRule, ModifyChannel, ModifyGuildEmoji,
     ModifyGuildScheduledEvent, ModifyGuildSoundboardSound, ModifyGuildTemplate,
     SendSoundboardSound, StartThreadFromMessage, StartThreadWithoutMessage,
@@ -676,6 +677,18 @@ fn sample_message() -> CreateMessage {
         content: Some("hello".to_string()),
         ..CreateMessage::default()
     }
+}
+
+fn sample_create() -> RequestCreateMessage {
+    RequestCreateMessage::new().content("hello")
+}
+
+fn sample_edit() -> EditMessage {
+    EditMessage::new().content("hello")
+}
+
+fn sample_webhook_edit() -> EditWebhookMessage {
+    EditWebhookMessage::new().content("hello")
 }
 
 fn sample_interaction_response() -> InteractionCallbackResponse {
@@ -1658,12 +1671,11 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("file-token", 123, base_url);
-    let body = sample_message();
     let files = vec![sample_file("hello.txt", "hello file")];
 
     assert_eq!(
         client
-            .create_message_with_files(test_id(100), &body, &files)
+            .create_message_with_files(test_id(100), &sample_create(), &files)
             .await
             .expect("create message with files")
             .content,
@@ -1671,9 +1683,9 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
     );
     assert_eq!(
         client
-            .update_message_with_files(test_id(100), test_id(701), &body, &files,)
+            .edit_message_with_files(test_id(100), test_id(701), &sample_edit(), &files)
             .await
-            .expect("update message with files")
+            .expect("edit message with files")
             .content,
         "updated"
     );
@@ -1703,7 +1715,7 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
 #[tokio::test]
 async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     let responses = vec![
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "800" })),
+        PlannedResponse::json(StatusCode::OK, message_payload("800", "500", "webhook")),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(StatusCode::OK, message_payload("801", "500", "followup")),
         PlannedResponse::json(StatusCode::OK, message_payload("802", "500", "original")),
@@ -1721,12 +1733,14 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
             .execute_webhook_with_files(
                 test_id(777),
                 "token",
-                &json!({ "content": "webhook" }),
+                &ExecuteWebhook::new().content("webhook"),
                 &files,
             )
             .await
-            .expect("execute webhook with files")["id"],
-        json!("800")
+            .expect("execute webhook with files")
+            .id
+            .get(),
+        800
     );
     client
         .create_interaction_response_with_files(
@@ -1800,7 +1814,6 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("bot-token", 123, base_url);
-    let body = sample_message();
     let files = vec![sample_file("webhook.txt", "webhook file")];
 
     assert_eq!(
@@ -1813,7 +1826,7 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message(test_id(777), "token", "900", &body)
+            .edit_webhook_message(test_id(777), "token", "900", &sample_webhook_edit())
             .await
             .expect("edit webhook message")
             .content,
@@ -1821,7 +1834,13 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message_with_files(test_id(777), "token", "900", &body, &files,)
+            .edit_webhook_message_with_files(
+                test_id(777),
+                "token",
+                "900",
+                &sample_webhook_edit(),
+                &files,
+            )
             .await
             .expect("edit webhook message with files")
             .content,
@@ -1872,7 +1891,6 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("bot-token", 123, base_url);
-    let body = sample_message();
     let files = vec![sample_file("webhook.txt", "webhook file")];
     let thread_query = WebhookMessageQuery {
         thread_id: Some(test_id(42)),
@@ -1893,7 +1911,13 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message_with_query(test_id(777), "token", "900", &edit_query, &body,)
+            .edit_webhook_message_with_query(
+                test_id(777),
+                "token",
+                "900",
+                &edit_query,
+                &sample_webhook_edit(),
+            )
             .await
             .expect("edit webhook message with query")
             .content,
@@ -1906,7 +1930,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
                 "token",
                 "900",
                 &edit_query,
-                &body,
+                &sample_webhook_edit(),
                 &files,
             )
             .await
@@ -1955,7 +1979,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
         PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
         PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
         PlannedResponse::json(StatusCode::OK, json!({ "id": "700", "type": 1 })),
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "800", "content": "query" })),
+        PlannedResponse::json(StatusCode::OK, message_payload("800", "700", "query")),
         PlannedResponse::json(StatusCode::OK, json!({ "ok": "slack" })),
         PlannedResponse::json(StatusCode::OK, json!({ "ok": "github" })),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
@@ -2016,11 +2040,14 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
                 test_id(700),
                 "token",
                 &query,
-                &json!({ "content": "query" }),
+                &ExecuteWebhook::new().content("query"),
             )
             .await
-            .expect("execute webhook with query")["id"],
-        json!("800")
+            .expect("execute webhook with query")
+            .expect("wait=true returns the message")
+            .id
+            .get(),
+        800
     );
     assert_eq!(
         client
@@ -5581,7 +5608,7 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
 
     assert_model_error_contains(
         client
-            .execute_webhook(test_id(456), "bad/token", &json!({}))
+            .execute_webhook(test_id(456), "bad/token", &ExecuteWebhook::new())
             .await
             .unwrap_err(),
         "webhook_token",
@@ -5772,18 +5799,17 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("token", 321, base_url);
-    let body = sample_message();
 
     let created = client
-        .create_message(test_id(100), &body)
+        .create_message(test_id(100), &sample_create())
         .await
         .expect("create message");
     assert_eq!(created.content, "hello");
 
     let updated = client
-        .update_message(test_id(100), test_id(1), &body)
+        .edit_message(test_id(100), test_id(1), &sample_edit())
         .await
-        .expect("update message");
+        .expect("edit message");
     assert_eq!(updated.content, "updated");
 
     let fetched = client
@@ -6954,7 +6980,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
             StatusCode::TOO_MANY_REQUESTS,
             json!({ "retry_after": 0.0, "global": false }),
         ),
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "901" })),
+        PlannedResponse::json(StatusCode::OK, message_payload("901", "500", "hook")),
         PlannedResponse::json(StatusCode::OK, channel_payload("500", 1, None)),
         PlannedResponse::json(StatusCode::OK, channel_payload("501", 3, Some("group"))),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
@@ -7008,10 +7034,14 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert!(fallback.is_empty());
 
     let executed = client
-        .execute_webhook(test_id(777), "token", &json!({ "content": "hook" }))
+        .execute_webhook(
+            test_id(777),
+            "token",
+            &ExecuteWebhook::new().content("hook"),
+        )
         .await
         .expect("execute webhook with retry");
-    assert_eq!(executed["id"], json!("901"));
+    assert_eq!(executed.id.get(), 901);
 
     let dm = client
         .create_dm_channel(&crate::model::CreateDmChannel {
@@ -7275,7 +7305,7 @@ async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
     }
 
     match client
-        .execute_webhook(test_id(9), "token", &json!({ "content": "boom" }))
+        .execute_webhook(test_id(9), "token", &ExecuteWebhook::new().content("boom"))
         .await
         .unwrap_err()
     {
@@ -7411,13 +7441,7 @@ async fn server_errors_are_not_replayed_for_post_requests() {
 
     let client = RestClient::new_with_base_url("no-replay-token", 123, base_url);
     let error = client
-        .create_message(
-            test_id(9),
-            &CreateMessage {
-                content: Some("hello".to_string()),
-                ..CreateMessage::default()
-            },
-        )
+        .create_message(test_id(9), &RequestCreateMessage::new().content("hello"))
         .await
         .expect_err("a 502 on POST must surface instead of being replayed");
     assert!(
@@ -7444,12 +7468,9 @@ async fn server_errors_are_replayed_for_nonce_enforced_message_creates() {
     client
         .create_message(
             test_id(9),
-            &CreateMessage {
-                content: Some("hello".to_string()),
-                nonce: Some("dedupe-1".to_string()),
-                enforce_nonce: true,
-                ..CreateMessage::default()
-            },
+            &RequestCreateMessage::new()
+                .content("hello")
+                .enforce_nonce("dedupe-1"),
         )
         .await
         .expect("Discord deduplicates enforced nonces, so the replay is safe");
@@ -7471,13 +7492,7 @@ async fn server_errors_are_replayed_for_post_when_explicitly_enabled() {
         .build()
         .expect("client");
     client
-        .create_message(
-            test_id(9),
-            &CreateMessage {
-                content: Some("hello".to_string()),
-                ..CreateMessage::default()
-            },
-        )
+        .create_message(test_id(9), &RequestCreateMessage::new().content("hello"))
         .await
         .expect("opted-in POST retry");
     task.await.expect("server task");
@@ -7580,7 +7595,7 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
     );
 
     // The 2.x adapters read the same rule from their bodies.
-    use super::messages::{enforces_nonce, value_enforces_nonce};
+    use super::messages::value_enforces_nonce;
     assert!(!value_enforces_nonce(
         &json!({ "nonce": "n", "enforce_nonce": false })
     ));
@@ -7590,15 +7605,16 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
     assert!(value_enforces_nonce(
         &json!({ "nonce": 5, "enforce_nonce": true })
     ));
-    let mut message = CreateMessage {
-        nonce: Some("n".to_string()),
-        ..CreateMessage::default()
-    };
-    assert!(!enforces_nonce(&message));
-    message.enforce_nonce = true;
-    assert!(enforces_nonce(&message));
-    message.nonce = None;
-    assert!(!enforces_nonce(&message));
+    // The typed rule is `CreateMessage::nonce_replay` (worker A's request
+    // type): a nonce together with `enforce_nonce`.
+    let message = RequestCreateMessage::new().nonce("n");
+    assert!(message.nonce_replay().is_none());
+    assert_eq!(
+        RequestCreateMessage::new()
+            .enforce_nonce("n")
+            .nonce_replay(),
+        Some("n")
+    );
 }
 
 #[test]
@@ -7659,12 +7675,9 @@ async fn long_rate_limit_after_ambiguous_attempt_stops_nonce_replay() {
     let error = client
         .create_message(
             test_id(9),
-            &CreateMessage {
-                content: Some("hello".to_string()),
-                nonce: Some("dedupe-2".to_string()),
-                enforce_nonce: true,
-                ..CreateMessage::default()
-            },
+            &RequestCreateMessage::new()
+                .content("hello")
+                .enforce_nonce("dedupe-2"),
         )
         .await
         .expect_err("the replay window was exceeded");
@@ -7744,7 +7757,11 @@ async fn api_error_text_echoing_the_route_token_is_scrubbed() {
 
     let client = RestClient::new_with_base_url("echo", 123, base_url);
     let error = client
-        .execute_webhook(test_id(9), "echoed-secret", &json!({ "content": "x" }))
+        .execute_webhook(
+            test_id(9),
+            "echoed-secret",
+            &ExecuteWebhook::new().content("x"),
+        )
         .await
         .expect_err("404");
     let text = format!("{error} {error:?}");
@@ -8054,13 +8071,7 @@ async fn rest_client_builder_rate_limit_callback_fires_on_every_429() {
         .expect("build client");
 
     let message = client
-        .create_message(
-            test_id(555),
-            &CreateMessage {
-                content: Some("hello".to_string()),
-                ..CreateMessage::default()
-            },
-        )
+        .create_message(test_id(555), &RequestCreateMessage::new().content("hello"))
         .await
         .expect("create message after retries");
     assert_eq!(message.content, "sent");
@@ -8120,38 +8131,30 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
     client
         .create_message(
             test_id(555),
-            &CreateMessage {
-                content: Some("no explicit mentions".to_string()),
-                ..CreateMessage::default()
-            },
+            &RequestCreateMessage::new().content("no explicit mentions"),
         )
         .await
         .expect("create message");
     client
         .create_message(
             test_id(555),
-            &CreateMessage {
-                content: Some("explicit mentions".to_string()),
-                allowed_mentions: Some(crate::model::AllowedMentions {
+            &RequestCreateMessage::new()
+                .content("explicit mentions")
+                .allowed_mentions(crate::model::AllowedMentions {
                     parse: vec!["users".to_string()],
                     ..crate::model::AllowedMentions::default()
                 }),
-                ..CreateMessage::default()
-            },
         )
         .await
         .expect("create message with explicit mentions");
     client
-        .update_message(
+        .edit_message(
             test_id(555),
             test_id(901),
-            &CreateMessage {
-                content: Some("edited".to_string()),
-                ..CreateMessage::default()
-            },
+            &EditMessage::new().content("edited"),
         )
         .await
-        .expect("update message");
+        .expect("edit message");
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -8179,7 +8182,10 @@ async fn default_allowed_mentions_injected_when_absent_and_kept_when_present() {
 #[tokio::test]
 async fn default_allowed_mentions_cover_webhook_and_interaction_response_payloads() {
     let responses = vec![
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "1000" })),
+        PlannedResponse::json(
+            StatusCode::OK,
+            message_payload("1000", "777", "from webhook"),
+        ),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
@@ -8199,7 +8205,7 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
         .execute_webhook(
             test_id(777),
             "webhooktoken",
-            &json!({ "content": "from webhook" }),
+            &ExecuteWebhook::new().content("from webhook"),
         )
         .await
         .expect("execute webhook");
@@ -8894,4 +8900,97 @@ async fn forum_threads_send_the_first_message_with_default_mentions() {
     assert!(requests[2]
         .body
         .contains(r#""allowed_mentions":{"parse":["users"]}"#));
+}
+
+#[tokio::test]
+async fn message_edits_and_webhook_uploads_carry_the_default_mentions() {
+    let (base_url, captured, server) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::OK, message_payload("1", "100", "edited")),
+        PlannedResponse::json(StatusCode::OK, message_payload("2", "100", "edited")),
+        PlannedResponse::json(StatusCode::OK, message_payload("3", "100", "edited")),
+        PlannedResponse::json(StatusCode::OK, message_payload("4", "100", "uploaded")),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("mentions", 1, base_url)
+        .with_default_allowed_mentions(AllowedMentions {
+            parse: vec!["roles".to_string()],
+            ..AllowedMentions::default()
+        });
+    client
+        .edit_message(test_id(100), test_id(1), &sample_edit())
+        .await
+        .unwrap();
+    let mut quiet = EditMessage::new().content("quiet");
+    quiet.allowed_mentions = crate::model::Patch::Value(crate::model::Nullable::Null);
+    client
+        .edit_message(test_id(100), test_id(2), &quiet)
+        .await
+        .unwrap();
+    client
+        .edit_webhook_message(test_id(7), "hook-token", "3", &sample_webhook_edit())
+        .await
+        .unwrap();
+    client
+        .execute_webhook_with_files(
+            test_id(7),
+            "hook-token",
+            &ExecuteWebhook::new().content("file"),
+            &[sample_file("a.txt", "a")],
+        )
+        .await
+        .unwrap();
+    // Without `wait`, Discord answers 204 and there is no message.
+    assert!(client
+        .execute_webhook_with_query(
+            test_id(7),
+            "hook-token",
+            &WebhookExecuteQuery::default(),
+            &ExecuteWebhook::new().content("fire and forget"),
+        )
+        .await
+        .unwrap()
+        .is_none());
+    server.await.unwrap();
+
+    let requests = captured.lock().unwrap();
+    let json =
+        |index: usize| serde_json::from_str::<serde_json::Value>(&requests[index].body).unwrap();
+    assert_eq!(json(0)["allowed_mentions"], json!({ "parse": ["roles"] }));
+    // An explicit `null` on an edit wins over the default.
+    assert_eq!(json(1)["allowed_mentions"], serde_json::Value::Null);
+    assert!(json(1)
+        .as_object()
+        .unwrap()
+        .contains_key("allowed_mentions"));
+    assert_eq!(json(2)["allowed_mentions"], json!({ "parse": ["roles"] }));
+    assert_eq!(requests[2].header("authorization"), None);
+    assert_multipart_request(
+        &requests[3],
+        "POST",
+        "/webhooks/7/hook-token?wait=true",
+        None,
+    );
+    assert!(requests[3]
+        .body
+        .contains(r#""allowed_mentions":{"parse":["roles"]}"#));
+    assert_eq!(requests[4].path, "/webhooks/7/hook-token");
+}
+
+#[tokio::test]
+async fn voice_messages_are_checked_before_upload() {
+    use crate::bitfield::message_flags::IS_VOICE_MESSAGE;
+
+    let client = RestClient::new_with_base_url("voice", 1, "http://127.0.0.1:9");
+    let voice = RequestCreateMessage::new().flags(IS_VOICE_MESSAGE);
+    let error = client
+        .create_message(test_id(100), &voice)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("audio file"), "{error}");
+    let error = client
+        .create_message_with_files(test_id(100), &voice, &[sample_file("note.txt", "x")])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("audio/*"), "{error}");
 }

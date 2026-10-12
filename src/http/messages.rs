@@ -2,27 +2,37 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, ChannelPins, ChannelPinsQuery, CreateMessage, GetReactionsQuery, GuildId, Id,
-    IdMarker, Message, MessageId, SearchGuildMessagesQuery, SearchGuildMessagesResponse, User,
+    ChannelId, ChannelPins, ChannelPinsQuery, GetReactionsQuery, GuildId, Id, IdMarker, Message,
+    MessageId, MessageReference, SearchGuildMessagesQuery, SearchGuildMessagesResponse, User,
     UserId,
 };
+use crate::request::{CreateMessage, EditMessage};
 
 use super::body::{message_json_body, message_multipart_body};
 use super::paths::query_string;
 use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
+    /// Sends a message. The client's default `allowed_mentions` applies when
+    /// the body sets none. With `nonce` and `enforce_nonce` set, a send that
+    /// fails ambiguously (a 5xx or a lost response) is retried within
+    /// Discord's deduplication window, which cannot post a second message.
     pub async fn create_message(
         &self,
         channel_id: ChannelId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
-        let enforces_nonce = enforces_nonce(body);
-        let body = self.message_with_default_allowed_mentions(body);
+        let encoded = match body.check_voice_files([]) {
+            Ok(()) => message_json_body(
+                &body.allowed_mentions_or(self.default_allowed_mentions()),
+                body.nonce_replay().is_some(),
+            ),
+            Err(error) => Err(error),
+        };
         self.send(
             RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            message_json_body(body.as_ref(), enforces_nonce),
+            encoded,
         )
         .await
     }
@@ -36,59 +46,69 @@ impl RestClient {
         message_id: MessageId,
         to_channel_id: ChannelId,
     ) -> Result<Message, DiscordError> {
-        let body = CreateMessage {
-            message_reference: Some(crate::model::MessageReference::forward(
-                from_channel_id,
-                message_id,
-            )),
-            ..CreateMessage::default()
-        };
+        let body = CreateMessage::new()
+            .message_reference(MessageReference::forward(from_channel_id, message_id));
         self.create_message(to_channel_id, &body).await
     }
 
+    /// [`Self::create_message`] with uploads: `payload_json` plus one
+    /// `files[n]` part per file. Describe them in `body.attachments`. A
+    /// voice message is checked locally first (one `audio/*` file).
     pub async fn create_message_with_files(
         &self,
         channel_id: ChannelId,
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
-        let enforces_nonce = enforces_nonce(body);
-        let body = self.message_with_default_allowed_mentions(body);
+        let encoded =
+            match body.check_voice_files(files.iter().map(|file| file.content_type.as_deref())) {
+                Ok(()) => message_multipart_body(
+                    &body.allowed_mentions_or(self.default_allowed_mentions()),
+                    files,
+                    body.nonce_replay().is_some(),
+                ),
+                Err(error) => Err(error),
+            };
         self.send(
             RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            message_multipart_body(body.as_ref(), files, enforces_nonce),
+            encoded,
         )
         .await
     }
 
-    pub async fn update_message(
+    /// Edits a message. Omitted fields keep their value; list every
+    /// attachment the message keeps in `body.attachments`. The client's
+    /// default `allowed_mentions` applies when the body sets none.
+    pub async fn edit_message(
         &self,
         channel_id: ChannelId,
         message_id: MessageId,
-        body: &CreateMessage,
+        body: &EditMessage,
     ) -> Result<Message, DiscordError> {
-        let body = self.message_with_default_allowed_mentions(body);
         self.send(
             RouteId::EditMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            json_body(body.as_ref()),
+            json_body(&body.allowed_mentions_or(self.default_allowed_mentions())),
         )
         .await
     }
 
-    pub async fn update_message_with_files(
+    /// [`Self::edit_message`] with new uploads (`files[n]`).
+    pub async fn edit_message_with_files(
         &self,
         channel_id: ChannelId,
         message_id: MessageId,
-        body: &CreateMessage,
+        body: &EditMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
-        let body = self.message_with_default_allowed_mentions(body);
         self.send(
             RouteId::EditMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            multipart_body(body.as_ref(), files),
+            multipart_body(
+                &body.allowed_mentions_or(self.default_allowed_mentions()),
+                files,
+            ),
         )
         .await
     }
@@ -432,15 +452,10 @@ impl RestClient {
     }
 }
 
-/// Whether a message create enforces its nonce (Discord then deduplicates a
-/// repeated send, which makes a replay safe). A narrow adapter for the 2.x
-/// `CreateMessage` until the endpoints take the phase 5 request types, whose
-/// `nonce_replay()` answers this.
-pub(super) fn enforces_nonce(body: &CreateMessage) -> bool {
-    body.enforce_nonce && body.nonce.is_some()
-}
-
-/// [`enforces_nonce`] for the untyped bodies the message helpers still send.
+/// Whether an untyped message create (the `Value` bodies `helpers.rs` still
+/// sends through `send_message_json`) enforces its nonce: `enforce_nonce:
+/// true` with a non-null `nonce`. A narrow adapter until those helpers send
+/// `request::CreateMessage`, whose `nonce_replay()` answers this.
 pub(super) fn value_enforces_nonce(body: &Value) -> bool {
     body.get("enforce_nonce").and_then(Value::as_bool) == Some(true)
         && body.get("nonce").is_some_and(|nonce| !nonce.is_null())

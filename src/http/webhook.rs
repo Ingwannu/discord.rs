@@ -7,9 +7,10 @@ use super::paths::{
 use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, CreateMessage, CreateWebhook, GuildId, Message, ModifyWebhook,
-    ModifyWebhookWithToken, Webhook, WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
+    ChannelId, CreateWebhook, GuildId, Message, ModifyWebhook, ModifyWebhookWithToken, Webhook,
+    WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
 };
+use crate::request::{EditWebhookMessage, ExecuteWebhook};
 
 impl RestClient {
     pub async fn create_webhook(
@@ -54,28 +55,41 @@ impl RestClient {
         self.get_channel_webhooks(channel_id).await
     }
 
+    /// Executes a webhook and returns the created message (`?wait=true`).
+    /// The client's default `allowed_mentions` applies when the body sets
+    /// none.
     pub async fn execute_webhook(
         &self,
         webhook_id: WebhookId,
         token: &str,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &ExecuteWebhook,
+    ) -> Result<Message, DiscordError> {
         let path = execute_webhook_path(webhook_id, token)?;
-        let body = self.json_with_default_allowed_mentions(body);
-        self.send(RouteId::ExecuteWebhook, &path, json_body(body.as_ref()))
-            .await
+        self.send(
+            RouteId::ExecuteWebhook,
+            &path,
+            json_body(&body.allowed_mentions_or(self.default_allowed_mentions())),
+        )
+        .await
     }
 
+    /// [`Self::execute_webhook`] with `wait`, `thread_id`, and
+    /// `with_components`. Without `wait: Some(true)` Discord answers
+    /// `204 No Content`, which is `Ok(None)`.
     pub async fn execute_webhook_with_query(
         &self,
         webhook_id: WebhookId,
         token: &str,
         query: &WebhookExecuteQuery,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
+        body: &ExecuteWebhook,
+    ) -> Result<Option<Message>, DiscordError> {
         let path = execute_webhook_path_with_query(webhook_id, token, query, None)?;
-        self.send(RouteId::ExecuteWebhook, &path, json_body(body))
-            .await
+        self.send_optional(
+            RouteId::ExecuteWebhook,
+            &path,
+            json_body(&body.allowed_mentions_or(self.default_allowed_mentions())),
+        )
+        .await
     }
 
     pub async fn execute_slack_compatible_webhook(
@@ -110,16 +124,25 @@ impl RestClient {
         .await
     }
 
+    /// [`Self::execute_webhook`] with uploads (`files[n]`); describe them in
+    /// `body.attachments`.
     pub async fn execute_webhook_with_files(
         &self,
         webhook_id: WebhookId,
         token: &str,
-        body: &Value,
+        body: &ExecuteWebhook,
         files: &[FileAttachment],
-    ) -> Result<Value, DiscordError> {
+    ) -> Result<Message, DiscordError> {
         let path = execute_webhook_path(webhook_id, token)?;
-        self.send(RouteId::ExecuteWebhook, &path, multipart_body(body, files))
-            .await
+        self.send(
+            RouteId::ExecuteWebhook,
+            &path,
+            multipart_body(
+                &body.allowed_mentions_or(self.default_allowed_mentions()),
+                files,
+            ),
+        )
+        .await
     }
 
     pub async fn get_webhook_message(
@@ -143,62 +166,84 @@ impl RestClient {
         self.send(RouteId::GetWebhookMessage, &path, NO_BODY).await
     }
 
+    /// Edits a message the webhook sent; `message_id` may be `@original`
+    /// for an interaction's original response. The client's default
+    /// `allowed_mentions` applies when the body sets none.
     pub async fn edit_webhook_message(
         &self,
         webhook_id: WebhookId,
         token: &str,
         message_id: &str,
-        body: &CreateMessage,
+        body: &EditWebhookMessage,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
-        self.send(RouteId::EditWebhookMessage, &path, json_body(body))
-            .await
+        self.send(
+            RouteId::EditWebhookMessage,
+            &path,
+            json_body(&body.allowed_mentions_or(self.default_allowed_mentions())),
+        )
+        .await
     }
 
+    /// [`Self::edit_webhook_message`] with `thread_id` and
+    /// `with_components`.
     pub async fn edit_webhook_message_with_query(
         &self,
         webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
-        body: &CreateMessage,
+        body: &EditWebhookMessage,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
-        self.send(RouteId::EditWebhookMessage, &path, json_body(body))
-            .await
+        self.send(
+            RouteId::EditWebhookMessage,
+            &path,
+            json_body(&body.allowed_mentions_or(self.default_allowed_mentions())),
+        )
+        .await
     }
 
+    /// [`Self::edit_webhook_message`] with new uploads (`files[n]`).
     pub async fn edit_webhook_message_with_files(
         &self,
         webhook_id: WebhookId,
         token: &str,
         message_id: &str,
-        body: &CreateMessage,
+        body: &EditWebhookMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
         self.send(
             RouteId::EditWebhookMessage,
             &path,
-            multipart_body(body, files),
+            multipart_body(
+                &body.allowed_mentions_or(self.default_allowed_mentions()),
+                files,
+            ),
         )
         .await
     }
 
+    /// [`Self::edit_webhook_message_with_files`] with `thread_id` and
+    /// `with_components`.
     pub async fn edit_webhook_message_with_files_and_query(
         &self,
         webhook_id: WebhookId,
         token: &str,
         message_id: &str,
         query: &WebhookMessageQuery,
-        body: &CreateMessage,
+        body: &EditWebhookMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
         self.send(
             RouteId::EditWebhookMessage,
             &path,
-            multipart_body(body, files),
+            multipart_body(
+                &body.allowed_mentions_or(self.default_allowed_mentions()),
+                files,
+            ),
         )
         .await
     }
