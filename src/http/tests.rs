@@ -29,7 +29,8 @@ use crate::error::DiscordError;
 use crate::model::{
     AddGroupDmRecipient, AddGuildMember, AddLobbyMember, AllowedMentions,
     ApplicationCommandPermission, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
-    AuditLogQuery, BeginGuildPruneRequest, BulkGuildBanRequest, ChannelPinsQuery,
+    AuditLogQuery, AutoModerationAction, AutoModerationActionType, AutoModerationEventType,
+    AutoModerationTriggerType, BeginGuildPruneRequest, BulkGuildBanRequest, ChannelPinsQuery,
     CommandPermissionsId, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
     CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance, CreateTestEntitlement,
     CreateWebhook, CurrentUserGuildsQuery, EditApplicationCommandPermissions,
@@ -45,7 +46,10 @@ use crate::model::{
     SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
-use crate::request::{ModifyChannel, StartThreadFromMessage, StartThreadWithoutMessage};
+use crate::request::{
+    CreateAutoModerationRule, CreateGuildTemplate, ModifyAutoModerationRule, ModifyChannel,
+    ModifyGuildTemplate, StartThreadFromMessage, StartThreadWithoutMessage,
+};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
@@ -486,6 +490,18 @@ fn emoji_payload(id: &str, name: &str) -> serde_json::Value {
         "name": name,
         "animated": false
     })
+}
+
+fn sample_auto_moderation_rule(name: &str) -> CreateAutoModerationRule {
+    CreateAutoModerationRule::new(
+        name,
+        AutoModerationEventType::MESSAGE_SEND,
+        AutoModerationTriggerType::KEYWORD,
+        vec![AutoModerationAction {
+            kind: AutoModerationActionType::BLOCK_MESSAGE,
+            metadata: None,
+        }],
+    )
 }
 
 fn auto_moderation_rule_payload(id: &str) -> serde_json::Value {
@@ -1304,7 +1320,7 @@ async fn typed_request_serialization_errors_return_json_errors_before_network() 
     };
 
     match client
-        .modify_guild_member_typed(test_id(1), test_id(2), &body)
+        .request::<serde_json::Value>(RawRequest::patch("/guilds/1/members/2").json(&body))
         .await
         .unwrap_err()
     {
@@ -2184,7 +2200,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_auto_moderation_rules_typed(test_id(200))
+            .get_auto_moderation_rules(test_id(200))
             .await
             .unwrap()[0]
             .id
@@ -2201,17 +2217,17 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert!(
         client
-            .create_auto_moderation_rule_typed(test_id(200), &json!({ "name": "new" }))
+            .create_auto_moderation_rule(test_id(200), &sample_auto_moderation_rule("new"))
             .await
             .unwrap()
             .enabled
     );
     assert!(
         client
-            .modify_auto_moderation_rule_typed(
+            .modify_auto_moderation_rule(
                 test_id(200),
                 test_id(8),
-                &json!({ "name": "updated" }),
+                &ModifyAutoModerationRule::new().name("updated"),
             )
             .await
             .unwrap()
@@ -2219,14 +2235,14 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .get_guild_preview_typed(test_id(200))
+            .get_guild_preview(test_id(200))
             .await
             .unwrap()
             .approximate_member_count,
         100
     );
     let audit_log = client
-        .get_guild_audit_log_typed(
+        .get_guild_audit_log(
             test_id(200),
             &AuditLogQuery {
                 user_id: Some(test_id(901)),
@@ -2254,7 +2270,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert_eq!(audit_log.users[0].username, "moderator");
     assert_eq!(
         client
-            .get_guild_prune_count_typed(test_id(200), Some(7), &[test_id(9)])
+            .get_guild_prune_count(test_id(200), Some(7), &[test_id(9)])
             .await
             .unwrap()
             .pruned,
@@ -2262,7 +2278,15 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .begin_guild_prune_typed(test_id(200), Some(7), Some(false), &[])
+            .begin_guild_prune(
+                test_id(200),
+                &BeginGuildPruneRequest {
+                    days: Some(7),
+                    compute_prune_count: Some(false),
+                    include_roles: None,
+                    reason: None,
+                },
+            )
             .await
             .unwrap()
             .pruned,
@@ -2270,7 +2294,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .begin_guild_prune_with_request(
+            .begin_guild_prune(
                 test_id(200),
                 &BeginGuildPruneRequest {
                     days: Some(7),
@@ -2365,8 +2389,12 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
     assert_request_basics(
         &requests[10],
         "POST",
-        "/guilds/200/prune?days=7&compute_prune_count=false",
+        "/guilds/200/prune",
         Some("Bot typed-admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[10].body).unwrap(),
+        json!({ "days": 7, "compute_prune_count": false })
     );
     assert_request_basics(
         &requests[11],
@@ -2406,28 +2434,40 @@ async fn raw_auto_moderation_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("automod-token", 555, base_url);
-    let body = json!({ "name": "block bad words" });
 
     assert_eq!(
         client
             .get_auto_moderation_rules(test_id(200))
             .await
-            .unwrap()[0]["id"],
-        json!("7")
+            .unwrap()[0]
+            .id
+            .get(),
+        7
     );
     assert_eq!(
         client
-            .create_auto_moderation_rule(test_id(200), &body)
+            .create_auto_moderation_rule(
+                test_id(200),
+                &sample_auto_moderation_rule("block bad words")
+            )
             .await
-            .unwrap()["id"],
-        json!("8")
+            .unwrap()
+            .id
+            .get(),
+        8
     );
     assert_eq!(
         client
-            .modify_auto_moderation_rule(test_id(200), test_id(9), &body)
+            .modify_auto_moderation_rule(
+                test_id(200),
+                test_id(9),
+                &ModifyAutoModerationRule::new().name("block bad words"),
+            )
             .await
-            .unwrap()["id"],
-        json!("9")
+            .unwrap()
+            .id
+            .get(),
+        9
     );
     client
         .delete_auto_moderation_rule(test_id(200), test_id(9))
@@ -2466,8 +2506,8 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
-        PlannedResponse::empty(StatusCode::NO_CONTENT),
-        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, member_payload("6", "raw")),
+        PlannedResponse::json(StatusCode::OK, member_payload("7", "typed")),
         PlannedResponse::json(
             StatusCode::OK,
             json!({
@@ -2525,12 +2565,15 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .create_guild_ban(
             test_id(200),
             test_id(4),
-            &json!({ "delete_message_seconds": 60 }),
+            &CreateGuildBan {
+                delete_message_days: None,
+                delete_message_seconds: Some(60),
+            },
         )
         .await
         .unwrap();
     client
-        .create_guild_ban_typed(
+        .create_guild_ban(
             test_id(200),
             test_id(5),
             &CreateGuildBan {
@@ -2544,12 +2587,20 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .remove_guild_ban(test_id(200), test_id(4))
         .await
         .unwrap();
-    client
-        .modify_guild_member(test_id(200), test_id(6), &json!({ "nick": "raw" }))
+    let member = client
+        .modify_guild_member(
+            test_id(200),
+            test_id(6),
+            &ModifyGuildMember {
+                nick: Some(Some("raw".to_string())),
+                ..ModifyGuildMember::default()
+            },
+        )
         .await
         .unwrap();
+    assert_eq!(member.user.unwrap().id.get(), 6);
     client
-        .modify_guild_member_typed(
+        .modify_guild_member(
             test_id(200),
             test_id(7),
             &ModifyGuildMember {
@@ -2560,15 +2611,20 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     assert!(client
-        .get_guild_audit_log(test_id(200), None, None, None, None)
+        .get_guild_audit_log(test_id(200), &AuditLogQuery::default())
         .await
-        .unwrap()["audit_log_entries"]
-        .as_array()
         .unwrap()
+        .audit_log_entries
         .is_empty());
     assert_eq!(
         client
-            .modify_guild_role_positions(test_id(200), &json!([{ "id": "9", "position": 1 }]),)
+            .modify_guild_role_positions(
+                test_id(200),
+                &[ModifyGuildRolePosition {
+                    id: test_id(9),
+                    position: Some(Some(1)),
+                }],
+            )
             .await
             .unwrap()[0]
             .name,
@@ -2576,7 +2632,7 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_role_positions_typed(
+            .modify_guild_role_positions(
                 test_id(200),
                 &[ModifyGuildRolePosition {
                     id: test_id(10),
@@ -3810,7 +3866,13 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
 
     assert_eq!(
         client
-            .modify_current_member(test_id(200), &json!({ "nick": "bot" }))
+            .modify_current_member(
+                test_id(200),
+                &ModifyCurrentMember {
+                    nick: Some(Some("bot".to_string())),
+                    ..ModifyCurrentMember::default()
+                },
+            )
             .await
             .unwrap()
             .user
@@ -4277,15 +4339,25 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
         client
             .get_guild_prune_count(test_id(200), Some(7), &[test_id(9)])
             .await
-            .unwrap()["pruned"],
-        json!(3)
+            .unwrap()
+            .pruned,
+        Some(3)
     );
     assert_eq!(
         client
-            .begin_guild_prune(test_id(200), Some(7), Some(false), &[])
+            .begin_guild_prune(
+                test_id(200),
+                &BeginGuildPruneRequest {
+                    days: Some(7),
+                    compute_prune_count: Some(false),
+                    include_roles: None,
+                    reason: None,
+                },
+            )
             .await
-            .unwrap()["pruned"],
-        json!(2)
+            .unwrap()
+            .pruned,
+        Some(2)
     );
     assert!(
         client
@@ -4296,21 +4368,23 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert!(
         !client
-            .modify_guild_widget_settings(test_id(200), &json!({ "enabled": false }))
+            .modify_guild_widget_settings(
+                test_id(200),
+                &ModifyGuildWidgetSettings {
+                    enabled: Some(false),
+                    ..ModifyGuildWidgetSettings::default()
+                },
+            )
             .await
             .unwrap()
             .enabled
     );
     assert_eq!(
-        client.get_guild_widget(test_id(200)).await.unwrap()["name"],
-        json!("widget")
+        client.get_guild_widget(test_id(200)).await.unwrap().name,
+        "widget"
     );
     assert_eq!(
-        client
-            .get_guild_widget_typed(test_id(200))
-            .await
-            .unwrap()
-            .members[0]
+        client.get_guild_widget(test_id(200)).await.unwrap().members[0]
             .status
             .as_deref(),
         Some("online")
@@ -4375,7 +4449,13 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_welcome_screen(test_id(200), &welcome_screen_payload())
+            .modify_guild_welcome_screen(
+                test_id(200),
+                &ModifyGuildWelcomeScreen {
+                    description: Some(Some("welcome".to_string())),
+                    ..ModifyGuildWelcomeScreen::default()
+                },
+            )
             .await
             .unwrap()
             .description
@@ -4391,7 +4471,13 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert!(
         client
-            .modify_guild_onboarding(test_id(200), &onboarding_payload())
+            .modify_guild_onboarding(
+                test_id(200),
+                &ModifyGuildOnboarding {
+                    enabled: Some(true),
+                    ..ModifyGuildOnboarding::default()
+                },
+            )
             .await
             .unwrap()
             .enabled
@@ -4421,7 +4507,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_template(test_id(200), &body)
+            .create_guild_template(test_id(200), &CreateGuildTemplate::new("name"))
             .await
             .unwrap()
             .code,
@@ -4437,7 +4523,11 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_template(test_id(200), "tmpl", &body)
+            .modify_guild_template(
+                test_id(200),
+                "tmpl",
+                &ModifyGuildTemplate::new().description("desc"),
+            )
             .await
             .unwrap()
             .code,
@@ -4513,8 +4603,12 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     assert_request_basics(
         &requests[14],
         "POST",
-        "/guilds/200/prune?days=7&compute_prune_count=false",
+        "/guilds/200/prune",
         Some("Bot admin-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[14].body).unwrap(),
+        json!({ "days": 7, "compute_prune_count": false })
     );
     assert_request_basics(
         &requests[18],
@@ -5925,7 +6019,13 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(guild_with_counts.name, "guild-counts");
 
     let updated = client
-        .update_guild(test_id(200), &json!({ "name": "guild-updated" }))
+        .modify_guild(
+            test_id(200),
+            &ModifyGuild {
+                name: Some("guild-updated".to_string()),
+                ..ModifyGuild::default()
+            },
+        )
         .await
         .expect("update guild");
     assert_eq!(updated.name, "guild-updated");
@@ -5992,13 +6092,26 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
         .expect("remove guild member role");
 
     let created_role = client
-        .create_role(test_id(200), &json!({ "name": "admin" }))
+        .create_guild_role(
+            test_id(200),
+            &CreateGuildRole {
+                name: Some("admin".to_string()),
+                ..CreateGuildRole::default()
+            },
+        )
         .await
         .expect("create role");
     assert_eq!(created_role.name, "admin");
 
     let updated_role = client
-        .update_role(test_id(200), test_id(300), &json!({ "name": "mod" }))
+        .modify_guild_role(
+            test_id(200),
+            test_id(300),
+            &ModifyGuildRole {
+                name: Some(Some("mod".to_string())),
+                ..ModifyGuildRole::default()
+            },
+        )
         .await
         .expect("update role");
     assert_eq!(updated_role.name, "mod");
@@ -6018,7 +6131,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(roles[0].name, "mod");
 
     let reordered_roles = client
-        .modify_guild_role_positions_typed(
+        .modify_guild_role_positions(
             test_id(200),
             &[ModifyGuildRolePosition {
                 id: test_id(300),
@@ -6176,7 +6289,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(StatusCode::OK, role_payload("300", "gradient")),
         PlannedResponse::json(StatusCode::OK, role_payload("300", "muted")),
-        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, member_payload("201", "bot")),
         PlannedResponse::json(StatusCode::OK, member_payload("201", "bot")),
         PlannedResponse::json(StatusCode::OK, guild_payload("200", "renamed")),
         PlannedResponse::json(StatusCode::OK, channel_payload("202", 0, Some("rules"))),
@@ -6214,7 +6327,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     let client = RestClient::new_with_base_url("guild-token", 0, base_url);
 
     client
-        .create_guild_ban_typed(
+        .create_guild_ban(
             test_id(200),
             test_id(201),
             &CreateGuildBan {
@@ -6260,7 +6373,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert_eq!(updated_role.name, "muted");
 
     client
-        .modify_guild_member_typed(
+        .modify_guild_member(
             test_id(200),
             test_id(201),
             &ModifyGuildMember {
@@ -6322,7 +6435,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert_eq!(channel.name.as_deref(), Some("rules"));
 
     let widget = client
-        .modify_guild_widget(
+        .modify_guild_widget_settings(
             test_id(200),
             &ModifyGuildWidgetSettings {
                 enabled: Some(true),
@@ -6334,7 +6447,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert!(widget.enabled);
 
     let welcome_screen = client
-        .modify_guild_welcome_screen_config(
+        .modify_guild_welcome_screen(
             test_id(200),
             &ModifyGuildWelcomeScreen {
                 enabled: Some(Some(true)),
@@ -6352,7 +6465,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert!(welcome_screen.description.is_none());
 
     let onboarding = client
-        .modify_guild_onboarding_config(
+        .modify_guild_onboarding(
             test_id(200),
             &ModifyGuildOnboarding {
                 prompts: Some(vec![crate::model::OnboardingPrompt {

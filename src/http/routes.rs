@@ -251,11 +251,11 @@ route_manifest! {
     DeleteFollowupMessage: DELETE "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" token, query [], body () => (), api [delete_followup_message, delete_followup_message_with_application_id];
 
     // --- Audit log and auto moderation ------------------------------------
-    GetGuildAuditLog: GET "/guilds/{guild.id}/audit-logs" bot, query [user_id, action_type, before, after, limit], body () => AuditLog, api [get_guild_audit_log, get_guild_audit_log_typed];
-    ListAutoModerationRulesForGuild: GET "/guilds/{guild.id}/auto-moderation/rules" bot, query [], body () => Vec<AutoModerationRule>, api [get_auto_moderation_rules, get_auto_moderation_rules_typed];
+    GetGuildAuditLog: GET "/guilds/{guild.id}/audit-logs" bot, query [user_id, action_type, before, after, limit], body () => AuditLog, api [get_guild_audit_log], was [get_guild_audit_log_typed => get_guild_audit_log];
+    ListAutoModerationRulesForGuild: GET "/guilds/{guild.id}/auto-moderation/rules" bot, query [], body () => Vec<AutoModerationRule>, api [get_auto_moderation_rules], was [get_auto_moderation_rules_typed => get_auto_moderation_rules];
     GetAutoModerationRule: GET "/guilds/{guild.id}/auto-moderation/rules/{auto_moderation_rule.id}" bot, query [], body () => AutoModerationRule, api [get_auto_moderation_rule];
-    CreateAutoModerationRule: POST "/guilds/{guild.id}/auto-moderation/rules" bot, query [], body Value => AutoModerationRule, api [create_auto_moderation_rule, create_auto_moderation_rule_typed];
-    ModifyAutoModerationRule: PATCH "/guilds/{guild.id}/auto-moderation/rules/{auto_moderation_rule.id}" bot, query [], body Value => AutoModerationRule, api [modify_auto_moderation_rule, modify_auto_moderation_rule_typed];
+    CreateAutoModerationRule: POST "/guilds/{guild.id}/auto-moderation/rules" bot, query [], body crate::request::CreateAutoModerationRule => AutoModerationRule, api [create_auto_moderation_rule], was [create_auto_moderation_rule_typed => create_auto_moderation_rule];
+    ModifyAutoModerationRule: PATCH "/guilds/{guild.id}/auto-moderation/rules/{auto_moderation_rule.id}" bot, query [], body crate::request::ModifyAutoModerationRule => AutoModerationRule, api [modify_auto_moderation_rule], was [modify_auto_moderation_rule_typed => modify_auto_moderation_rule];
     DeleteAutoModerationRule: DELETE "/guilds/{guild.id}/auto-moderation/rules/{auto_moderation_rule.id}" bot, query [], body () => (), api [delete_auto_moderation_rule];
 
     // --- Channels ---------------------------------------------------------
@@ -344,8 +344,8 @@ route_manifest! {
 
     // --- Guilds -----------------------------------------------------------
     GetGuild: GET "/guilds/{guild.id}" bot, query [with_counts], body () => Guild, api [get_guild, get_guild_with_query];
-    GetGuildPreview: GET "/guilds/{guild.id}/preview" bot, query [], body () => GuildPreview, api [get_guild_preview, get_guild_preview_typed];
-    ModifyGuild: PATCH "/guilds/{guild.id}" bot, query [], body ModifyGuild => Guild, api [modify_guild, update_guild, update_guild_typed];
+    GetGuildPreview: GET "/guilds/{guild.id}/preview" bot, query [], body () => GuildPreview, api [get_guild_preview], was [get_guild_preview_typed => get_guild_preview];
+    ModifyGuild: PATCH "/guilds/{guild.id}" bot, query [], body ModifyGuild => Guild, api [modify_guild], was [update_guild => modify_guild, update_guild_typed => modify_guild];
     ModifyGuildIncidentActions: PUT "/guilds/{guild.id}/incident-actions" bot, query [], body ModifyGuildIncidentActions => GuildIncidentsData, api [modify_guild_incident_actions];
     CreateGuild: POST "/guilds" bot, query [], body CreateGuild => Guild, api [create_guild];
     CreateGuildFromTemplate: POST "/guilds/templates/{template.code}" bot, query [], body CreateGuildFromTemplate => Guild, api [create_guild_from_template];
@@ -353,26 +353,26 @@ route_manifest! {
     ModifyGuildMfaLevel: POST "/guilds/{guild.id}/mfa" bot, query [], body GuildMfaLevel => GuildMfaLevel, api [modify_guild_mfa_level];
     GetGuildIntegrations: GET "/guilds/{guild.id}/integrations" bot, query [], body () => Vec<Integration>, api [get_guild_integrations];
     DeleteGuildIntegration: DELETE "/guilds/{guild.id}/integrations/{integration.id}" bot, query [], body () => (), api [delete_guild_integration];
-    GetGuildPruneCount: GET "/guilds/{guild.id}/prune" bot, query [days, include_roles], body () => GuildPruneCount, api [get_guild_prune_count, get_guild_prune_count_typed];
-    BeginGuildPrune: POST "/guilds/{guild.id}/prune" bot, query [days, compute_prune_count, include_roles], body BeginGuildPruneRequest => GuildPruneResult, api [begin_guild_prune, begin_guild_prune_typed, begin_guild_prune_with_body, begin_guild_prune_with_request];
+    GetGuildPruneCount: GET "/guilds/{guild.id}/prune" bot, query [days, include_roles], body () => GuildPruneCount, api [get_guild_prune_count], was [get_guild_prune_count_typed => get_guild_prune_count];
+    BeginGuildPrune: POST "/guilds/{guild.id}/prune" bot, query [], body BeginGuildPruneRequest => GuildPruneResult, api [begin_guild_prune], was [begin_guild_prune_typed => begin_guild_prune, begin_guild_prune_with_body => begin_guild_prune, begin_guild_prune_with_request => begin_guild_prune];
     GetGuildVoiceRegions: GET "/guilds/{guild.id}/regions" bot, query [], body () => Vec<VoiceRegion>, api [get_guild_voice_regions];
     GetGuildInvites: GET "/guilds/{guild.id}/invites" bot, query [], body () => Vec<Invite>, api [get_guild_invites];
     GetGuildVanityUrl: GET "/guilds/{guild.id}/vanity-url" bot, query [], body () => VanityUrl, api [get_guild_vanity_url];
     GetGuildWidgetSettings: GET "/guilds/{guild.id}/widget" bot, query [], body () => GuildWidgetSettings, api [get_guild_widget_settings];
-    ModifyGuildWidget: PATCH "/guilds/{guild.id}/widget" bot, query [], body ModifyGuildWidgetSettings => GuildWidgetSettings, api [modify_guild_widget_settings, modify_guild_widget_settings_typed, modify_guild_widget];
-    GetGuildWidget: GET "/guilds/{guild.id}/widget.json" bot, query [], body () => GuildWidget, api [get_guild_widget, get_guild_widget_typed];
+    ModifyGuildWidget: PATCH "/guilds/{guild.id}/widget" bot, query [], body ModifyGuildWidgetSettings => GuildWidgetSettings, api [modify_guild_widget_settings], was [modify_guild_widget_settings_typed => modify_guild_widget_settings, modify_guild_widget => modify_guild_widget_settings];
+    GetGuildWidget: GET "/guilds/{guild.id}/widget.json" bot, query [], body () => GuildWidget, api [get_guild_widget], was [get_guild_widget_typed => get_guild_widget];
     GetGuildWidgetImage: GET "/guilds/{guild.id}/widget.png" none, query [style], body () => Vec<u8>, api [get_guild_widget_image];
     GetGuildWelcomeScreen: GET "/guilds/{guild.id}/welcome-screen" bot, query [], body () => WelcomeScreen, api [get_guild_welcome_screen];
-    ModifyGuildWelcomeScreen: PATCH "/guilds/{guild.id}/welcome-screen" bot, query [], body ModifyGuildWelcomeScreen => WelcomeScreen, api [modify_guild_welcome_screen, modify_guild_welcome_screen_typed, modify_guild_welcome_screen_config];
+    ModifyGuildWelcomeScreen: PATCH "/guilds/{guild.id}/welcome-screen" bot, query [], body ModifyGuildWelcomeScreen => WelcomeScreen, api [modify_guild_welcome_screen], was [modify_guild_welcome_screen_typed => modify_guild_welcome_screen, modify_guild_welcome_screen_config => modify_guild_welcome_screen];
     GetGuildOnboarding: GET "/guilds/{guild.id}/onboarding" bot, query [], body () => GuildOnboarding, api [get_guild_onboarding];
-    ModifyGuildOnboarding: PUT "/guilds/{guild.id}/onboarding" bot, query [], body ModifyGuildOnboarding => GuildOnboarding, api [modify_guild_onboarding, modify_guild_onboarding_typed, modify_guild_onboarding_config];
+    ModifyGuildOnboarding: PUT "/guilds/{guild.id}/onboarding" bot, query [], body ModifyGuildOnboarding => GuildOnboarding, api [modify_guild_onboarding], was [modify_guild_onboarding_typed => modify_guild_onboarding, modify_guild_onboarding_config => modify_guild_onboarding];
 
     // --- Guild templates --------------------------------------------------
     GetGuildTemplate: GET "/guilds/templates/{template.code}" bot, query [], body () => GuildTemplate, api [get_guild_template_by_code];
     GetGuildTemplates: GET "/guilds/{guild.id}/templates" bot, query [], body () => Vec<GuildTemplate>, api [get_guild_templates];
-    CreateGuildTemplate: POST "/guilds/{guild.id}/templates" bot, query [], body Value => GuildTemplate, api [create_guild_template];
+    CreateGuildTemplate: POST "/guilds/{guild.id}/templates" bot, query [], body crate::request::CreateGuildTemplate => GuildTemplate, api [create_guild_template];
     SyncGuildTemplate: PUT "/guilds/{guild.id}/templates/{template.code}" bot, query [], body () => GuildTemplate, api [sync_guild_template];
-    ModifyGuildTemplate: PATCH "/guilds/{guild.id}/templates/{template.code}" bot, query [], body Value => GuildTemplate, api [modify_guild_template];
+    ModifyGuildTemplate: PATCH "/guilds/{guild.id}/templates/{template.code}" bot, query [], body crate::request::ModifyGuildTemplate => GuildTemplate, api [modify_guild_template];
     DeleteGuildTemplate: DELETE "/guilds/{guild.id}/templates/{template.code}" bot, query [], body () => GuildTemplate, api [delete_guild_template];
 
     // --- Members, bans, roles ---------------------------------------------
@@ -380,7 +380,7 @@ route_manifest! {
     ListGuildMembers: GET "/guilds/{guild.id}/members" bot, query [limit, after], body () => Vec<Member>, api [get_guild_members, get_guild_members_with_query];
     SearchGuildMembers: GET "/guilds/{guild.id}/members/search" bot, query [query, limit], body () => Vec<Member>, api [search_guild_members, search_guild_members_with_query];
     AddGuildMember: PUT "/guilds/{guild.id}/members/{user.id}" bot, query [], body AddGuildMember => Option<Member>, api [add_guild_member];
-    ModifyGuildMember: PATCH "/guilds/{guild.id}/members/{user.id}" bot, query [], body ModifyGuildMember => (), api [modify_guild_member, modify_guild_member_typed];
+    ModifyGuildMember: PATCH "/guilds/{guild.id}/members/{user.id}" bot, query [], body ModifyGuildMember => Member, api [modify_guild_member], was [modify_guild_member_typed => modify_guild_member];
     ModifyCurrentMember: PATCH "/guilds/{guild.id}/members/@me" bot, query [], body ModifyCurrentMember => Member, api [modify_current_member];
     ModifyCurrentUserNick: PATCH "/guilds/{guild.id}/members/@me/nick" bot, query [], body Option<String> => (), api [modify_current_member_nick];
     AddGuildMemberRole: PUT "/guilds/{guild.id}/members/{user.id}/roles/{role.id}" bot, query [], body () => (), api [add_guild_member_role];
@@ -388,15 +388,15 @@ route_manifest! {
     RemoveGuildMember: DELETE "/guilds/{guild.id}/members/{user.id}" bot, query [], body () => (), api [remove_guild_member];
     GetGuildBans: GET "/guilds/{guild.id}/bans" bot, query [limit, before, after], body () => Vec<Ban>, api [get_guild_bans, get_guild_bans_with_query];
     GetGuildBan: GET "/guilds/{guild.id}/bans/{user.id}" bot, query [], body () => Ban, api [get_guild_ban];
-    CreateGuildBan: PUT "/guilds/{guild.id}/bans/{user.id}" bot, query [], body CreateGuildBan => (), api [create_guild_ban, create_guild_ban_typed];
+    CreateGuildBan: PUT "/guilds/{guild.id}/bans/{user.id}" bot, query [], body CreateGuildBan => (), api [create_guild_ban], was [create_guild_ban_typed => create_guild_ban];
     RemoveGuildBan: DELETE "/guilds/{guild.id}/bans/{user.id}" bot, query [], body () => (), api [remove_guild_ban];
     BulkGuildBan: POST "/guilds/{guild.id}/bulk-ban" bot, query [], body BulkGuildBanRequest => BulkGuildBanResponse, api [bulk_guild_ban];
     GetGuildRoles: GET "/guilds/{guild.id}/roles" bot, query [], body () => Vec<Role>, api [list_roles];
     GetGuildRole: GET "/guilds/{guild.id}/roles/{role.id}" bot, query [], body () => Role, api [get_guild_role];
     GetGuildRoleMemberCounts: GET "/guilds/{guild.id}/roles/member-counts" bot, query [], body () => HashMap<RoleId, u64>, api [get_guild_role_member_counts];
-    CreateGuildRole: POST "/guilds/{guild.id}/roles" bot, query [], body CreateGuildRole => Role, api [create_guild_role, create_role, create_role_typed];
-    ModifyGuildRolePositions: PATCH "/guilds/{guild.id}/roles" bot, query [], body [ModifyGuildRolePosition] => Vec<Role>, api [modify_guild_role_positions, modify_guild_role_positions_typed];
-    ModifyGuildRole: PATCH "/guilds/{guild.id}/roles/{role.id}" bot, query [], body ModifyGuildRole => Role, api [modify_guild_role, update_role, update_role_typed];
+    CreateGuildRole: POST "/guilds/{guild.id}/roles" bot, query [], body CreateGuildRole => Role, api [create_guild_role], was [create_role => create_guild_role, create_role_typed => create_guild_role];
+    ModifyGuildRolePositions: PATCH "/guilds/{guild.id}/roles" bot, query [], body [ModifyGuildRolePosition] => Vec<Role>, api [modify_guild_role_positions], was [modify_guild_role_positions_typed => modify_guild_role_positions];
+    ModifyGuildRole: PATCH "/guilds/{guild.id}/roles/{role.id}" bot, query [], body ModifyGuildRole => Role, api [modify_guild_role], was [update_role => modify_guild_role, update_role_typed => modify_guild_role];
     DeleteGuildRole: DELETE "/guilds/{guild.id}/roles/{role.id}" bot, query [], body () => (), api [delete_role];
 
     // --- Invites ------------------------------------------------------------

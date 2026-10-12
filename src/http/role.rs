@@ -2,8 +2,6 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     CreateGuildRole, GuildId, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleId,
@@ -12,52 +10,6 @@ use crate::model::{
 use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
-    pub async fn create_role(&self, guild_id: GuildId, body: &Value) -> Result<Role, DiscordError> {
-        self.create_role_typed(guild_id, body).await
-    }
-
-    pub async fn create_role_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<Role, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.send(
-            RouteId::CreateGuildRole,
-            &format!("/guilds/{}/roles", guild_id),
-            json_body(body),
-        )
-        .await
-    }
-
-    pub async fn update_role(
-        &self,
-        guild_id: GuildId,
-        role_id: RoleId,
-        body: &Value,
-    ) -> Result<Role, DiscordError> {
-        self.update_role_typed(guild_id, role_id, body).await
-    }
-
-    pub async fn update_role_typed<B>(
-        &self,
-        guild_id: GuildId,
-        role_id: RoleId,
-        body: &B,
-    ) -> Result<Role, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.send(
-            RouteId::ModifyGuildRole,
-            &format!("/guilds/{}/roles/{}", guild_id, role_id),
-            json_body(body),
-        )
-        .await
-    }
-
     pub async fn delete_role(
         &self,
         guild_id: GuildId,
@@ -80,20 +32,8 @@ impl RestClient {
         .await
     }
 
+    /// Reorders roles; returns every role of the guild.
     pub async fn modify_guild_role_positions(
-        &self,
-        guild_id: GuildId,
-        body: &Value,
-    ) -> Result<Vec<Role>, DiscordError> {
-        self.send(
-            RouteId::ModifyGuildRolePositions,
-            &format!("/guilds/{}/roles", guild_id),
-            json_body(body),
-        )
-        .await
-    }
-
-    pub async fn modify_guild_role_positions_typed(
         &self,
         guild_id: GuildId,
         positions: &[ModifyGuildRolePosition],
@@ -106,12 +46,26 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_guild_role_positions`")]
+    pub async fn modify_guild_role_positions_typed(
+        &self,
+        guild_id: GuildId,
+        positions: &[ModifyGuildRolePosition],
+    ) -> Result<Vec<Role>, DiscordError> {
+        self.modify_guild_role_positions(guild_id, positions).await
+    }
+
     pub async fn create_guild_role(
         &self,
         guild_id: GuildId,
         body: &CreateGuildRole,
     ) -> Result<Role, DiscordError> {
-        self.create_role_typed(guild_id, body).await
+        self.send(
+            RouteId::CreateGuildRole,
+            &format!("/guilds/{}/roles", guild_id),
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn modify_guild_role(
@@ -120,7 +74,12 @@ impl RestClient {
         role_id: RoleId,
         body: &ModifyGuildRole,
     ) -> Result<Role, DiscordError> {
-        self.update_role_typed(guild_id, role_id, body).await
+        self.send(
+            RouteId::ModifyGuildRole,
+            &format!("/guilds/{}/roles/{}", guild_id, role_id),
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn get_guild_role(

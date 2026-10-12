@@ -1,8 +1,6 @@
 //! Guild endpoints: fetch/modify a guild, guild preview, incident actions, and
 //! the deprecated guild-creation/ownership routes.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     GetGuildQuery, Guild, GuildId, GuildIncidentsData, GuildPreview, ModifyGuild,
@@ -32,22 +30,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn update_guild(
+    pub async fn modify_guild(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &ModifyGuild,
     ) -> Result<Guild, DiscordError> {
-        self.update_guild_typed(guild_id, body).await
-    }
-
-    pub async fn update_guild_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<Guild, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyGuild,
             &format!("/guilds/{}", guild_id),
@@ -56,18 +43,7 @@ impl RestClient {
         .await
     }
 
-    pub async fn modify_guild(
-        &self,
-        guild_id: GuildId,
-        body: &ModifyGuild,
-    ) -> Result<Guild, DiscordError> {
-        self.update_guild_typed(guild_id, body).await
-    }
-
-    pub async fn get_guild_preview(
-        &self,
-        guild_id: GuildId,
-    ) -> Result<serde_json::Value, DiscordError> {
+    pub async fn get_guild_preview(&self, guild_id: GuildId) -> Result<GuildPreview, DiscordError> {
         self.send(
             RouteId::GetGuildPreview,
             &format!("/guilds/{}/preview", guild_id),
@@ -76,16 +52,12 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `get_guild_preview`")]
     pub async fn get_guild_preview_typed(
         &self,
         guild_id: GuildId,
     ) -> Result<GuildPreview, DiscordError> {
-        self.send(
-            RouteId::GetGuildPreview,
-            &format!("/guilds/{}/preview", guild_id),
-            NO_BODY,
-        )
-        .await
+        self.get_guild_preview(guild_id).await
     }
 
     pub async fn modify_guild_incident_actions(

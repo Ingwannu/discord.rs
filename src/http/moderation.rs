@@ -1,10 +1,8 @@
 //! Guild ban endpoints. Auto-moderation rules live in `auto_moderation.rs`.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
-    Ban, BulkGuildBanRequest, BulkGuildBanResponse, GuildBansQuery, GuildId, UserId,
+    Ban, BulkGuildBanRequest, BulkGuildBanResponse, CreateGuildBan, GuildBansQuery, GuildId, UserId,
 };
 
 use super::paths::guild_bans_query;
@@ -55,24 +53,13 @@ impl RestClient {
         .await
     }
 
+    /// Bans a user, optionally deleting their recent messages.
     pub async fn create_guild_ban(
         &self,
         guild_id: GuildId,
         user_id: UserId,
-        body: &Value,
+        body: &CreateGuildBan,
     ) -> Result<(), DiscordError> {
-        self.create_guild_ban_typed(guild_id, user_id, body).await
-    }
-
-    pub async fn create_guild_ban_typed<B>(
-        &self,
-        guild_id: GuildId,
-        user_id: UserId,
-        body: &B,
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send_unit(
             RouteId::CreateGuildBan,
             &format!("/guilds/{}/bans/{}", guild_id, user_id),

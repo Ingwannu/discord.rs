@@ -264,7 +264,7 @@ impl Member {
         guild_id: GuildId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
-        http.create_guild_ban_typed(
+        http.create_guild_ban(
             guild_id,
             member_user_id(self)?,
             &ban_body(delete_message_seconds),
@@ -285,15 +285,15 @@ impl Member {
     }
 
     /// Times this member out until `until`, an ISO8601 timestamp for
-    /// `communication_disabled_until`. Pass a `with_reason` client for an
-    /// audit-log reason.
+    /// `communication_disabled_until`, and returns the updated member. Pass a
+    /// `with_reason` client for an audit-log reason.
     pub async fn timeout(
         &self,
         http: &RestClient,
         guild_id: GuildId,
         until: impl Into<String>,
-    ) -> Result<(), DiscordError> {
-        http.modify_guild_member_typed(
+    ) -> Result<Member, DiscordError> {
+        http.modify_guild_member(
             guild_id,
             member_user_id(self)?,
             &timeout_body(Some(until.into())),
@@ -302,13 +302,13 @@ impl Member {
     }
 
     /// Removes this member's timeout by nulling
-    /// `communication_disabled_until`.
+    /// `communication_disabled_until`, and returns the updated member.
     pub async fn remove_timeout(
         &self,
         http: &RestClient,
         guild_id: GuildId,
-    ) -> Result<(), DiscordError> {
-        http.modify_guild_member_typed(guild_id, member_user_id(self)?, &timeout_body(None))
+    ) -> Result<Member, DiscordError> {
+        http.modify_guild_member(guild_id, member_user_id(self)?, &timeout_body(None))
             .await
     }
 
@@ -335,14 +335,15 @@ impl Member {
     }
 
     /// Applies a [`ModifyGuildMember`] body to this member (nick, roles,
-    /// mute/deaf, voice channel, timeout, flags).
+    /// mute/deaf, voice channel, timeout, flags) and returns the updated
+    /// member.
     pub async fn edit(
         &self,
         http: &RestClient,
         guild_id: GuildId,
         body: &ModifyGuildMember,
-    ) -> Result<(), DiscordError> {
-        http.modify_guild_member_typed(guild_id, member_user_id(self)?, body)
+    ) -> Result<Member, DiscordError> {
+        http.modify_guild_member(guild_id, member_user_id(self)?, body)
             .await
     }
 
@@ -419,7 +420,7 @@ impl Guild {
         http: &RestClient,
         body: &CreateGuildRole,
     ) -> Result<Role, DiscordError> {
-        http.create_role_typed(self.id, body).await
+        http.create_guild_role(self.id, body).await
     }
 
     /// Bans a user from this guild, deleting up to `delete_message_seconds`
@@ -431,7 +432,7 @@ impl Guild {
         user_id: UserId,
         delete_message_seconds: Option<u64>,
     ) -> Result<(), DiscordError> {
-        http.create_guild_ban_typed(self.id, user_id, &ban_body(delete_message_seconds))
+        http.create_guild_ban(self.id, user_id, &ban_body(delete_message_seconds))
             .await
     }
 

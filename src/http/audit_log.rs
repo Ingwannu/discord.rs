@@ -1,41 +1,14 @@
 //! Guild audit log endpoints.
 
 use crate::error::DiscordError;
-use crate::model::{AuditLog, AuditLogActionType, AuditLogEntryId, AuditLogQuery, GuildId, UserId};
+use crate::model::{AuditLog, AuditLogQuery, GuildId};
 
 use super::paths::audit_log_query;
 use super::{RestClient, RouteId, NO_BODY};
 
 impl RestClient {
-    /// Fetches a guild audit log as raw JSON.
-    #[deprecated(
-        since = "2.0.1",
-        note = "Use get_guild_audit_log_typed for a typed AuditLog"
-    )]
+    /// Fetches a guild's audit log, filtered and paginated by `query`.
     pub async fn get_guild_audit_log(
-        &self,
-        guild_id: GuildId,
-        user_id: Option<UserId>,
-        action_type: Option<AuditLogActionType>,
-        before: Option<AuditLogEntryId>,
-        limit: Option<u64>,
-    ) -> Result<serde_json::Value, DiscordError> {
-        let query = audit_log_query(&AuditLogQuery {
-            user_id,
-            action_type,
-            before,
-            after: None,
-            limit,
-        });
-        self.send(
-            RouteId::GetGuildAuditLog,
-            &format!("/guilds/{}/audit-logs{}", guild_id, query),
-            NO_BODY,
-        )
-        .await
-    }
-
-    pub async fn get_guild_audit_log_typed(
         &self,
         guild_id: GuildId,
         query: &AuditLogQuery,
@@ -47,5 +20,14 @@ impl RestClient {
             NO_BODY,
         )
         .await
+    }
+
+    #[deprecated(since = "3.0.0", note = "renamed to `get_guild_audit_log`")]
+    pub async fn get_guild_audit_log_typed(
+        &self,
+        guild_id: GuildId,
+        query: &AuditLogQuery,
+    ) -> Result<AuditLog, DiscordError> {
+        self.get_guild_audit_log(guild_id, query).await
     }
 }

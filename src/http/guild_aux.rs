@@ -1,8 +1,6 @@
 //! Auxiliary guild endpoints: integrations, prune, vanity URL, widget, welcome
 //! screen, onboarding, and templates.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     BeginGuildPruneRequest, GuildId, GuildOnboarding, GuildPruneCount, GuildPruneResult,
@@ -10,6 +8,8 @@ use crate::model::{
     IntegrationId, ModifyGuildOnboarding, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
     RoleId, VanityUrl, WelcomeScreen,
 };
+
+use crate::request::{CreateGuildTemplate, ModifyGuildTemplate};
 
 use super::paths::{guild_prune_query, validate_token_path_segment};
 use super::{json_body, RestClient, RouteId, NO_BODY};
@@ -40,22 +40,8 @@ impl RestClient {
         .await
     }
 
+    /// How many members a prune with these settings would remove.
     pub async fn get_guild_prune_count(
-        &self,
-        guild_id: GuildId,
-        days: Option<u64>,
-        include_roles: &[RoleId],
-    ) -> Result<serde_json::Value, DiscordError> {
-        let query = guild_prune_query(days, None, include_roles);
-        self.send(
-            RouteId::GetGuildPruneCount,
-            &format!("/guilds/{}/prune{query}", guild_id),
-            NO_BODY,
-        )
-        .await
-    }
-
-    pub async fn get_guild_prune_count_typed(
         &self,
         guild_id: GuildId,
         days: Option<u64>,
@@ -70,46 +56,24 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `get_guild_prune_count`")]
+    pub async fn get_guild_prune_count_typed(
+        &self,
+        guild_id: GuildId,
+        days: Option<u64>,
+        include_roles: &[RoleId],
+    ) -> Result<GuildPruneCount, DiscordError> {
+        self.get_guild_prune_count(guild_id, days, include_roles)
+            .await
+    }
+
+    /// Begins a prune. The settings go in the JSON body, as Discord
+    /// documents; set `compute_prune_count: false` on large guilds.
     pub async fn begin_guild_prune(
         &self,
         guild_id: GuildId,
-        days: Option<u64>,
-        compute_prune_count: Option<bool>,
-        include_roles: &[RoleId],
-    ) -> Result<serde_json::Value, DiscordError> {
-        let query = guild_prune_query(days, compute_prune_count, include_roles);
-        self.send(
-            RouteId::BeginGuildPrune,
-            &format!("/guilds/{}/prune{query}", guild_id),
-            NO_BODY,
-        )
-        .await
-    }
-
-    pub async fn begin_guild_prune_typed(
-        &self,
-        guild_id: GuildId,
-        days: Option<u64>,
-        compute_prune_count: Option<bool>,
-        include_roles: &[RoleId],
+        body: &BeginGuildPruneRequest,
     ) -> Result<GuildPruneResult, DiscordError> {
-        let query = guild_prune_query(days, compute_prune_count, include_roles);
-        self.send(
-            RouteId::BeginGuildPrune,
-            &format!("/guilds/{}/prune{query}", guild_id),
-            NO_BODY,
-        )
-        .await
-    }
-
-    pub async fn begin_guild_prune_with_body<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<GuildPruneResult, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::BeginGuildPrune,
             &format!("/guilds/{}/prune", guild_id),
@@ -118,12 +82,13 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `begin_guild_prune`")]
     pub async fn begin_guild_prune_with_request(
         &self,
         guild_id: GuildId,
         body: &BeginGuildPruneRequest,
     ) -> Result<GuildPruneResult, DiscordError> {
-        self.begin_guild_prune_with_body(guild_id, body).await
+        self.begin_guild_prune(guild_id, body).await
     }
 
     pub async fn get_guild_vanity_url(&self, guild_id: GuildId) -> Result<VanityUrl, DiscordError> {
@@ -150,20 +115,8 @@ impl RestClient {
     pub async fn modify_guild_widget_settings(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &ModifyGuildWidgetSettings,
     ) -> Result<GuildWidgetSettings, DiscordError> {
-        self.modify_guild_widget_settings_typed(guild_id, body)
-            .await
-    }
-
-    pub async fn modify_guild_widget_settings_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<GuildWidgetSettings, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyGuildWidget,
             &format!("/guilds/{}/widget", guild_id),
@@ -172,19 +125,17 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_guild_widget_settings`")]
     pub async fn modify_guild_widget(
         &self,
         guild_id: GuildId,
         body: &ModifyGuildWidgetSettings,
     ) -> Result<GuildWidgetSettings, DiscordError> {
-        self.modify_guild_widget_settings_typed(guild_id, body)
-            .await
+        self.modify_guild_widget_settings(guild_id, body).await
     }
 
-    pub async fn get_guild_widget(
-        &self,
-        guild_id: GuildId,
-    ) -> Result<serde_json::Value, DiscordError> {
+    /// The public widget (`widget.json`) of a guild with the widget enabled.
+    pub async fn get_guild_widget(&self, guild_id: GuildId) -> Result<GuildWidget, DiscordError> {
         self.send(
             RouteId::GetGuildWidget,
             &format!("/guilds/{}/widget.json", guild_id),
@@ -193,16 +144,12 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `get_guild_widget`")]
     pub async fn get_guild_widget_typed(
         &self,
         guild_id: GuildId,
     ) -> Result<GuildWidget, DiscordError> {
-        self.send(
-            RouteId::GetGuildWidget,
-            &format!("/guilds/{}/widget.json", guild_id),
-            NO_BODY,
-        )
-        .await
+        self.get_guild_widget(guild_id).await
     }
 
     /// Return the public PNG widget image for a guild.
@@ -239,19 +186,8 @@ impl RestClient {
     pub async fn modify_guild_welcome_screen(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &ModifyGuildWelcomeScreen,
     ) -> Result<WelcomeScreen, DiscordError> {
-        self.modify_guild_welcome_screen_typed(guild_id, body).await
-    }
-
-    pub async fn modify_guild_welcome_screen_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<WelcomeScreen, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyGuildWelcomeScreen,
             &format!("/guilds/{}/welcome-screen", guild_id),
@@ -260,12 +196,13 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_guild_welcome_screen`")]
     pub async fn modify_guild_welcome_screen_config(
         &self,
         guild_id: GuildId,
         body: &ModifyGuildWelcomeScreen,
     ) -> Result<WelcomeScreen, DiscordError> {
-        self.modify_guild_welcome_screen_typed(guild_id, body).await
+        self.modify_guild_welcome_screen(guild_id, body).await
     }
 
     pub async fn get_guild_onboarding(
@@ -283,19 +220,8 @@ impl RestClient {
     pub async fn modify_guild_onboarding(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &ModifyGuildOnboarding,
     ) -> Result<GuildOnboarding, DiscordError> {
-        self.modify_guild_onboarding_typed(guild_id, body).await
-    }
-
-    pub async fn modify_guild_onboarding_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<GuildOnboarding, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyGuildOnboarding,
             &format!("/guilds/{}/onboarding", guild_id),
@@ -304,12 +230,13 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_guild_onboarding`")]
     pub async fn modify_guild_onboarding_config(
         &self,
         guild_id: GuildId,
         body: &ModifyGuildOnboarding,
     ) -> Result<GuildOnboarding, DiscordError> {
-        self.modify_guild_onboarding_typed(guild_id, body).await
+        self.modify_guild_onboarding(guild_id, body).await
     }
 
     pub async fn get_guild_templates(
@@ -341,7 +268,7 @@ impl RestClient {
     pub async fn create_guild_template(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &CreateGuildTemplate,
     ) -> Result<GuildTemplate, DiscordError> {
         self.send(
             RouteId::CreateGuildTemplate,
@@ -369,7 +296,7 @@ impl RestClient {
         &self,
         guild_id: GuildId,
         template_code: &str,
-        body: &Value,
+        body: &ModifyGuildTemplate,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
         self.send(

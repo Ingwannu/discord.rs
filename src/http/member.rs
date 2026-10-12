@@ -1,10 +1,9 @@
 //! Guild member endpoints: list, search, add, modify, remove, and member roles.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
-    AddGuildMember, GuildId, GuildMembersQuery, Member, RoleId, SearchGuildMembersQuery, UserId,
+    AddGuildMember, GuildId, GuildMembersQuery, Member, ModifyCurrentMember, ModifyGuildMember,
+    RoleId, SearchGuildMembersQuery, UserId,
 };
 
 use super::paths::{guild_members_query, search_guild_members_query};
@@ -112,26 +111,14 @@ impl RestClient {
         .await
     }
 
+    /// Modifies a member; returns the updated member.
     pub async fn modify_guild_member(
         &self,
         guild_id: GuildId,
         user_id: UserId,
-        body: &Value,
-    ) -> Result<(), DiscordError> {
-        self.modify_guild_member_typed(guild_id, user_id, body)
-            .await
-    }
-
-    pub async fn modify_guild_member_typed<B>(
-        &self,
-        guild_id: GuildId,
-        user_id: UserId,
-        body: &B,
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.send_unit(
+        body: &ModifyGuildMember,
+    ) -> Result<Member, DiscordError> {
+        self.send(
             RouteId::ModifyGuildMember,
             &format!("/guilds/{}/members/{}", guild_id, user_id),
             json_body(body),
@@ -139,28 +126,33 @@ impl RestClient {
         .await
     }
 
+    /// Deprecated by Discord in favour of Modify Current Member
+    /// ([`Self::modify_current_member`] with a `nick`); kept while Discord
+    /// still documents the route.
     pub async fn modify_current_member_nick(
         &self,
         guild_id: GuildId,
         nick: Option<&str>,
     ) -> Result<(), DiscordError> {
-        let body = serde_json::json!({ "nick": nick });
+        #[derive(serde::Serialize)]
+        struct Nick<'a> {
+            nick: Option<&'a str>,
+        }
         self.send_unit(
             RouteId::ModifyCurrentUserNick,
             &format!("/guilds/{}/members/@me/nick", guild_id),
-            json_body(&body),
+            json_body(&Nick { nick }),
         )
         .await
     }
 
-    pub async fn modify_current_member<B>(
+    /// Modifies the bot's own member (nick, banner, avatar, bio); returns
+    /// the updated member.
+    pub async fn modify_current_member(
         &self,
         guild_id: GuildId,
-        body: &B,
-    ) -> Result<Member, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+        body: &ModifyCurrentMember,
+    ) -> Result<Member, DiscordError> {
         self.send(
             RouteId::ModifyCurrentMember,
             &format!("/guilds/{}/members/@me", guild_id),
