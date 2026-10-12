@@ -1,0 +1,25 @@
+error[E0599]: no method named `nonce` found for struct `EditMessage` in the current scope
+ --> tests/ui/edit_message_create_only_fields.rs:9:32
+  |
+9 |     let _ = EditMessage::new().nonce("n");
+  |                                ^^^^^ method not found in `EditMessage`
+
+error[E0599]: no method named `sticker_ids` found for struct `EditMessage` in the current scope
+  --> tests/ui/edit_message_create_only_fields.rs:10:32
+   |
+10 |     let _ = EditMessage::new().sticker_ids(vec![sticker_id]);
+   |                                ^^^^^^^^^^^ method not found in `EditMessage`
+
+error[E0599]: no method named `reply_to` found for struct `EditMessage` in the current scope
+  --> tests/ui/edit_message_create_only_fields.rs:11:32
+   |
+11 |     let _ = EditMessage::new().reply_to(message_id);
+   |                                ^^^^^^^^ method not found in `EditMessage`
+
+error[E0609]: no field `enforce_nonce` on type `EditMessage`
+  --> tests/ui/edit_message_create_only_fields.rs:13:10
+   |
+13 |     edit.enforce_nonce = true;
+   |          ^^^^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `content`, `embeds`, `flags`, `allowed_mentions`, `components` ... and 3 others

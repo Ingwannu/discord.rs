@@ -1,0 +1,19 @@
+error[E0599]: no method named `label` found for struct `PremiumButtonBuilder` in the current scope
+ --> tests/ui/premium_button_label_url.rs:9:47
+  |
+9 |     let _ = PremiumButtonBuilder::new(sku_id).label("Buy");
+  |                                               ^^^^^ method not found in `PremiumButtonBuilder`
+
+error[E0599]: no method named `url` found for struct `PremiumButtonBuilder` in the current scope
+  --> tests/ui/premium_button_label_url.rs:10:47
+   |
+10 |     let _ = PremiumButtonBuilder::new(sku_id).url("https://example.com");
+   |                                               ^^^ method not found in `PremiumButtonBuilder`
+
+error[E0609]: no field `label` on type `PremiumButton`
+  --> tests/ui/premium_button_label_url.rs:12:12
+   |
+12 |     button.label = Some("Buy".to_owned());
+   |            ^^^^^ unknown field
+   |
+   = note: available fields are: `id`, `sku_id`, `disabled`

@@ -1,0 +1,18 @@
+error[E0599]: no method named `custom_id` found for struct `LinkButtonBuilder` in the current scope
+ --> tests/ui/link_button_custom_id.rs:9:10
+  |
+7 |       let _ = LinkButtonBuilder::new("https://example.com")
+  |  _____________-
+8 | |         .label("Docs")
+9 | |         .custom_id("docs");
+  | |         -^^^^^^^^^ method not found in `LinkButtonBuilder`
+  | |_________|
+  |
+
+error[E0609]: no field `custom_id` on type `LinkButton`
+  --> tests/ui/link_button_custom_id.rs:11:12
+   |
+11 |     button.custom_id = Some("docs".to_owned());
+   |            ^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `id`, `url`, `label`, `emoji`, `disabled`

@@ -2,10 +2,10 @@
 // literal) is not accepted where a `ChannelType` or `ButtonStyle` is
 // expected. Wrap unknown values explicitly with `ChannelType::new`.
 use discordrs::permissions::ChannelClass;
-use discordrs::ButtonBuilder;
+use discordrs::CustomButtonBuilder;
 
 fn main() {
     let raw: u8 = 0;
     let _class = ChannelClass::from_channel_type(raw);
-    let _button = ButtonBuilder::new().style(1);
+    let _button = CustomButtonBuilder::new("go").style(1);
 }
