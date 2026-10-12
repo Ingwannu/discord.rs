@@ -635,4 +635,39 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("has not been acknowledged"));
     }
+
+    #[tokio::test]
+    async fn entry_point_routes_and_member_users_resolve() {
+        // A guild interaction carries the user on the member.
+        let mut ctx = context("16");
+        let user = ctx.user.take();
+        ctx.member = Some(crate::model::Member {
+            user,
+            ..crate::model::Member::default()
+        });
+        let interaction =
+            Interaction::PrimaryEntryPoint(crate::model::PrimaryEntryPointInteraction {
+                context: ctx.clone(),
+                data: command_data("launch"),
+            });
+        let app_context = AppContext {
+            context: ctx.clone(),
+            interaction: interaction.clone(),
+            route: route_key(&interaction),
+        };
+        assert_eq!(app_context.user_id(), Some(test_id(16)));
+        assert_eq!(app_context.route, RouteKey::Command("launch".to_string()));
+
+        let framework = AppFramework::builder()
+            .command("launch", |_ctx| async {
+                InteractionResponse::LaunchActivity
+            })
+            .build();
+        let reply = framework.dispatch(ctx, interaction).await;
+        assert!(matches!(
+            reply,
+            EndpointReply::Inline(response) if response.kind()
+                == crate::model::InteractionResponseType::LAUNCH_ACTIVITY
+        ));
+    }
 }

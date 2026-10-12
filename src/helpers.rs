@@ -1049,4 +1049,62 @@ mod tests {
         assert_eq!(json(4), json!({ "type": 5, "data": { "flags": 0 } }));
         assert_eq!(json(7)["content"], json!("hello"));
     }
+
+    /// The channel-message helpers post the Components V2 body to the
+    /// channel endpoints.
+    #[tokio::test]
+    async fn channel_message_helpers_reach_discord() {
+        use crate::response::tests::mock;
+
+        const MESSAGE: &str = r#"{"id":"30","channel_id":"40","content":"ok"}"#;
+        let mut server =
+            mock::spawn((0..5).map(|_| mock::Reply::Now(200, MESSAGE)).collect()).await;
+        let http = DiscordHttpClient::builder("bot-token", Some(test_id(123)))
+            .api_base(server.base_url.clone())
+            .build()
+            .unwrap();
+        let channel = test_id(40);
+
+        assert_eq!(
+            super::send_container_message(&http, channel, sample_container())
+                .await
+                .unwrap()["id"],
+            json!("30")
+        );
+        super::send_to_channel(&http, channel, "Title", "Body", Vec::new(), None)
+            .await
+            .unwrap();
+        super::send_components_v2(&http, channel, sample_components_message())
+            .await
+            .unwrap();
+        super::edit_message_with_container(&http, channel, test_id(30), sample_container())
+            .await
+            .unwrap();
+        let sent = super::send_message(
+            &http,
+            channel,
+            &crate::model::CreateMessage {
+                content: Some("plain".to_string()),
+                ..crate::model::CreateMessage::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent.id, test_id(30));
+
+        for expected in [
+            "POST /channels/40/messages",
+            "POST /channels/40/messages",
+            "POST /channels/40/messages",
+            "PATCH /channels/40/messages/30",
+            "POST /channels/40/messages",
+        ] {
+            let (line, body) = server.next_request_with_body().await;
+            assert_eq!(line, expected);
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if expected.starts_with("PATCH") || body.get("components").is_some() {
+                assert_eq!(body["flags"], json!(MESSAGE_FLAG_IS_COMPONENTS_V2));
+            }
+        }
+    }
 }
