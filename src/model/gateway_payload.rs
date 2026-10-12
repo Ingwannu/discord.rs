@@ -53,9 +53,10 @@ use super::{
     DisplayNameStyles, Embed, Guild, GuildId, GuildScheduledEvent, Member, Message,
     MessageActivity, MessageCall, MessageComponent, MessageId, MessageInteraction,
     MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, Nullable,
-    NullablePatch, PartialApplication, Patch, Poll, Presence, Reaction, ResolvedData, Role, RoleId,
-    RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker, StickerItem,
-    User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState, WebhookId,
+    NullablePatch, PartialApplication, Patch, Permissions, Poll, Presence, Reaction, ResolvedData,
+    Role, RoleId, RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker,
+    StickerItem, User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState,
+    WebhookId,
 };
 
 /// A GUILD_CREATE payload, split into the units the cache stores.
@@ -948,6 +949,213 @@ impl MessageUpdate {
             Patch::Value(Nullable::Value(author)) => author.to_user(),
             _ => None,
         }
+    }
+}
+
+/// GUILD_MEMBER_UPDATE: the member fields Discord sent.
+///
+/// `guild_id`, `user`, and `roles` are always sent; the other fields follow
+/// the [`MessageUpdate`] table (omitted keeps, `null` clears where the field
+/// is nullable), mirroring [`Member`]. The cache merges an update into the
+/// member it holds and never stores one on its own: a member it does not
+/// hold stays uncached, because the omitted fields are unknown.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MemberUpdate {
+    pub guild_id: GuildId,
+    /// The member's user, sent in full; shared with the cache's user store.
+    #[serde(with = "super::shared::arc")]
+    pub user: Arc<User>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present"
+    )]
+    pub roles: Patch<Vec<RoleId>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub nick: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub joined_at: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub permissions: NullablePatch<Permissions>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub deaf: NullablePatch<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub mute: NullablePatch<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub avatar: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub banner: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub premium_since: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub pending: NullablePatch<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub communication_disabled_until: NullablePatch<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub avatar_decoration_data: NullablePatch<AvatarDecorationData>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub collectibles: NullablePatch<UserCollectibles>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub flags: NullablePatch<u64>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub display_name_styles: NullablePatch<Box<DisplayNameStyles>>,
+}
+
+impl MemberUpdate {
+    /// An update for `user` in `guild_id` with no other field sent.
+    pub fn new(guild_id: GuildId, user: impl Into<Arc<User>>) -> Self {
+        Self {
+            guild_id,
+            user: user.into(),
+            roles: Patch::Missing,
+            nick: Patch::Missing,
+            joined_at: Patch::Missing,
+            permissions: Patch::Missing,
+            deaf: Patch::Missing,
+            mute: Patch::Missing,
+            avatar: Patch::Missing,
+            banner: Patch::Missing,
+            premium_since: Patch::Missing,
+            pending: Patch::Missing,
+            communication_disabled_until: Patch::Missing,
+            avatar_decoration_data: Patch::Missing,
+            collectibles: Patch::Missing,
+            flags: Patch::Missing,
+            display_name_styles: Patch::Missing,
+        }
+    }
+
+    /// The id of the member's user.
+    pub fn user_id(&self) -> UserId {
+        self.user.id
+    }
+
+    /// Applies every sent field to `member`, whose user must be this
+    /// update's user (or unknown); returns `false` and leaves it unchanged
+    /// otherwise. `member.user` becomes the update's (shared) user.
+    pub fn apply_to(&self, member: &mut Member) -> bool {
+        if member
+            .user
+            .as_ref()
+            .is_some_and(|user| user.id != self.user.id)
+        {
+            return false;
+        }
+        // Exhaustive for the same reason as `MessageUpdate::apply_to`.
+        let MemberUpdate {
+            guild_id: _,
+            user,
+            roles,
+            nick,
+            joined_at,
+            permissions,
+            deaf,
+            mute,
+            avatar,
+            banner,
+            premium_since,
+            pending,
+            communication_disabled_until,
+            avatar_decoration_data,
+            collectibles,
+            flags,
+            display_name_styles,
+        } = self;
+        let Member {
+            user: target_user,
+            roles: target_roles,
+            nick: target_nick,
+            joined_at: target_joined_at,
+            permissions: target_permissions,
+            deaf: target_deaf,
+            mute: target_mute,
+            avatar: target_avatar,
+            banner: target_banner,
+            premium_since: target_premium_since,
+            pending: target_pending,
+            communication_disabled_until: target_communication_disabled_until,
+            avatar_decoration_data: target_avatar_decoration_data,
+            collectibles: target_collectibles,
+            flags: target_flags,
+            display_name_styles: target_display_name_styles,
+        } = member;
+        *target_user = Some(Arc::clone(user));
+        apply_patch(target_roles, roles);
+        apply_nullable(target_nick, nick);
+        apply_nullable(target_joined_at, joined_at);
+        apply_nullable(target_permissions, permissions);
+        apply_nullable(target_deaf, deaf);
+        apply_nullable(target_mute, mute);
+        apply_nullable(target_avatar, avatar);
+        apply_nullable(target_banner, banner);
+        apply_nullable(target_premium_since, premium_since);
+        apply_nullable(target_pending, pending);
+        apply_nullable(
+            target_communication_disabled_until,
+            communication_disabled_until,
+        );
+        apply_nullable(target_avatar_decoration_data, avatar_decoration_data);
+        apply_nullable(target_collectibles, collectibles);
+        apply_nullable(target_flags, flags);
+        apply_nullable(target_display_name_styles, display_name_styles);
+        true
     }
 }
 

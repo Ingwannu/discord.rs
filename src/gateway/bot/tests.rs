@@ -1289,10 +1289,15 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         SINGLE_SHARD,
         &Event::from_kind(
             "GUILD_MEMBER_UPDATE",
-            EventKind::MemberUpdate(MemberEvent {
+            // Sends no `nick`: the cached nick stays.
+            EventKind::MemberUpdate(Arc::new(crate::model::MemberUpdate::new(
                 guild_id,
-                member: Arc::new(Member::default()),
-            }),
+                User {
+                    id: user_id,
+                    username: "alice".to_string(),
+                    ..User::fixture()
+                },
+            ))),
         ),
     )
     .await;
@@ -1909,17 +1914,14 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         ),
         Event::from_kind(
             "GUILD_MEMBER_UPDATE",
-            EventKind::MemberUpdate(MemberEvent {
+            EventKind::MemberUpdate(Arc::new(crate::model::MemberUpdate::new(
                 guild_id,
-                member: Arc::new(Member {
-                    user: Some(Arc::new(User {
-                        id: user_id,
-                        username: "member".to_string(),
-                        ..User::fixture()
-                    })),
-                    ..Member::default()
-                }),
-            }),
+                User {
+                    id: user_id,
+                    username: "member".to_string(),
+                    ..User::fixture()
+                },
+            ))),
         ),
         Event::from_kind(
             "GUILD_MEMBER_REMOVE",
@@ -4771,6 +4773,74 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
             "{name}"
         );
     }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn member_updates_merge_copy_on_write_and_never_create_members() {
+    let store = crate::cache::CacheHandle::new();
+    let (forwarder, _worker) =
+        super::CacheBackendForwarder::spawn(Arc::new(store.clone()), 16, Duration::from_secs(5));
+    let cache = crate::cache::CacheHandle::new();
+    let add = decode_event(
+        "GUILD_MEMBER_ADD",
+        json!({ "guild_id": "9", "user": { "id": "5", "username": "a" },
+                "roles": ["1"], "nick": "nick", "deaf": true }),
+    )
+    .unwrap();
+    for event in [&add] {
+        super::apply_cache_updates(&cache, SINGLE_SHARD, event).await;
+        super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, event).await;
+    }
+    let before = cache.member_arc(test_id(9), test_id(5)).await.unwrap();
+
+    let update = decode_event(
+        "GUILD_MEMBER_UPDATE",
+        json!({ "guild_id": "9", "user": { "id": "5", "username": "b" }, "roles": ["2"] }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &update).await;
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &update).await;
+    forwarder.flush().await;
+    for merged in [
+        cache.member_arc(test_id(9), test_id(5)).await.unwrap(),
+        store.member_arc(test_id(9), test_id(5)).await.unwrap(),
+    ] {
+        assert_eq!(merged.roles, [test_id(2)]);
+        assert_eq!(
+            merged.nick.as_deref(),
+            Some("nick"),
+            "omitted fields are kept"
+        );
+        assert_eq!(merged.deaf, Some(true));
+        assert_eq!(merged.user.as_ref().unwrap().username, "b");
+    }
+    assert_eq!(
+        before.roles,
+        [test_id(1)],
+        "the earlier snapshot is unchanged"
+    );
+    let EventKind::MemberUpdate(patch) = update.kind() else {
+        panic!("unexpected {update:?}");
+    };
+    assert!(Arc::ptr_eq(
+        &patch.user,
+        &cache.user_arc(test_id(5)).await.unwrap()
+    ));
+
+    // An uncached member stays uncached in both stores; its user is complete
+    // and is stored.
+    let stranger = decode_event(
+        "GUILD_MEMBER_UPDATE",
+        json!({ "guild_id": "9", "user": { "id": "6", "username": "c" }, "roles": [] }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &stranger).await;
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &stranger).await;
+    forwarder.flush().await;
+    assert!(cache.member(test_id(9), test_id(6)).await.is_none());
+    assert!(store.member(test_id(9), test_id(6)).await.is_none());
+    assert_eq!(cache.user(test_id(6)).await.unwrap().username, "c");
 }
 
 #[cfg(feature = "cache")]

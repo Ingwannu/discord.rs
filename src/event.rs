@@ -668,8 +668,9 @@ pub enum EventKind {
     ChannelDelete(Box<Channel>),
     /// GUILD_MEMBER_ADD.
     MemberAdd(MemberEvent),
-    /// GUILD_MEMBER_UPDATE.
-    MemberUpdate(MemberEvent),
+    /// GUILD_MEMBER_UPDATE: a typed patch, shared with the external cache
+    /// backend's ordered worker.
+    MemberUpdate(Arc<crate::model::MemberUpdate>),
     /// GUILD_MEMBER_REMOVE.
     MemberRemove(Box<MemberRemovePayload>),
     /// GUILD_MEMBERS_CHUNK.

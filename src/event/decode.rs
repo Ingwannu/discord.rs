@@ -100,7 +100,7 @@ dispatch_table! { data;
     "GUILD_MEMBERS_CHUNK" => EventKind::GuildMembersChunk(Box::new(typed(data)?)),
     "GUILD_MEMBER_ADD" => EventKind::MemberAdd(decode_member_event(data)?),
     "GUILD_MEMBER_REMOVE" => EventKind::MemberRemove(Box::new(typed(data)?)),
-    "GUILD_MEMBER_UPDATE" => EventKind::MemberUpdate(decode_member_event(data)?),
+    "GUILD_MEMBER_UPDATE" => EventKind::MemberUpdate(Arc::new(typed(data)?)),
     "GUILD_ROLE_CREATE" => EventKind::RoleCreate(Box::new(typed(data)?)),
     "GUILD_ROLE_DELETE" => EventKind::RoleDelete(typed(data)?),
     "GUILD_ROLE_UPDATE" => EventKind::RoleUpdate(Box::new(typed(data)?)),

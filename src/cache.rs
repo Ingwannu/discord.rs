@@ -7,10 +7,10 @@ use tokio::sync::RwLock;
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, Member, Message, MessageId,
-    MessageUpdate, PartialUser, Presence, Role, RoleId, ScheduledEventId, SoundboardSound,
-    SoundboardSoundId, StageInstance, StageInstanceId, Sticker, StickerId, User, UserId,
-    VoiceState,
+    Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, Member, MemberUpdate, Message,
+    MessageId, MessageUpdate, PartialUser, Presence, Role, RoleId, ScheduledEventId,
+    SoundboardSound, SoundboardSoundId, StageInstance, StageInstanceId, Sticker, StickerId, User,
+    UserId, VoiceState,
 };
 #[cfg(feature = "cache")]
 use crate::model::{Nullable, Patch};
@@ -857,6 +857,38 @@ impl CacheHandle {
         _user_id: UserId,
         _member: impl Into<Arc<Member>>,
     ) {
+    }
+
+    /// Applies a GUILD_MEMBER_UPDATE: stores its user (always complete, and
+    /// shared with the update) and merges the update into the cached member,
+    /// returning the merged member. A member that is not cached (or has
+    /// expired) stays uncached and `None` is returned: the update's omitted
+    /// fields are unknown, so it is never turned into a member on its own.
+    ///
+    /// The merge is copy-on-write under the write lock, as for
+    /// [`Self::apply_message_update`].
+    #[cfg(feature = "cache")]
+    pub async fn apply_member_update(&self, update: &MemberUpdate) -> Option<Arc<Member>> {
+        let key = (update.guild_id, update.user_id());
+        let now = Instant::now();
+        let mut store = self.store.write().await;
+        self.insert_user(&mut store, Arc::clone(&update.user));
+        if seen_expired(store.member_seen.get(&key), self.config.member_ttl, now) {
+            return None;
+        }
+        let cached = store.members.get_mut(&key)?;
+        update.apply_to(Arc::make_mut(cached));
+        let merged = Arc::clone(cached);
+        // Refresh recency and TTL as replacing the entry did in 2.x.
+        store.member_seen.insert(key, now);
+        store.member_order.touch(key);
+        maybe_prune_expired(&mut store, &self.config, now);
+        Some(merged)
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn apply_member_update(&self, _update: &MemberUpdate) -> Option<Arc<Member>> {
+        None
     }
 
     #[cfg(feature = "cache")]

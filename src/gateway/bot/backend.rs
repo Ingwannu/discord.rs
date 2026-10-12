@@ -65,7 +65,7 @@ use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::{Event, EventKind};
 use crate::model::{
-    ChannelId, GuildId, Member, Message, MessageId, MessageUpdate, Presence, UserId,
+    ChannelId, GuildId, Member, MemberUpdate, Message, MessageId, MessageUpdate, Presence, UserId,
 };
 
 /// Boxed, `Send` future returned by [`ErasedCacheBackend`].
@@ -108,6 +108,11 @@ pub(super) trait ErasedCacheBackend: Send + Sync + 'static {
         guild_id: &'a GuildId,
         user_id: &'a UserId,
     ) -> BackendFuture<'a, ()>;
+    fn get_member<'a>(
+        &'a self,
+        guild_id: &'a GuildId,
+        user_id: &'a UserId,
+    ) -> BackendFuture<'a, Option<Arc<Member>>>;
     fn put_message(&self, epoch: u64, message: Arc<Message>) -> BackendFuture<'_, ()>;
     fn get_message<'a>(
         &'a self,
@@ -182,6 +187,14 @@ impl<B: CacheBackend + 'static> ErasedCacheBackend for B {
         message_id: &'a MessageId,
     ) -> BackendFuture<'a, Option<Arc<Message>>> {
         Box::pin(async move { CacheBackend::get_message(self, *channel_id, *message_id).await })
+    }
+
+    fn get_member<'a>(
+        &'a self,
+        guild_id: &'a GuildId,
+        user_id: &'a UserId,
+    ) -> BackendFuture<'a, Option<Arc<Member>>> {
+        Box::pin(async move { CacheBackend::get_member(self, *guild_id, *user_id).await })
     }
 
     fn delete_message<'a>(
@@ -276,6 +289,7 @@ pub(super) enum BackendWrite {
     /// Shared with the event and the in-memory cache.
     PutMessage(Arc<Message>),
     UpdateMessage(Box<BackendMessageUpdate>),
+    UpdateMember(Box<BackendMemberUpdate>),
     DeleteMessages {
         channel_id: ChannelId,
         message_ids: Vec<MessageId>,
@@ -297,6 +311,15 @@ pub(super) struct BackendMessageUpdate {
     /// The in-memory cache's merged copy, used when the backend does not
     /// hold the message.
     in_memory: Option<Arc<Message>>,
+}
+
+#[derive(Debug)]
+pub(super) struct BackendMemberUpdate {
+    /// The typed patch, shared with the event.
+    update: Arc<MemberUpdate>,
+    /// The in-memory cache's merged copy, used when the backend does not
+    /// hold the member.
+    in_memory: Option<Arc<Member>>,
 }
 
 #[derive(Debug)]
@@ -1058,6 +1081,36 @@ async fn apply_backend_write(
             )
             .await
         }
+        BackendWrite::UpdateMember(update) => {
+            let BackendMemberUpdate { update, in_memory } = *update;
+            let (guild_id, user_id) = (update.guild_id, update.user_id());
+            let stored = contained("get_member", backend.get_member(&guild_id, &user_id)).await;
+            // Same rules as `UpdateMessage`: merge into the stored copy
+            // (copy-on-write), else store the in-memory merged copy, and never
+            // store the partial update on its own.
+            let merged = match stored {
+                Ok(Some(mut stored)) => {
+                    update.apply_to(Arc::make_mut(&mut stored));
+                    stored
+                }
+                Ok(None) => match in_memory {
+                    Some(member) => member,
+                    None => return Ok(()),
+                },
+                Err(error) => match in_memory {
+                    Some(member) => {
+                        warn!("cache backend {error}; storing the in-memory copy instead");
+                        member
+                    }
+                    None => return Err(error),
+                },
+            };
+            contained(
+                "put_member",
+                backend.put_member(epoch, guild_id, user_id, merged),
+            )
+            .await
+        }
         BackendWrite::DeleteMember { guild_id, user_id } => {
             contained(
                 "delete_member",
@@ -1177,15 +1230,24 @@ pub(super) async fn forward_cache_backend_updates(
 ) {
     let write = match event.kind() {
         EventKind::Ready(_) => Some(BackendWrite::ClearShard),
-        EventKind::MemberAdd(event) | EventKind::MemberUpdate(event) => event
-            .member
-            .user
-            .as_ref()
-            .map(|user| BackendWrite::PutMember {
-                guild_id: event.guild_id,
-                user_id: user.id,
-                member: Arc::clone(&event.member),
-            }),
+        EventKind::MemberUpdate(update) => {
+            let in_memory = cache.member_arc(update.guild_id, update.user_id()).await;
+            Some(BackendWrite::UpdateMember(Box::new(BackendMemberUpdate {
+                update: Arc::clone(update),
+                in_memory,
+            })))
+        }
+        EventKind::MemberAdd(event) => {
+            event
+                .member
+                .user
+                .as_ref()
+                .map(|user| BackendWrite::PutMember {
+                    guild_id: event.guild_id,
+                    user_id: user.id,
+                    member: Arc::clone(&event.member),
+                })
+        }
         EventKind::MemberRemove(data) => Some(BackendWrite::DeleteMember {
             guild_id: data.guild_id,
             user_id: data.user.id,

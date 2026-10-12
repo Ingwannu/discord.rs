@@ -1004,14 +1004,8 @@ fn decode_event_covers_remaining_success_variants() {
     {
         EventKind::MemberUpdate(event) => {
             assert_eq!(event.guild_id, snowflake("55"));
-            assert_eq!(
-                event
-                    .member
-                    .user
-                    .as_ref()
-                    .map(|user| user.username.as_str()),
-                Some("member-update")
-            );
+            assert_eq!(event.user.username, "member-update");
+            assert!(event.nick.is_missing(), "omitted fields stay missing");
         }
         other => panic!("unexpected member update event: {other:?}"),
     }

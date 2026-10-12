@@ -407,3 +407,36 @@ fn partial_users_patch_display_name_styles() {
     assert!(cleared.apply_to(&mut user));
     assert!(user.display_name_styles.is_none(), "null clears");
 }
+
+#[test]
+fn member_updates_keep_omitted_fields_and_refuse_other_users() {
+    let mut member: Member = serde_json::from_value(json!({
+        "user": { "id": "5", "username": "before" },
+        "roles": ["1"],
+        "nick": "nick",
+        "deaf": true,
+        "avatar": "a1"
+    }))
+    .unwrap();
+    let update: MemberUpdate = serde_json::from_value(json!({
+        "guild_id": "9",
+        "user": { "id": "5", "username": "after" },
+        "roles": ["2", "3"],
+        "avatar": null
+    }))
+    .unwrap();
+    assert!(update.nick.is_missing() && update.deaf.is_missing());
+    assert!(update.apply_to(&mut member));
+    assert_eq!(member.roles, [test_id(2), test_id(3)]);
+    assert_eq!(member.nick.as_deref(), Some("nick"), "omitted keeps");
+    assert_eq!(member.deaf, Some(true));
+    assert_eq!(member.avatar, None, "null clears");
+    assert!(Arc::ptr_eq(member.user.as_ref().unwrap(), &update.user));
+
+    let other = MemberUpdate::new(
+        test_id(9),
+        serde_json::from_value::<User>(json!({ "id": "6", "username": "x" })).unwrap(),
+    );
+    assert!(!other.apply_to(&mut member));
+    assert_eq!(member.user.as_ref().unwrap().id, test_id(5));
+}

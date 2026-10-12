@@ -25,11 +25,11 @@ use crate::collector::CollectorHub;
 use crate::error::DiscordError;
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
+#[cfg(feature = "voice")]
+use crate::model::UserId;
 use crate::model::{
     ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, RoleId,
 };
-#[cfg(feature = "voice")]
-use crate::model::UserId;
 #[cfg(feature = "sharding")]
 use crate::sharding::{
     ShardInfo, ShardIpcMessage, ShardRuntimeChannels, ShardRuntimeState, ShardSupervisorEvent,
@@ -788,9 +788,8 @@ pub trait EventHandler: Send + Sync + 'static {
                     self.member_add(ctx, payload.guild_id, Arc::clone(&payload.member))
                         .await
                 }
-                EventKind::MemberUpdate(payload) => {
-                    self.member_update(ctx, payload.guild_id, Arc::clone(&payload.member))
-                        .await
+                EventKind::MemberUpdate(update) => {
+                    self.member_update(ctx, Arc::clone(update)).await
                 }
                 EventKind::MemberRemove(data) => {
                     self.member_remove(ctx, data.guild_id, &data.user).await
@@ -1037,8 +1036,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn member_update(
         &self,
         _ctx: Context,
-        _guild_id: GuildId,
-        _member: Arc<crate::model::Member>,
+        _update: Arc<crate::model::MemberUpdate>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -2804,7 +2802,12 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         EventKind::ChannelDelete(channel) => {
             cache.remove_channel(channel.id).await;
         }
-        EventKind::MemberAdd(event) | EventKind::MemberUpdate(event) => {
+        EventKind::MemberUpdate(update) => {
+            // Stores the (complete) user and merges into the cached member;
+            // a member the cache does not hold stays uncached.
+            cache.apply_member_update(update).await;
+        }
+        EventKind::MemberAdd(event) => {
             if let Some(user) = event.member.user.as_ref() {
                 cache.upsert_user(Arc::clone(user)).await;
                 cache

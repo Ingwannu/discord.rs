@@ -18,12 +18,18 @@
 //!   the cache's copy of the value's strings and lists); a struct holding the
 //!   field shrinks by the value's inline size.
 
-/// `#[serde(deserialize_with)]` for `Arc<T>` (the payloads using it are
-/// decode-only).
+/// `#[serde(with)]` (or `deserialize_with`) for `Arc<T>`.
 pub(crate) mod arc {
     use std::sync::Arc;
 
-    use serde::{Deserialize, Deserializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(crate) fn serialize<T: Serialize, S: Serializer>(
+        value: &Arc<T>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        T::serialize(value, serializer)
+    }
 
     pub(crate) fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
         deserializer: D,
