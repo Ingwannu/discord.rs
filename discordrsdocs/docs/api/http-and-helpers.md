@@ -6,10 +6,10 @@
 
 Common operations include:
 
-- typed message create/update/get
+- typed message create/edit/get (`request::CreateMessage`, `request::EditMessage`)
 - typed guild/channel/member/role lookups
 - typed application command overwrite
-- typed Auto Moderation rule reads and writes through `get_auto_moderation_rules_typed`, `create_auto_moderation_rule_typed`, and `modify_auto_moderation_rule_typed`
+- typed Auto Moderation rule reads and writes through `get_auto_moderation_rules`, `create_auto_moderation_rule`, and `modify_auto_moderation_rule`
 - typed guild administration helpers for bulk bans, guild count fetches, guild ban pagination, member pagination, single-role lookup, audit logs, guild preview, prune count/result, vanity URL, incident actions, and voice regions
 - typed guild channel-position updates, OAuth2 guild-member joins, role member-count reads, and public widget image downloads
 - typed Stage Instance create/modify request bodies
@@ -29,7 +29,45 @@ Common operations include:
 - interaction responses and follow-up webhook helpers
 - Create Group DM plus Group DM recipient add/remove helpers for OAuth2 `gdm.join` flows
 
-Raw `serde_json::Value` methods remain available for routes where Discord adds fields before discord.rs has a typed model. Prefer the typed methods first, then drop to raw JSON only for newly released or experimental API fields.
+Every method takes a concrete request type and returns a typed model (3.0). For a route Discord added before discord.rs has a method, or for an experiment, use `RestClient::request(RawRequest)`; see [Raw requests](#raw-requests-rawrequest-30).
+
+## REST Surface (3.0)
+
+3.0 settles one name and one signature per Discord operation:
+
+- **One canonical method per operation.** The 2.x pairs (`get_guild_emojis` returning `Vec<Value>` next to `get_guild_emojis_typed`) and aliases (`_from_request`, `_with_body`, `_config`, `update_guild`, `create_role`, `update_role`) are merged into the canonical name, which takes the concrete request type and returns the typed model. Renames that map 1:1 stay as `#[deprecated]` forwards for one release; generic `B: Serialize` variants are gone. `_with_query` and `_with_files` variants stay. The full table is [below](#migrating-rest-names-from-2x-30).
+- **Concrete request bodies.** Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. New bodies for the other domains live in `discordrs::request` too: `ModifyChannel` (for `update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage` (new `create_forum_thread(_with_files)`), `CreateAutoModerationRule` / `ModifyAutoModerationRule`, `CreateGuildEmoji` / `ModifyGuildEmoji` / `CreateApplicationEmoji` / `ModifyApplicationEmoji`, `SendSoundboardSound` / `CreateGuildSoundboardSound` / `ModifyGuildSoundboardSound`, `CreateGuildTemplate` / `ModifyGuildTemplate`, `CreateGuildScheduledEvent` / `ModifyGuildScheduledEvent`, and `EditApplicationCommand`. Create bodies use `Option` fields; modify bodies use `Patch` / `NullablePatch`, where the `clear_*` setters send `null`. The 2.x bodies still in `discordrs::model` (`ModifyGuild`, `CreateGuildRole`, `CreateWebhook`, ...) keep working and move to `request` later.
+- **Documented exceptions.** `execute_slack_compatible_webhook` / `execute_github_compatible_webhook` take `&Value` (Slack- and GitHub-format payloads), and `update_lobby_message_moderation_metadata` takes the application-defined `HashMap<String, String>`.
+- **Bodies are encoded once.** A body is serialized straight to bytes with `serde_json::to_vec` (no `serde_json::Value` tree) and every attempt, including retries, sends the same bytes. Object keys follow the request type's field order.
+- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, and the interaction callbacks and follow-ups. An explicit value, or an explicit `null` on an edit, wins. 2.x did not apply it to `edit_webhook_message`.
+- **Nonce replay** comes from the typed request (`CreateMessage::nonce_replay()`, set with `.enforce_nonce("...")`), not from reading the JSON back, and only for Create Message.
+- **Voice messages** (`IS_VOICE_MESSAGE`) are checked locally before upload: exactly one `audio/*` file.
+- `modify_guild_member` returns the updated `Member` (Discord's 200 body) instead of `()`; `Member::edit` / `timeout` / `remove_timeout` follow.
+
+## Raw Requests (`RawRequest`, 3.0)
+
+`RestClient::request::<T>(RawRequest)` sends any method and path through the same transport as the typed methods: route gates, rate limits, `with_reason`, retries, and token redaction in errors and logs. `T` is any `DeserializeOwned` type (`serde_json::Value` for untyped JSON, `()` to ignore the body).
+
+```rust
+use discordrs::RawRequest;
+use serde_json::{json, Value};
+
+let channel: Value = rest.request(RawRequest::get("/channels/123")).await?;
+let created: Value = rest
+    .request(RawRequest::post("/channels/123/messages").json(&json!({ "content": "hi" })))
+    .await?;
+let _: () = rest
+    .request(RawRequest::get("/users/@me/connections").bearer(&access_token))
+    .await?;
+```
+
+`json(&body)` encodes once when it is called (an encoding error is returned by `request` before anything is sent), `json_bytes(bytes)` sends pre-encoded JSON, and `multipart(&payload, &files)` sends `payload_json` plus `files[n]`. Two rules are stricter than for typed methods, because the client cannot tell what a raw request does: a POST or PATCH is never replayed after an ambiguous failure, even with `enforce_nonce`, unless `retry_non_idempotent_requests(true)` is set; and the `Authorization` header follows the path (the bot token, except on `/webhooks/{id}/{token}…` and `/interactions/…`) unless `bearer(...)` or `without_authorization()` chooses. `Debug` shows only the method and the token-redacted path.
+
+This replaces the 2.x `request(method, path, Option<&Value>) -> Value`, `request_typed`, `request_multipart`, and `request_typed_multipart`.
+
+## Route Manifest and Request Goldens (3.0)
+
+Every route the client sends is one row of `src/http/routes.rs`: a stable route ID, the method, the path template in the docs' spelling, the authorization (`bot`, `bearer`, `token`, `none`), the query parameters, the request and response types, and the methods that send it. Endpoints pass their route ID to the transport, which takes the method and the `Authorization` header from the row. `ci/api_drift.py` reads the same rows for the weekly Discord drift report, and its `--self-check` (every PR) checks that every endpoint method is listed and sends its route. `src/http/goldens/rest_routes.golden` records the exact request of every route (method, escaped path, query, authorization, body bytes, multipart parts); `cargo test` compares against it. See "Discord API Drift Report" in [Testing and Coverage](../guide/testing-and-coverage.md).
 
 `1.2.1` hardens the REST layer:
 
@@ -86,7 +124,7 @@ let rest = RestClient::builder("bot-token", None)
 - `use_client(reqwest::Client)` supplies a fully custom client, superseding `connect_timeout`, `request_timeout`, and `proxy`.
 - `rate_limit_callback(...)` fires on every 429 with `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
 - `retry_non_idempotent_requests(true)` (3.0, default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. Enable it only when a duplicated mutation is acceptable for every request the client makes.
-- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
 
 ## Interaction Response API (`InteractionResponder`, 2.2.0; response state 3.0)
 
@@ -237,16 +275,12 @@ rest.delete_guild(from_template.id).await?;
 `MessageReference::reply(...)` and `MessageReference::forward(...)` build typed references (`MessageReferenceType::DEFAULT` / `FORWARD`), and `forward_message(...)` forwards in one call — the equivalent of discord.js's `message.forward(channel)`:
 
 ```rust
-use discordrs::{CreateMessage, MessageReference};
+use discordrs::request::CreateMessage;
 
 // Reply in the same channel.
 rest.create_message(
     channel_id,
-    &CreateMessage {
-        content: Some("On it!".to_string()),
-        message_reference: Some(MessageReference::reply(message_id)),
-        ..Default::default()
-    },
+    &CreateMessage::new().content("On it!").reply_to(message_id),
 )
 .await?;
 
@@ -290,7 +324,7 @@ let application = rest.get_current_application().await?;
 println!("editing {}", application.name);
 
 let updated = rest
-    .edit_current_application_from_request(&ModifyCurrentApplication {
+    .edit_current_application(&ModifyCurrentApplication {
         description: Some("Support utilities".to_string()),
         install_params: Some(ApplicationInstallParams {
             scopes: vec!["bot".to_string(), "applications.commands".to_string()],
@@ -312,7 +346,7 @@ Webhook management has typed request bodies for creation and modification:
 use discordrs::{CreateWebhook, ModifyWebhook, ModifyWebhookWithToken};
 
 let webhook = rest
-    .create_webhook_from_request(
+    .create_webhook(
         channel_id,
         &CreateWebhook {
             name: "deployments".to_string(),
@@ -323,7 +357,7 @@ let webhook = rest
 let webhook_id = webhook.id.clone().expect("webhook id");
 let webhook_token = webhook.token.as_deref().expect("webhook token");
 
-rest.modify_webhook_from_request(
+rest.modify_webhook(
     webhook_id,
     &ModifyWebhook {
         name: Some("ops".to_string()),
@@ -333,7 +367,7 @@ rest.modify_webhook_from_request(
 )
 .await?;
 
-rest.modify_webhook_with_token_from_request(
+rest.modify_webhook_with_token(
     webhook_id,
     webhook_token,
     &ModifyWebhookWithToken {
@@ -344,7 +378,7 @@ rest.modify_webhook_with_token_from_request(
 .await?;
 ```
 
-Webhook execution supports Discord's `wait`, `thread_id`, and `with_components` query parameters. Slack-compatible and GitHub-compatible execution helpers use Discord's documented compatibility endpoints:
+Webhook execution takes `request::ExecuteWebhook` and supports Discord's `wait`, `thread_id`, and `with_components` query parameters. `execute_webhook` sends `wait=true` and returns the `Message`; `execute_webhook_with_query` returns `Option<Message>` (`None` for Discord's 204 without `wait`). Slack-compatible and GitHub-compatible execution helpers use Discord's documented compatibility endpoints and keep an untyped `&Value` body, because those payloads follow Slack's and GitHub's formats, not Discord's:
 
 ```rust
 use discordrs::WebhookExecuteQuery;
@@ -355,10 +389,15 @@ let query = WebhookExecuteQuery {
     with_components: Some(true),
 };
 
-rest.execute_webhook_with_query(webhook_id, token, &query, &serde_json::json!({
-    "content": "deployment finished"
-}))
-.await?;
+// `wait: false`: Discord answers 204, so the result is `None`.
+let sent: Option<Message> = rest
+    .execute_webhook_with_query(
+        webhook_id,
+        token,
+        &query,
+        &discordrs::request::ExecuteWebhook::new().content("deployment finished"),
+    )
+    .await?;
 
 rest.execute_slack_compatible_webhook(
     webhook_id,
@@ -389,8 +428,14 @@ let message = rest
     .get_webhook_message_with_query(webhook_id, token, message_id, &message_query)
     .await?;
 
-rest.edit_webhook_message_with_query(webhook_id, token, message.id.as_str(), &message_query, &body)
-    .await?;
+rest.edit_webhook_message_with_query(
+    webhook_id,
+    token,
+    message.id.as_str(),
+    &message_query,
+    &discordrs::request::EditWebhookMessage::new().content("edited"),
+)
+.await?;
 
 rest.delete_webhook_message_with_query(webhook_id, token, message.id.as_str(), &message_query)
     .await?;
@@ -427,7 +472,7 @@ let updated = rest
 Discord's user connection and linked-role endpoints require user OAuth2 scopes. These helpers take an explicit Bearer token so bot-token REST calls and user-token REST calls do not get mixed accidentally:
 
 - `get_current_user_connections(bearer_token)`
-- `get_current_user_guilds_typed_with_query(query)`
+- `get_current_user_guilds_with_query(query)`
 - `get_current_user_guild_member(bearer_token, guild_id)`
 - `get_current_user_application_role_connection(bearer_token)`
 - `update_current_user_application_role_connection(bearer_token, body)`
@@ -440,7 +485,7 @@ Current-user guild lists are available with Discord's documented pagination and 
 use discordrs::CurrentUserGuildsQuery;
 
 let guilds = rest
-    .get_current_user_guilds_typed_with_query(&CurrentUserGuildsQuery {
+    .get_current_user_guilds_with_query(&CurrentUserGuildsQuery {
         after: Some(last_seen_guild_id),
         limit: Some(50),
         with_counts: Some(true),
@@ -509,7 +554,7 @@ Guild role reordering is typed through `ModifyGuildRolePosition`:
 use discordrs::ModifyGuildRolePosition;
 
 let roles = rest
-    .modify_guild_role_positions_typed(
+    .modify_guild_role_positions(
         guild_id,
         &[ModifyGuildRolePosition {
             id: role_id,
@@ -539,7 +584,7 @@ rest.modify_guild(
 )
 .await?;
 
-rest.create_guild_channel_from_request(
+rest.create_guild_channel(
     guild_id,
     &CreateGuildChannel {
         name: "rules".to_string(),
@@ -550,7 +595,7 @@ rest.create_guild_channel_from_request(
 )
 .await?;
 
-rest.create_guild_ban_typed(
+rest.create_guild_ban(
     guild_id,
     user_id,
     &CreateGuildBan {
@@ -586,16 +631,18 @@ rest.modify_guild_role(
 )
 .await?;
 
-rest.modify_guild_member_typed(
-    guild_id,
-    user_id,
-    &ModifyGuildMember {
-        nick: Some(None),
-        channel_id: Some(None),
-        ..Default::default()
-    },
-)
-.await?;
+// Returns the updated member (3.0).
+let member = rest
+    .modify_guild_member(
+        guild_id,
+        user_id,
+        &ModifyGuildMember {
+            nick: Some(None),
+            channel_id: Some(None),
+            ..Default::default()
+        },
+    )
+    .await?;
 
 let current_member = rest
     .modify_current_member(
@@ -608,7 +655,7 @@ let current_member = rest
     )
     .await?;
 
-rest.modify_guild_widget(
+rest.modify_guild_widget_settings(
     guild_id,
     &ModifyGuildWidgetSettings {
         enabled: Some(true),
@@ -617,7 +664,7 @@ rest.modify_guild_widget(
 )
 .await?;
 
-rest.modify_guild_welcome_screen_config(
+rest.modify_guild_welcome_screen(
     guild_id,
     &ModifyGuildWelcomeScreen {
         enabled: Some(Some(true)),
@@ -632,7 +679,7 @@ rest.modify_guild_welcome_screen_config(
 )
 .await?;
 
-rest.modify_guild_onboarding_config(
+rest.modify_guild_onboarding(
     guild_id,
     &ModifyGuildOnboarding {
         default_channel_ids: Some(vec![channel_id]),
@@ -644,7 +691,7 @@ rest.modify_guild_onboarding_config(
 .await?;
 
 let prune = rest
-    .begin_guild_prune_with_request(
+    .begin_guild_prune(
         guild_id,
         &BeginGuildPruneRequest {
             days: Some(7),
@@ -656,7 +703,7 @@ let prune = rest
     .await?;
 
 let stage = rest
-    .create_stage_instance_from_request(&CreateStageInstance {
+    .create_stage_instance(&CreateStageInstance {
         channel_id,
         topic: "Town hall".to_string(),
         privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -665,7 +712,7 @@ let stage = rest
     })
     .await?;
 
-rest.modify_stage_instance_from_request(
+rest.modify_stage_instance(
     stage.channel_id,
     &ModifyStageInstance {
         privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -725,15 +772,15 @@ let matches = rest
 
 Role member counts are exposed as `get_guild_role_member_counts(guild_id)`, returning a map of role IDs to member counts. Discord excludes the `@everyone` role from this response.
 
-Guild widgets are available as typed JSON through `get_guild_widget_typed(guild_id)`. The public PNG widget image is available through `get_guild_widget_image(guild_id, style)`, where `style` is a `GuildWidgetImageStyle` value. This image route is documented by Discord as unauthenticated, so discord.rs intentionally omits the bot authorization header for it.
+Guild widgets are available as typed JSON through `get_guild_widget(guild_id)`. The public PNG widget image is available through `get_guild_widget_image(guild_id, style)`, where `style` is a `GuildWidgetImageStyle` value. This image route is documented by Discord as unauthenticated, so discord.rs intentionally omits the bot authorization header for it.
 
-Audit logs are available as typed `AuditLog` payloads through `get_guild_audit_log_typed(guild_id, query)`. Use `AuditLogQuery` for `user_id`, `action_type`, `before`, `after`, and `limit` filters:
+Audit logs are available as typed `AuditLog` payloads through `get_guild_audit_log(guild_id, query)`. Use `AuditLogQuery` for `user_id`, `action_type`, `before`, `after`, and `limit` filters:
 
 ```rust
 use discordrs::AuditLogQuery;
 
 let audit_log = rest
-    .get_guild_audit_log_typed(
+    .get_guild_audit_log(
         guild_id,
         &AuditLogQuery {
             after: Some(last_entry_id),
@@ -746,14 +793,14 @@ let audit_log = rest
 
 ## Channel Administration Helpers
 
-Channel invite listing and creation are typed through `get_channel_invites(...)` and `create_channel_invite_typed(...)`:
+Channel invite listing and creation are typed through `get_channel_invites(...)` and `create_channel_invite(...)`:
 
 ```rust
 use discordrs::{CreateChannelInvite, RoleId};
 
 let invites = rest.get_channel_invites(channel_id).await?;
 let invite = rest
-    .create_channel_invite_typed(
+    .create_channel_invite(
         channel_id,
         &CreateChannelInvite {
             max_age: Some(600),
@@ -792,7 +839,7 @@ rest
 // fails before sending if the body's `type` disagrees.
 let target = OverwriteTarget::Role(role_id);
 rest
-    .edit_channel_permissions_typed(
+    .edit_channel_permissions(
         channel_id,
         target,
         &EditChannelPermission {
@@ -813,7 +860,7 @@ use std::collections::HashMap;
 use discordrs::{AddGroupDmRecipient, CreateGroupDmChannel, UserId};
 
 let group_dm = rest
-    .create_group_dm_channel_typed(&CreateGroupDmChannel {
+    .create_group_dm_channel(&CreateGroupDmChannel {
         access_tokens: vec![gdm_join_access_token.to_string()],
         nicks: HashMap::from([(UserId::try_from(42_u64)?, "friend".to_string())]),
     })
@@ -844,7 +891,7 @@ let pack = rest.get_sticker_pack(sticker_pack_id).await?;
 println!("pack: {}", pack.name);
 
 let sticker = rest
-    .create_guild_sticker_from_request(
+    .create_guild_sticker(
         guild_id,
         &CreateGuildSticker {
             name: "wave".to_string(),
@@ -855,7 +902,7 @@ let sticker = rest
     )
     .await?;
 
-rest.modify_guild_sticker_from_request(
+rest.modify_guild_sticker(
     guild_id,
     sticker.id,
     &ModifyGuildSticker {
@@ -1023,3 +1070,123 @@ oauth
 - Use helper functions for common interaction acknowledgment paths.
 - Keep Components V2 payload generation inside the builders.
 - Fall back to low-level raw request helpers only when the typed surface does not yet cover the route.
+
+## Migrating REST Names from 2.x (3.0)
+
+"Deprecated forward" means the 2.x name still compiles with a deprecation warning and calls the 3.0 method; "removed" means it is gone (a generic `B: Serialize` or `&Value` body, or a 2.x name now used by the canonical method with a typed signature).
+
+| 2.x | 3.0 | Route | 2.x name |
+|---|---|---|---|
+| `begin_guild_prune_typed` | `begin_guild_prune` | `BeginGuildPrune` | removed |
+| `begin_guild_prune_with_body` | `begin_guild_prune` | `BeginGuildPrune` | removed |
+| `begin_guild_prune_with_request` | `begin_guild_prune` | `BeginGuildPrune` | deprecated forward |
+| `bulk_overwrite_global_commands_typed` | `bulk_overwrite_global_commands` | `BulkOverwriteGlobalApplicationCommands` | deprecated forward |
+| `bulk_overwrite_guild_commands_typed` | `bulk_overwrite_guild_commands` | `BulkOverwriteGuildApplicationCommands` | deprecated forward |
+| `create_application_emoji_typed` | `create_application_emoji` | `CreateApplicationEmoji` | removed |
+| `create_auto_moderation_rule_typed` | `create_auto_moderation_rule` | `CreateAutoModerationRule` | removed |
+| `create_channel_invite_typed` | `create_channel_invite` | `CreateChannelInvite` | deprecated forward |
+| `create_dm_channel_typed` | `create_dm_channel` | `CreateDm` | deprecated forward |
+| `create_group_dm_channel_typed` | `create_group_dm_channel` | `CreateGroupDm` | deprecated forward |
+| `create_guild_ban_typed` | `create_guild_ban` | `CreateGuildBan` | removed |
+| `create_guild_channel_from_request` | `create_guild_channel` | `CreateGuildChannel` | deprecated forward |
+| `create_guild_channel_typed` | `create_guild_channel` | `CreateGuildChannel` | removed |
+| `create_guild_emoji_typed` | `create_guild_emoji` | `CreateGuildEmoji` | removed |
+| `create_guild_scheduled_event_typed` | `create_guild_scheduled_event` | `CreateGuildScheduledEvent` | removed |
+| `create_guild_sticker_from_request` | `create_guild_sticker` | `CreateGuildSticker` | deprecated forward |
+| `create_guild_sticker_typed` | `create_guild_sticker` | `CreateGuildSticker` | removed |
+| `create_role` | `create_guild_role` | `CreateGuildRole` | removed |
+| `create_role_typed` | `create_guild_role` | `CreateGuildRole` | removed |
+| `create_stage_instance_from_request` | `create_stage_instance` | `CreateStageInstance` | deprecated forward |
+| `create_stage_instance_typed` | `create_stage_instance` | `CreateStageInstance` | removed |
+| `create_webhook_from_request` | `create_webhook` | `CreateWebhook` | deprecated forward |
+| `create_webhook_raw` | `create_webhook` | `CreateWebhook` | removed |
+| `create_webhook_typed` | `create_webhook` | `CreateWebhook` | removed |
+| `edit_channel_permissions_typed` | `edit_channel_permissions` | `EditChannelPermissions` | deprecated forward |
+| `edit_current_application_from_request` | `edit_current_application` | `EditCurrentApplication` | deprecated forward |
+| `get_application_emoji_typed` | `get_application_emoji` | `GetApplicationEmoji` | deprecated forward |
+| `get_application_emojis_typed` | `get_application_emojis` | `ListApplicationEmojis` | deprecated forward |
+| `get_auto_moderation_rules_typed` | `get_auto_moderation_rules` | `ListAutoModerationRulesForGuild` | deprecated forward |
+| `get_channel_webhooks_raw` | `get_channel_webhooks` | `GetChannelWebhooks` | removed |
+| `get_channel_webhooks_typed` | `get_channel_webhooks` | `GetChannelWebhooks` | deprecated forward |
+| `get_current_user_guilds_typed` | `get_current_user_guilds` | `GetCurrentUserGuilds` | deprecated forward |
+| `get_current_user_guilds_typed_with_query` | `get_current_user_guilds_with_query` | `GetCurrentUserGuilds` | deprecated forward |
+| `get_guild_audit_log_typed` | `get_guild_audit_log` | `GetGuildAuditLog` | deprecated forward |
+| `get_guild_emoji_typed` | `get_guild_emoji` | `GetGuildEmoji` | deprecated forward |
+| `get_guild_emojis_typed` | `get_guild_emojis` | `ListGuildEmojis` | deprecated forward |
+| `get_guild_preview_typed` | `get_guild_preview` | `GetGuildPreview` | deprecated forward |
+| `get_guild_prune_count_typed` | `get_guild_prune_count` | `GetGuildPruneCount` | deprecated forward |
+| `get_guild_widget_typed` | `get_guild_widget` | `GetGuildWidget` | deprecated forward |
+| `get_public_archived_threads` | `list_public_archived_threads` | `ListPublicArchivedThreads` | removed |
+| `get_voice_regions_typed` | `get_voice_regions` | `ListVoiceRegions` | deprecated forward |
+| `modify_application_emoji_typed` | `modify_application_emoji` | `ModifyApplicationEmoji` | removed |
+| `modify_auto_moderation_rule_typed` | `modify_auto_moderation_rule` | `ModifyAutoModerationRule` | removed |
+| `modify_current_user_voice_state_from_request` | `modify_current_user_voice_state` | `ModifyCurrentUserVoiceState` | deprecated forward |
+| `modify_guild_emoji_typed` | `modify_guild_emoji` | `ModifyGuildEmoji` | removed |
+| `modify_guild_member_typed` | `modify_guild_member` | `ModifyGuildMember` | removed |
+| `modify_guild_onboarding_config` | `modify_guild_onboarding` | `ModifyGuildOnboarding` | deprecated forward |
+| `modify_guild_onboarding_typed` | `modify_guild_onboarding` | `ModifyGuildOnboarding` | removed |
+| `modify_guild_role_positions_typed` | `modify_guild_role_positions` | `ModifyGuildRolePositions` | deprecated forward |
+| `modify_guild_scheduled_event_typed` | `modify_guild_scheduled_event` | `ModifyGuildScheduledEvent` | removed |
+| `modify_guild_sticker_from_request` | `modify_guild_sticker` | `ModifyGuildSticker` | deprecated forward |
+| `modify_guild_sticker_typed` | `modify_guild_sticker` | `ModifyGuildSticker` | removed |
+| `modify_guild_welcome_screen_config` | `modify_guild_welcome_screen` | `ModifyGuildWelcomeScreen` | deprecated forward |
+| `modify_guild_welcome_screen_typed` | `modify_guild_welcome_screen` | `ModifyGuildWelcomeScreen` | removed |
+| `modify_guild_widget` | `modify_guild_widget_settings` | `ModifyGuildWidget` | deprecated forward |
+| `modify_guild_widget_settings_typed` | `modify_guild_widget_settings` | `ModifyGuildWidget` | removed |
+| `modify_stage_instance_from_request` | `modify_stage_instance` | `ModifyStageInstance` | deprecated forward |
+| `modify_stage_instance_typed` | `modify_stage_instance` | `ModifyStageInstance` | removed |
+| `modify_user_voice_state_from_request` | `modify_user_voice_state` | `ModifyUserVoiceState` | deprecated forward |
+| `modify_webhook_from_request` | `modify_webhook` | `ModifyWebhook` | deprecated forward |
+| `modify_webhook_typed` | `modify_webhook` | `ModifyWebhook` | removed |
+| `modify_webhook_with_token_from_request` | `modify_webhook_with_token` | `ModifyWebhookWithToken` | deprecated forward |
+| `modify_webhook_with_token_typed` | `modify_webhook_with_token` | `ModifyWebhookWithToken` | removed |
+| `update_channel_typed` | `update_channel` | `ModifyChannel` | removed |
+| `update_guild` | `modify_guild` | `ModifyGuild` | removed |
+| `update_guild_typed` | `modify_guild` | `ModifyGuild` | removed |
+| `update_message` | `edit_message` | `EditMessage` | removed |
+| `update_message_with_files` | `edit_message_with_files` | `EditMessage` | removed |
+| `update_role` | `modify_guild_role` | `ModifyGuildRole` | removed |
+| `update_role_typed` | `modify_guild_role` | `ModifyGuildRole` | removed |
+
+Same name, new signature (2.x → 3.0):
+
+| Method | 2.x | 3.0 |
+|---|---|---|
+| `update_channel` | `&Value` | `&request::ModifyChannel` |
+| `create_guild_channel` | `&Value` | `&CreateGuildChannel` |
+| `edit_channel_permissions` | `&Value` | `&EditChannelPermission` |
+| `create_channel_invite` | `Option<&Value>` | `&CreateChannelInvite` (`default()` sends `{}`) |
+| `create_thread_from_message`, `create_thread` | `&Value` | `&request::StartThreadFromMessage`, `&request::StartThreadWithoutMessage`; forum threads use the new `create_forum_thread` |
+| `create_message`, `create_message_with_files` | `&model::CreateMessage` | `&request::CreateMessage` |
+| `execute_webhook`, `execute_webhook_with_files` | `&Value` → `Value` | `&request::ExecuteWebhook` → `Message` |
+| `execute_webhook_with_query` | `&Value` → `Value` | `&request::ExecuteWebhook` → `Option<Message>` |
+| `edit_webhook_message*` | `&model::CreateMessage` | `&request::EditWebhookMessage` |
+| `get_guild_audit_log` | inline filters → `Value` | `&AuditLogQuery` → `AuditLog` |
+| `get_guild_prune_count` | → `Value` | → `GuildPruneCount` |
+| `begin_guild_prune` | inline query parameters → `Value` | `&BeginGuildPruneRequest` (JSON body) → `GuildPruneResult` |
+| `get_guild_preview`, `get_guild_widget` | → `Value` | → `GuildPreview`, `GuildWidget` |
+| `modify_guild_widget_settings`, `modify_guild_welcome_screen`, `modify_guild_onboarding` | `&Value` | `&ModifyGuildWidgetSettings`, `&ModifyGuildWelcomeScreen`, `&ModifyGuildOnboarding` |
+| `create_guild_template`, `modify_guild_template` | `&Value` | `&request::CreateGuildTemplate`, `&request::ModifyGuildTemplate` |
+| `modify_guild_member` | `&Value` → `()` | `&ModifyGuildMember` → `Member` |
+| `modify_current_member` | `B: Serialize` | `&ModifyCurrentMember` |
+| `create_guild_ban` | `&Value` | `&CreateGuildBan` |
+| `modify_guild_role_positions` | `&Value` | `&[ModifyGuildRolePosition]` |
+| `get_auto_moderation_rules` | → `Vec<Value>` | → `Vec<AutoModerationRule>` |
+| `create_auto_moderation_rule`, `modify_auto_moderation_rule` | `&Value` → `Value` | `&request::{CreateAutoModerationRule, ModifyAutoModerationRule}` → `AutoModerationRule` |
+| `get_guild_emojis`, `get_guild_emoji`, `get_application_emojis`, `get_application_emoji` | → `Value` | → `Emoji` |
+| `create_guild_emoji`, `modify_guild_emoji`, `create_application_emoji`, `modify_application_emoji` | `&Value` → `Value` | `&request::*Emoji` → `Emoji` |
+| `create_guild_sticker` | `&Value` | `&CreateGuildSticker` (form fields) |
+| `modify_guild_sticker` | `&Value` | `&ModifyGuildSticker` |
+| `send_soundboard_sound`, `create_guild_soundboard_sound`, `modify_guild_soundboard_sound` | `&Value` | `&request::{SendSoundboardSound, CreateGuildSoundboardSound, ModifyGuildSoundboardSound}` |
+| `create_guild_scheduled_event`, `modify_guild_scheduled_event` | `&Value` | `&request::{CreateGuildScheduledEvent, ModifyGuildScheduledEvent}` |
+| `create_stage_instance`, `modify_stage_instance` | `&Value` | `&CreateStageInstance`, `&ModifyStageInstance` |
+| `modify_current_user_voice_state`, `modify_user_voice_state` | `B: Serialize` | `&ModifyCurrentUserVoiceState`, `&ModifyUserVoiceState` |
+| `get_voice_regions` | → `Vec<Value>` | → `Vec<VoiceRegion>` |
+| `create_webhook` | `&Value` → `Value` | `&CreateWebhook` → `Webhook` |
+| `get_channel_webhooks` | → `Vec<Value>` | → `Vec<Webhook>` |
+| `modify_webhook`, `modify_webhook_with_token` | `&Value` | `&ModifyWebhook`, `&ModifyWebhookWithToken` |
+| `edit_current_application` | `B: Serialize` | `&ModifyCurrentApplication` |
+| `edit_global_command`, `edit_guild_command` | `&Value` | `&request::EditApplicationCommand` |
+| `batch_edit_application_command_permissions` | `B: Serialize` | `&[GuildApplicationCommandPermissions]`, deprecated (Discord disabled the route) |
+| `get_current_user_guilds(_with_query)` | → `Vec<Value>` | → `Vec<CurrentUserGuild>` |
+| `request` | `(Method, &str, Option<&Value>)` → `Value` | `(RawRequest)` → `T` |

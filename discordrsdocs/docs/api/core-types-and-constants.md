@@ -90,7 +90,7 @@ Some wire fields hold an ID whose kind depends on a sibling field. Each has an e
 | `MentionableId` | a bare snowflake | `User`, `Role` (from `ResolvedData::mentionable(id)`) |
 
 - `Everyone` and `AllChannels` cannot be recognised from a lone permission, so a standalone `ApplicationCommandPermission` decodes them as `Role` / `Channel`. `GuildApplicationCommandPermissions` and the `APPLICATION_COMMAND_PERMISSIONS_UPDATE` event resolve them against their `guild_id` (`CommandPermissionTarget::in_guild`), and both spellings serialize to the same JSON. `AllChannels` of guild `1` would be ID `0`, so it is a serialization error rather than a bad request.
-- Overwrite endpoints take a target: `edit_channel_permissions_typed(channel_id, OverwriteTarget::Role(role_id), &body)`; build the body with `EditChannelPermission::for_target(target)`, because a body whose `type` contradicts the target is rejected before sending.
+- Overwrite endpoints take a target: `edit_channel_permissions(channel_id, OverwriteTarget::Role(role_id), &body)`; build the body with `EditChannelPermission::for_target(target)`, because a body whose `type` contradicts the target is rejected before sending.
 - `SelectDefaultValue` is shared by received components (`MessageComponent::default_values`) and `SelectMenuBuilder` (`default_user(UserId)`, `default_role(RoleId)`, `default_channel(ChannelId)`, `default_mentionable(MentionableId)`). Component `id(...)` setters take a `ComponentId`.
 - `MentionResolver` methods take `UserId` / `RoleId` / `ChannelId`; a closure resolver takes a `MentionTarget` (`User`, `Role`, `Channel`).
 

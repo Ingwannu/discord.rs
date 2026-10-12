@@ -12,6 +12,41 @@
 - 3.0부터 route 키에서 웹훅·인터랙션 토큰을 해시값으로 바꾸고, 전송 오류와 API·프록시 오류 본문에서 요청 토큰을 지웁니다. REST 로그, `RateLimitInfo::route`, `DiscordError::{RateLimit, Api, Http}`에 토큰이 남지 않습니다. 버킷을 알기 전에 줄 서 있던 요청은 버킷 게이트로 옮겨 가서 같은 버킷의 요청과 동시에 나가지 않습니다
 - 비정상 대기값(`inf`, `NaN`, 음수, 지나치게 큰 `Retry-After`/`x-ratelimit-reset-after`)은 panic 대신 범위로 잘라 처리합니다
 
+## REST 표면 (3.0)
+
+3.0은 Discord 작업 하나에 이름 하나, 시그니처 하나만 둡니다.
+
+- **작업마다 정규 메서드 하나.** 2.x의 쌍(`Vec<Value>`를 돌려주는 `get_guild_emojis`와 `get_guild_emojis_typed`)과 별칭(`_from_request`, `_with_body`, `_config`, `update_guild`, `create_role`, `update_role`)은 정규 이름으로 합쳤습니다. 정규 메서드는 구체 요청 타입을 받고 타입 모델을 돌려줍니다. 1:1로 이름만 바뀐 것은 한 릴리스 동안 `#[deprecated]` 전달 메서드로 남고, 제네릭 `B: Serialize` 변형은 없어졌습니다. `_with_query`와 `_with_files` 변형은 유지합니다. 전체 표는 [아래](#2x에서-rest-이름-옮기기-30)에 있습니다.
+- **구체 요청 본문.** 메시지 엔드포인트는 `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`를 받습니다. 다른 도메인의 새 본문도 `discordrs::request`에 있습니다: `ModifyChannel`(`update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage`(새 `create_forum_thread(_with_files)`), `CreateAutoModerationRule`/`ModifyAutoModerationRule`, 이모지 4종, 사운드보드 3종, `CreateGuildTemplate`/`ModifyGuildTemplate`, `CreateGuildScheduledEvent`/`ModifyGuildScheduledEvent`, `EditApplicationCommand`. 생성 본문은 `Option` 필드, 수정 본문은 `Patch`/`NullablePatch` 필드이고 `clear_*` setter는 `null`을 보냅니다. 아직 `discordrs::model`에 있는 2.x 본문(`ModifyGuild`, `CreateGuildRole`, `CreateWebhook` 등)은 그대로 쓰고, 나중에 `request`로 옮깁니다.
+- **문서화된 예외.** `execute_slack_compatible_webhook`/`execute_github_compatible_webhook`은 Slack·GitHub 형식 본문이라 `&Value`를 받고, `update_lobby_message_moderation_metadata`는 애플리케이션이 정의하는 `HashMap<String, String>`을 받습니다.
+- **본문은 한 번만 인코딩합니다.** 본문은 `serde_json::to_vec`으로 바로 바이트가 되고(`serde_json::Value` 트리 없음), 재시도를 포함한 모든 시도가 같은 바이트를 보냅니다. 객체 키는 요청 타입의 필드 순서를 따릅니다.
+- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, 인터랙션 콜백과 후속 메시지. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 2.x는 `edit_webhook_message`에 적용하지 않았습니다.
+- **nonce 재전송**은 JSON을 다시 읽지 않고 타입 요청(`CreateMessage::nonce_replay()`, `.enforce_nonce("...")`로 설정)에서 판정하며, Create Message에만 해당합니다.
+- **음성 메시지**(`IS_VOICE_MESSAGE`)는 업로드 전에 로컬에서 확인합니다: `audio/*` 파일이 정확히 하나여야 합니다.
+- `modify_guild_member`는 `()` 대신 갱신된 `Member`(Discord의 200 본문)를 돌려줍니다. `Member::edit`/`timeout`/`remove_timeout`도 같습니다.
+
+## 원시 요청 (`RawRequest`, 3.0)
+
+`RestClient::request::<T>(RawRequest)`는 임의의 메서드와 경로를 타입 메서드와 같은 전송 계층(route 게이트, rate limit, `with_reason`, 재시도, 오류·로그의 토큰 가리기)으로 보냅니다. `T`는 `DeserializeOwned`면 무엇이든 됩니다(타입 없는 JSON은 `serde_json::Value`, 본문을 버리려면 `()`).
+
+```rust
+use discordrs::RawRequest;
+use serde_json::{json, Value};
+
+let channel: Value = rest.request(RawRequest::get("/channels/123")).await?;
+let created: Value = rest
+    .request(RawRequest::post("/channels/123/messages").json(&json!({ "content": "hi" })))
+    .await?;
+```
+
+`json(&body)`는 호출할 때 한 번 인코딩하고(인코딩 오류는 아무것도 보내기 전에 `request`가 돌려줍니다), `json_bytes(bytes)`는 미리 인코딩한 JSON을, `multipart(&payload, &files)`는 `payload_json`과 `files[n]`을 보냅니다. 클라이언트가 원시 요청의 의미를 알 수 없으므로 두 가지는 타입 메서드보다 보수적입니다. POST·PATCH는 `enforce_nonce`가 있어도 모호한 실패 뒤에 다시 보내지 않고(`retry_non_idempotent_requests(true)`일 때만), `Authorization` 헤더는 `bearer(...)`나 `without_authorization()`로 고르지 않으면 경로를 따릅니다(봇 토큰, 단 `/webhooks/{id}/{token}…`과 `/interactions/…`는 헤더 없음). `Debug`는 메서드와 토큰을 가린 경로만 보여 줍니다.
+
+2.x의 `request(method, path, Option<&Value>) -> Value`, `request_typed`, `request_multipart`, `request_typed_multipart`를 대신합니다.
+
+## 라우트 목록과 요청 골든 (3.0)
+
+클라이언트가 보내는 모든 라우트는 `src/http/routes.rs`의 한 행입니다: 고정 라우트 ID, 메서드, 문서 표기 경로, 인증(`bot`, `bearer`, `token`, `none`), 쿼리 파라미터, 요청·응답 타입, 그 라우트를 보내는 메서드. 엔드포인트는 라우트 ID를 전송 계층에 넘기고, 전송 계층은 메서드와 `Authorization` 헤더를 행에서 가져옵니다. `ci/api_drift.py`가 주간 Discord drift 리포트에 같은 행을 읽고, PR마다 도는 `--self-check`가 모든 엔드포인트 메서드가 목록에 있고 자기 라우트를 보내는지 확인합니다. `src/http/goldens/rest_routes.golden`은 모든 라우트의 실제 요청(메서드, 이스케이프된 경로, 쿼리, 인증, 본문 바이트, multipart 파트)을 담고 `cargo test`가 비교합니다.
+
 ## Discord API 추가 기능 (3.0)
 
 - **대규모 봇 샤딩:** `CurrentUserGuildsQuery { shard: Some(n), .. }`로 `shard` 쿼리 파라미터를 보냅니다. 대규모 봇 샤딩을 쓰는 앱은 2026-09-15부터 `GET /users/@me/guilds`에 이 값이 필수입니다(`0..max_concurrency`, 게이트웨이 샤드 ID와 다름).
@@ -248,3 +283,80 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 - `respond_component_with_container(...)`
 - `respond_modal_with_container(...)`
 - `respond_with_modal(...)`
+
+## 2.x에서 REST 이름 옮기기 (3.0)
+
+"deprecated 전달"은 2.x 이름이 경고와 함께 컴파일되고 3.0 메서드를 호출한다는 뜻이고, "제거"는 없어졌다는 뜻입니다(제네릭 `B: Serialize`나 `&Value` 본문, 또는 정규 메서드가 같은 이름을 타입 시그니처로 쓰게 된 경우). 이름은 같고 시그니처만 바뀐 메서드(`update_channel(&ModifyChannel)`, `execute_webhook(&ExecuteWebhook) -> Message`, `get_guild_emojis() -> Vec<Emoji>` 등)는 영문 문서의 "Same name, new signature" 표를 보세요.
+
+| 2.x | 3.0 | 라우트 | 2.x 이름 |
+|---|---|---|---|
+| `begin_guild_prune_typed` | `begin_guild_prune` | `BeginGuildPrune` | 제거 |
+| `begin_guild_prune_with_body` | `begin_guild_prune` | `BeginGuildPrune` | 제거 |
+| `begin_guild_prune_with_request` | `begin_guild_prune` | `BeginGuildPrune` | deprecated 전달 |
+| `bulk_overwrite_global_commands_typed` | `bulk_overwrite_global_commands` | `BulkOverwriteGlobalApplicationCommands` | deprecated 전달 |
+| `bulk_overwrite_guild_commands_typed` | `bulk_overwrite_guild_commands` | `BulkOverwriteGuildApplicationCommands` | deprecated 전달 |
+| `create_application_emoji_typed` | `create_application_emoji` | `CreateApplicationEmoji` | 제거 |
+| `create_auto_moderation_rule_typed` | `create_auto_moderation_rule` | `CreateAutoModerationRule` | 제거 |
+| `create_channel_invite_typed` | `create_channel_invite` | `CreateChannelInvite` | deprecated 전달 |
+| `create_dm_channel_typed` | `create_dm_channel` | `CreateDm` | deprecated 전달 |
+| `create_group_dm_channel_typed` | `create_group_dm_channel` | `CreateGroupDm` | deprecated 전달 |
+| `create_guild_ban_typed` | `create_guild_ban` | `CreateGuildBan` | 제거 |
+| `create_guild_channel_from_request` | `create_guild_channel` | `CreateGuildChannel` | deprecated 전달 |
+| `create_guild_channel_typed` | `create_guild_channel` | `CreateGuildChannel` | 제거 |
+| `create_guild_emoji_typed` | `create_guild_emoji` | `CreateGuildEmoji` | 제거 |
+| `create_guild_scheduled_event_typed` | `create_guild_scheduled_event` | `CreateGuildScheduledEvent` | 제거 |
+| `create_guild_sticker_from_request` | `create_guild_sticker` | `CreateGuildSticker` | deprecated 전달 |
+| `create_guild_sticker_typed` | `create_guild_sticker` | `CreateGuildSticker` | 제거 |
+| `create_role` | `create_guild_role` | `CreateGuildRole` | 제거 |
+| `create_role_typed` | `create_guild_role` | `CreateGuildRole` | 제거 |
+| `create_stage_instance_from_request` | `create_stage_instance` | `CreateStageInstance` | deprecated 전달 |
+| `create_stage_instance_typed` | `create_stage_instance` | `CreateStageInstance` | 제거 |
+| `create_webhook_from_request` | `create_webhook` | `CreateWebhook` | deprecated 전달 |
+| `create_webhook_raw` | `create_webhook` | `CreateWebhook` | 제거 |
+| `create_webhook_typed` | `create_webhook` | `CreateWebhook` | 제거 |
+| `edit_channel_permissions_typed` | `edit_channel_permissions` | `EditChannelPermissions` | deprecated 전달 |
+| `edit_current_application_from_request` | `edit_current_application` | `EditCurrentApplication` | deprecated 전달 |
+| `get_application_emoji_typed` | `get_application_emoji` | `GetApplicationEmoji` | deprecated 전달 |
+| `get_application_emojis_typed` | `get_application_emojis` | `ListApplicationEmojis` | deprecated 전달 |
+| `get_auto_moderation_rules_typed` | `get_auto_moderation_rules` | `ListAutoModerationRulesForGuild` | deprecated 전달 |
+| `get_channel_webhooks_raw` | `get_channel_webhooks` | `GetChannelWebhooks` | 제거 |
+| `get_channel_webhooks_typed` | `get_channel_webhooks` | `GetChannelWebhooks` | deprecated 전달 |
+| `get_current_user_guilds_typed` | `get_current_user_guilds` | `GetCurrentUserGuilds` | deprecated 전달 |
+| `get_current_user_guilds_typed_with_query` | `get_current_user_guilds_with_query` | `GetCurrentUserGuilds` | deprecated 전달 |
+| `get_guild_audit_log_typed` | `get_guild_audit_log` | `GetGuildAuditLog` | deprecated 전달 |
+| `get_guild_emoji_typed` | `get_guild_emoji` | `GetGuildEmoji` | deprecated 전달 |
+| `get_guild_emojis_typed` | `get_guild_emojis` | `ListGuildEmojis` | deprecated 전달 |
+| `get_guild_preview_typed` | `get_guild_preview` | `GetGuildPreview` | deprecated 전달 |
+| `get_guild_prune_count_typed` | `get_guild_prune_count` | `GetGuildPruneCount` | deprecated 전달 |
+| `get_guild_widget_typed` | `get_guild_widget` | `GetGuildWidget` | deprecated 전달 |
+| `get_public_archived_threads` | `list_public_archived_threads` | `ListPublicArchivedThreads` | 제거 |
+| `get_voice_regions_typed` | `get_voice_regions` | `ListVoiceRegions` | deprecated 전달 |
+| `modify_application_emoji_typed` | `modify_application_emoji` | `ModifyApplicationEmoji` | 제거 |
+| `modify_auto_moderation_rule_typed` | `modify_auto_moderation_rule` | `ModifyAutoModerationRule` | 제거 |
+| `modify_current_user_voice_state_from_request` | `modify_current_user_voice_state` | `ModifyCurrentUserVoiceState` | deprecated 전달 |
+| `modify_guild_emoji_typed` | `modify_guild_emoji` | `ModifyGuildEmoji` | 제거 |
+| `modify_guild_member_typed` | `modify_guild_member` | `ModifyGuildMember` | 제거 |
+| `modify_guild_onboarding_config` | `modify_guild_onboarding` | `ModifyGuildOnboarding` | deprecated 전달 |
+| `modify_guild_onboarding_typed` | `modify_guild_onboarding` | `ModifyGuildOnboarding` | 제거 |
+| `modify_guild_role_positions_typed` | `modify_guild_role_positions` | `ModifyGuildRolePositions` | deprecated 전달 |
+| `modify_guild_scheduled_event_typed` | `modify_guild_scheduled_event` | `ModifyGuildScheduledEvent` | 제거 |
+| `modify_guild_sticker_from_request` | `modify_guild_sticker` | `ModifyGuildSticker` | deprecated 전달 |
+| `modify_guild_sticker_typed` | `modify_guild_sticker` | `ModifyGuildSticker` | 제거 |
+| `modify_guild_welcome_screen_config` | `modify_guild_welcome_screen` | `ModifyGuildWelcomeScreen` | deprecated 전달 |
+| `modify_guild_welcome_screen_typed` | `modify_guild_welcome_screen` | `ModifyGuildWelcomeScreen` | 제거 |
+| `modify_guild_widget` | `modify_guild_widget_settings` | `ModifyGuildWidget` | deprecated 전달 |
+| `modify_guild_widget_settings_typed` | `modify_guild_widget_settings` | `ModifyGuildWidget` | 제거 |
+| `modify_stage_instance_from_request` | `modify_stage_instance` | `ModifyStageInstance` | deprecated 전달 |
+| `modify_stage_instance_typed` | `modify_stage_instance` | `ModifyStageInstance` | 제거 |
+| `modify_user_voice_state_from_request` | `modify_user_voice_state` | `ModifyUserVoiceState` | deprecated 전달 |
+| `modify_webhook_from_request` | `modify_webhook` | `ModifyWebhook` | deprecated 전달 |
+| `modify_webhook_typed` | `modify_webhook` | `ModifyWebhook` | 제거 |
+| `modify_webhook_with_token_from_request` | `modify_webhook_with_token` | `ModifyWebhookWithToken` | deprecated 전달 |
+| `modify_webhook_with_token_typed` | `modify_webhook_with_token` | `ModifyWebhookWithToken` | 제거 |
+| `update_channel_typed` | `update_channel` | `ModifyChannel` | 제거 |
+| `update_guild` | `modify_guild` | `ModifyGuild` | 제거 |
+| `update_guild_typed` | `modify_guild` | `ModifyGuild` | 제거 |
+| `update_message` | `edit_message` | `EditMessage` | 제거 |
+| `update_message_with_files` | `edit_message_with_files` | `EditMessage` | 제거 |
+| `update_role` | `modify_guild_role` | `ModifyGuildRole` | 제거 |
+| `update_role_typed` | `modify_guild_role` | `ModifyGuildRole` | 제거 |

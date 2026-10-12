@@ -58,18 +58,19 @@ The public API was tightened to make the typed surface the default:
 - Builder implementation submodules are private. Import from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
 - `1.2.2` fixes Gateway compression handling so default connections no longer request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
-- `get_public_archived_threads(...)` and `get_guild_audit_log(...)` are legacy raw-JSON helpers. Prefer `list_public_archived_threads(...)` and `get_guild_audit_log_typed(...)` for typed responses.
+- 3.0 removed the legacy raw-JSON helpers `get_public_archived_threads(...)` and the inline-parameter `get_guild_audit_log(...)`; use `list_public_archived_threads(...)` and `get_guild_audit_log(guild_id, &AuditLogQuery)`.
 - `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
 
 Common replacements:
 
 | Old path | New path |
 |----------|----------|
-| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(...)` |
-| `RestClient::edit_message(...)` | `RestClient::update_message(...)` |
-| `RestClient::create_dm_channel(...)` | `RestClient::create_dm_channel_typed(...)` |
+| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(&request::CreateMessage)` |
+| `RestClient::edit_message(...)` (1.x), `update_message(...)` (2.x) | `RestClient::edit_message(&request::EditMessage)` (3.0) |
+| `RestClient::create_dm_channel(...)` (1.x), `create_dm_channel_typed(...)` (2.x) | `RestClient::create_dm_channel(&CreateDmChannel)` (3.0) |
 | `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
-| `RestClient::bulk_overwrite_global_commands(...)` | `RestClient::bulk_overwrite_global_commands_typed(...)` |
+| `RestClient::bulk_overwrite_global_commands(...)` (1.x), `bulk_overwrite_global_commands_typed(...)` (2.x) | `RestClient::bulk_overwrite_global_commands(&[CommandDefinition])` (3.0) |
+| `RestClient::request(method, path, Option<&Value>)`, `request_typed`, `request_multipart` (2.x) | `RestClient::request::<T>(RawRequest)` (3.0) |
 | `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
 | generic `DiscordModel` access for `ApplicationCommand` | `ApplicationCommand::id_opt()` / `ApplicationCommand::created_at()` |
 
@@ -298,7 +299,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.create_guild_channel_from_request(
+    http.create_guild_channel(
         guild_id,
         &CreateGuildChannel {
             name: "rules".to_string(),
@@ -320,7 +321,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.modify_guild_role_positions_typed(
+    http.modify_guild_role_positions(
         guild_id,
         &[ModifyGuildRolePosition {
             id: "321".parse()?,
@@ -329,7 +330,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.create_guild_ban_typed(
+    http.create_guild_ban(
         guild_id,
         user_id,
         &CreateGuildBan {
@@ -365,7 +366,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.modify_guild_member_typed(
+    http.modify_guild_member(
         guild_id,
         user_id,
         &ModifyGuildMember {
@@ -388,7 +389,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
         .await?;
     println!("current member: {:?}", current_member.user);
 
-    http.modify_guild_widget(
+    http.modify_guild_widget_settings(
         guild_id,
         &ModifyGuildWidgetSettings {
             enabled: Some(true),
@@ -397,7 +398,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.modify_guild_welcome_screen_config(
+    http.modify_guild_welcome_screen(
         guild_id,
         &ModifyGuildWelcomeScreen {
             enabled: Some(Some(true)),
@@ -412,7 +413,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     )
     .await?;
 
-    http.modify_guild_onboarding_config(
+    http.modify_guild_onboarding(
         guild_id,
         &ModifyGuildOnboarding {
             default_channel_ids: Some(vec!["456".parse()?]),
@@ -424,7 +425,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     .await?;
 
     let prune = http
-        .begin_guild_prune_with_request(
+        .begin_guild_prune(
             guild_id,
             &BeginGuildPruneRequest {
                 days: Some(7),
@@ -437,7 +438,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     println!("pruned: {:?}", prune.pruned);
 
     let stage = http
-        .create_stage_instance_from_request(&CreateStageInstance {
+        .create_stage_instance(&CreateStageInstance {
             channel_id: channel_id,
             topic: "Town hall".to_string(),
             privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -446,7 +447,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
         })
         .await?;
 
-    http.modify_stage_instance_from_request(
+    http.modify_stage_instance(
         stage.channel_id,
         &ModifyStageInstance {
             privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -473,7 +474,7 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
     println!("{role_counts:?}");
 
     let audit_log = http
-        .get_guild_audit_log_typed(
+        .get_guild_audit_log(
             guild_id,
             &AuditLogQuery {
                 after: Some("100".parse()?),
@@ -595,7 +596,7 @@ async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::Discor
     println!("pack: {}", pack.name);
 
     let sticker = http
-        .create_guild_sticker_from_request(
+        .create_guild_sticker(
             guild_id,
             &CreateGuildSticker {
                 name: "wave".to_string(),
@@ -606,7 +607,7 @@ async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::Discor
         )
         .await?;
 
-    http.modify_guild_sticker_from_request(
+    http.modify_guild_sticker(
         guild_id,
         sticker.id,
         &ModifyGuildSticker {
@@ -632,7 +633,7 @@ async fn update_application(http: &DiscordHttpClient) -> Result<(), discordrs::D
     let app = http.get_current_application().await?;
     println!("editing {}", app.name);
 
-    http.edit_current_application_from_request(&ModifyCurrentApplication {
+    http.edit_current_application(&ModifyCurrentApplication {
         description: Some("Support utilities".to_string()),
         install_params: Some(ApplicationInstallParams {
             scopes: vec!["bot".to_string(), "applications.commands".to_string()],
@@ -712,7 +713,7 @@ async fn channel_admin(
     let invites = http.get_channel_invites(channel_id).await?;
     println!("active invites: {}", invites.len());
 
-    http.create_channel_invite_typed(
+    http.create_channel_invite(
         channel_id,
         &CreateChannelInvite {
             max_age: Some(600),
@@ -749,7 +750,7 @@ async fn channel_admin(
     // The overwrite target says whether the ID is a role or a member, and
     // `for_target` puts the matching `type` in the body.
     let target = OverwriteTarget::Role(role_id);
-    http.edit_channel_permissions_typed(
+    http.edit_channel_permissions(
         channel_id,
         target,
         &EditChannelPermission {
@@ -768,7 +769,8 @@ async fn channel_admin(
 `MessageReference` has typed constructors for the two reference kinds (`MessageReferenceType::DEFAULT` and `MessageReferenceType::FORWARD`), and `forward_message(...)` forwards in one call — the equivalent of discord.js's `message.forward(channel)`:
 
 ```rust
-use discordrs::{CreateMessage, DiscordHttpClient, MessageReference};
+use discordrs::request::CreateMessage;
+use discordrs::DiscordHttpClient;
 
 async fn reply_and_forward(
     http: &DiscordHttpClient,
@@ -779,11 +781,7 @@ async fn reply_and_forward(
     // Reply to a message in the same channel.
     http.create_message(
         channel_id,
-        &CreateMessage {
-            content: Some("On it!".to_string()),
-            message_reference: Some(MessageReference::reply(message_id)),
-            ..Default::default()
-        },
+        &CreateMessage::new().content("On it!").reply_to(message_id),
     )
     .await?;
 
@@ -1190,6 +1188,19 @@ async fn collect_clicks(ctx: &discordrs::Context) {
 
 ## 8.5 REST Safety Notes
 
+3.0: every `RestClient` method takes a concrete request type and returns a typed model; bodies are encoded once into bytes and reused on retries. For a route without a method, use the raw escape hatch, which goes through the same rate limits, retries, and token redaction (a raw POST or PATCH is never replayed after an ambiguous failure):
+
+```rust
+use discordrs::RawRequest;
+use serde_json::{json, Value};
+
+let created: Value = rest
+    .request(RawRequest::post("/channels/123/messages").json(&json!({ "content": "hi" })))
+    .await?;
+```
+
+The 2.x → 3.0 name table is "Migrating REST Names from 2.x" in `discordrsdocs/docs/api/http-and-helpers.md`.
+
 `RestClient` validates token-like path segments before authenticated routes are built. This includes invite codes passed to `get_invite`, `get_invite_with_options`, and `delete_invite`, so user-provided invite text cannot inject `/`, `\`, `?`, `#`, or control characters into bot-authorized REST paths.
 
 Application command permission edits are an OAuth2 Bearer-token flow in Discord, not a bot-token flow. Use `get_guild_application_command_permissions(...)` and `get_application_command_permissions(...)` for bot-authenticated reads, then use `edit_application_command_permissions(bearer_token, ...)` with an access token that has Discord's `applications.commands.permissions.update` scope.
@@ -1229,7 +1240,7 @@ Webhook Resource management supports typed request bodies and query-aware execut
 use discordrs::{CreateWebhook, ModifyWebhook, WebhookExecuteQuery, WebhookMessageQuery};
 
 let webhook = rest
-    .create_webhook_from_request(
+    .create_webhook(
         channel_id,
         &CreateWebhook {
             name: "deployments".to_string(),
@@ -1241,7 +1252,7 @@ let webhook = rest
 let webhook_id = webhook.id.expect("webhook id");
 let webhook_token = webhook.token.expect("webhook token");
 
-rest.modify_webhook_from_request(
+rest.modify_webhook(
     webhook_id,
     &ModifyWebhook {
         name: Some("ops".to_string()),
@@ -1259,9 +1270,9 @@ rest.execute_webhook_with_query(
         thread_id: Some(thread_id),
         with_components: Some(true),
     },
-    &serde_json::json!({ "content": "deployment finished" }),
+    &discordrs::request::ExecuteWebhook::new().content("deployment finished"),
 )
-.await?;
+.await?; // `wait: false`, so Discord answers 204 and this is `None`
 
 let message_query = WebhookMessageQuery {
     thread_id: Some(thread_id),
@@ -1277,10 +1288,7 @@ rest.edit_webhook_message_with_query(
     &webhook_token,
     &message.id.to_string(),
     &message_query,
-    &discordrs::CreateMessage {
-        content: Some("deployment edited".to_string()),
-        ..Default::default()
-    },
+    &discordrs::request::EditWebhookMessage::new().content("deployment edited"),
 )
 .await?;
 ```
@@ -1415,7 +1423,7 @@ fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
 - `use_client(reqwest::Client)` is the escape hatch for a fully custom client; it supersedes `connect_timeout`, `request_timeout`, and `proxy`.
 - `rate_limit_callback(...)` fires on every 429 with a `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
 - `retry_non_idempotent_requests(true)` (default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. By default only GET/HEAD/OPTIONS/PUT/DELETE and `POST /channels/{id}/messages` with `nonce` + `enforce_nonce: true` (within 60 seconds of the first attempt) are replayed, because Discord may already have applied an ambiguous failure; 429s are always retried, and connection failures are retried for every method unless `use_client(...)` supplied the client (its redirect policy is unknown).
-- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `update_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
 
 ## 8.8 Prepare for Channel Obfuscation (mandatory 2026-11-16)
 
@@ -1678,7 +1686,7 @@ async fn manage_voice_state(http: &DiscordHttpClient) -> Result<(), discordrs::D
     let state = http.get_current_user_voice_state(guild_id).await?;
     println!("current voice session: {:?}", state.session_id);
 
-    http.modify_current_user_voice_state_from_request(
+    http.modify_current_user_voice_state(
         guild_id,
         &ModifyCurrentUserVoiceState {
             channel_id: Some(channel_id),
@@ -1688,7 +1696,7 @@ async fn manage_voice_state(http: &DiscordHttpClient) -> Result<(), discordrs::D
     )
     .await?;
 
-    http.modify_user_voice_state_from_request(
+    http.modify_user_voice_state(
         guild_id,
         user_id,
         &ModifyUserVoiceState {
@@ -1917,16 +1925,16 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 - `get_entitlement(...)`
 - `get_application_activity_instance(...)`
 - `get_guild_integrations(...)`
-- `get_guild_audit_log_typed(...)`
+- `get_guild_audit_log(...)`
 - `get_guild_with_query(...)`
 - `get_guild_bans_with_query(...)`
 - `get_guild_members_with_query(...)`
 - `search_guild_members_with_query(...)`
-- `get_current_user_guilds_typed_with_query(...)`
+- `get_current_user_guilds_with_query(...)`
 - `get_current_user_connections(...)`
 - `get_current_user_application_role_connection(...)`
 - `update_current_user_application_role_connection(...)`
-- `create_group_dm_channel_typed(...)`
+- `create_group_dm_channel(...)`
 - `parse_webhook_event_payload(...)`
 - `modify_guild_incident_actions(...)`
 - `create_lobby(...)`, `get_lobby(...)`, `modify_lobby(...)`, `delete_lobby(...)`

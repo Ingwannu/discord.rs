@@ -29,7 +29,7 @@ discordrs = { version = "2.2.0", features = ["voice", "dave"] }
 - `VoiceDaveFrameDecryptor`: trait for DAVE frame decryptors.
 - `VoiceDaveFrameEncryptor` and `send_opus_frame_with_dave(...)`: behind `dave`, encrypt Opus with DAVE before RTP packetization.
 - `VoiceDaveySession`: experimental `dave` feature wrapper over `davey` / OpenMLS. `VoiceDaveyDecryptor` remains as a compatibility alias.
-- `get_current_user_voice_state(...)`, `get_user_voice_state(...)`, `modify_current_user_voice_state_from_request(...)`, and `modify_user_voice_state_from_request(...)`: typed Voice Resource REST helpers for stage voice-state reads and moderation updates.
+- `get_current_user_voice_state(...)`, `get_user_voice_state(...)`, `modify_current_user_voice_state(...)`, and `modify_user_voice_state(...)`: typed Voice Resource REST helpers for stage voice-state reads and moderation updates.
 - `discordrs::voice::player::{AudioPlayer, AudioResource, AudioInput, NoSubscriberBehavior}`: the `2.2.0` discord.js-style playback pipeline (see below).
 
 ## Audio Playback Pipeline
@@ -183,7 +183,7 @@ let user_id: UserId = "789".parse()?;
 let state = rest.get_current_user_voice_state(guild_id).await?;
 println!("current voice session: {:?}", state.session_id);
 
-rest.modify_current_user_voice_state_from_request(
+rest.modify_current_user_voice_state(
     guild_id,
     &ModifyCurrentUserVoiceState {
         channel_id: Some(channel_id),
@@ -193,7 +193,7 @@ rest.modify_current_user_voice_state_from_request(
 )
 .await?;
 
-rest.modify_user_voice_state_from_request(
+rest.modify_user_voice_state(
     guild_id,
     user_id,
     &ModifyUserVoiceState {

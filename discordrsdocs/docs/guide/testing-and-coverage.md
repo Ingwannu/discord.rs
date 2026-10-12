@@ -174,8 +174,8 @@ Rules for new code:
   manifest `RouteId`: `send` (decode into `T`), `send_optional` (`None` for 204), `send_unit`,
   `send_bytes`, and `send_bearer` / `send_bearer_unit` for routes authorized with a caller's
   OAuth2 token. Bodies are encoded once with `serde_json::to_vec` (`body::encode_json`, no
-  `Value` tree) and every attempt sends the same bytes. The shims are generic over the response type only, run no `?`, and hand the awaited
-  `Result` to `decode_response`. New endpoints add a row to `src/http/routes.rs` and call these
+  `Value` tree) and every attempt sends the same bytes. The shims are generic over the response
+  type only, run no `?`, and hand the awaited `Result` to `decode_response`. New endpoints add a row to `src/http/routes.rs` and call these
   shims; they do not add another generic `async fn` around the loop. A shim cost about 160 LLVM
   IR lines per `(response, body)` type pair, down from about 275, before body encoding moved to
   the call site. For a crate that calls 150 endpoints this
@@ -413,6 +413,20 @@ edit:
 - *`Method::X`: endpoints name their route with `RouteId`*: an endpoint file builds a request
   with an HTTP method instead of a manifest route.
 - *evidence `...` no longer appears in src/*: an event-table entry's evidence moved; update it.
+
+### Request goldens
+
+`src/http/tests/goldens.rs` sends one call per manifest route (and per method a row lists) to a
+local recording server and renders the request: method, escaped path and query, `Authorization`
+header, content type, and body bytes, with multipart boundaries replaced by `BOUNDARY`. The output
+must equal `src/http/goldens/rest_routes.golden`, and each request must match its row's method,
+template shape, and authorization kind. A route without a case, or a case calling a method its row
+does not list, fails the test. After an intended change, regenerate and review the diff:
+
+```bash
+DISCORDRS_UPDATE_GOLDENS=1 cargo test --all-features --lib http::tests::goldens
+git diff src/http/goldens/rest_routes.golden
+```
 
 ### Weekly issue
 

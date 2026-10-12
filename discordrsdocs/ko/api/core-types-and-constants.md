@@ -86,7 +86,7 @@ ID의 종류가 옆 필드에 따라 달라지는 와이어 필드는 enum으로
 | `MentionableId` | snowflake 하나 | `User`, `Role`(`ResolvedData::mentionable(id)`로 구함) |
 
 - `Everyone`과 `AllChannels`는 권한 하나만 보고는 알 수 없으므로, 단독 `ApplicationCommandPermission`은 `Role`/`Channel`로 읽습니다. `GuildApplicationCommandPermissions`와 `APPLICATION_COMMAND_PERMISSIONS_UPDATE` 이벤트가 자기 `guild_id`로 해석하며(`CommandPermissionTarget::in_guild`), 두 표현은 같은 JSON으로 직렬화됩니다. 길드 ID 1의 `AllChannels`는 ID 0이 되므로 잘못된 요청 대신 직렬화 오류가 됩니다.
-- 덮어쓰기 엔드포인트는 대상을 받습니다: `edit_channel_permissions_typed(channel_id, OverwriteTarget::Role(role_id), &body)`. 본문의 `type`이 대상과 어긋나면 보내기 전에 오류가 나므로 본문은 `EditChannelPermission::for_target(target)`으로 만듭니다.
+- 덮어쓰기 엔드포인트는 대상을 받습니다: `edit_channel_permissions(channel_id, OverwriteTarget::Role(role_id), &body)`. 본문의 `type`이 대상과 어긋나면 보내기 전에 오류가 나므로 본문은 `EditChannelPermission::for_target(target)`으로 만듭니다.
 - `SelectDefaultValue`는 수신 컴포넌트(`MessageComponent::default_values`)와 `SelectMenuBuilder`(`default_user(UserId)`, `default_role(RoleId)`, `default_channel(ChannelId)`, `default_mentionable(MentionableId)`)가 함께 씁니다. 컴포넌트 `id(...)` setter는 `ComponentId`를 받습니다.
 - `MentionResolver` 메서드는 `UserId`/`RoleId`/`ChannelId`를 받고, 클로저 resolver는 `MentionTarget`(`User`, `Role`, `Channel`)을 받습니다.
 

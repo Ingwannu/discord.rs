@@ -121,17 +121,19 @@ Recent API cleanup tightened the public surface:
 - `RestClient` now exposes the typed REST methods as the supported public path. The old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands` are no longer public.
 - Builder implementation submodules are private. Import builders from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel` because its ID is optional until Discord assigns one. Use `ApplicationCommand::id_opt()` and `ApplicationCommand::created_at()` instead.
+- 3.0 (unreleased): REST methods take concrete request types and return typed models. The 2.x `_typed` / `_from_request` / `_config` pairs collapse into one canonical method (`update_channel(&ModifyChannel)`, `modify_guild`, `create_guild_role`, `get_guild_emojis() -> Vec<Emoji>`, ...); the 1:1 renames remain as deprecated forwards for one release. Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. Routes without a typed method go through `RestClient::request(RawRequest)`. The full old → new table is "Migrating REST names from 2.x" in [HTTP and Helpers](discordrsdocs/docs/api/http-and-helpers.md).
 - 3.0 (unreleased): integer discriminants are open newtypes (`ChannelType`, `ButtonStyle`, `CommandOptionType`, `InteractionResponseType`, ...) with named constants, the 2.x `u8` constant modules (`button_style`, `option_type`, ...) are gone, and permission sets are `Permissions` (`PermissionsBitField` is a deprecated alias). See "Migrating from 2.x discriminants" in [Models and Constants](discordrsdocs/docs/api/core-types-and-constants.md).
 
 If you are upgrading existing code, the common replacements are:
 
 | Old path | New path |
 |----------|----------|
-| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(...)` |
-| `RestClient::edit_message(...)` | `RestClient::update_message(...)` |
-| `RestClient::create_dm_channel(...)` | `RestClient::create_dm_channel_typed(...)` |
+| `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(&request::CreateMessage)` |
+| `RestClient::edit_message(...)` (1.x), `update_message(...)` (2.x) | `RestClient::edit_message(&request::EditMessage)` (3.0) |
+| `RestClient::create_dm_channel(...)` (1.x), `create_dm_channel_typed(...)` (2.x) | `RestClient::create_dm_channel(&CreateDmChannel)` (3.0) |
 | `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
-| `RestClient::bulk_overwrite_global_commands(...)` | `RestClient::bulk_overwrite_global_commands_typed(...)` |
+| `RestClient::bulk_overwrite_global_commands(...)` (1.x), `bulk_overwrite_global_commands_typed(...)` (2.x) | `RestClient::bulk_overwrite_global_commands(&[CommandDefinition])` (3.0) |
+| `RestClient::request(method, path, Option<&Value>)`, `request_typed`, `request_multipart` (2.x) | `RestClient::request::<T>(RawRequest)` (3.0) |
 | `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
 | generic `DiscordModel` access for `ApplicationCommand` | `ApplicationCommand::id_opt()` / `ApplicationCommand::created_at()` |
 
@@ -324,8 +326,8 @@ fn app(public_key: &str) -> Router {
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
-- Prefer the typed `RestClient` methods such as `create_message`, `update_message`, `create_interaction_response_typed`, and `bulk_overwrite_*_typed`.
-- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log_typed`, `get_auto_moderation_rules_typed`, `get_guild_preview_typed`, `get_guild_vanity_url`, `get_voice_regions_typed`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
+- Prefer the typed `RestClient` methods such as `create_message`, `edit_message`, `create_interaction_response_typed`, and `bulk_overwrite_global_commands`.
+- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log`, `get_auto_moderation_rules`, `get_guild_preview`, `get_guild_vanity_url`, `get_voice_regions`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
 - `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
 - Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.
 - Use `CacheHandle::is_enabled()` when code may be compiled with `default-features = false`; cache storage is enabled in the default feature set.
