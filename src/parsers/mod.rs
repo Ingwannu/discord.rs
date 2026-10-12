@@ -1,4 +1,3 @@
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -42,8 +41,20 @@ pub(crate) fn required_id_field<M: IdMarker>(
 ) -> Result<Id<M>, DiscordError> {
     value
         .get(field)
-        .and_then(|raw| Id::deserialize(raw).ok())
+        .and_then(id_from_value)
         .ok_or_else(|| invalid_data_error(format!("missing or invalid {context}.{field}")))
+}
+
+/// An ID from a decimal string or a positive integer, the same rule as
+/// `Id`'s `Deserialize`. Matched by hand rather than through
+/// `Id::deserialize(&Value)` so the raw-handler helpers add no `&Value`
+/// deserializer instance (the crate reads models from text only).
+fn id_from_value<M: IdMarker>(value: &Value) -> Option<Id<M>> {
+    match value {
+        Value::String(text) => text.parse().ok(),
+        Value::Number(number) => number.as_u64().and_then(|raw| Id::try_from(raw).ok()),
+        _ => None,
+    }
 }
 
 /// Reads an optional ID field: absent or `null` is `None`, any other value
@@ -55,9 +66,9 @@ pub(crate) fn optional_id_field<M: IdMarker>(
 ) -> Result<Option<Id<M>>, DiscordError> {
     match value.get(field) {
         None | Some(Value::Null) => Ok(None),
-        Some(raw) => Id::deserialize(raw)
+        Some(raw) => id_from_value(raw)
             .map(Some)
-            .map_err(|_| invalid_data_error(format!("invalid {context}.{field}"))),
+            .ok_or_else(|| invalid_data_error(format!("invalid {context}.{field}"))),
     }
 }
 

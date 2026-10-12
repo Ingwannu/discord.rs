@@ -19,8 +19,8 @@ use crate::model::{
     InteractionResponseState, InteractionResponseType, InteractionType,
 };
 use crate::parsers::{
-    parse_interaction_context, parse_raw_interaction, value_to_u8, InteractionContext,
-    RawInteraction,
+    decode_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
+    InteractionContext, RawInteraction,
 };
 use crate::response::{AckKind, InteractionResponsePhase};
 use crate::types::invalid_data_error;
@@ -343,12 +343,16 @@ where
         return status.into_response();
     }
 
-    let payload: Value = match serde_json::from_slice(body.as_ref()) {
+    // Text, not bytes: the crate only instantiates its decoders for the
+    // text reader (`from_str`).
+    let payload: Value = match body_json(body.as_ref())
+        .and_then(|text| serde_json::from_str(text).map_err(|error| error.to_string()))
+    {
         Ok(payload) => payload,
         Err(error) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
+                Json(serde_json::json!({ "error": error })),
             )
                 .into_response();
         }
@@ -458,9 +462,11 @@ where
         return status.into_response();
     }
 
-    // Decoded straight from the body: no `Value` tree (see
-    // `parsers::decode_interaction`).
-    let interaction = match serde_json::from_slice::<Interaction>(body.as_ref()) {
+    // Decoded straight from the body text: no `Value` tree, and the same
+    // decoder instance as the gateway (see `parsers::decode_interaction`).
+    let interaction = match body_json(body.as_ref())
+        .and_then(|text| decode_interaction(text).map_err(|error| error.to_string()))
+    {
         Ok(interaction) => interaction,
         Err(error) => {
             // Endpoint verification must get its PONG even if the PING
@@ -471,7 +477,7 @@ where
             }
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
+                Json(serde_json::json!({ "error": error })),
             )
                 .into_response();
         }
@@ -504,8 +510,15 @@ fn is_ping(body: &[u8]) -> bool {
         #[serde(rename = "type")]
         kind: InteractionType,
     }
-    serde_json::from_slice::<TypeOnly>(body)
-        .is_ok_and(|payload| payload.kind == InteractionType::PING)
+    body_json(body)
+        .ok()
+        .and_then(|text| serde_json::from_str::<TypeOnly>(text).ok())
+        .is_some_and(|payload| payload.kind == InteractionType::PING)
+}
+
+/// The request body as JSON text; Discord sends UTF-8.
+fn body_json(body: &[u8]) -> Result<&str, String> {
+    std::str::from_utf8(body).map_err(|error| format!("request body is not UTF-8: {error}"))
 }
 
 /// Decides which transport owns the initial response and answers Discord

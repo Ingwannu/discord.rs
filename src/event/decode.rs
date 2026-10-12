@@ -35,7 +35,6 @@ use crate::model::{
     ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, Id, Member, MessageId,
     PresenceStatus, ReactionType, SoundboardSound, UserId,
 };
-use crate::parsers::parse_interaction;
 use crate::types::Emoji;
 
 use super::*;
@@ -136,12 +135,9 @@ dispatch_table! { data;
     "INTEGRATION_CREATE" => EventKind::IntegrationCreate(Box::new(decode_integration_event(data)?)),
     "INTEGRATION_DELETE" => EventKind::IntegrationDelete(decode_integration_delete_event(data)?),
     "INTEGRATION_UPDATE" => EventKind::IntegrationUpdate(Box::new(decode_integration_event(data)?)),
-    "INTERACTION_CREATE" => {
-        // The interaction parser still reads a `Value`; it will expose a
-        // direct path from text later (model/parser series).
-        let value: Value = serde_json::from_str(data)?;
-        EventKind::InteractionCreate(Box::new(parse_interaction(&value)?))
-    },
+    // `Interaction`'s Deserialize is Discord's wire format, read in one pass
+    // (see `parsers::decode_interaction`).
+    "INTERACTION_CREATE" => EventKind::InteractionCreate(Box::new(typed(data)?)),
     "INVITE_CREATE" => EventKind::InviteCreate(Box::new(decode_invite_event(data)?)),
     "INVITE_DELETE" => EventKind::InviteDelete(Box::new(decode_invite_event(data)?)),
     "MESSAGE_CREATE" => EventKind::MessageCreate(Arc::new(typed(data)?)),

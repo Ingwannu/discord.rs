@@ -260,7 +260,8 @@ pub fn parse_modal_submission(data: &Value) -> Result<V2ModalSubmission, Discord
     } else {
         required_object_field(data, "data", "interaction")?
     };
-    V2ModalSubmission::deserialize(modal_data)
+    // Through text, the only reader the crate instantiates models for.
+    serde_json::from_str::<V2ModalSubmission>(&modal_data.to_string())
         .map_err(|error| invalid_data_error(error.to_string()))
 }
 

@@ -203,10 +203,10 @@ impl CommandOptionValue {
     }
 
     /// Converts any `Serialize` value that writes a JSON string, number, or
-    /// boolean. Scalars build no JSON tree (`serde_json::Value` holds them
-    /// inline).
+    /// boolean.
     pub(crate) fn from_serialize(value: &impl Serialize) -> Result<Self, serde_json::Error> {
-        Self::deserialize(serde_json::to_value(value)?)
+        // Through text, the only reader the crate instantiates models for.
+        serde_json::from_str(&serde_json::to_string(value)?)
     }
 }
 

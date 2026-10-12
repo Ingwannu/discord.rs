@@ -2,7 +2,6 @@
 //! `Deserialize for Interaction` in the private `wire` module) and the raw-handler helpers
 //! that work on a `serde_json::Value` the endpoint already parsed.
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -224,8 +223,11 @@ pub fn parse_raw_interaction(raw: &Value) -> Result<RawInteraction, DiscordError
 /// [`Interaction::Unknown`] with its `data` kept as JSON text.
 ///
 /// `Interaction` also implements `Deserialize` in the same wire format, so
-/// `serde_json::from_slice::<Interaction>(bytes)` and
-/// `Interaction::deserialize(&*raw_value)` work the same way.
+/// `serde_json::from_str::<Interaction>(text)` and
+/// `Interaction::deserialize(&*raw_value)` work the same way. The crate
+/// itself only reads models from text (`from_str`), so other readers
+/// (`from_slice`, a `Value`) compile a second copy of every model decoder;
+/// prefer the text.
 ///
 /// ```
 /// use discordrs::{decode_interaction, Interaction};
@@ -245,10 +247,11 @@ pub fn decode_interaction(json: &str) -> Result<Interaction, DiscordError> {
 /// that already hold one; same result as [`decode_interaction`].
 ///
 /// Prefer [`decode_interaction`] on the JSON text: a `Value` has already
-/// paid for the tree, and its sorted keys put `data` before `type`, so the
-/// decoder re-encodes `data` once before reading it.
+/// paid for the tree. The value is written back to text and decoded with
+/// the text decoder, so this wrapper adds no second instance of the model
+/// decoders to the binary.
 pub fn parse_interaction(raw: &Value) -> Result<Interaction, DiscordError> {
-    Interaction::deserialize(raw).map_err(|error| invalid_data_error(error.to_string()))
+    serde_json::from_str(&raw.to_string()).map_err(|error| invalid_data_error(error.to_string()))
 }
 
 #[cfg(test)]
