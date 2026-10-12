@@ -1530,6 +1530,30 @@ impl Serialize for Container {
     }
 }
 
+/// `validate()` for the leaf and row types, which only have the private
+/// `check` so far.
+macro_rules! validate_via_check {
+    ($($ty:ty: $what:literal),* $(,)?) => {$(
+        impl $ty {
+            #[doc = concat!("Checks the ", $what, " against Discord's limits.")]
+            pub fn validate(&self) -> Result<(), DiscordError> {
+                self.check("", &mut Tally::default())
+            }
+        }
+    )*};
+}
+
+validate_via_check! {
+    ButtonRow: "row and its buttons",
+    SelectRow: "row and its select menu",
+    CustomButton: "button",
+    LinkButton: "button",
+    Thumbnail: "thumbnail",
+    MediaGallery: "gallery",
+    FileComponent: "file component",
+    Separator: "separator",
+}
+
 // ---------------------------------------------------------------------------
 // Message-wide validation
 // ---------------------------------------------------------------------------
