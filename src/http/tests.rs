@@ -8761,6 +8761,54 @@ async fn raw_requests_choose_authorization_from_the_path_or_the_caller() {
     assert!(error.to_string().contains("bearer_token"), "{error}");
 }
 
+#[test]
+fn raw_request_constructors_keep_their_method_and_path() {
+    for (request, method) in [
+        (RawRequest::get("/a?b=c"), Method::GET),
+        (RawRequest::post("/a?b=c"), Method::POST),
+        (RawRequest::put("/a?b=c"), Method::PUT),
+        (RawRequest::patch("/a?b=c"), Method::PATCH),
+        (RawRequest::delete("/a?b=c"), Method::DELETE),
+    ] {
+        assert_eq!(request.method(), &method);
+        assert_eq!(request.path(), "/a?b=c");
+    }
+}
+
+#[test]
+fn file_bodies_reject_blank_names_before_sending() {
+    use super::body::{
+        multipart_body, named_file_multipart_body, payload_named_file_multipart_body, sticker_body,
+    };
+
+    let blank = FileAttachment::new(" ", b"x".to_vec());
+    let error = multipart_body(&json!({}), std::slice::from_ref(&blank))
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("filename"), "{error}");
+    let file = FileAttachment::new("a.png", b"x".to_vec());
+    let error = named_file_multipart_body(" ", &file).err().unwrap();
+    assert!(error.to_string().contains("field name"), "{error}");
+    let error = payload_named_file_multipart_body(&json!({}), "", &file)
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("field name"), "{error}");
+
+    // Only message bodies can ask for a nonce replay.
+    let sticker = CreateGuildSticker {
+        name: "name".to_string(),
+        description: "desc".to_string(),
+        tags: "tag".to_string(),
+    };
+    for body in [
+        sticker_body(&sticker, file.clone()),
+        named_file_multipart_body("file", &file),
+        payload_named_file_multipart_body(&json!({}), "file", &file),
+    ] {
+        assert!(!body.unwrap().unwrap().enforces_nonce());
+    }
+}
+
 #[tokio::test]
 async fn raw_posts_are_not_replayed_even_with_an_enforced_nonce() {
     let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::text(

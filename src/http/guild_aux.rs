@@ -47,7 +47,7 @@ impl RestClient {
         days: Option<u64>,
         include_roles: &[RoleId],
     ) -> Result<GuildPruneCount, DiscordError> {
-        let query = guild_prune_query(days, None, include_roles);
+        let query = guild_prune_query(days, include_roles);
         self.send(
             RouteId::GetGuildPruneCount,
             &format!("/guilds/{}/prune{query}", guild_id),

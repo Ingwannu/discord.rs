@@ -170,17 +170,12 @@ pub(crate) fn webhook_execute_query(
     query_string(params)
 }
 
-pub(crate) fn guild_prune_query(
-    days: Option<u64>,
-    compute_prune_count: Option<bool>,
-    include_roles: &[RoleId],
-) -> String {
+/// Get Guild Prune Count's query. Begin Guild Prune sends the same options
+/// as a JSON body, so `compute_prune_count` never appears here.
+pub(crate) fn guild_prune_query(days: Option<u64>, include_roles: &[RoleId]) -> String {
     let mut params = Vec::new();
     if let Some(days) = days {
         params.push(format!("days={days}"));
-    }
-    if let Some(compute_prune_count) = compute_prune_count {
-        params.push(format!("compute_prune_count={compute_prune_count}"));
     }
     if !include_roles.is_empty() {
         let roles = include_roles

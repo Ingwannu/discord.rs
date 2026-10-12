@@ -156,8 +156,9 @@ macro_rules! route_manifest {
         /// Fails to compile when a row names a type that does not exist. The
         /// method names are checked by `ci/api_drift.py --self-check`
         /// (generic methods cannot be named without their type arguments).
+        /// A test rather than a dead function so coverage counts its rows.
         #[cfg(test)]
-        #[expect(dead_code, reason = "a compile-time check, never called")]
+        #[test]
         fn manifest_names_resolve() {
             #[allow(unused_imports, reason = "each row uses a different subset")]
             use crate::model::*;

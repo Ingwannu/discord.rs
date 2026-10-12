@@ -634,7 +634,14 @@ fn cases() -> Vec<Case> {
                 &m::SearchGuildMessagesQuery {
                     content: Some("hello world".to_string()),
                     limit: Some(25),
+                    offset: Some(50),
+                    max_id: Some(test_id(9)),
+                    min_id: Some(test_id(1)),
+                    slop: Some(2),
                     author_ids: vec![test_id(42)],
+                    pinned: Some(false),
+                    sort_by: Some("timestamp".to_string()),
+                    sort_order: Some("asc".to_string()),
                     ..m::SearchGuildMessagesQuery::default()
                 }
             )),
@@ -758,6 +765,8 @@ fn cases() -> Vec<Case> {
             &m::EntitlementQuery {
                 user_id: Some(test_id(42)),
                 sku_ids: vec![test_id(900), test_id(901)],
+                before: Some(test_id(990)),
+                after: Some(test_id(910)),
                 exclude_ended: Some(true),
                 ..m::EntitlementQuery::default()
             }
@@ -1217,7 +1226,7 @@ fn cases() -> Vec<Case> {
                 &m::GuildScheduledEventUsersQuery {
                     limit: Some(10),
                     with_member: Some(true),
-                    before: None,
+                    before: Some(test_id(43)),
                     after: Some(test_id(41)),
                 }
             )

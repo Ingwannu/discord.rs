@@ -633,7 +633,7 @@ body:
 {"messages":["1","2"]}
 
 ### SearchGuildMessages · search_guild_messages
-GET /guilds/200/messages/search?limit=25&content=hello+world&author_id=42
+GET /guilds/200/messages/search?limit=25&offset=50&max_id=9&min_id=1&slop=2&content=hello+world&author_id=42&pinned=false&sort_by=timestamp&sort_order=asc
 authorization: Bot golden-token
 content-type: application/json
 body: -
@@ -811,7 +811,7 @@ content-type: application/json
 body: -
 
 ### ListEntitlements · get_entitlements
-GET /applications/555/entitlements?user_id=42&sku_ids=900%2C901&exclude_ended=true
+GET /applications/555/entitlements?user_id=42&sku_ids=900%2C901&before=990&after=910&exclude_ended=true
 authorization: Bot golden-token
 content-type: application/json
 body: -
@@ -1421,7 +1421,7 @@ content-type: application/json
 body: -
 
 ### GetGuildScheduledEventUsers · get_guild_scheduled_event_users_with_query
-GET /guilds/200/scheduled-events/2/users?limit=10&with_member=true&after=41
+GET /guilds/200/scheduled-events/2/users?limit=10&with_member=true&before=43&after=41
 authorization: Bot golden-token
 content-type: application/json
 body: -
