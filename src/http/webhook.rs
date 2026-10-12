@@ -15,19 +15,8 @@ impl RestClient {
     pub async fn create_webhook(
         &self,
         channel_id: ChannelId,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
-        self.create_webhook_raw(channel_id, body).await
-    }
-
-    pub async fn create_webhook_typed<B>(
-        &self,
-        channel_id: ChannelId,
-        body: &B,
-    ) -> Result<Webhook, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+        body: &CreateWebhook,
+    ) -> Result<Webhook, DiscordError> {
         self.send(
             RouteId::CreateWebhook,
             &format!("/channels/{}/webhooks", channel_id),
@@ -36,35 +25,16 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `create_webhook`")]
     pub async fn create_webhook_from_request(
         &self,
         channel_id: ChannelId,
         body: &CreateWebhook,
     ) -> Result<Webhook, DiscordError> {
-        self.create_webhook_typed(channel_id, body).await
-    }
-
-    pub async fn create_webhook_raw(
-        &self,
-        channel_id: ChannelId,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
-        self.send(
-            RouteId::CreateWebhook,
-            &format!("/channels/{}/webhooks", channel_id),
-            json_body(body),
-        )
-        .await
+        self.create_webhook(channel_id, body).await
     }
 
     pub async fn get_channel_webhooks(
-        &self,
-        channel_id: ChannelId,
-    ) -> Result<Vec<Value>, DiscordError> {
-        self.get_channel_webhooks_raw(channel_id).await
-    }
-
-    pub async fn get_channel_webhooks_typed(
         &self,
         channel_id: ChannelId,
     ) -> Result<Vec<Webhook>, DiscordError> {
@@ -76,21 +46,12 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_channel_webhooks_raw(
+    #[deprecated(since = "3.0.0", note = "renamed to `get_channel_webhooks`")]
+    pub async fn get_channel_webhooks_typed(
         &self,
         channel_id: ChannelId,
-    ) -> Result<Vec<Value>, DiscordError> {
-        let response = self
-            .send(
-                RouteId::GetChannelWebhooks,
-                &format!("/channels/{}/webhooks", channel_id),
-                NO_BODY,
-            )
-            .await?;
-        match response {
-            Value::Array(webhooks) => Ok(webhooks),
-            _ => Ok(vec![]),
-        }
+    ) -> Result<Vec<Webhook>, DiscordError> {
+        self.get_channel_webhooks(channel_id).await
     }
 
     pub async fn execute_webhook(
@@ -303,7 +264,7 @@ impl RestClient {
     pub async fn modify_webhook(
         &self,
         webhook_id: WebhookId,
-        body: &Value,
+        body: &ModifyWebhook,
     ) -> Result<Webhook, DiscordError> {
         self.send(
             RouteId::ModifyWebhook,
@@ -313,28 +274,13 @@ impl RestClient {
         .await
     }
 
-    pub async fn modify_webhook_typed<B>(
-        &self,
-        webhook_id: WebhookId,
-        body: &B,
-    ) -> Result<Webhook, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.send(
-            RouteId::ModifyWebhook,
-            &format!("/webhooks/{}", webhook_id),
-            json_body(body),
-        )
-        .await
-    }
-
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_webhook`")]
     pub async fn modify_webhook_from_request(
         &self,
         webhook_id: WebhookId,
         body: &ModifyWebhook,
     ) -> Result<Webhook, DiscordError> {
-        self.modify_webhook_typed(webhook_id, body).await
+        self.modify_webhook(webhook_id, body).await
     }
 
     pub async fn delete_webhook(&self, webhook_id: WebhookId) -> Result<(), DiscordError> {
@@ -350,7 +296,7 @@ impl RestClient {
         &self,
         webhook_id: WebhookId,
         token: &str,
-        body: &Value,
+        body: &ModifyWebhookWithToken,
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
         let path = format!("/webhooks/{}/{}", webhook_id, token);
@@ -358,28 +304,14 @@ impl RestClient {
             .await
     }
 
-    pub async fn modify_webhook_with_token_typed<B>(
-        &self,
-        webhook_id: WebhookId,
-        token: &str,
-        body: &B,
-    ) -> Result<Webhook, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        validate_token_path_segment("webhook_token", token, false)?;
-        let path = format!("/webhooks/{}/{}", webhook_id, token);
-        self.send(RouteId::ModifyWebhookWithToken, &path, json_body(body))
-            .await
-    }
-
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_webhook_with_token`")]
     pub async fn modify_webhook_with_token_from_request(
         &self,
         webhook_id: WebhookId,
         token: &str,
         body: &ModifyWebhookWithToken,
     ) -> Result<Webhook, DiscordError> {
-        self.modify_webhook_with_token_typed(webhook_id, token, body)
+        self.modify_webhook_with_token(webhook_id, token, body)
             .await
     }
 

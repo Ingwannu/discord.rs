@@ -1,8 +1,6 @@
 //! Voice endpoints: voice channel status, stage instances, voice regions, and
 //! voice states.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     ChannelId, CreateStageInstance, GuildId, ModifyCurrentUserVoiceState, ModifyStageInstance,
@@ -25,17 +23,10 @@ impl RestClient {
         .await
     }
 
-    pub async fn create_stage_instance(&self, body: &Value) -> Result<StageInstance, DiscordError> {
-        self.create_stage_instance_typed(body).await
-    }
-
-    pub async fn create_stage_instance_typed<B>(
+    pub async fn create_stage_instance(
         &self,
-        body: &B,
-    ) -> Result<StageInstance, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+        body: &CreateStageInstance,
+    ) -> Result<StageInstance, DiscordError> {
         self.send(
             RouteId::CreateStageInstance,
             "/stage-instances",
@@ -44,11 +35,12 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `create_stage_instance`")]
     pub async fn create_stage_instance_from_request(
         &self,
         body: &CreateStageInstance,
     ) -> Result<StageInstance, DiscordError> {
-        self.create_stage_instance_typed(body).await
+        self.create_stage_instance(body).await
     }
 
     pub async fn get_stage_instance(
@@ -66,19 +58,8 @@ impl RestClient {
     pub async fn modify_stage_instance(
         &self,
         channel_id: ChannelId,
-        body: &Value,
+        body: &ModifyStageInstance,
     ) -> Result<StageInstance, DiscordError> {
-        self.modify_stage_instance_typed(channel_id, body).await
-    }
-
-    pub async fn modify_stage_instance_typed<B>(
-        &self,
-        channel_id: ChannelId,
-        body: &B,
-    ) -> Result<StageInstance, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyStageInstance,
             &format!("/stage-instances/{}", channel_id),
@@ -87,12 +68,13 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_stage_instance`")]
     pub async fn modify_stage_instance_from_request(
         &self,
         channel_id: ChannelId,
         body: &ModifyStageInstance,
     ) -> Result<StageInstance, DiscordError> {
-        self.modify_stage_instance_typed(channel_id, body).await
+        self.modify_stage_instance(channel_id, body).await
     }
 
     pub async fn delete_stage_instance(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
@@ -104,14 +86,14 @@ impl RestClient {
         .await
     }
 
-    pub async fn get_voice_regions(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
+    pub async fn get_voice_regions(&self) -> Result<Vec<VoiceRegion>, DiscordError> {
         self.send(RouteId::ListVoiceRegions, "/voice/regions", NO_BODY)
             .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `get_voice_regions`")]
     pub async fn get_voice_regions_typed(&self) -> Result<Vec<VoiceRegion>, DiscordError> {
-        self.send(RouteId::ListVoiceRegions, "/voice/regions", NO_BODY)
-            .await
+        self.get_voice_regions().await
     }
 
     pub async fn get_guild_voice_regions(
@@ -151,14 +133,11 @@ impl RestClient {
         .await
     }
 
-    pub async fn modify_current_user_voice_state<B>(
+    pub async fn modify_current_user_voice_state(
         &self,
         guild_id: GuildId,
-        body: &B,
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+        body: &ModifyCurrentUserVoiceState,
+    ) -> Result<(), DiscordError> {
         self.send_unit(
             RouteId::ModifyCurrentUserVoiceState,
             &format!("/guilds/{}/voice-states/@me", guild_id),
@@ -167,6 +146,7 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_current_user_voice_state`")]
     pub async fn modify_current_user_voice_state_from_request(
         &self,
         guild_id: GuildId,
@@ -175,15 +155,12 @@ impl RestClient {
         self.modify_current_user_voice_state(guild_id, body).await
     }
 
-    pub async fn modify_user_voice_state<B>(
+    pub async fn modify_user_voice_state(
         &self,
         guild_id: GuildId,
         user_id: UserId,
-        body: &B,
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+        body: &ModifyUserVoiceState,
+    ) -> Result<(), DiscordError> {
         self.send_unit(
             RouteId::ModifyUserVoiceState,
             &format!("/guilds/{}/voice-states/{}", guild_id, user_id),
@@ -192,6 +169,7 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_user_voice_state`")]
     pub async fn modify_user_voice_state_from_request(
         &self,
         guild_id: GuildId,

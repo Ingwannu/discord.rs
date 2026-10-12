@@ -31,9 +31,7 @@ async fn main() -> Result<(), discordrs::DiscordError> {
 
     let client = RestClient::new(token, Some(application_id));
     let commands = command_definitions();
-    let registered = client
-        .bulk_overwrite_global_commands_typed(&commands)
-        .await?;
+    let registered = client.bulk_overwrite_global_commands(&commands).await?;
 
     println!("registered_commands={}", registered.len());
     Ok(())

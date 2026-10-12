@@ -1,7 +1,7 @@
 use crate::model::{
     test_id, AuditLogActionType, ChannelType, CommandType, InteractionResponseType, MfaLevel,
-    OnboardingMode, OverwriteType, RoleConnectionMetadataType, ScheduledEventStatus, SkuAccessType,
-    StageInstancePrivacyLevel,
+    OnboardingMode, OverwriteType, RoleConnectionMetadataType, ScheduledEventEntityType,
+    ScheduledEventPrivacyLevel, ScheduledEventStatus, SkuAccessType, StageInstancePrivacyLevel,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -34,21 +34,25 @@ use crate::model::{
     CommandPermissionsId, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
     CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance, CreateTestEntitlement,
     CreateWebhook, CurrentUserGuildsQuery, EditApplicationCommandPermissions,
-    EditChannelPermission, EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildBansQuery,
-    GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
-    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
-    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
-    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId,
-    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus,
-    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
+    EditChannelPermission, EntitlementOwner, EntitlementQuery, GetGuildQuery,
+    GuildApplicationCommandPermissions, GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle,
+    InteractionCallbackResponse, JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember,
+    LobbyMemberUpdate, ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
+    ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
+    ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
+    ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId, RoleColors,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery,
+    ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::request::{
-    CreateAutoModerationRule, CreateGuildTemplate, ModifyAutoModerationRule, ModifyChannel,
-    ModifyGuildTemplate, StartThreadFromMessage, StartThreadWithoutMessage,
+    CreateApplicationEmoji, CreateAutoModerationRule, CreateGuildEmoji, CreateGuildScheduledEvent,
+    CreateGuildSoundboardSound, CreateGuildTemplate, EditApplicationCommand,
+    ModifyApplicationEmoji, ModifyAutoModerationRule, ModifyChannel, ModifyGuildEmoji,
+    ModifyGuildScheduledEvent, ModifyGuildSoundboardSound, ModifyGuildTemplate,
+    SendSoundboardSound, StartThreadFromMessage, StartThreadWithoutMessage,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -1971,7 +1975,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
 
     assert_eq!(
         client
-            .create_webhook_from_request(
+            .create_webhook(
                 test_id(500),
                 &CreateWebhook {
                     name: "deployments".to_string(),
@@ -1985,7 +1989,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
         Some(700)
     );
     client
-        .modify_webhook_from_request(
+        .modify_webhook(
             test_id(700),
             &ModifyWebhook {
                 name: Some("ops".to_string()),
@@ -1996,7 +2000,7 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
         .await
         .expect("modify webhook");
     client
-        .modify_webhook_with_token_from_request(
+        .modify_webhook_with_token(
             test_id(700),
             "token",
             &ModifyWebhookWithToken {
@@ -2098,7 +2102,11 @@ async fn webhook_management_and_compatible_execute_wrappers_hit_expected_paths()
     }
 
     assert!(client
-        .modify_webhook_with_token(test_id(700), "bad/token", &json!({}))
+        .modify_webhook_with_token(
+            test_id(700),
+            "bad/token",
+            &ModifyWebhookWithToken::default()
+        )
         .await
         .is_err());
     assert!(client
@@ -2317,10 +2325,7 @@ async fn typed_guild_admin_and_automod_wrappers_hit_expected_paths() {
             .as_deref(),
         Some("discordrs")
     );
-    assert_eq!(
-        client.get_voice_regions_typed().await.unwrap()[0].id,
-        "rotterdam"
-    );
+    assert_eq!(client.get_voice_regions().await.unwrap()[0].id, "rotterdam");
 
     server.await.expect("server finished");
     let requests = captured.lock().expect("captured requests");
@@ -2539,7 +2544,6 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("raw-admin-token", 555, base_url);
-    let emoji_body = json!({ "name": "emoji", "image": "data:image/png;base64,AAAA" });
 
     assert_eq!(
         client
@@ -2645,52 +2649,84 @@ async fn raw_guild_admin_and_emoji_wrappers_hit_expected_paths() {
         "mod"
     );
     assert_eq!(
-        client.get_guild_emojis(test_id(200)).await.unwrap()[0]["name"],
-        json!("guild_raw")
+        client.get_guild_emojis(test_id(200)).await.unwrap()[0]
+            .name
+            .as_deref(),
+        Some("guild_raw")
     );
     assert_eq!(
         client
             .get_guild_emoji(test_id(200), test_id(1))
             .await
-            .unwrap()["id"],
-        json!("1")
+            .unwrap()
+            .id
+            .map(u64::from),
+        Some(1)
     );
     assert_eq!(
         client
-            .create_guild_emoji(test_id(200), &emoji_body)
+            .create_guild_emoji(
+                test_id(200),
+                &CreateGuildEmoji::new("emoji", "data:image/png;base64,AAAA"),
+            )
             .await
-            .unwrap()["name"],
-        json!("guild_create")
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("guild_create")
     );
     assert_eq!(
         client
-            .modify_guild_emoji(test_id(200), test_id(2), &emoji_body)
+            .modify_guild_emoji(
+                test_id(200),
+                test_id(2),
+                &ModifyGuildEmoji::new().name("emoji")
+            )
             .await
-            .unwrap()["name"],
-        json!("guild_edit")
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("guild_edit")
     );
     client
         .delete_guild_emoji(test_id(200), test_id(2))
         .await
         .unwrap();
     assert_eq!(
-        client.get_application_emojis().await.unwrap()[0]["name"],
-        json!("app_raw")
-    );
-    assert_eq!(
-        client.get_application_emoji(test_id(3)).await.unwrap()["id"],
-        json!("3")
-    );
-    assert_eq!(
-        client.create_application_emoji(&emoji_body).await.unwrap()["name"],
-        json!("app_create")
+        client.get_application_emojis().await.unwrap()[0]
+            .name
+            .as_deref(),
+        Some("app_raw")
     );
     assert_eq!(
         client
-            .modify_application_emoji(test_id(4), &emoji_body)
+            .get_application_emoji(test_id(3))
             .await
-            .unwrap()["name"],
-        json!("app_edit")
+            .unwrap()
+            .id
+            .map(u64::from),
+        Some(3)
+    );
+    assert_eq!(
+        client
+            .create_application_emoji(&CreateApplicationEmoji::new(
+                "emoji",
+                "data:image/png;base64,AAAA"
+            ))
+            .await
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("app_create")
+    );
+    assert_eq!(
+        client
+            .modify_application_emoji(test_id(4), &ModifyApplicationEmoji::new("emoji"))
+            .await
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("app_edit")
     );
     client.delete_application_emoji(test_id(4)).await.unwrap();
 
@@ -2741,17 +2777,16 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("emoji-token", 555, base_url);
-    let body = json!({ "name": "emoji", "image": "data:image/png;base64,AAAA" });
 
     assert_eq!(
-        client.get_guild_emojis_typed(test_id(200)).await.unwrap()[0]
+        client.get_guild_emojis(test_id(200)).await.unwrap()[0]
             .name
             .as_deref(),
         Some("guild_one")
     );
     assert_eq!(
         client
-            .get_guild_emoji_typed(test_id(200), test_id(1))
+            .get_guild_emoji(test_id(200), test_id(1))
             .await
             .unwrap()
             .id
@@ -2760,7 +2795,10 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_emoji_typed(test_id(200), &body)
+            .create_guild_emoji(
+                test_id(200),
+                &CreateGuildEmoji::new("emoji", "data:image/png;base64,AAAA"),
+            )
             .await
             .unwrap()
             .name
@@ -2769,7 +2807,11 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_emoji_typed(test_id(200), test_id(2), &body)
+            .modify_guild_emoji(
+                test_id(200),
+                test_id(2),
+                &ModifyGuildEmoji::new().name("emoji")
+            )
             .await
             .unwrap()
             .name
@@ -2777,14 +2819,14 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
         Some("guild_two_edit")
     );
     assert_eq!(
-        client.get_application_emojis_typed().await.unwrap()[0]
+        client.get_application_emojis().await.unwrap()[0]
             .name
             .as_deref(),
         Some("app_one")
     );
     assert_eq!(
         client
-            .get_application_emoji_typed(test_id(3))
+            .get_application_emoji(test_id(3))
             .await
             .unwrap()
             .id
@@ -2793,7 +2835,10 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_application_emoji_typed(&body)
+            .create_application_emoji(&CreateApplicationEmoji::new(
+                "emoji",
+                "data:image/png;base64,AAAA",
+            ))
             .await
             .unwrap()
             .name
@@ -2802,7 +2847,7 @@ async fn typed_emoji_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_application_emoji_typed(test_id(4), &body)
+            .modify_application_emoji(test_id(4), &ModifyApplicationEmoji::new("emoji"))
             .await
             .unwrap()
             .name
@@ -2904,7 +2949,7 @@ async fn application_management_wrappers_hit_expected_paths() {
     assert_eq!(client.get_current_application().await.unwrap().name, "app");
     assert_eq!(
         client
-            .edit_current_application_from_request(&ModifyCurrentApplication {
+            .edit_current_application(&ModifyCurrentApplication {
                 description: Some("updated".to_string()),
                 icon: Some(None),
                 tags: Some(vec!["utility".to_string()]),
@@ -3021,11 +3066,18 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
         .unwrap();
     assert_eq!(single.guild_id.get(), 200);
 
+    let batch_body = GuildApplicationCommandPermissions {
+        id: CommandPermissionsId::Command(test_id(401)),
+        application_id: test_id(555),
+        guild_id: test_id(200),
+        permissions: edit.permissions.clone(),
+    };
+    #[expect(deprecated, reason = "covers the disabled batch route while it exists")]
     let batch = client
         .batch_edit_application_command_permissions(
             "oauth.access-token",
             test_id(200),
-            std::slice::from_ref(&edit),
+            std::slice::from_ref(&batch_body),
         )
         .await
         .unwrap();
@@ -3066,6 +3118,9 @@ async fn application_command_permissions_use_expected_auth_and_payloads() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&requests[2].body).unwrap(),
         json!([{
+            "id": "401",
+            "application_id": "555",
+            "guild_id": "200",
             "permissions": [{
                 "id": "300",
                 "type": 1,
@@ -3178,8 +3233,9 @@ async fn current_user_oauth_wrappers_use_bearer_auth_and_typed_models() {
                 shard: None,
             })
             .await
-            .unwrap()[0]["name"],
-        json!("Guild Page")
+            .unwrap()[0]
+            .name,
+        "Guild Page"
     );
     client.leave_guild(test_id(200)).await.unwrap();
 
@@ -3881,11 +3937,11 @@ async fn remaining_admin_gap_wrappers_hit_expected_paths() {
         "bot-member"
     );
     assert_eq!(
-        client.get_current_user_guilds_typed().await.unwrap()[0].name,
+        client.get_current_user_guilds().await.unwrap()[0].name,
         "guild"
     );
     let guilds_with_counts = client
-        .get_current_user_guilds_typed_with_query(&CurrentUserGuildsQuery {
+        .get_current_user_guilds_with_query(&CurrentUserGuildsQuery {
             after: Some(test_id(199)),
             limit: Some(50),
             with_counts: Some(true),
@@ -3973,7 +4029,7 @@ async fn voice_state_resource_wrappers_hit_expected_paths() {
         777
     );
     client
-        .modify_current_user_voice_state_from_request(
+        .modify_current_user_voice_state(
             test_id(200),
             &ModifyCurrentUserVoiceState {
                 channel_id: Some(test_id(300)),
@@ -3984,7 +4040,7 @@ async fn voice_state_resource_wrappers_hit_expected_paths() {
         .await
         .unwrap();
     client
-        .modify_user_voice_state_from_request(
+        .modify_user_voice_state(
             test_id(200),
             test_id(777),
             &ModifyUserVoiceState {
@@ -4248,23 +4304,37 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("admin-token", 555, base_url);
-    let body = json!({ "name": "name", "description": "desc", "tags": "tag" });
 
     assert_eq!(client.get_application_emojis().await.unwrap().len(), 1);
     assert_eq!(
-        client.get_application_emoji(test_id(1)).await.unwrap()["id"],
-        json!("1")
-    );
-    assert_eq!(
-        client.create_application_emoji(&body).await.unwrap()["id"],
-        json!("2")
+        client
+            .get_application_emoji(test_id(1))
+            .await
+            .unwrap()
+            .id
+            .map(u64::from),
+        Some(1)
     );
     assert_eq!(
         client
-            .modify_application_emoji(test_id(2), &body)
+            .create_application_emoji(&CreateApplicationEmoji::new(
+                "name",
+                "data:image/png;base64,AAAA"
+            ))
             .await
-            .unwrap()["name"],
-        json!("renamed")
+            .unwrap()
+            .id
+            .map(u64::from),
+        Some(2)
+    );
+    assert_eq!(
+        client
+            .modify_application_emoji(test_id(2), &ModifyApplicationEmoji::new("renamed"))
+            .await
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("renamed")
     );
     client.delete_application_emoji(test_id(2)).await.unwrap();
     assert_eq!(
@@ -4316,7 +4386,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_sticker_from_request(
+            .modify_guild_sticker(
                 test_id(200),
                 test_id(12),
                 &ModifyGuildSticker {
@@ -4407,7 +4477,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_stage_instance_from_request(&CreateStageInstance {
+            .create_stage_instance(&CreateStageInstance {
                 channel_id: test_id(400),
                 topic: "town hall".to_string(),
                 privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -4426,7 +4496,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_stage_instance_from_request(
+            .modify_stage_instance(
                 test_id(400),
                 &ModifyStageInstance {
                     privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
@@ -4710,7 +4780,15 @@ async fn raw_sticker_wrappers_preserve_multipart_and_json_bodies() {
     );
     assert_eq!(
         client
-            .modify_guild_sticker(test_id(200), test_id(13), &body)
+            .modify_guild_sticker(
+                test_id(200),
+                test_id(13),
+                &ModifyGuildSticker {
+                    name: Some("name".to_string()),
+                    description: Some(Some("desc".to_string())),
+                    tags: Some("tag".to_string()),
+                },
+            )
             .await
             .unwrap()
             .id
@@ -4789,7 +4867,13 @@ async fn scheduled_event_wrappers_return_typed_models() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("scheduled-token", 0, base_url);
-    let body = json!({ "name": "community night" });
+    let body = CreateGuildScheduledEvent::new(
+        "community night",
+        ScheduledEventEntityType::EXTERNAL,
+        ScheduledEventPrivacyLevel::GUILD_ONLY,
+        "2026-05-01T18:00:00Z",
+    );
+    let modify = ModifyGuildScheduledEvent::new().name("community night");
 
     assert_eq!(
         client
@@ -4801,7 +4885,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .create_guild_scheduled_event_typed(test_id(200), &body)
+            .create_guild_scheduled_event(test_id(200), &body)
             .await
             .unwrap()
             .entity_metadata
@@ -4819,7 +4903,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .modify_guild_scheduled_event_typed(test_id(200), test_id(2), &body)
+            .modify_guild_scheduled_event(test_id(200), test_id(2), &modify)
             .await
             .unwrap()
             .status,
@@ -4844,7 +4928,7 @@ async fn scheduled_event_wrappers_return_typed_models() {
     );
     assert_eq!(
         client
-            .modify_guild_scheduled_event(test_id(200), test_id(3), &body)
+            .modify_guild_scheduled_event(test_id(200), test_id(3), &modify)
             .await
             .unwrap()
             .id
@@ -4959,7 +5043,8 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
         limit: Some(10),
         ..SubscriptionQuery::default()
     };
-    let sound_body = json!({ "sound_id": "1", "source_guild_id": "200" });
+    let send_body = SendSoundboardSound::new(test_id(1)).source_guild_id(test_id(200));
+    let sound_body = CreateGuildSoundboardSound::new("quack", "data:audio/ogg;base64,AAAA");
 
     let sku = client.get_skus().await.unwrap().remove(0);
     assert_eq!(sku.slug, "premium");
@@ -5014,7 +5099,7 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     );
     client.delete_test_entitlement(test_id(902)).await.unwrap();
     client
-        .send_soundboard_sound(test_id(300), &sound_body)
+        .send_soundboard_sound(test_id(300), &send_body)
         .await
         .unwrap();
     assert_eq!(
@@ -5049,7 +5134,11 @@ async fn monetization_and_soundboard_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .modify_guild_soundboard_sound(test_id(200), test_id(3), &json!({ "name": "quack" }))
+            .modify_guild_soundboard_sound(
+                test_id(200),
+                test_id(3),
+                &ModifyGuildSoundboardSound::new().name("quack"),
+            )
             .await
             .unwrap()
             .sound_id
@@ -5414,7 +5503,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
 
     assert_model_error_contains(
         client
-            .bulk_overwrite_global_commands_typed(&commands)
+            .bulk_overwrite_global_commands(&commands)
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -5429,7 +5518,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
     );
     assert_model_error_contains(
         client
-            .bulk_overwrite_guild_commands_typed(test_id(456), &commands)
+            .bulk_overwrite_guild_commands(test_id(456), &commands)
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -6143,7 +6232,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(reordered_roles[0].name, "mod");
 
     let overwritten = client
-        .bulk_overwrite_global_commands_typed(std::slice::from_ref(&command))
+        .bulk_overwrite_global_commands(std::slice::from_ref(&command))
         .await
         .expect("bulk overwrite global commands");
     assert_eq!(overwritten[0].name, "ping");
@@ -6168,7 +6257,7 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(gateway.shards, 1);
 
     let guild_commands = client
-        .bulk_overwrite_guild_commands_typed(test_id(200), &[command])
+        .bulk_overwrite_guild_commands(test_id(200), &[command])
         .await
         .expect("bulk overwrite guild commands");
     assert_eq!(guild_commands[0].name, "guild");
@@ -6243,7 +6332,7 @@ async fn single_command_wrappers_hit_expected_paths() {
     assert_eq!(global.name, "global");
 
     let edited = client
-        .edit_global_command(test_id(401), &json!({ "name": "global" }))
+        .edit_global_command(test_id(401), &EditApplicationCommand::new().name("global"))
         .await
         .expect("edit global command");
     assert_eq!(edited.description, "edited");
@@ -6858,9 +6947,9 @@ async fn public_widget_image_retries_rate_limits_and_surfaces_api_errors() {
 #[tokio::test]
 async fn client_webhook_and_followup_wrappers_hit_local_server() {
     let responses = vec![
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "900" })),
-        PlannedResponse::json(StatusCode::OK, json!([{ "id": "900" }])),
-        PlannedResponse::json(StatusCode::OK, json!({ "unexpected": true })),
+        PlannedResponse::json(StatusCode::OK, webhook_payload("900", "hook")),
+        PlannedResponse::json(StatusCode::OK, json!([webhook_payload("900", "hook")])),
+        PlannedResponse::json(StatusCode::OK, json!([])),
         PlannedResponse::json(
             StatusCode::TOO_MANY_REQUESTS,
             json!({ "retry_after": 0.0, "global": false }),
@@ -6895,10 +6984,16 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     let client = RestClient::new_with_base_url("hook-token", 123, base_url);
 
     let webhook = client
-        .create_webhook(test_id(500), &json!({ "name": "hook" }))
+        .create_webhook(
+            test_id(500),
+            &CreateWebhook {
+                name: "hook".to_string(),
+                avatar: None,
+            },
+        )
         .await
         .expect("create webhook");
-    assert_eq!(webhook["id"], json!("900"));
+    assert_eq!(webhook.id.map(u64::from), Some(900));
 
     let webhooks = client
         .get_channel_webhooks(test_id(500))
@@ -6909,7 +7004,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     let fallback = client
         .get_channel_webhooks(test_id(500))
         .await
-        .expect("get channel webhooks fallback");
+        .expect("get channel webhooks, none");
     assert!(fallback.is_empty());
 
     let executed = client

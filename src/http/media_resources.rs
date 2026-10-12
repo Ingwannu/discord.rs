@@ -1,10 +1,10 @@
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     ChannelId, CreateGuildSticker, GuildId, ModifyGuildSticker, SoundboardSound, SoundboardSoundId,
     SoundboardSoundList, Sticker, StickerId, StickerPack, StickerPackId, StickerPackList,
 };
+
+use crate::request::{CreateGuildSoundboardSound, ModifyGuildSoundboardSound, SendSoundboardSound};
 
 use super::body::sticker_body;
 use super::{json_body, FileAttachment, RestClient, RouteId, NO_BODY};
@@ -92,7 +92,7 @@ impl RestClient {
         &self,
         guild_id: GuildId,
         sticker_id: StickerId,
-        body: &Value,
+        body: &ModifyGuildSticker,
     ) -> Result<Sticker, DiscordError> {
         self.send(
             RouteId::ModifyGuildSticker,
@@ -102,31 +102,14 @@ impl RestClient {
         .await
     }
 
-    pub async fn modify_guild_sticker_typed<B>(
-        &self,
-        guild_id: GuildId,
-        sticker_id: StickerId,
-        body: &B,
-    ) -> Result<Sticker, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.send(
-            RouteId::ModifyGuildSticker,
-            &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
-            json_body(body),
-        )
-        .await
-    }
-
+    #[deprecated(since = "3.0.0", note = "renamed to `modify_guild_sticker`")]
     pub async fn modify_guild_sticker_from_request(
         &self,
         guild_id: GuildId,
         sticker_id: StickerId,
         body: &ModifyGuildSticker,
     ) -> Result<Sticker, DiscordError> {
-        self.modify_guild_sticker_typed(guild_id, sticker_id, body)
-            .await
+        self.modify_guild_sticker(guild_id, sticker_id, body).await
     }
 
     pub async fn delete_guild_sticker(
@@ -145,7 +128,7 @@ impl RestClient {
     pub async fn send_soundboard_sound(
         &self,
         channel_id: ChannelId,
-        body: &Value,
+        body: &SendSoundboardSound,
     ) -> Result<(), DiscordError> {
         self.send_unit(
             RouteId::SendSoundboardSound,
@@ -194,7 +177,7 @@ impl RestClient {
     pub async fn create_guild_soundboard_sound(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &CreateGuildSoundboardSound,
     ) -> Result<SoundboardSound, DiscordError> {
         self.send(
             RouteId::CreateGuildSoundboardSound,
@@ -208,7 +191,7 @@ impl RestClient {
         &self,
         guild_id: GuildId,
         sound_id: SoundboardSoundId,
-        body: &Value,
+        body: &ModifyGuildSoundboardSound,
     ) -> Result<SoundboardSound, DiscordError> {
         self.send(
             RouteId::ModifyGuildSoundboardSound,

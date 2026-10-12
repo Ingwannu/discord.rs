@@ -210,7 +210,7 @@ impl RouteId {
 route_manifest! {
     // --- Application -----------------------------------------------------
     GetCurrentApplication: GET "/applications/@me" bot, query [], body () => Application, api [get_current_application];
-    EditCurrentApplication: PATCH "/applications/@me" bot, query [], body ModifyCurrentApplication => Application, api [edit_current_application, edit_current_application_from_request];
+    EditCurrentApplication: PATCH "/applications/@me" bot, query [], body ModifyCurrentApplication => Application, api [edit_current_application], was [edit_current_application_from_request => edit_current_application];
     GetApplicationActivityInstance: GET "/applications/{application.id}/activity-instances/{instance_id}" bot, query [], body () => ActivityInstance, api [get_application_activity_instance];
     GetApplicationRoleConnectionMetadataRecords: GET "/applications/{application.id}/role-connections/metadata" bot, query [], body () => Vec<ApplicationRoleConnectionMetadata>, api [get_application_role_connection_metadata_records];
     UpdateApplicationRoleConnectionMetadataRecords: PUT "/applications/{application.id}/role-connections/metadata" bot, query [], body [ApplicationRoleConnectionMetadata] => Vec<ApplicationRoleConnectionMetadata>, api [update_application_role_connection_metadata_records];
@@ -226,20 +226,20 @@ route_manifest! {
     // --- Application commands -------------------------------------------
     GetGlobalApplicationCommands: GET "/applications/{application.id}/commands" bot, query [], body () => Vec<ApplicationCommand>, api [get_global_commands];
     CreateGlobalApplicationCommand: POST "/applications/{application.id}/commands" bot, query [], body CommandDefinition => ApplicationCommand, api [create_global_command];
-    BulkOverwriteGlobalApplicationCommands: PUT "/applications/{application.id}/commands" bot, query [], body [CommandDefinition] => Vec<ApplicationCommand>, api [bulk_overwrite_global_commands_typed];
+    BulkOverwriteGlobalApplicationCommands: PUT "/applications/{application.id}/commands" bot, query [], body [CommandDefinition] => Vec<ApplicationCommand>, api [bulk_overwrite_global_commands], was [bulk_overwrite_global_commands_typed => bulk_overwrite_global_commands];
     GetGlobalApplicationCommand: GET "/applications/{application.id}/commands/{command.id}" bot, query [], body () => ApplicationCommand, api [get_global_command];
-    EditGlobalApplicationCommand: PATCH "/applications/{application.id}/commands/{command.id}" bot, query [], body Value => ApplicationCommand, api [edit_global_command];
+    EditGlobalApplicationCommand: PATCH "/applications/{application.id}/commands/{command.id}" bot, query [], body crate::request::EditApplicationCommand => ApplicationCommand, api [edit_global_command];
     DeleteGlobalApplicationCommand: DELETE "/applications/{application.id}/commands/{command.id}" bot, query [], body () => (), api [delete_global_command];
     GetGuildApplicationCommands: GET "/applications/{application.id}/guilds/{guild.id}/commands" bot, query [], body () => Vec<ApplicationCommand>, api [get_guild_commands];
     CreateGuildApplicationCommand: POST "/applications/{application.id}/guilds/{guild.id}/commands" bot, query [], body CommandDefinition => ApplicationCommand, api [create_guild_command];
-    BulkOverwriteGuildApplicationCommands: PUT "/applications/{application.id}/guilds/{guild.id}/commands" bot, query [], body [CommandDefinition] => Vec<ApplicationCommand>, api [bulk_overwrite_guild_commands_typed];
+    BulkOverwriteGuildApplicationCommands: PUT "/applications/{application.id}/guilds/{guild.id}/commands" bot, query [], body [CommandDefinition] => Vec<ApplicationCommand>, api [bulk_overwrite_guild_commands], was [bulk_overwrite_guild_commands_typed => bulk_overwrite_guild_commands];
     GetGuildApplicationCommand: GET "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}" bot, query [], body () => ApplicationCommand, api [get_guild_command];
-    EditGuildApplicationCommand: PATCH "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}" bot, query [], body Value => ApplicationCommand, api [edit_guild_command];
+    EditGuildApplicationCommand: PATCH "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}" bot, query [], body crate::request::EditApplicationCommand => ApplicationCommand, api [edit_guild_command];
     DeleteGuildApplicationCommand: DELETE "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}" bot, query [], body () => (), api [delete_guild_command];
     GetGuildApplicationCommandPermissions: GET "/applications/{application.id}/guilds/{guild.id}/commands/permissions" bot, query [], body () => Vec<GuildApplicationCommandPermissions>, api [get_guild_application_command_permissions];
     GetApplicationCommandPermissions: GET "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}/permissions" bot, query [], body () => GuildApplicationCommandPermissions, api [get_application_command_permissions];
     EditApplicationCommandPermissions: PUT "/applications/{application.id}/guilds/{guild.id}/commands/{command.id}/permissions" bearer, query [], body EditApplicationCommandPermissions => GuildApplicationCommandPermissions, api [edit_application_command_permissions];
-    BatchEditApplicationCommandPermissions: PUT "/applications/{application.id}/guilds/{guild.id}/commands/permissions" bearer, query [], body Value => Vec<GuildApplicationCommandPermissions>, api [batch_edit_application_command_permissions];
+    BatchEditApplicationCommandPermissions: PUT "/applications/{application.id}/guilds/{guild.id}/commands/permissions" bearer, query [], body [GuildApplicationCommandPermissions] => Vec<GuildApplicationCommandPermissions>, api [batch_edit_application_command_permissions];
 
     // --- Interactions (worker C owns the methods) ----------------------------
     CreateInteractionResponse: POST "/interactions/{interaction.id}/{interaction.token}/callback" token, query [with_response], body crate::request::InteractionResponse => Option<InteractionCallbackResult>, api [create_interaction_response, create_interaction_response_with_result, create_interaction_response_with_files, create_interaction_response_typed, post_interaction_callback, post_interaction_callback_with_result];
@@ -317,15 +317,15 @@ route_manifest! {
     EndPoll: POST "/channels/{channel.id}/polls/{message.id}/expire" bot, query [], body () => Message, api [end_poll];
 
     // --- Emoji --------------------------------------------------------------
-    ListGuildEmojis: GET "/guilds/{guild.id}/emojis" bot, query [], body () => Vec<Emoji>, api [get_guild_emojis, get_guild_emojis_typed];
-    GetGuildEmoji: GET "/guilds/{guild.id}/emojis/{emoji.id}" bot, query [], body () => Emoji, api [get_guild_emoji, get_guild_emoji_typed];
-    CreateGuildEmoji: POST "/guilds/{guild.id}/emojis" bot, query [], body Value => Emoji, api [create_guild_emoji, create_guild_emoji_typed];
-    ModifyGuildEmoji: PATCH "/guilds/{guild.id}/emojis/{emoji.id}" bot, query [], body Value => Emoji, api [modify_guild_emoji, modify_guild_emoji_typed];
+    ListGuildEmojis: GET "/guilds/{guild.id}/emojis" bot, query [], body () => Vec<Emoji>, api [get_guild_emojis], was [get_guild_emojis_typed => get_guild_emojis];
+    GetGuildEmoji: GET "/guilds/{guild.id}/emojis/{emoji.id}" bot, query [], body () => Emoji, api [get_guild_emoji], was [get_guild_emoji_typed => get_guild_emoji];
+    CreateGuildEmoji: POST "/guilds/{guild.id}/emojis" bot, query [], body crate::request::CreateGuildEmoji => Emoji, api [create_guild_emoji], was [create_guild_emoji_typed => create_guild_emoji];
+    ModifyGuildEmoji: PATCH "/guilds/{guild.id}/emojis/{emoji.id}" bot, query [], body crate::request::ModifyGuildEmoji => Emoji, api [modify_guild_emoji], was [modify_guild_emoji_typed => modify_guild_emoji];
     DeleteGuildEmoji: DELETE "/guilds/{guild.id}/emojis/{emoji.id}" bot, query [], body () => (), api [delete_guild_emoji];
-    ListApplicationEmojis: GET "/applications/{application.id}/emojis" bot, query [], body () => Vec<Emoji>, api [get_application_emojis, get_application_emojis_typed];
-    GetApplicationEmoji: GET "/applications/{application.id}/emojis/{emoji.id}" bot, query [], body () => Emoji, api [get_application_emoji, get_application_emoji_typed];
-    CreateApplicationEmoji: POST "/applications/{application.id}/emojis" bot, query [], body Value => Emoji, api [create_application_emoji, create_application_emoji_typed];
-    ModifyApplicationEmoji: PATCH "/applications/{application.id}/emojis/{emoji.id}" bot, query [], body Value => Emoji, api [modify_application_emoji, modify_application_emoji_typed];
+    ListApplicationEmojis: GET "/applications/{application.id}/emojis" bot, query [], body () => Vec<Emoji>, api [get_application_emojis], was [get_application_emojis_typed => get_application_emojis];
+    GetApplicationEmoji: GET "/applications/{application.id}/emojis/{emoji.id}" bot, query [], body () => Emoji, api [get_application_emoji], was [get_application_emoji_typed => get_application_emoji];
+    CreateApplicationEmoji: POST "/applications/{application.id}/emojis" bot, query [], body crate::request::CreateApplicationEmoji => Emoji, api [create_application_emoji], was [create_application_emoji_typed => create_application_emoji];
+    ModifyApplicationEmoji: PATCH "/applications/{application.id}/emojis/{emoji.id}" bot, query [], body crate::request::ModifyApplicationEmoji => Emoji, api [modify_application_emoji], was [modify_application_emoji_typed => modify_application_emoji];
     DeleteApplicationEmoji: DELETE "/applications/{application.id}/emojis/{emoji.id}" bot, query [], body () => (), api [delete_application_emoji];
 
     // --- Entitlements and SKUs ------------------------------------------------
@@ -429,9 +429,9 @@ route_manifest! {
 
     // --- Scheduled events -----------------------------------------------------
     ListScheduledEventsForGuild: GET "/guilds/{guild.id}/scheduled-events" bot, query [with_user_count], body () => Vec<GuildScheduledEvent>, api [get_guild_scheduled_events, get_guild_scheduled_events_with_query];
-    CreateGuildScheduledEvent: POST "/guilds/{guild.id}/scheduled-events" bot, query [], body Value => GuildScheduledEvent, api [create_guild_scheduled_event, create_guild_scheduled_event_typed];
+    CreateGuildScheduledEvent: POST "/guilds/{guild.id}/scheduled-events" bot, query [], body crate::request::CreateGuildScheduledEvent => GuildScheduledEvent, api [create_guild_scheduled_event], was [create_guild_scheduled_event_typed => create_guild_scheduled_event];
     GetGuildScheduledEvent: GET "/guilds/{guild.id}/scheduled-events/{guild_scheduled_event.id}" bot, query [], body () => GuildScheduledEvent, api [get_guild_scheduled_event];
-    ModifyGuildScheduledEvent: PATCH "/guilds/{guild.id}/scheduled-events/{guild_scheduled_event.id}" bot, query [], body Value => GuildScheduledEvent, api [modify_guild_scheduled_event, modify_guild_scheduled_event_typed];
+    ModifyGuildScheduledEvent: PATCH "/guilds/{guild.id}/scheduled-events/{guild_scheduled_event.id}" bot, query [], body crate::request::ModifyGuildScheduledEvent => GuildScheduledEvent, api [modify_guild_scheduled_event], was [modify_guild_scheduled_event_typed => modify_guild_scheduled_event];
     DeleteGuildScheduledEvent: DELETE "/guilds/{guild.id}/scheduled-events/{guild_scheduled_event.id}" bot, query [], body () => (), api [delete_guild_scheduled_event];
     GetGuildScheduledEventUsers: GET "/guilds/{guild.id}/scheduled-events/{guild_scheduled_event.id}/users" bot, query [limit, with_member, before, after], body () => Vec<GuildScheduledEventUser>, api [get_guild_scheduled_event_users, get_guild_scheduled_event_users_with_query];
 
@@ -442,32 +442,32 @@ route_manifest! {
     ListGuildStickers: GET "/guilds/{guild.id}/stickers" bot, query [], body () => Vec<Sticker>, api [get_guild_stickers];
     GetGuildSticker: GET "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body () => Sticker, api [get_guild_sticker];
     CreateGuildSticker: POST "/guilds/{guild.id}/stickers" bot, query [], body CreateGuildSticker => Sticker, api [create_guild_sticker], was [create_guild_sticker_typed => create_guild_sticker, create_guild_sticker_from_request => create_guild_sticker];
-    ModifyGuildSticker: PATCH "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body ModifyGuildSticker => Sticker, api [modify_guild_sticker, modify_guild_sticker_typed, modify_guild_sticker_from_request];
+    ModifyGuildSticker: PATCH "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body ModifyGuildSticker => Sticker, api [modify_guild_sticker], was [modify_guild_sticker_typed => modify_guild_sticker, modify_guild_sticker_from_request => modify_guild_sticker];
     DeleteGuildSticker: DELETE "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body () => (), api [delete_guild_sticker];
-    SendSoundboardSound: POST "/channels/{channel.id}/send-soundboard-sound" bot, query [], body Value => (), api [send_soundboard_sound];
+    SendSoundboardSound: POST "/channels/{channel.id}/send-soundboard-sound" bot, query [], body crate::request::SendSoundboardSound => (), api [send_soundboard_sound];
     ListDefaultSoundboardSounds: GET "/soundboard-default-sounds" bot, query [], body () => Vec<SoundboardSound>, api [list_default_soundboard_sounds];
     ListGuildSoundboardSounds: GET "/guilds/{guild.id}/soundboard-sounds" bot, query [], body () => SoundboardSoundList, api [list_guild_soundboard_sounds];
     GetGuildSoundboardSound: GET "/guilds/{guild.id}/soundboard-sounds/{sound.id}" bot, query [], body () => SoundboardSound, api [get_guild_soundboard_sound];
-    CreateGuildSoundboardSound: POST "/guilds/{guild.id}/soundboard-sounds" bot, query [], body Value => SoundboardSound, api [create_guild_soundboard_sound];
-    ModifyGuildSoundboardSound: PATCH "/guilds/{guild.id}/soundboard-sounds/{sound.id}" bot, query [], body Value => SoundboardSound, api [modify_guild_soundboard_sound];
+    CreateGuildSoundboardSound: POST "/guilds/{guild.id}/soundboard-sounds" bot, query [], body crate::request::CreateGuildSoundboardSound => SoundboardSound, api [create_guild_soundboard_sound];
+    ModifyGuildSoundboardSound: PATCH "/guilds/{guild.id}/soundboard-sounds/{sound.id}" bot, query [], body crate::request::ModifyGuildSoundboardSound => SoundboardSound, api [modify_guild_soundboard_sound];
     DeleteGuildSoundboardSound: DELETE "/guilds/{guild.id}/soundboard-sounds/{sound.id}" bot, query [], body () => (), api [delete_guild_soundboard_sound];
 
     // --- Stage instances and voice ----------------------------------------
-    CreateStageInstance: POST "/stage-instances" bot, query [], body CreateStageInstance => StageInstance, api [create_stage_instance, create_stage_instance_typed, create_stage_instance_from_request];
+    CreateStageInstance: POST "/stage-instances" bot, query [], body CreateStageInstance => StageInstance, api [create_stage_instance], was [create_stage_instance_typed => create_stage_instance, create_stage_instance_from_request => create_stage_instance];
     GetStageInstance: GET "/stage-instances/{channel.id}" bot, query [], body () => StageInstance, api [get_stage_instance];
-    ModifyStageInstance: PATCH "/stage-instances/{channel.id}" bot, query [], body ModifyStageInstance => StageInstance, api [modify_stage_instance, modify_stage_instance_typed, modify_stage_instance_from_request];
+    ModifyStageInstance: PATCH "/stage-instances/{channel.id}" bot, query [], body ModifyStageInstance => StageInstance, api [modify_stage_instance], was [modify_stage_instance_typed => modify_stage_instance, modify_stage_instance_from_request => modify_stage_instance];
     DeleteStageInstance: DELETE "/stage-instances/{channel.id}" bot, query [], body () => (), api [delete_stage_instance];
-    ListVoiceRegions: GET "/voice/regions" bot, query [], body () => Vec<VoiceRegion>, api [get_voice_regions, get_voice_regions_typed];
+    ListVoiceRegions: GET "/voice/regions" bot, query [], body () => Vec<VoiceRegion>, api [get_voice_regions], was [get_voice_regions_typed => get_voice_regions];
     GetCurrentUserVoiceState: GET "/guilds/{guild.id}/voice-states/@me" bot, query [], body () => VoiceState, api [get_current_user_voice_state];
     GetUserVoiceState: GET "/guilds/{guild.id}/voice-states/{user.id}" bot, query [], body () => VoiceState, api [get_user_voice_state];
-    ModifyCurrentUserVoiceState: PATCH "/guilds/{guild.id}/voice-states/@me" bot, query [], body ModifyCurrentUserVoiceState => (), api [modify_current_user_voice_state, modify_current_user_voice_state_from_request];
-    ModifyUserVoiceState: PATCH "/guilds/{guild.id}/voice-states/{user.id}" bot, query [], body ModifyUserVoiceState => (), api [modify_user_voice_state, modify_user_voice_state_from_request];
+    ModifyCurrentUserVoiceState: PATCH "/guilds/{guild.id}/voice-states/@me" bot, query [], body ModifyCurrentUserVoiceState => (), api [modify_current_user_voice_state], was [modify_current_user_voice_state_from_request => modify_current_user_voice_state];
+    ModifyUserVoiceState: PATCH "/guilds/{guild.id}/voice-states/{user.id}" bot, query [], body ModifyUserVoiceState => (), api [modify_user_voice_state], was [modify_user_voice_state_from_request => modify_user_voice_state];
 
     // --- Users ----------------------------------------------------------------
     GetCurrentUser: GET "/users/@me" bot, query [], body () => User, api [get_current_user];
     GetUser: GET "/users/{user.id}" bot, query [], body () => User, api [get_user];
     ModifyCurrentUser: PATCH "/users/@me" bot, query [], body ModifyCurrentUser => User, api [modify_current_user];
-    GetCurrentUserGuilds: GET "/users/@me/guilds" bot, query [before, after, limit, with_counts, shard], body () => Vec<CurrentUserGuild>, api [get_current_user_guilds, get_current_user_guilds_with_query, get_current_user_guilds_typed, get_current_user_guilds_typed_with_query];
+    GetCurrentUserGuilds: GET "/users/@me/guilds" bot, query [before, after, limit, with_counts, shard], body () => Vec<CurrentUserGuild>, api [get_current_user_guilds, get_current_user_guilds_with_query], was [get_current_user_guilds_typed => get_current_user_guilds, get_current_user_guilds_typed_with_query => get_current_user_guilds_with_query];
     GetCurrentUserGuildMember: GET "/users/@me/guilds/{guild.id}/member" bearer, query [], body () => Member, api [get_current_user_guild_member];
     LeaveGuild: DELETE "/users/@me/guilds/{guild.id}" bot, query [], body () => (), api [leave_guild];
     GetCurrentUserConnections: GET "/users/@me/connections" bearer, query [], body () => Vec<UserConnection>, api [get_current_user_connections];
@@ -477,13 +477,13 @@ route_manifest! {
     GetCurrentAuthorizationInformation: GET "/oauth2/@me" bearer, query [], body () => AuthorizationInformation, api [get_current_authorization_information];
 
     // --- Webhooks -------------------------------------------------------------
-    CreateWebhook: POST "/channels/{channel.id}/webhooks" bot, query [], body CreateWebhook => Webhook, api [create_webhook, create_webhook_typed, create_webhook_from_request, create_webhook_raw];
-    GetChannelWebhooks: GET "/channels/{channel.id}/webhooks" bot, query [], body () => Vec<Webhook>, api [get_channel_webhooks, get_channel_webhooks_typed, get_channel_webhooks_raw];
+    CreateWebhook: POST "/channels/{channel.id}/webhooks" bot, query [], body CreateWebhook => Webhook, api [create_webhook], was [create_webhook_typed => create_webhook, create_webhook_from_request => create_webhook, create_webhook_raw => create_webhook];
+    GetChannelWebhooks: GET "/channels/{channel.id}/webhooks" bot, query [], body () => Vec<Webhook>, api [get_channel_webhooks], was [get_channel_webhooks_typed => get_channel_webhooks, get_channel_webhooks_raw => get_channel_webhooks];
     GetGuildWebhooks: GET "/guilds/{guild.id}/webhooks" bot, query [], body () => Vec<Webhook>, api [get_guild_webhooks];
     GetWebhook: GET "/webhooks/{webhook.id}" bot, query [], body () => Webhook, api [get_webhook];
     GetWebhookWithToken: GET "/webhooks/{webhook.id}/{webhook.token}" token, query [], body () => Webhook, api [get_webhook_with_token];
-    ModifyWebhook: PATCH "/webhooks/{webhook.id}" bot, query [], body ModifyWebhook => Webhook, api [modify_webhook, modify_webhook_typed, modify_webhook_from_request];
-    ModifyWebhookWithToken: PATCH "/webhooks/{webhook.id}/{webhook.token}" token, query [], body ModifyWebhookWithToken => Webhook, api [modify_webhook_with_token, modify_webhook_with_token_typed, modify_webhook_with_token_from_request];
+    ModifyWebhook: PATCH "/webhooks/{webhook.id}" bot, query [], body ModifyWebhook => Webhook, api [modify_webhook], was [modify_webhook_typed => modify_webhook, modify_webhook_from_request => modify_webhook];
+    ModifyWebhookWithToken: PATCH "/webhooks/{webhook.id}/{webhook.token}" token, query [], body ModifyWebhookWithToken => Webhook, api [modify_webhook_with_token], was [modify_webhook_with_token_typed => modify_webhook_with_token, modify_webhook_with_token_from_request => modify_webhook_with_token];
     DeleteWebhook: DELETE "/webhooks/{webhook.id}" bot, query [], body () => (), api [delete_webhook];
     DeleteWebhookWithToken: DELETE "/webhooks/{webhook.id}/{webhook.token}" token, query [], body () => (), api [delete_webhook_with_token];
     ExecuteWebhook: POST "/webhooks/{webhook.id}/{webhook.token}" token, query [wait, thread_id, with_components], body Value => Value, api [execute_webhook, execute_webhook_with_query, execute_webhook_with_files];

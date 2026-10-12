@@ -15,10 +15,10 @@ impl RestClient {
             .await
     }
 
-    pub async fn edit_current_application<B>(&self, body: &B) -> Result<Application, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
+    pub async fn edit_current_application(
+        &self,
+        body: &ModifyCurrentApplication,
+    ) -> Result<Application, DiscordError> {
         self.send(
             RouteId::EditCurrentApplication,
             "/applications/@me",
@@ -27,6 +27,7 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `edit_current_application`")]
     pub async fn edit_current_application_from_request(
         &self,
         body: &ModifyCurrentApplication,

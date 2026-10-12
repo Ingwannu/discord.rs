@@ -27,15 +27,17 @@ impl RestClient {
             .await
     }
 
-    pub async fn get_current_user_guilds(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
+    /// The guilds the bot (or OAuth2 user) is in, up to 200.
+    pub async fn get_current_user_guilds(&self) -> Result<Vec<CurrentUserGuild>, DiscordError> {
         self.get_current_user_guilds_with_query(&CurrentUserGuildsQuery::default())
             .await
     }
 
+    /// [`Self::get_current_user_guilds`] with pagination and counts.
     pub async fn get_current_user_guilds_with_query(
         &self,
         query: &CurrentUserGuildsQuery,
-    ) -> Result<Vec<serde_json::Value>, DiscordError> {
+    ) -> Result<Vec<CurrentUserGuild>, DiscordError> {
         let query = current_user_guilds_query(query);
         self.send(
             RouteId::GetCurrentUserGuilds,
@@ -45,24 +47,22 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `get_current_user_guilds`")]
     pub async fn get_current_user_guilds_typed(
         &self,
     ) -> Result<Vec<CurrentUserGuild>, DiscordError> {
-        self.get_current_user_guilds_typed_with_query(&CurrentUserGuildsQuery::default())
-            .await
+        self.get_current_user_guilds().await
     }
 
+    #[deprecated(
+        since = "3.0.0",
+        note = "renamed to `get_current_user_guilds_with_query`"
+    )]
     pub async fn get_current_user_guilds_typed_with_query(
         &self,
         query: &CurrentUserGuildsQuery,
     ) -> Result<Vec<CurrentUserGuild>, DiscordError> {
-        let query = current_user_guilds_query(query);
-        self.send(
-            RouteId::GetCurrentUserGuilds,
-            &format!("/users/@me/guilds{query}"),
-            NO_BODY,
-        )
-        .await
+        self.get_current_user_guilds_with_query(query).await
     }
 
     /// Returns the current OAuth2 user's guild member object for one guild.

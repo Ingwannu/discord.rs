@@ -1,10 +1,12 @@
-use serde_json::Value;
+//! Guild scheduled event endpoints.
 
 use crate::error::DiscordError;
 use crate::model::{
     GuildId, GuildScheduledEvent, GuildScheduledEventUser, GuildScheduledEventUsersQuery,
     GuildScheduledEventsQuery, ScheduledEventId,
 };
+
+use crate::request::{CreateGuildScheduledEvent, ModifyGuildScheduledEvent};
 
 use super::{json_body, RestClient, RouteId, NO_BODY};
 
@@ -39,24 +41,8 @@ impl RestClient {
     pub async fn create_guild_scheduled_event(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &CreateGuildScheduledEvent,
     ) -> Result<GuildScheduledEvent, DiscordError> {
-        self.send(
-            RouteId::CreateGuildScheduledEvent,
-            &format!("/guilds/{}/scheduled-events", guild_id),
-            json_body(body),
-        )
-        .await
-    }
-
-    pub async fn create_guild_scheduled_event_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-    ) -> Result<GuildScheduledEvent, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::CreateGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events", guild_id),
@@ -82,25 +68,8 @@ impl RestClient {
         &self,
         guild_id: GuildId,
         event_id: ScheduledEventId,
-        body: &Value,
+        body: &ModifyGuildScheduledEvent,
     ) -> Result<GuildScheduledEvent, DiscordError> {
-        self.send(
-            RouteId::ModifyGuildScheduledEvent,
-            &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
-            json_body(body),
-        )
-        .await
-    }
-
-    pub async fn modify_guild_scheduled_event_typed<B>(
-        &self,
-        guild_id: GuildId,
-        event_id: ScheduledEventId,
-        body: &B,
-    ) -> Result<GuildScheduledEvent, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
         self.send(
             RouteId::ModifyGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
