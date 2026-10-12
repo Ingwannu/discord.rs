@@ -1,5 +1,3 @@
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     ChannelId, ChannelPins, ChannelPinsQuery, GetReactionsQuery, GuildId, Id, IdMarker, Message,
@@ -194,20 +192,6 @@ impl RestClient {
             .await
     }
 
-    pub(crate) async fn edit_message_json(
-        &self,
-        channel_id: ChannelId,
-        message_id: MessageId,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
-        self.send(
-            RouteId::EditMessage,
-            &format!("/channels/{}/messages/{}", channel_id, message_id),
-            json_body(body),
-        )
-        .await
-    }
-
     pub async fn delete_message(
         &self,
         channel_id: ChannelId,
@@ -372,19 +356,6 @@ impl RestClient {
         .await
     }
 
-    pub(crate) async fn send_message_json(
-        &self,
-        channel_id: ChannelId,
-        body: &Value,
-    ) -> Result<Value, DiscordError> {
-        self.send(
-            RouteId::CreateMessage,
-            &format!("/channels/{}/messages", channel_id),
-            message_json_body(body, value_enforces_nonce(body)),
-        )
-        .await
-    }
-
     pub async fn pin_message(
         &self,
         channel_id: ChannelId,
@@ -450,15 +421,6 @@ impl RestClient {
         )
         .await
     }
-}
-
-/// Whether an untyped message create (the `Value` bodies `helpers.rs` still
-/// sends through `send_message_json`) enforces its nonce: `enforce_nonce:
-/// true` with a non-null `nonce`. A narrow adapter until those helpers send
-/// `request::CreateMessage`, whose `nonce_replay()` answers this.
-pub(super) fn value_enforces_nonce(body: &Value) -> bool {
-    body.get("enforce_nonce").and_then(Value::as_bool) == Some(true)
-        && body.get("nonce").is_some_and(|nonce| !nonce.is_null())
 }
 
 fn channel_pins_query(query: &ChannelPinsQuery) -> String {

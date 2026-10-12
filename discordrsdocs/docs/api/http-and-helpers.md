@@ -39,7 +39,7 @@ Every method takes a concrete request type and returns a typed model (3.0). For 
 - **Concrete request bodies.** Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. New bodies for the other domains live in `discordrs::request` too: `ModifyChannel` (for `update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage` (new `create_forum_thread(_with_files)`), `CreateAutoModerationRule` / `ModifyAutoModerationRule`, `CreateGuildEmoji` / `ModifyGuildEmoji` / `CreateApplicationEmoji` / `ModifyApplicationEmoji`, `SendSoundboardSound` / `CreateGuildSoundboardSound` / `ModifyGuildSoundboardSound`, `CreateGuildTemplate` / `ModifyGuildTemplate`, `CreateGuildScheduledEvent` / `ModifyGuildScheduledEvent`, and `EditApplicationCommand`. Create bodies use `Option` fields; modify bodies use `Patch` / `NullablePatch`, where the `clear_*` setters send `null`. The 2.x bodies still in `discordrs::model` (`ModifyGuild`, `CreateGuildRole`, `CreateWebhook`, ...) keep working and move to `request` later.
 - **Documented exceptions.** `execute_slack_compatible_webhook` / `execute_github_compatible_webhook` take `&Value` (Slack- and GitHub-format payloads), and `update_lobby_message_moderation_metadata` takes the application-defined `HashMap<String, String>`.
 - **Bodies are encoded once.** A body is serialized straight to bytes with `serde_json::to_vec` (no `serde_json::Value` tree) and every attempt, including retries, sends the same bytes. Object keys follow the request type's field order.
-- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, and the interaction callbacks and follow-ups. An explicit value, or an explicit `null` on an edit, wins. 2.x did not apply it to `edit_webhook_message`.
+- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, the Components V2 channel helpers (`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), and on the interaction side the message callbacks (types 4 and 7; not `RawInteractionResponse`), follow-ups, and `@original` / follow-up edits. An explicit value, or an explicit `null` on an edit, wins. The legacy `create_interaction_response_typed` still writes it into the JSON `data` of types 4 and 7. 2.x did not apply it to `edit_webhook_message` or the channel helpers.
 - **Nonce replay** comes from the typed request (`CreateMessage::nonce_replay()`, set with `.enforce_nonce("...")`), not from reading the JSON back, and only for Create Message.
 - **Voice messages** (`IS_VOICE_MESSAGE`) are checked locally before upload: exactly one `audio/*` file.
 - `modify_guild_member` returns the updated `Member` (Discord's 200 body) instead of `()`; `Member::edit` / `timeout` / `remove_timeout` follow.
@@ -1035,7 +1035,7 @@ let c = create_container("Notice", "Done", vec![], None);
 respond_with_container(http, ctx.id, &ctx.token, c, true).await?;
 ```
 
-`followup_with_container` and `defer_and_followup_container` return the created `Message` (3.0; they returned the raw JSON in 2.x).
+`followup_with_container` and `defer_and_followup_container` return the created `Message` (3.0; they returned the raw JSON in 2.x). So do the channel helpers `send_container_message`, `send_to_channel`, `send_components_v2`, and `edit_message_with_container`, which build a `request::CreateMessage` / `EditMessage` with `components_v2(..)` and send it through `create_message` / `edit_message`. `edit_message_with_container` sets only the components and the `IS_COMPONENTS_V2` flag, so Discord rejects it for a message that still has content or embeds; clear those with `EditMessage::clear_content()` / `clear_embeds()` and call `edit_message` instead.
 
 ## OAuth2 Backend Helpers
 
@@ -1183,6 +1183,7 @@ Same name, new signature (2.x → 3.0):
 | `modify_current_user_voice_state`, `modify_user_voice_state` | `B: Serialize` | `&ModifyCurrentUserVoiceState`, `&ModifyUserVoiceState` |
 | `get_voice_regions` | → `Vec<Value>` | → `Vec<VoiceRegion>` |
 | `create_webhook` | `&Value` → `Value` | `&CreateWebhook` → `Webhook` |
+| helpers `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container` | → `Value` | → `Message` |
 | `get_channel_webhooks` | → `Vec<Value>` | → `Vec<Webhook>` |
 | `modify_webhook`, `modify_webhook_with_token` | `&Value` | `&ModifyWebhook`, `&ModifyWebhookWithToken` |
 | `edit_current_application` | `B: Serialize` | `&ModifyCurrentApplication` |

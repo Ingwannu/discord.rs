@@ -20,7 +20,7 @@
 - **구체 요청 본문.** 메시지 엔드포인트는 `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`를 받습니다. 다른 도메인의 새 본문도 `discordrs::request`에 있습니다: `ModifyChannel`(`update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage`(새 `create_forum_thread(_with_files)`), `CreateAutoModerationRule`/`ModifyAutoModerationRule`, 이모지 4종, 사운드보드 3종, `CreateGuildTemplate`/`ModifyGuildTemplate`, `CreateGuildScheduledEvent`/`ModifyGuildScheduledEvent`, `EditApplicationCommand`. 생성 본문은 `Option` 필드, 수정 본문은 `Patch`/`NullablePatch` 필드이고 `clear_*` setter는 `null`을 보냅니다. 아직 `discordrs::model`에 있는 2.x 본문(`ModifyGuild`, `CreateGuildRole`, `CreateWebhook` 등)은 그대로 쓰고, 나중에 `request`로 옮깁니다.
 - **문서화된 예외.** `execute_slack_compatible_webhook`/`execute_github_compatible_webhook`은 Slack·GitHub 형식 본문이라 `&Value`를 받고, `update_lobby_message_moderation_metadata`는 애플리케이션이 정의하는 `HashMap<String, String>`을 받습니다.
 - **본문은 한 번만 인코딩합니다.** 본문은 `serde_json::to_vec`으로 바로 바이트가 되고(`serde_json::Value` 트리 없음), 재시도를 포함한 모든 시도가 같은 바이트를 보냅니다. 객체 키는 요청 타입의 필드 순서를 따릅니다.
-- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, 인터랙션 콜백과 후속 메시지. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 2.x는 `edit_webhook_message`에 적용하지 않았습니다.
+- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, Components V2 채널 헬퍼(`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), 그리고 인터랙션 쪽의 메시지 콜백(타입 4·7, `RawInteractionResponse` 제외), follow-up, `@original`·follow-up 수정. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 레거시 `create_interaction_response_typed`는 타입 4·7의 JSON `data`에 계속 넣습니다. 2.x는 `edit_webhook_message`와 채널 헬퍼에 적용하지 않았습니다.
 - **nonce 재전송**은 JSON을 다시 읽지 않고 타입 요청(`CreateMessage::nonce_replay()`, `.enforce_nonce("...")`로 설정)에서 판정하며, Create Message에만 해당합니다.
 - **음성 메시지**(`IS_VOICE_MESSAGE`)는 업로드 전에 로컬에서 확인합니다: `audio/*` 파일이 정확히 하나여야 합니다.
 - `modify_guild_member`는 `()` 대신 갱신된 `Member`(Discord의 200 본문)를 돌려줍니다. `Member::edit`/`timeout`/`remove_timeout`도 같습니다.
@@ -283,6 +283,8 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 - `respond_component_with_container(...)`
 - `respond_modal_with_container(...)`
 - `respond_with_modal(...)`
+
+채널 헬퍼 `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`는 `request::CreateMessage`/`EditMessage`를 `components_v2(..)`로 만들어 `create_message`/`edit_message`로 보내고 생성·수정된 `Message`를 돌려줍니다(3.0. 2.x는 원시 JSON). `edit_message_with_container`는 컴포넌트와 `IS_COMPONENTS_V2` 플래그만 설정하므로, 내용이나 임베드가 남은 메시지는 Discord가 거부합니다. 그때는 `EditMessage::clear_content()`/`clear_embeds()`와 함께 `edit_message`를 직접 호출하세요.
 
 ## 2.x에서 REST 이름 옮기기 (3.0)
 

@@ -32,28 +32,27 @@ use crate::model::{
     AuditLogQuery, AutoModerationAction, AutoModerationActionType, AutoModerationEventType,
     AutoModerationTriggerType, BeginGuildPruneRequest, BulkGuildBanRequest, ChannelPinsQuery,
     CommandPermissionsId, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
-    CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance, CreateTestEntitlement,
-    CreateWebhook, CurrentUserGuildsQuery, EditApplicationCommandPermissions,
-    EditChannelPermission, EntitlementOwner, EntitlementQuery, GetGuildQuery,
-    GuildApplicationCommandPermissions, GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle,
-    InteractionCallbackResponse, JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember,
-    LobbyMemberUpdate, ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser,
-    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
-    ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
-    ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
-    ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
-    ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId, RoleColors,
-    SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus, SubscriptionQuery,
-    ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
+    CreateGuildSticker, CreateLobby, CreateStageInstance, CreateTestEntitlement, CreateWebhook,
+    CurrentUserGuildsQuery, EditApplicationCommandPermissions, EditChannelPermission,
+    EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildApplicationCommandPermissions,
+    GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
+    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
+    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId,
+    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus,
+    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
 use crate::request::{
     CreateApplicationEmoji, CreateAutoModerationRule, CreateGuildEmoji, CreateGuildScheduledEvent,
     CreateGuildSoundboardSound, CreateGuildTemplate, CreateMessage as RequestCreateMessage,
-    EditApplicationCommand, EditMessage, EditWebhookMessage, ExecuteWebhook,
-    ModifyApplicationEmoji, ModifyAutoModerationRule, ModifyChannel, ModifyGuildEmoji,
-    ModifyGuildScheduledEvent, ModifyGuildSoundboardSound, ModifyGuildTemplate,
-    SendSoundboardSound, StartThreadFromMessage, StartThreadWithoutMessage,
+    EditApplicationCommand, EditMessage, ExecuteWebhook, ModifyApplicationEmoji,
+    ModifyAutoModerationRule, ModifyChannel, ModifyGuildEmoji, ModifyGuildScheduledEvent,
+    ModifyGuildSoundboardSound, ModifyGuildTemplate, SendSoundboardSound, StartThreadFromMessage,
+    StartThreadWithoutMessage,
 };
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
@@ -674,23 +673,12 @@ fn sample_command() -> CommandDefinition {
     }
 }
 
-fn sample_message() -> CreateMessage {
-    CreateMessage {
-        content: Some("hello".to_string()),
-        ..CreateMessage::default()
-    }
-}
-
 fn sample_create() -> RequestCreateMessage {
     RequestCreateMessage::new().content("hello")
 }
 
-fn sample_edit() -> EditMessage {
+fn sample_message_edit() -> EditMessage {
     EditMessage::new().content("hello")
-}
-
-fn sample_webhook_edit() -> EditWebhookMessage {
-    EditWebhookMessage::new().content("hello")
 }
 
 fn sample_interaction_response() -> InteractionCallbackResponse {
@@ -1685,7 +1673,7 @@ async fn channel_message_file_helpers_send_multipart_payloads() {
     );
     assert_eq!(
         client
-            .edit_message_with_files(test_id(100), test_id(701), &sample_edit(), &files)
+            .edit_message_with_files(test_id(100), test_id(701), &sample_message_edit(), &files)
             .await
             .expect("edit message with files")
             .content,
@@ -1828,7 +1816,7 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message(test_id(777), "token", "900", &sample_webhook_edit())
+            .edit_webhook_message(test_id(777), "token", "900", &sample_edit())
             .await
             .expect("edit webhook message")
             .content,
@@ -1836,13 +1824,7 @@ async fn webhook_message_crud_uses_tokenized_message_paths() {
     );
     assert_eq!(
         client
-            .edit_webhook_message_with_files(
-                test_id(777),
-                "token",
-                "900",
-                &sample_webhook_edit(),
-                &files,
-            )
+            .edit_webhook_message_with_files(test_id(777), "token", "900", &sample_edit(), &files,)
             .await
             .expect("edit webhook message with files")
             .content,
@@ -1918,7 +1900,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
                 "token",
                 "900",
                 &edit_query,
-                &sample_webhook_edit(),
+                &sample_edit(),
             )
             .await
             .expect("edit webhook message with query")
@@ -1932,7 +1914,7 @@ async fn webhook_message_query_wrappers_hit_expected_paths() {
                 "token",
                 "900",
                 &edit_query,
-                &sample_webhook_edit(),
+                &sample_edit(),
                 &files,
             )
             .await
@@ -5765,11 +5747,8 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(StatusCode::OK, json!({ "ok": true })),
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "903", "content": "raw" })),
-        PlannedResponse::json(
-            StatusCode::OK,
-            json!({ "id": "903", "content": "edited raw" }),
-        ),
+        PlannedResponse::json(StatusCode::OK, message_payload("903", "100", "raw")),
+        PlannedResponse::json(StatusCode::OK, message_payload("903", "100", "edited raw")),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::json(
             StatusCode::OK,
@@ -5809,7 +5788,7 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(created.content, "hello");
 
     let updated = client
-        .edit_message(test_id(100), test_id(1), &sample_edit())
+        .edit_message(test_id(100), test_id(1), &sample_message_edit())
         .await
         .expect("edit message");
     assert_eq!(updated.content, "updated");
@@ -5916,20 +5895,20 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(raw["ok"], json!(true));
 
     let sent = client
-        .send_message_json(test_id(100), &json!({ "content": "raw" }))
+        .create_message(test_id(100), &RequestCreateMessage::new().content("raw"))
         .await
-        .expect("send raw message");
-    assert_eq!(sent["id"], json!("903"));
+        .expect("send message");
+    assert_eq!(sent.id, test_id(903));
 
     let edited = client
-        .edit_message_json(
+        .edit_message(
             test_id(100),
             test_id(903),
-            &json!({ "content": "edited raw" }),
+            &EditMessage::new().content("edited raw"),
         )
         .await
-        .expect("edit raw message");
-    assert_eq!(edited["content"], json!("edited raw"));
+        .expect("edit message");
+    assert_eq!(edited.content, "edited raw");
 
     client
         .delete_message(test_id(100), test_id(903))
@@ -7596,17 +7575,6 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
             .enforces_nonce()
     );
 
-    // The 2.x adapters read the same rule from their bodies.
-    use super::messages::value_enforces_nonce;
-    assert!(!value_enforces_nonce(
-        &json!({ "nonce": "n", "enforce_nonce": false })
-    ));
-    assert!(!value_enforces_nonce(
-        &json!({ "nonce": null, "enforce_nonce": true })
-    ));
-    assert!(value_enforces_nonce(
-        &json!({ "nonce": 5, "enforce_nonce": true })
-    ));
     // The typed rule is `CreateMessage::nonce_replay` (worker A's request
     // type): a nonce together with `enforce_nonce`.
     let message = RequestCreateMessage::new().nonce("n");
@@ -8968,7 +8936,7 @@ async fn message_edits_and_webhook_uploads_carry_the_default_mentions() {
             ..AllowedMentions::default()
         });
     client
-        .edit_message(test_id(100), test_id(1), &sample_edit())
+        .edit_message(test_id(100), test_id(1), &sample_message_edit())
         .await
         .unwrap();
     let mut quiet = EditMessage::new().content("quiet");
@@ -8978,7 +8946,7 @@ async fn message_edits_and_webhook_uploads_carry_the_default_mentions() {
         .await
         .unwrap();
     client
-        .edit_webhook_message(test_id(7), "hook-token", "3", &sample_webhook_edit())
+        .edit_webhook_message(test_id(7), "hook-token", "3", &sample_edit())
         .await
         .unwrap();
     client

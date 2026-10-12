@@ -111,11 +111,17 @@ fn interaction_response() -> m::InteractionCallbackResponse {
     }
 }
 
-fn followup() -> m::CreateMessage {
-    m::CreateMessage {
-        content: Some("golden".to_string()),
-        ..m::CreateMessage::default()
-    }
+/// A typed message callback (type 4).
+fn typed_interaction_response() -> r::InteractionResponse {
+    r::InteractionResponse::ChannelMessage(r::InteractionMessage::from("golden"))
+}
+
+fn followup() -> r::CreateFollowup {
+    r::CreateFollowup::from("golden")
+}
+
+fn interaction_edit() -> r::EditInteractionResponse {
+    r::EditInteractionResponse::from("golden")
 }
 
 fn permission_edit() -> m::EditApplicationCommandPermissions {
@@ -291,7 +297,7 @@ fn cases() -> Vec<Case> {
             |c| c.create_interaction_response_with_files(
                 test_id(778),
                 INTERACTION_TOKEN,
-                &interaction_response(),
+                &typed_interaction_response(),
                 &files()
             )
         ),
@@ -301,7 +307,7 @@ fn cases() -> Vec<Case> {
             |c| c.create_interaction_response_with_result(
                 test_id(778),
                 INTERACTION_TOKEN,
-                &interaction_response()
+                &typed_interaction_response()
             )
         ),
         case!(
@@ -312,7 +318,7 @@ fn cases() -> Vec<Case> {
         case!(
             EditOriginalInteractionResponse,
             edit_original_interaction_response,
-            |c| c.edit_original_interaction_response(INTERACTION_TOKEN, &followup())
+            |c| c.edit_original_interaction_response(INTERACTION_TOKEN, &interaction_edit())
         ),
         case!(
             DeleteOriginalInteractionResponse,
@@ -327,9 +333,124 @@ fn cases() -> Vec<Case> {
             |c| c.create_followup_message_with_files(INTERACTION_TOKEN, &followup(), &files())
         ),
         case!(EditFollowupMessage, edit_followup_message, |c| c
-            .edit_followup_message(INTERACTION_TOKEN, "903", &followup())),
+            .edit_followup_message(
+                INTERACTION_TOKEN,
+                "903",
+                &interaction_edit()
+            )),
         case!(DeleteFollowupMessage, delete_followup_message, |c| c
             .delete_followup_message(INTERACTION_TOKEN, "903")),
+        case!(
+            CreateInteractionResponse,
+            create_interaction_response,
+            |c| c.create_interaction_response(
+                test_id(778),
+                INTERACTION_TOKEN,
+                &typed_interaction_response()
+            )
+        ),
+        // The `_with_application_id` variants name the application instead of
+        // using the client's (555).
+        case!(
+            GetOriginalInteractionResponse,
+            get_original_interaction_response_with_application_id,
+            |c| c.get_original_interaction_response_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN
+            )
+        ),
+        case!(
+            EditOriginalInteractionResponse,
+            edit_original_interaction_response_with_files,
+            |c| c.edit_original_interaction_response_with_files(
+                INTERACTION_TOKEN,
+                &interaction_edit(),
+                &files()
+            )
+        ),
+        case!(
+            EditOriginalInteractionResponse,
+            edit_original_interaction_response_with_application_id,
+            |c| c.edit_original_interaction_response_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN,
+                &interaction_edit()
+            )
+        ),
+        case!(
+            EditOriginalInteractionResponse,
+            edit_original_interaction_response_with_application_id_and_files,
+            |c| c.edit_original_interaction_response_with_application_id_and_files(
+                test_id(556),
+                INTERACTION_TOKEN,
+                &interaction_edit(),
+                &files()
+            )
+        ),
+        case!(
+            DeleteOriginalInteractionResponse,
+            delete_original_interaction_response_with_application_id,
+            |c| c.delete_original_interaction_response_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN
+            )
+        ),
+        case!(
+            CreateFollowupMessage,
+            create_followup_message_with_application_id,
+            |c| c.create_followup_message_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN,
+                &followup()
+            )
+        ),
+        case!(
+            CreateFollowupMessage,
+            create_followup_message_with_application_id_and_files,
+            |c| c.create_followup_message_with_application_id_and_files(
+                test_id(556),
+                INTERACTION_TOKEN,
+                &followup(),
+                &files()
+            )
+        ),
+        case!(EditFollowupMessage, edit_followup_message_with_files, |c| c
+            .edit_followup_message_with_files(
+                INTERACTION_TOKEN,
+                "903",
+                &interaction_edit(),
+                &files()
+            )),
+        case!(
+            EditFollowupMessage,
+            edit_followup_message_with_application_id,
+            |c| c.edit_followup_message_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN,
+                "903",
+                &interaction_edit()
+            )
+        ),
+        case!(
+            EditFollowupMessage,
+            edit_followup_message_with_application_id_and_files,
+            |c| c.edit_followup_message_with_application_id_and_files(
+                test_id(556),
+                INTERACTION_TOKEN,
+                "903",
+                &interaction_edit(),
+                &files()
+            )
+        ),
+        case!(
+            DeleteFollowupMessage,
+            delete_followup_message_with_application_id,
+            |c| c.delete_followup_message_with_application_id(
+                test_id(556),
+                INTERACTION_TOKEN,
+                "903"
+            )
+        ),
         // --- Audit log and auto moderation ----------------------------------
         case!(GetGuildAuditLog, get_guild_audit_log, |c| c
             .get_guild_audit_log(
@@ -597,10 +718,6 @@ fn cases() -> Vec<Case> {
             test_id(1),
             test_id(100)
         )),
-        case!(CreateMessage, send_message_json, |c| c.send_message_json(
-            test_id(100),
-            &json!({ "content": "untyped" })
-        )),
         case!(CrosspostMessage, crosspost_message, |c| c
             .crosspost_message(test_id(100), test_id(1))),
         case!(EditMessage, edit_message, |c| c.edit_message(
@@ -616,11 +733,6 @@ fn cases() -> Vec<Case> {
                     .attachments(vec![r::MessageAttachment::keep(test_id(77)), upload_0(),]),
                 &files()
             )),
-        case!(EditMessage, edit_message_json, |c| c.edit_message_json(
-            test_id(100),
-            test_id(1),
-            &json!({ "content": "untyped" })
-        )),
         case!(DeleteMessage, delete_message, |c| c
             .delete_message(test_id(100), test_id(1))),
         case!(BulkDeleteMessages, bulk_delete_messages, |c| c
@@ -1897,26 +2009,14 @@ fn every_route_and_listed_method_has_a_golden() {
     }
 
     // Every method a row lists has its own golden, except the crate-private
-    // interaction JSON helpers worker C is replacing.
+    // callback senders behind the public interaction response methods.
     let called = cases
         .iter()
         .map(|case| (case.route, case.api))
         .collect::<HashSet<_>>();
     let exempt = [
-        "create_interaction_response_json",
-        "create_followup_message_json",
-        "create_followup_message_json_with_application_id",
-        "get_original_interaction_response_with_application_id",
-        "edit_original_interaction_response_with_files",
-        "edit_original_interaction_response_with_application_id",
-        "edit_original_interaction_response_with_application_id_and_files",
-        "delete_original_interaction_response_with_application_id",
-        "create_followup_message_with_application_id",
-        "create_followup_message_with_application_id_and_files",
-        "edit_followup_message_with_files",
-        "edit_followup_message_with_application_id",
-        "edit_followup_message_with_application_id_and_files",
-        "delete_followup_message_with_application_id",
+        "post_interaction_callback",
+        "post_interaction_callback_with_result",
     ];
     let uncovered = MANIFEST
         .iter()

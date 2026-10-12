@@ -257,6 +257,132 @@ authorization: -
 content-type: application/json
 body: -
 
+### CreateInteractionResponse · create_interaction_response
+POST /interactions/778/golden-interaction-token/callback
+authorization: -
+content-type: application/json
+body:
+{"type":4,"data":{"content":"golden"}}
+
+### GetOriginalInteractionResponse · get_original_interaction_response_with_application_id
+GET /webhooks/556/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body: -
+
+### EditOriginalInteractionResponse · edit_original_interaction_response_with_files
+PATCH /webhooks/555/golden-interaction-token/messages/@original
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditOriginalInteractionResponse · edit_original_interaction_response_with_application_id
+PATCH /webhooks/556/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### EditOriginalInteractionResponse · edit_original_interaction_response_with_application_id_and_files
+PATCH /webhooks/556/golden-interaction-token/messages/@original
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### DeleteOriginalInteractionResponse · delete_original_interaction_response_with_application_id
+DELETE /webhooks/556/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body: -
+
+### CreateFollowupMessage · create_followup_message_with_application_id
+POST /webhooks/556/golden-interaction-token
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### CreateFollowupMessage · create_followup_message_with_application_id_and_files
+POST /webhooks/556/golden-interaction-token
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditFollowupMessage · edit_followup_message_with_files
+PATCH /webhooks/555/golden-interaction-token/messages/903
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditFollowupMessage · edit_followup_message_with_application_id
+PATCH /webhooks/556/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### EditFollowupMessage · edit_followup_message_with_application_id_and_files
+PATCH /webhooks/556/golden-interaction-token/messages/903
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### DeleteFollowupMessage · delete_followup_message_with_application_id
+DELETE /webhooks/556/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body: -
+
 ### GetGuildAuditLog · get_guild_audit_log
 GET /guilds/200/audit-logs?user_id=42&action_type=20&before=950&limit=25
 authorization: Bot golden-token
@@ -576,13 +702,6 @@ content-type: application/json
 body:
 {"message_reference":{"type":1,"message_id":"1","channel_id":"101"}}
 
-### CreateMessage · send_message_json
-POST /channels/100/messages
-authorization: Bot golden-token
-content-type: application/json
-body:
-{"content":"untyped"}
-
 ### CrosspostMessage · crosspost_message
 POST /channels/100/messages/1/crosspost
 authorization: Bot golden-token
@@ -611,13 +730,6 @@ Content-Type: text/plain
 
 golden file
 --BOUNDARY--
-
-### EditMessage · edit_message_json
-PATCH /channels/100/messages/1
-authorization: Bot golden-token
-content-type: application/json
-body:
-{"content":"untyped"}
 
 ### DeleteMessage · delete_message
 DELETE /channels/100/messages/1

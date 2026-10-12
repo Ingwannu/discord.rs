@@ -22,16 +22,14 @@
 //! [`InteractionResponder`]: crate::response::InteractionResponder
 //! [`InteractionContext`]: crate::parsers::InteractionContext
 
-use serde_json::Value;
-
 use crate::bitfield::MessageFlags;
 use crate::builders::{create_container, ComponentsV2Message, ContainerBuilder, ModalBuilder};
 use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionContextData,
-    InteractionId, Message, MessageId,
+    ApplicationCommandOptionChoice, ChannelId, InteractionContextData, InteractionId, Message,
+    MessageId,
 };
 use crate::request::{
     self, Component, CreateFollowup, EditInteractionResponse, InteractionMessage,
@@ -45,27 +43,6 @@ fn components_v2_flags(ephemeral: bool) -> u64 {
         flags |= crate::response::EPHEMERAL_FLAG;
     }
     flags
-}
-
-/// A Components V2 channel-message body for the JSON channel-message
-/// helpers (`send_container_message`, `send_components_v2`,
-/// `edit_message_with_container`), which keep their 2.x JSON results until
-/// the REST message endpoints take the typed request bodies.
-struct ComponentsV2Payload {
-    components: Vec<Component>,
-}
-
-impl ComponentsV2Payload {
-    fn new(components: Vec<Component>) -> Self {
-        Self { components }
-    }
-
-    fn into_value(self) -> Value {
-        serde_json::json!({
-            "components": self.components,
-            "flags": components_v2_flags(false),
-        })
-    }
 }
 
 /// The flags of a Components V2 message.
@@ -92,14 +69,14 @@ fn components_v2_callback(
     }
 }
 
-/// Provides the `send_container_message` helper.
+/// Sends a Components V2 message holding one container.
 pub async fn send_container_message(
     http: &DiscordHttpClient,
     channel_id: ChannelId,
     container: ContainerBuilder,
-) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
-    http.send_message_json(channel_id, &body).await
+) -> Result<Message, DiscordError> {
+    let body = request::CreateMessage::new().components_v2(vec![container.build().into()]);
+    http.create_message(channel_id, &body).await
 }
 
 /// Provides the `send_message` helper.
@@ -119,7 +96,7 @@ pub async fn send_to_channel(
     description: &str,
     buttons: Vec<ButtonConfig>,
     image_url: Option<&str>,
-) -> Result<Value, DiscordError> {
+) -> Result<Message, DiscordError> {
     let container = create_container(title, description, buttons, image_url);
     send_container_message(http, channel_id, container).await
 }
@@ -346,15 +323,18 @@ pub async fn edit_followup_response(
         .await
 }
 
-/// Provides the `edit_message_with_container` helper.
+/// Replaces a message's components with one container and sets
+/// `IS_COMPONENTS_V2`. Discord rejects the edit if the message still has
+/// content or embeds; clear them with [`DiscordHttpClient::edit_message`]
+/// and [`request::EditMessage::components_v2`] instead.
 pub async fn edit_message_with_container(
     http: &DiscordHttpClient,
     channel_id: ChannelId,
     message_id: MessageId,
     container: ContainerBuilder,
-) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
-    http.edit_message_json(channel_id, message_id, &body).await
+) -> Result<Message, DiscordError> {
+    let body = request::EditMessage::new().components_v2(vec![container.build().into()]);
+    http.edit_message(channel_id, message_id, &body).await
 }
 
 /// Updates the component's message (type 7) with a Components V2 container.
@@ -507,14 +487,14 @@ pub async fn defer_and_followup_container(
     followup_with_container(http, interaction_token, container, ephemeral).await
 }
 
-/// Provides the `send_components_v2` helper.
+/// Sends a Components V2 message.
 pub async fn send_components_v2(
     http: &DiscordHttpClient,
     channel_id: ChannelId,
     message: ComponentsV2Message,
-) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(message.build()).into_value();
-    http.send_message_json(channel_id, &body).await
+) -> Result<Message, DiscordError> {
+    let body = request::CreateMessage::new().components_v2(message.build());
+    http.create_message(channel_id, &body).await
 }
 
 /// Replies (type 4) with a Components V2 message.
@@ -570,7 +550,7 @@ mod tests {
         respond_modal_with_container, respond_to_interaction, respond_with_autocomplete_choices,
         respond_with_components_v2, respond_with_container, respond_with_message,
         respond_with_modal, respond_with_modal_typed, update_component_with_container,
-        update_interaction_message, ComponentsV2Payload,
+        update_interaction_message,
     };
     use crate::builders::{
         ComponentsV2Message, ContainerBuilder, ModalBuilder, TextDisplayBuilder, TextInputBuilder,
@@ -650,17 +630,18 @@ mod tests {
     }
 
     #[test]
-    fn components_v2_payload_serializes_components_and_flags() {
+    fn components_v2_bodies_serialize_components_and_flags() {
         let component = crate::request::Component::from(crate::request::TextDisplay::new("hello"));
 
-        let standard = ComponentsV2Payload::new(vec![component.clone()]).into_value();
-        assert_eq!(
-            standard,
-            json!({
-                "components": [{ "type": 10, "content": "hello" }],
-                "flags": MESSAGE_FLAG_IS_COMPONENTS_V2,
-            })
-        );
+        // The channel-message helpers' bodies (2.x sent this JSON as a Value).
+        let standard = json!({
+            "components": [{ "type": 10, "content": "hello" }],
+            "flags": MESSAGE_FLAG_IS_COMPONENTS_V2,
+        });
+        let create = CreateMessage::new().components_v2(vec![component.clone()]);
+        assert_eq!(serde_json::to_value(&create).unwrap(), standard);
+        let edit = crate::request::EditMessage::new().components_v2(vec![component.clone()]);
+        assert_eq!(serde_json::to_value(&edit).unwrap(), standard);
 
         let reply = serde_json::to_value(super::components_v2_callback(
             false,
@@ -1068,8 +1049,9 @@ mod tests {
         assert_eq!(
             super::send_container_message(&http, channel, sample_container())
                 .await
-                .unwrap()["id"],
-            json!("30")
+                .unwrap()
+                .id,
+            test_id(30)
         );
         super::send_to_channel(&http, channel, "Title", "Body", Vec::new(), None)
             .await
@@ -1080,16 +1062,9 @@ mod tests {
         super::edit_message_with_container(&http, channel, test_id(30), sample_container())
             .await
             .unwrap();
-        let sent = super::send_message(
-            &http,
-            channel,
-            &crate::model::CreateMessage {
-                content: Some("plain".to_string()),
-                ..crate::model::CreateMessage::default()
-            },
-        )
-        .await
-        .unwrap();
+        let sent = super::send_message(&http, channel, &CreateMessage::new().content("plain"))
+            .await
+            .unwrap();
         assert_eq!(sent.id, test_id(30));
 
         for expected in [
@@ -1103,6 +1078,8 @@ mod tests {
             assert_eq!(line, expected);
             let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
             if expected.starts_with("PATCH") || body.get("components").is_some() {
+                let keys = body.as_object().unwrap().keys().collect::<Vec<_>>();
+                assert_eq!(keys, ["components", "flags"]);
                 assert_eq!(body["flags"], json!(MESSAGE_FLAG_IS_COMPONENTS_V2));
             }
         }
