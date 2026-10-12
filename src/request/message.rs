@@ -95,6 +95,10 @@ const EDIT_MESSAGE_FLAGS: u64 = SUPPRESS_EMBEDS | IS_COMPONENTS_V2;
 /// `SUPPRESS_NOTIFICATIONS` can be set".
 const INTERACTION_MESSAGE_FLAGS: u64 =
     SUPPRESS_EMBEDS | EPHEMERAL | IS_COMPONENTS_V2 | IS_VOICE_MESSAGE | SUPPRESS_NOTIFICATIONS;
+/// `UPDATE_MESSAGE` callback `flags`: the interaction callback set without
+/// `IS_VOICE_MESSAGE`, because voice messages "cannot be edited" (Voice
+/// Messages).
+const UPDATE_MESSAGE_FLAGS: u64 = INTERACTION_MESSAGE_FLAGS & !IS_VOICE_MESSAGE;
 /// Execute Webhook `flags`: "only `SUPPRESS_EMBEDS`, `SUPPRESS_NOTIFICATIONS`
 /// and `IS_COMPONENTS_V2` can be set".
 const EXECUTE_WEBHOOK_FLAGS: u64 = SUPPRESS_EMBEDS | SUPPRESS_NOTIFICATIONS | IS_COMPONENTS_V2;
@@ -821,7 +825,7 @@ impl UpdateMessage {
     /// Checks the values this update sets against Discord's limits.
     pub fn validate(&self) -> Result<(), DiscordError> {
         check_body(&BodyRef {
-            allowed_flags: INTERACTION_MESSAGE_FLAGS,
+            allowed_flags: UPDATE_MESSAGE_FLAGS,
             endpoint: "an UPDATE_MESSAGE callback",
             patch: true,
             content: patch_value(&self.content).map(String::as_str),
@@ -1214,6 +1218,9 @@ fn check_body(body: &BodyRef<'_>) -> Result<(), DiscordError> {
             )));
         }
     }
+    if flags.contains(IS_VOICE_MESSAGE) {
+        check_voice_message(body)?;
+    }
     if let Some(content) = body.content {
         check_max_len(
             "",
@@ -1264,6 +1271,104 @@ fn check_body(body: &BodyRef<'_>) -> Result<(), DiscordError> {
     }
     Ok(())
 }
+
+/// The Voice Messages rules a body can see: "Only a single audio attachment
+/// is allowed. No content, stickers, etc.", and the attachment carries
+/// `duration_secs` and `waveform` ("required for voice messages",
+/// Attachment Request Structure). The file itself (one part, an `audio/*`
+/// content type) is checked by [`check_voice_files`] where the files are
+/// known.
+fn check_voice_message(body: &BodyRef<'_>) -> Result<(), DiscordError> {
+    let conflicting = unsupported(&[
+        ("content", body.content.is_some()),
+        (
+            "embeds",
+            body.embeds.is_some_and(|embeds| !embeds.is_empty()),
+        ),
+        (
+            "components",
+            body.components
+                .is_some_and(|components| !components.is_empty()),
+        ),
+        ("sticker_ids", body.stickers > 0),
+        ("poll", body.poll.is_some()),
+        ("shared_client_theme", body.shared_client_theme),
+    ]);
+    if !conflicting.is_empty() {
+        return Err(DiscordError::model(format!(
+            "a voice message (IS_VOICE_MESSAGE) cannot set {}",
+            conflicting.join(", ")
+        )));
+    }
+    match body.attachments.unwrap_or_default() {
+        [MessageAttachment::Upload(upload)]
+            if upload.duration_secs.is_some() && upload.waveform.is_some() =>
+        {
+            Ok(())
+        }
+        [MessageAttachment::Upload(_)] => Err(DiscordError::model(
+            "a voice message attachment needs duration_secs and waveform",
+        )),
+        attachments => Err(DiscordError::model(format!(
+            "a voice message needs exactly one uploaded attachment, got {} attachment entries",
+            attachments.len()
+        ))),
+    }
+}
+
+/// Checks the files of a voice message, for the REST client's multipart
+/// path: exactly one file, whose content type starts with `audio/`
+/// (Discord reads `duration_secs` and `waveform` only for such files).
+/// `content_types` has one entry per file part.
+fn check_voice_files<'a>(
+    content_types: impl IntoIterator<Item = Option<&'a str>>,
+) -> Result<(), DiscordError> {
+    let mut content_types = content_types.into_iter();
+    match (content_types.next(), content_types.next()) {
+        (Some(Some(content_type)), None) if content_type.starts_with("audio/") => Ok(()),
+        (Some(content_type), None) => Err(DiscordError::model(format!(
+            "a voice message file needs an audio/* content type, got {}",
+            content_type.unwrap_or("none")
+        ))),
+        (None, _) => Err(DiscordError::model(
+            "a voice message needs its audio file uploaded with the message",
+        )),
+        (Some(_), Some(_)) => Err(DiscordError::model(
+            "a voice message allows only a single audio file",
+        )),
+    }
+}
+
+/// `is_voice_message` and `check_voice_files` for the bodies that can send
+/// a voice message.
+macro_rules! voice_message {
+    ($($ty:ident),*) => {$(
+        impl $ty {
+            /// Whether the `IS_VOICE_MESSAGE` flag is set.
+            pub fn is_voice_message(&self) -> bool {
+                self.flags.is_some_and(|flags| flags.contains(IS_VOICE_MESSAGE))
+            }
+
+            /// For a voice message, checks the files sent with it: exactly
+            /// one, with an `audio/*` content type. `content_types` has one
+            /// entry per uploaded file, in `files[n]` order. Does nothing for
+            /// other messages. The REST client calls this before uploading;
+            /// [`Self::validate`] checks the body's own voice rules.
+            pub fn check_voice_files<'a>(
+                &self,
+                content_types: impl IntoIterator<Item = Option<&'a str>>,
+            ) -> Result<(), DiscordError> {
+                if self.is_voice_message() {
+                    check_voice_files(content_types)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    )*};
+}
+
+voice_message!(CreateMessage, InteractionMessage);
 
 // ---------------------------------------------------------------------------
 // Conversions
@@ -1747,6 +1852,52 @@ mod tests {
             .unwrap(),
             r#"{"content":"hi"}"#
         );
+    }
+
+    #[test]
+    fn voice_messages_have_one_described_audio_upload_and_nothing_else() {
+        use crate::model::UploadId;
+        use crate::request::AttachmentUpload;
+
+        let mut upload = AttachmentUpload::new(UploadId::new(0));
+        upload.duration_secs = Some(2.5);
+        upload.waveform = Some("AAAA".to_owned());
+        let voice = CreateMessage::new()
+            .flags(IS_VOICE_MESSAGE)
+            .add_attachment(upload.clone());
+        voice.validate().expect("a valid voice message body");
+        assert!(voice.is_voice_message());
+
+        let error = |message: CreateMessage| message.validate().unwrap_err().to_string();
+        assert!(error(voice.clone().content("hi")).contains("cannot set content"));
+        assert!(error(CreateMessage::new().flags(IS_VOICE_MESSAGE))
+            .contains("exactly one uploaded attachment, got 0"));
+        assert!(error(
+            CreateMessage::new()
+                .flags(IS_VOICE_MESSAGE)
+                .add_attachment(AttachmentUpload::new(UploadId::new(0)))
+        )
+        .contains("needs duration_secs and waveform"));
+        assert!(error(voice.clone().add_attachment(upload)).contains("got 2"));
+
+        voice.check_voice_files([Some("audio/ogg")]).unwrap();
+        assert!(voice.check_voice_files([Some("image/png")]).is_err());
+        assert!(voice.check_voice_files([None]).is_err());
+        assert!(voice
+            .check_voice_files([Some("audio/ogg"), Some("audio/ogg")])
+            .is_err());
+        assert!(voice.check_voice_files(std::iter::empty()).is_err());
+        CreateMessage::new()
+            .check_voice_files([Some("image/png"), None])
+            .expect("not a voice message");
+
+        // Voice messages cannot be edited.
+        assert!(UpdateMessage::new()
+            .flags(IS_VOICE_MESSAGE)
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("IS_VOICE_MESSAGE cannot be set"));
     }
 
     #[test]
