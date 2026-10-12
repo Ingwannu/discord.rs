@@ -1174,6 +1174,55 @@ impl PartialUser {
         true
     }
 
+    /// Whether any field besides `id` was sent. PRESENCE_UPDATE usually
+    /// sends `{"id": ...}` alone; the cache skips such a patch instead of
+    /// taking its write lock or copying a shared user for nothing.
+    #[cfg(feature = "cache")]
+    pub(crate) fn carries_changes(&self) -> bool {
+        // Exhaustive for the same reason as `apply_to`.
+        let PartialUser {
+            id: _,
+            username,
+            global_name,
+            discriminator,
+            avatar,
+            bot,
+            system,
+            mfa_enabled,
+            banner,
+            accent_color,
+            locale,
+            verified,
+            email,
+            flags,
+            premium_type,
+            public_flags,
+            avatar_decoration_data,
+            collectibles,
+            primary_guild,
+            display_name_styles,
+        } = self;
+        !(username.is_missing()
+            && global_name.is_missing()
+            && discriminator.is_missing()
+            && avatar.is_missing()
+            && bot.is_missing()
+            && system.is_missing()
+            && mfa_enabled.is_missing()
+            && banner.is_missing()
+            && accent_color.is_missing()
+            && locale.is_missing()
+            && verified.is_missing()
+            && email.is_missing()
+            && flags.is_missing()
+            && premium_type.is_missing()
+            && public_flags.is_missing()
+            && avatar_decoration_data.is_missing()
+            && collectibles.is_missing()
+            && primary_guild.is_missing()
+            && display_name_styles.is_missing())
+    }
+
     /// A complete [`User`] when `username` (the only required field besides
     /// `id`) was sent: omitted optional fields are `None`, exactly as when a
     /// full user object omits them. `None` otherwise; a user is never made up

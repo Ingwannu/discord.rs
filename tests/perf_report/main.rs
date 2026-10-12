@@ -264,9 +264,9 @@ fn perf_fixtures_decode() {
             (EventKind::PresenceUpdate(presence), "presence_update") => {
                 // decode_presence_update_event falls back to empty
                 // activities on a decode error.
-                assert_eq!(presence.activities.len(), 2);
-                assert!(presence.client_status.is_some());
-                assert!(presence.user_id.is_some() && presence.guild_id.is_some());
+                assert_eq!(presence.activities().len(), 2);
+                assert!(presence.client_status().is_some());
+                assert!(presence.user_id().is_some() && presence.guild_id.is_some());
             }
             (EventKind::InteractionCreate(interaction), "interaction_create.chat_input") => {
                 let discordrs::model::Interaction::ChatInputCommand(command) = &**interaction

@@ -61,7 +61,6 @@ use tokio::time::{Duration, Instant};
 use tracing::{error, warn};
 
 use super::pipeline::{AbortOnDrop, ABORT_CONFIRM_GRACE};
-use super::presence_from_update;
 use crate::cache::{CacheBackend, CacheClear, CacheClearId, CacheHandle};
 use crate::error::DiscordError;
 use crate::event::{Event, EventKind};
@@ -1221,9 +1220,10 @@ pub(super) async fn forward_cache_backend_updates(
             channel_id: event.channel_id,
             message_ids: event.ids.clone(),
         }),
-        EventKind::PresenceUpdate(event) => match (event.guild_id, event.user_id) {
+        EventKind::PresenceUpdate(event) => match (event.guild_id, event.user_id()) {
             (Some(guild_id), Some(user_id)) => Some(BackendWrite::PutPresence {
-                presence: Arc::new(presence_from_update(event, user_id)),
+                // The event's own presence, also stored by the cache.
+                presence: Arc::clone(&event.presence),
                 guild_id,
                 user_id,
             }),

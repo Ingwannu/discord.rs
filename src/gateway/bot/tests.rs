@@ -79,6 +79,27 @@ fn content_update(
     Arc::new(update)
 }
 
+/// A PRESENCE_UPDATE as the decoder builds it: no partial user fields, the
+/// shared presence carrying the user id.
+fn presence_update_event(
+    user_id: crate::model::UserId,
+    guild_id: GuildId,
+    status: crate::model::PresenceStatus,
+    activities: Vec<crate::model::Activity>,
+) -> Box<PresenceUpdateEvent> {
+    Box::new(PresenceUpdateEvent {
+        guild_id: Some(guild_id),
+        user: None,
+        presence: Arc::new(crate::model::Presence {
+            user_id: Some(user_id),
+            user: None,
+            status: Some(status),
+            activities: (!activities.is_empty()).then_some(activities),
+            client_status: None,
+        }),
+    })
+}
+
 /// Shard pair for cache tests that model a single-shard bot.
 #[cfg(feature = "cache")]
 const SINGLE_SHARD: (u32, u32) = (0, 1);
@@ -307,13 +328,12 @@ async fn apply_cache_updates_tracks_user_presence_and_voice_state_events() {
         SINGLE_SHARD,
         &Event::from_kind(
             "PRESENCE_UPDATE",
-            EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
-                user_id: Some(user_id),
-                guild_id: Some(guild_id),
-                status: Some(PresenceStatus::ONLINE),
-                activities: vec![Activity::new(ActivityType::PLAYING, "testing")],
-                ..PresenceUpdateEvent::default()
-            })),
+            EventKind::PresenceUpdate(presence_update_event(
+                user_id,
+                guild_id,
+                PresenceStatus::ONLINE,
+                vec![Activity::new(ActivityType::PLAYING, "testing")],
+            )),
         ),
     )
     .await;
@@ -1552,12 +1572,12 @@ async fn apply_cache_updates_leaves_cache_unchanged_for_noop_event_variants() {
         ),
         Event::from_kind(
             "PRESENCE_UPDATE",
-            EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
-                user_id: Some(test_id(406)),
-                guild_id: Some(guild_id),
-                status: Some(PresenceStatus::ONLINE),
-                ..PresenceUpdateEvent::default()
-            })),
+            EventKind::PresenceUpdate(presence_update_event(
+                test_id(406),
+                guild_id,
+                PresenceStatus::ONLINE,
+                Vec::new(),
+            )),
         ),
         decode_event("UNKNOWN_EVENT", json!({})).unwrap(),
     ];
@@ -1649,8 +1669,8 @@ async fn event_handler_routes_additional_typed_hooks() {
         async fn presence_update(&self, _ctx: super::Context, event: &PresenceUpdateEvent) {
             self.hits.lock().await.push(format!(
                 "presence:{}:{}",
-                event.user_id.unwrap(),
-                event.status.as_ref().unwrap()
+                event.user_id().unwrap(),
+                event.status().unwrap()
             ));
         }
 
@@ -1775,12 +1795,12 @@ async fn event_handler_routes_additional_typed_hooks() {
             context.clone(),
             Arc::new(Event::from_kind(
                 "PRESENCE_UPDATE",
-                EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
-                    user_id: Some(test_id(13)),
-                    guild_id: Some(test_id(14)),
-                    status: Some(PresenceStatus::ONLINE),
-                    ..PresenceUpdateEvent::default()
-                })),
+                EventKind::PresenceUpdate(presence_update_event(
+                    test_id(13),
+                    test_id(14),
+                    PresenceStatus::ONLINE,
+                    Vec::new(),
+                )),
             )),
         )
         .await;
@@ -3499,12 +3519,12 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
     );
     let presence_event = Event::from_kind(
         "PRESENCE_UPDATE",
-        EventKind::PresenceUpdate(Box::new(PresenceUpdateEvent {
-            guild_id: Some(test_id(1)),
-            user_id: Some(test_id(2)),
-            status: Some(PresenceStatus::ONLINE),
-            ..PresenceUpdateEvent::default()
-        })),
+        EventKind::PresenceUpdate(presence_update_event(
+            test_id(2),
+            test_id(1),
+            PresenceStatus::ONLINE,
+            Vec::new(),
+        )),
     );
     let message_delete_event = Event::from_kind(
         "MESSAGE_DELETE",
@@ -4751,6 +4771,57 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
             "{name}"
         );
     }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn presence_updates_share_one_presence_and_patch_the_cached_user() {
+    let store = crate::cache::CacheHandle::new();
+    let (forwarder, _worker) =
+        super::CacheBackendForwarder::spawn(Arc::new(store.clone()), 16, Duration::from_secs(5));
+    let cache = crate::cache::CacheHandle::new();
+    let member = decode_event(
+        "GUILD_MEMBER_ADD",
+        json!({ "guild_id": "9", "user": { "id": "5", "username": "a", "avatar": "x" }, "roles": [] }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &member).await;
+    let before = cache.user_arc(test_id(5)).await.unwrap();
+
+    // `{"id"}` alone patches nothing: the shared user is not copied.
+    let quiet = decode_event(
+        "PRESENCE_UPDATE",
+        json!({ "user": { "id": "5" }, "guild_id": "9", "status": "online",
+                "activities": [{ "name": "x", "type": 0 }] }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &quiet).await;
+    super::forward_cache_backend_updates(&forwarder, &cache, SINGLE_SHARD, &quiet).await;
+    forwarder.flush().await;
+    assert!(Arc::ptr_eq(
+        &before,
+        &cache.user_arc(test_id(5)).await.unwrap()
+    ));
+    let EventKind::PresenceUpdate(event) = quiet.kind() else {
+        panic!("unexpected {quiet:?}");
+    };
+    let cached = cache.presence_arc(test_id(9), test_id(5)).await.unwrap();
+    let mirrored = store.presence_arc(test_id(9), test_id(5)).await.unwrap();
+    assert!(Arc::ptr_eq(&event.presence, &cached));
+    assert!(Arc::ptr_eq(&event.presence, &mirrored));
+    assert_eq!(cached.activities.as_ref().map(Vec::capacity), Some(1));
+
+    // A presence that carries user fields patches the cached user.
+    let renamed = decode_event(
+        "PRESENCE_UPDATE",
+        json!({ "user": { "id": "5", "username": "b" }, "guild_id": "9", "status": "idle" }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &renamed).await;
+    let after = cache.user_arc(test_id(5)).await.unwrap();
+    assert_eq!(after.username, "b");
+    assert_eq!(after.avatar.as_deref(), Some("x"));
+    assert_eq!(before.username, "a", "the member keeps its snapshot");
 }
 
 #[cfg(feature = "cache")]

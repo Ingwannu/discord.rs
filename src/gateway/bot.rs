@@ -26,8 +26,10 @@ use crate::error::DiscordError;
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, RoleId, UserId,
+    ApplicationId, ChannelId, GuildCreatePayload, GuildId, Interaction, MessageId, RoleId,
 };
+#[cfg(feature = "voice")]
+use crate::model::UserId;
 #[cfg(feature = "sharding")]
 use crate::sharding::{
     ShardInfo, ShardIpcMessage, ShardRuntimeChannels, ShardRuntimeState, ShardSupervisorEvent,
@@ -2943,9 +2945,12 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 .await;
         }
         EventKind::PresenceUpdate(event) => {
-            if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id) {
+            if let Some(user) = event.user.as_ref() {
+                cache.apply_partial_user(user).await;
+            }
+            if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id()) {
                 cache
-                    .upsert_presence(guild_id, user_id, presence_from_update(event, user_id))
+                    .upsert_presence(guild_id, user_id, Arc::clone(&event.presence))
                     .await;
             }
         }
@@ -2956,25 +2961,6 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
         // entitlements, invites, reactions, typing, polls, ...), or is not
         // a known payload at all.
         _ => {}
-    }
-}
-
-/// The cached presence shape for a PRESENCE_UPDATE, shared by the in-memory
-/// and backend paths so both store the same value.
-fn presence_from_update(
-    event: &crate::event::PresenceUpdateEvent,
-    user_id: UserId,
-) -> crate::model::Presence {
-    crate::model::Presence {
-        user_id: Some(user_id),
-        user: None,
-        status: event.status.clone(),
-        activities: if event.activities.is_empty() {
-            None
-        } else {
-            Some(event.activities.clone())
-        },
-        client_status: event.client_status.clone(),
     }
 }
 

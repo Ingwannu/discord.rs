@@ -40,10 +40,10 @@ use crate::model::{
     AutoModerationTriggerMetadata, AutoModerationTriggerType, Channel, ChannelId, ClientStatus,
     CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
     GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, InviteTargetType,
-    Member, Message, MessageId, PollAnswerId, Presence, PresenceStatus, ReactionType, Role, RoleId,
-    ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel, ScheduledEventStatus,
-    SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User,
-    UserId, VoiceChannelEffectAnimationType, VoiceServerUpdate, VoiceState,
+    Member, Message, MessageId, PartialUser, PollAnswerId, Presence, PresenceStatus, ReactionType,
+    Role, RoleId, ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel,
+    ScheduledEventStatus, SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription,
+    ThreadMember, User, UserId, VoiceChannelEffectAnimationType, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -266,22 +266,43 @@ pub struct TypingStartEvent {
     pub timestamp: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default)]
-/// Typed Discord API object for `PresenceUpdateEvent`.
+/// PRESENCE_UPDATE: a user's presence in a guild, and the partial user
+/// object Discord sends with it.
+///
+/// The presence is built once when the dispatch is decoded and shared with
+/// the cache and the external cache backend, which store this `Arc` as it is
+/// (each used to build a copy with every activity cloned).
+#[derive(Clone, Debug)]
 pub struct PresenceUpdateEvent {
-    pub user: Option<PresenceUpdateUser>,
-    pub user_id: Option<UserId>,
     pub guild_id: Option<GuildId>,
-    pub status: Option<PresenceStatus>,
-    pub activities: Vec<Activity>,
-    pub client_status: Option<ClientStatus>,
+    /// The partial user: only `id` is guaranteed. The fields it carries
+    /// patch the cached user (see `CacheHandle::apply_partial_user`).
+    pub user: Option<PartialUser>,
+    /// `user_id` (from `user`), `status`, `activities` (`None` when Discord
+    /// sent none), and `client_status`.
+    pub presence: Arc<Presence>,
 }
 
-#[derive(Clone, Debug)]
-/// Typed Discord API object for `PresenceUpdateUser`.
-pub struct PresenceUpdateUser {
-    pub id: UserId,
-    pub username: Option<String>,
+impl PresenceUpdateEvent {
+    /// The user the presence belongs to.
+    pub fn user_id(&self) -> Option<UserId> {
+        self.presence.user_id
+    }
+
+    /// The overall status (`online`, `idle`, ...).
+    pub fn status(&self) -> Option<&PresenceStatus> {
+        self.presence.status.as_ref()
+    }
+
+    /// The user's activities, empty when there are none.
+    pub fn activities(&self) -> &[Activity] {
+        self.presence.activities.as_deref().unwrap_or_default()
+    }
+
+    /// The status per platform.
+    pub fn client_status(&self) -> Option<&ClientStatus> {
+        self.presence.client_status.as_ref()
+    }
 }
 
 #[derive(Clone, Debug)]

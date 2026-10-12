@@ -300,9 +300,9 @@ fn decode_event_handles_optional_field_fallbacks() {
     .unwrap();
     match presence_update.kind() {
         EventKind::PresenceUpdate(event) => {
-            assert_eq!(event.user_id, None);
+            assert_eq!(event.user_id(), None);
             assert_eq!(event.guild_id, None);
-            assert_eq!(event.status, None);
+            assert_eq!(event.status(), None);
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -450,20 +450,16 @@ fn decode_event_reads_nested_and_required_payloads() {
     match presence_update.kind() {
         EventKind::PresenceUpdate(event) => {
             assert_eq!(event.guild_id, Some(snowflake("18")));
-            assert_eq!(event.user_id, Some(snowflake("19")));
-            assert_eq!(event.status.as_deref(), Some("online"));
+            assert_eq!(event.user_id(), Some(snowflake("19")));
+            assert_eq!(event.status().map(|status| &**status), Some("online"));
+            assert!(matches!(
+                event.user.as_ref().map(|user| &user.username),
+                Some(Patch::Value(name)) if name == "present"
+            ));
+            assert_eq!(event.activities()[0].name, "Building");
             assert_eq!(
                 event
-                    .user
-                    .as_ref()
-                    .and_then(|user| user.username.as_deref()),
-                Some("present")
-            );
-            assert_eq!(event.activities[0].name, "Building");
-            assert_eq!(
-                event
-                    .client_status
-                    .as_ref()
+                    .client_status()
                     .and_then(|status| status.desktop.as_deref()),
                 Some("online")
             );

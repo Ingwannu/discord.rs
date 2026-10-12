@@ -7,7 +7,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use discordrs::model::{GuildCreatePayload, Presence};
+use discordrs::model::GuildCreatePayload;
 use discordrs::{CacheConfig, CacheHandle, Event, EventKind, EventMetadata};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -154,16 +154,13 @@ async fn apply_cache_replica(cache: &CacheHandle, event: &Event) {
             cache.apply_message_update(update).await;
         }
         EventKind::PresenceUpdate(event) => {
-            if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id) {
-                // `presence_from_update`.
-                let presence = Presence {
-                    user_id: Some(user_id),
-                    user: None,
-                    status: event.status.clone(),
-                    activities: (!event.activities.is_empty()).then(|| event.activities.clone()),
-                    client_status: event.client_status.clone(),
-                };
-                cache.upsert_presence(guild_id, user_id, presence).await;
+            if let Some(user) = event.user.as_ref() {
+                cache.apply_partial_user(user).await;
+            }
+            if let (Some(guild_id), Some(user_id)) = (event.guild_id, event.user_id()) {
+                cache
+                    .upsert_presence(guild_id, user_id, Arc::clone(&event.presence))
+                    .await;
             }
         }
         // Chat input interactions and unknown dispatches touch no cache state.

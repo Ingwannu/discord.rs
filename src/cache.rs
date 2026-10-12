@@ -724,6 +724,9 @@ impl CacheHandle {
     /// the user as it was (copy-on-write).
     #[cfg(feature = "cache")]
     pub async fn apply_partial_user(&self, user: &PartialUser) {
+        if !user.carries_changes() {
+            return;
+        }
         let mut store = self.store.write().await;
         self.patch_user_locked(&mut store, user);
     }
@@ -733,7 +736,10 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     fn patch_user_locked(&self, store: &mut CacheStore, user: &PartialUser) -> Option<Arc<User>> {
         if let Some(cached) = store.users.get_mut(&user.id) {
-            user.apply_to(Arc::make_mut(cached));
+            // An id-only partial changes nothing; do not copy a shared user.
+            if user.carries_changes() {
+                user.apply_to(Arc::make_mut(cached));
+            }
             let patched = Arc::clone(cached);
             // Refresh recency as the 2.x upsert of the author did.
             remember_key(&mut store.user_order, user.id);

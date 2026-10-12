@@ -30,10 +30,11 @@ use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use serde_json::Value;
 
+use crate::model::normalize_presence;
 use crate::model::{
     marker, ApplicationCommandPermission, ApplicationId, AuditLogEntry, BorrowedKey, ChannelId,
     ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, Id, Member, MessageId,
-    PresenceStatus, ReactionType, SoundboardSound, UserId,
+    PartialUser, Presence, PresenceStatus, ReactionType, SoundboardSound, UserId,
 };
 use crate::types::Emoji;
 
@@ -594,15 +595,9 @@ fn decode_reaction_event(data: &str) -> Result<ReactionEvent, EventDecodeError> 
 
 fn decode_presence_update_event(data: &str) -> Result<PresenceUpdateEvent, EventDecodeError> {
     #[derive(Deserialize)]
-    struct UserWire {
-        id: UserId,
-        #[serde(default)]
-        username: Lenient<String>,
-    }
-    #[derive(Deserialize)]
     struct Wire {
         #[serde(default)]
-        user: Lenient<UserWire>,
+        user: Lenient<PartialUser>,
         #[serde(default)]
         guild_id: Lenient<GuildId>,
         #[serde(default)]
@@ -613,17 +608,24 @@ fn decode_presence_update_event(data: &str) -> Result<PresenceUpdateEvent, Event
         client_status: Lenient<ClientStatus>,
     }
     let wire: Wire = typed(data)?;
-    let user = wire.user.0.map(|user| PresenceUpdateUser {
-        id: user.id,
-        username: user.username.0,
-    });
-    Ok(PresenceUpdateEvent {
+    let user = wire.user.0;
+    let mut presence = Presence {
         user_id: user.as_ref().map(|user| user.id),
-        user,
-        guild_id: wire.guild_id.0,
+        user: None,
         status: wire.status.0.map(PresenceStatus::new),
-        activities: wire.activities.or_empty(),
+        activities: wire
+            .activities
+            .0
+            .filter(|activities| !activities.is_empty()),
         client_status: wire.client_status.0,
+    };
+    // The cache keeps this presence while the member is online: drop the
+    // decoder's spare `activities` capacity first, as GUILD_CREATE does.
+    normalize_presence(&mut presence);
+    Ok(PresenceUpdateEvent {
+        guild_id: wire.guild_id.0,
+        user,
+        presence: Arc::new(presence),
     })
 }
 
