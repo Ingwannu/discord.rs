@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 
 use crate::event::ScheduledEvent;
 use crate::model::{
-    Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, Member, MemberUpdate, Message,
-    MessageId, MessageUpdate, PartialUser, Presence, Role, RoleId, ScheduledEventId,
+    Channel, ChannelId, EmojiId, Guild, GuildCreate, GuildId, GuildUpdate, Member, MemberUpdate,
+    Message, MessageId, MessageUpdate, PartialUser, Presence, Role, RoleId, ScheduledEventId,
     SoundboardSound, SoundboardSoundId, StageInstance, StageInstanceId, Sticker, StickerId, User,
     UserId, VoiceState,
 };
@@ -547,26 +547,45 @@ impl CacheHandle {
     #[cfg(not(feature = "cache"))]
     pub async fn apply_guild_create(&self, _guild: &GuildCreate) {}
 
-    /// Applies a GUILD_UPDATE: replaces the cached guild (without any
-    /// GUILD_CREATE-only collections it carries) and refreshes its roles.
+    /// Applies a GUILD_UPDATE to the cached guild copy-on-write and returns
+    /// the merged guild. Omitted fields keep their cached value, so the
+    /// GUILD_CREATE-only fields (`member_count`, `joined_at`, ...) survive;
+    /// `roles`, `emojis`, and `stickers`, complete lists when sent, replace
+    /// the guild's entries in the role, emoji, and sticker stores. A guild
+    /// that is not cached stays uncached (`None`), with nothing stored for
+    /// it: the update is never turned into a guild on its own.
     #[cfg(feature = "cache")]
-    pub async fn apply_guild_update(&self, guild: &Guild) {
-        let mut stored = guild.without_create_collections();
-        let roles: Vec<Arc<Role>> = std::mem::take(&mut stored.roles)
-            .into_iter()
-            .map(Arc::new)
-            .collect();
+    pub async fn apply_guild_update(&self, update: &GuildUpdate) -> Option<Arc<Guild>> {
         let mut store = self.store.write().await;
-        let guild_id = guild.id;
-        store.guilds.insert(guild_id, Arc::new(stored));
+        let cached = store.guilds.get_mut(&update.id)?;
+        update.apply_fields(Arc::make_mut(cached));
+        let merged = Arc::clone(cached);
+        let guild_id = update.id;
         remember_key(&mut store.guild_order, guild_id);
-        insert_roles(&mut store, guild_id, &roles);
-        enforce_guild_limit(&mut store, &self.config);
-        self.enforce_role_limit(&mut store);
+        // GUILD_UPDATE's lists are complete: they replace what is cached.
+        if let Patch::Value(roles) = &update.roles {
+            store
+                .roles
+                .retain(|(stored_guild_id, _), _| *stored_guild_id != guild_id);
+            store
+                .role_order
+                .retain(|(stored_guild_id, _)| *stored_guild_id != guild_id);
+            insert_roles(&mut store, guild_id, roles);
+            self.enforce_role_limit(&mut store);
+        }
+        if let Patch::Value(emojis) = &update.emojis {
+            self.replace_emojis_locked(&mut store, guild_id, emojis.iter().cloned());
+        }
+        if let Patch::Value(stickers) = &update.stickers {
+            self.replace_stickers_locked(&mut store, guild_id, stickers.iter().cloned());
+        }
+        Some(merged)
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn apply_guild_update(&self, _guild: &Guild) {}
+    pub async fn apply_guild_update(&self, _update: &GuildUpdate) -> Option<Arc<Guild>> {
+        None
+    }
 
     #[cfg(feature = "cache")]
     fn enforce_role_limit(&self, store: &mut CacheStore) {
@@ -1524,6 +1543,19 @@ impl CacheHandle {
             return;
         }
         let mut store = self.store.write().await;
+        self.replace_emojis_locked(&mut store, guild_id, emojis);
+    }
+
+    #[cfg(feature = "cache")]
+    fn replace_emojis_locked(
+        &self,
+        store: &mut CacheStore,
+        guild_id: GuildId,
+        emojis: impl IntoIterator<Item = Emoji>,
+    ) {
+        if !self.config.cache_emojis {
+            return;
+        }
         store
             .emojis
             .retain(|(stored_guild_id, _), _| stored_guild_id != &guild_id);
@@ -1584,6 +1616,19 @@ impl CacheHandle {
             return;
         }
         let mut store = self.store.write().await;
+        self.replace_stickers_locked(&mut store, guild_id, stickers);
+    }
+
+    #[cfg(feature = "cache")]
+    fn replace_stickers_locked(
+        &self,
+        store: &mut CacheStore,
+        guild_id: GuildId,
+        stickers: impl IntoIterator<Item = Sticker>,
+    ) {
+        if !self.config.cache_stickers {
+            return;
+        }
         store
             .stickers
             .retain(|(stored_guild_id, _), _| stored_guild_id != &guild_id);

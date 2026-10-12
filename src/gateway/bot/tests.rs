@@ -1870,11 +1870,13 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         ),
         Event::from_kind(
             "GUILD_UPDATE",
-            EventKind::GuildUpdate(Box::new(crate::model::Guild {
-                id: guild_id,
-                name: "guild-updated".to_string(),
-                ..crate::model::Guild::fixture()
-            })),
+            EventKind::GuildUpdate(Box::new(crate::model::GuildUpdate::from(
+                crate::model::Guild {
+                    id: guild_id,
+                    name: "guild-updated".to_string(),
+                    ..crate::model::Guild::fixture()
+                },
+            ))),
         ),
         Event::from_kind(
             "GUILD_DELETE",
@@ -4773,6 +4775,69 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
             "{name}"
         );
     }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn guild_updates_keep_create_only_fields_and_replace_lists() {
+    let cache = crate::cache::CacheHandle::new();
+    let create = decode_event(
+        "GUILD_CREATE",
+        json!({
+            "id": "9", "name": "g", "description": "d", "member_count": 1000,
+            "joined_at": "2026-01-01T00:00:00+00:00",
+            "roles": [{ "id": "11", "name": "a" }, { "id": "12", "name": "b" }],
+            "emojis": [{ "id": "40", "name": "e1" }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &create).await;
+    let before = cache.guild(test_id(9)).await.unwrap();
+
+    let update = decode_event(
+        "GUILD_UPDATE",
+        json!({
+            "id": "9", "name": "renamed", "description": null,
+            "roles": [{ "id": "12", "name": "b2" }],
+            "emojis": [{ "id": "41", "name": "e2" }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &update).await;
+    let guild = cache.guild(test_id(9)).await.unwrap();
+    assert_eq!(guild.name, "renamed");
+    assert_eq!(guild.description, None);
+    assert_eq!(
+        guild.member_count,
+        Some(1000),
+        "GUILD_CREATE-only fields stay"
+    );
+    assert!(guild.joined_at.is_some());
+    assert_eq!(
+        guild
+            .roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<Vec<_>>(),
+        ["b2"]
+    );
+    assert!(
+        cache.role(test_id(9), test_id(11)).await.is_none(),
+        "replaced"
+    );
+    assert!(cache.emoji(test_id(9), test_id(40)).await.is_none());
+    assert!(cache.emoji(test_id(9), test_id(41)).await.is_some());
+    assert_eq!(before.name, "g");
+
+    // A guild the cache does not hold stays uncached, roles included.
+    let stranger = decode_event(
+        "GUILD_UPDATE",
+        json!({ "id": "8", "name": "x", "roles": [{ "id": "13", "name": "r" }] }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &stranger).await;
+    assert!(cache.guild(test_id(8)).await.is_none());
+    assert!(cache.role(test_id(8), test_id(13)).await.is_none());
 }
 
 #[cfg(feature = "cache")]

@@ -50,13 +50,14 @@ use crate::types::Emoji;
 
 use super::{
     ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention,
-    DisplayNameStyles, Embed, Guild, GuildId, GuildScheduledEvent, Member, Message,
+    DefaultMessageNotificationLevel, DisplayNameStyles, Embed, ExplicitContentFilterLevel, Guild,
+    GuildId, GuildIncidentsData, GuildNsfwLevel, GuildScheduledEvent, Member, Message,
     MessageActivity, MessageCall, MessageComponent, MessageId, MessageInteraction,
-    MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, Nullable,
-    NullablePatch, PartialApplication, Patch, Permissions, Poll, Presence, Reaction, ResolvedData,
-    Role, RoleId, RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker,
-    StickerItem, User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState,
-    WebhookId,
+    MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, MfaLevel, Nullable,
+    NullablePatch, PartialApplication, Patch, Permissions, Poll, PremiumTier, Presence, Reaction,
+    ResolvedData, Role, RoleId, RoleSubscriptionData, SharedClientTheme, SoundboardSound,
+    StageInstance, Sticker, StickerItem, User, UserCollectibles, UserId, UserPremiumType,
+    UserPrimaryGuild, VerificationLevel, VoiceState, WebhookId,
 };
 
 /// A GUILD_CREATE payload, split into the units the cache stores.
@@ -948,6 +949,311 @@ impl MessageUpdate {
         match &self.author {
             Patch::Value(Nullable::Value(author)) => author.to_user(),
             _ => None,
+        }
+    }
+}
+
+/// GUILD_UPDATE: the guild fields Discord sent.
+///
+/// Discord sends the whole guild object, but some of its fields are optional
+/// and the GUILD_CREATE-only fields (`joined_at`, `large`, `member_count`,
+/// the member, channel, and presence lists, ...) are never part of it, so an
+/// update decoded as a whole [`Guild`] cleared everything it did not carry.
+/// Every field follows the [`MessageUpdate`] table instead: omitted keeps,
+/// `null` clears where the field is nullable, a value replaces. `roles`,
+/// `emojis`, and `stickers` are full lists when sent; the cache keeps them
+/// in its role, emoji, and sticker stores.
+///
+/// Decoded from the gateway's text only (like [`GuildCreatePayload`]); build
+/// one from a REST [`Guild`] with `GuildUpdate::from(guild)`.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct GuildUpdate {
+    pub id: GuildId,
+    pub name: Patch<String>,
+    pub owner_id: NullablePatch<UserId>,
+    pub icon: NullablePatch<String>,
+    pub splash: NullablePatch<String>,
+    pub banner: NullablePatch<String>,
+    pub description: NullablePatch<String>,
+    pub features: Patch<Vec<String>>,
+    pub premium_tier: NullablePatch<PremiumTier>,
+    pub max_presences: NullablePatch<u64>,
+    pub max_members: NullablePatch<u64>,
+    pub vanity_url_code: NullablePatch<String>,
+    pub system_channel_id: NullablePatch<ChannelId>,
+    pub rules_channel_id: NullablePatch<ChannelId>,
+    pub preferred_locale: NullablePatch<String>,
+    pub afk_channel_id: NullablePatch<ChannelId>,
+    pub afk_timeout: NullablePatch<u64>,
+    pub verification_level: NullablePatch<VerificationLevel>,
+    pub default_message_notifications: NullablePatch<DefaultMessageNotificationLevel>,
+    pub explicit_content_filter: NullablePatch<ExplicitContentFilterLevel>,
+    pub mfa_level: NullablePatch<MfaLevel>,
+    pub application_id: NullablePatch<ApplicationId>,
+    pub system_channel_flags: NullablePatch<u64>,
+    pub public_updates_channel_id: NullablePatch<ChannelId>,
+    pub nsfw_level: NullablePatch<GuildNsfwLevel>,
+    pub premium_subscription_count: NullablePatch<u64>,
+    pub premium_progress_bar_enabled: NullablePatch<bool>,
+    pub safety_alerts_channel_id: NullablePatch<ChannelId>,
+    pub approximate_member_count: NullablePatch<u64>,
+    pub approximate_presence_count: NullablePatch<u64>,
+    pub incidents_data: NullablePatch<GuildIncidentsData>,
+    /// Roles; the cache's role store keeps these `Arc`s as they are.
+    pub roles: Patch<Vec<Arc<Role>>>,
+    pub emojis: Patch<Vec<Emoji>>,
+    pub stickers: Patch<Vec<Sticker>>,
+}
+
+impl GuildUpdate {
+    /// An update for guild `id` with no field sent.
+    pub fn new(id: GuildId) -> Self {
+        Self {
+            id,
+            name: Patch::Missing,
+            owner_id: Patch::Missing,
+            icon: Patch::Missing,
+            splash: Patch::Missing,
+            banner: Patch::Missing,
+            description: Patch::Missing,
+            features: Patch::Missing,
+            premium_tier: Patch::Missing,
+            max_presences: Patch::Missing,
+            max_members: Patch::Missing,
+            vanity_url_code: Patch::Missing,
+            system_channel_id: Patch::Missing,
+            rules_channel_id: Patch::Missing,
+            preferred_locale: Patch::Missing,
+            afk_channel_id: Patch::Missing,
+            afk_timeout: Patch::Missing,
+            verification_level: Patch::Missing,
+            default_message_notifications: Patch::Missing,
+            explicit_content_filter: Patch::Missing,
+            mfa_level: Patch::Missing,
+            application_id: Patch::Missing,
+            system_channel_flags: Patch::Missing,
+            public_updates_channel_id: Patch::Missing,
+            nsfw_level: Patch::Missing,
+            premium_subscription_count: Patch::Missing,
+            premium_progress_bar_enabled: Patch::Missing,
+            safety_alerts_channel_id: Patch::Missing,
+            approximate_member_count: Patch::Missing,
+            approximate_presence_count: Patch::Missing,
+            incidents_data: Patch::Missing,
+            roles: Patch::Missing,
+            emojis: Patch::Missing,
+            stickers: Patch::Missing,
+        }
+    }
+
+    /// Applies every sent field, `roles`, `emojis`, and `stickers` included,
+    /// to `guild`, which must have the same id; returns `false` and leaves it
+    /// unchanged otherwise.
+    pub fn apply_to(&self, guild: &mut Guild) -> bool {
+        self.apply(guild, true)
+    }
+
+    /// [`Self::apply_to`] without the lists the cache keeps in their own
+    /// stores (roles, emojis, stickers): its guilds hold none of them.
+    #[cfg(any(feature = "cache", test))]
+    pub(crate) fn apply_fields(&self, guild: &mut Guild) -> bool {
+        self.apply(guild, false)
+    }
+
+    fn apply(&self, guild: &mut Guild, lists: bool) -> bool {
+        if self.id != guild.id {
+            return false;
+        }
+        // Both destructurings are exhaustive, as in `MessageUpdate::apply_to`.
+        let GuildUpdate {
+            id: _,
+            name,
+            owner_id,
+            icon,
+            splash,
+            banner,
+            description,
+            features,
+            premium_tier,
+            max_presences,
+            max_members,
+            vanity_url_code,
+            system_channel_id,
+            rules_channel_id,
+            preferred_locale,
+            afk_channel_id,
+            afk_timeout,
+            verification_level,
+            default_message_notifications,
+            explicit_content_filter,
+            mfa_level,
+            application_id,
+            system_channel_flags,
+            public_updates_channel_id,
+            nsfw_level,
+            premium_subscription_count,
+            premium_progress_bar_enabled,
+            safety_alerts_channel_id,
+            approximate_member_count,
+            approximate_presence_count,
+            incidents_data,
+            roles,
+            emojis,
+            stickers,
+        } = self;
+        let Guild {
+            id: _,
+            name: target_name,
+            owner_id: target_owner_id,
+            icon: target_icon,
+            splash: target_splash,
+            banner: target_banner,
+            description: target_description,
+            features: target_features,
+            premium_tier: target_premium_tier,
+            max_presences: target_max_presences,
+            max_members: target_max_members,
+            vanity_url_code: target_vanity_url_code,
+            system_channel_id: target_system_channel_id,
+            rules_channel_id: target_rules_channel_id,
+            preferred_locale: target_preferred_locale,
+            afk_channel_id: target_afk_channel_id,
+            afk_timeout: target_afk_timeout,
+            verification_level: target_verification_level,
+            default_message_notifications: target_default_message_notifications,
+            explicit_content_filter: target_explicit_content_filter,
+            mfa_level: target_mfa_level,
+            application_id: target_application_id,
+            system_channel_flags: target_system_channel_flags,
+            public_updates_channel_id: target_public_updates_channel_id,
+            nsfw_level: target_nsfw_level,
+            premium_subscription_count: target_premium_subscription_count,
+            premium_progress_bar_enabled: target_premium_progress_bar_enabled,
+            safety_alerts_channel_id: target_safety_alerts_channel_id,
+            approximate_member_count: target_approximate_member_count,
+            approximate_presence_count: target_approximate_presence_count,
+            incidents_data: target_incidents_data,
+            roles: target_roles,
+            emojis: target_emojis,
+            stickers: target_stickers,
+            // GUILD_CREATE only: never part of GUILD_UPDATE.
+            unavailable: _,
+            member_count: _,
+            joined_at: _,
+            large: _,
+            channels: _,
+            threads: _,
+            members: _,
+            voice_states: _,
+            presences: _,
+            stage_instances: _,
+            soundboard_sounds: _,
+            guild_scheduled_events: _,
+        } = guild;
+        apply_patch(target_name, name);
+        apply_nullable(target_owner_id, owner_id);
+        apply_nullable(target_icon, icon);
+        apply_nullable(target_splash, splash);
+        apply_nullable(target_banner, banner);
+        apply_nullable(target_description, description);
+        apply_patch(target_features, features);
+        apply_nullable(target_premium_tier, premium_tier);
+        apply_nullable(target_max_presences, max_presences);
+        apply_nullable(target_max_members, max_members);
+        apply_nullable(target_vanity_url_code, vanity_url_code);
+        apply_nullable(target_system_channel_id, system_channel_id);
+        apply_nullable(target_rules_channel_id, rules_channel_id);
+        apply_nullable(target_preferred_locale, preferred_locale);
+        apply_nullable(target_afk_channel_id, afk_channel_id);
+        apply_nullable(target_afk_timeout, afk_timeout);
+        apply_nullable(target_verification_level, verification_level);
+        apply_nullable(
+            target_default_message_notifications,
+            default_message_notifications,
+        );
+        apply_nullable(target_explicit_content_filter, explicit_content_filter);
+        apply_nullable(target_mfa_level, mfa_level);
+        apply_nullable(target_application_id, application_id);
+        apply_nullable(target_system_channel_flags, system_channel_flags);
+        apply_nullable(target_public_updates_channel_id, public_updates_channel_id);
+        apply_nullable(target_nsfw_level, nsfw_level);
+        apply_nullable(
+            target_premium_subscription_count,
+            premium_subscription_count,
+        );
+        apply_nullable(
+            target_premium_progress_bar_enabled,
+            premium_progress_bar_enabled,
+        );
+        apply_nullable(target_safety_alerts_channel_id, safety_alerts_channel_id);
+        apply_nullable(target_approximate_member_count, approximate_member_count);
+        apply_nullable(
+            target_approximate_presence_count,
+            approximate_presence_count,
+        );
+        apply_nullable(target_incidents_data, incidents_data);
+        if lists {
+            if let Patch::Value(roles) = roles {
+                *target_roles = roles.iter().map(|role| (**role).clone()).collect();
+            }
+            apply_patch(target_emojis, emojis);
+            apply_patch(target_stickers, stickers);
+        }
+        true
+    }
+}
+
+impl From<Guild> for GuildUpdate {
+    /// Every field of `guild` as sent: applying it replaces them all (an
+    /// absent optional value clears), as the GUILD_UPDATE handling of 2.x
+    /// did; GUILD_CREATE-only fields are not part of an update.
+    fn from(guild: Guild) -> Self {
+        Self {
+            id: guild.id,
+            name: Patch::Value(guild.name),
+            owner_id: Patch::Value(Nullable::from(guild.owner_id)),
+            icon: Patch::Value(Nullable::from(guild.icon)),
+            splash: Patch::Value(Nullable::from(guild.splash)),
+            banner: Patch::Value(Nullable::from(guild.banner)),
+            description: Patch::Value(Nullable::from(guild.description)),
+            features: Patch::Value(guild.features),
+            premium_tier: Patch::Value(Nullable::from(guild.premium_tier)),
+            max_presences: Patch::Value(Nullable::from(guild.max_presences)),
+            max_members: Patch::Value(Nullable::from(guild.max_members)),
+            vanity_url_code: Patch::Value(Nullable::from(guild.vanity_url_code)),
+            system_channel_id: Patch::Value(Nullable::from(guild.system_channel_id)),
+            rules_channel_id: Patch::Value(Nullable::from(guild.rules_channel_id)),
+            preferred_locale: Patch::Value(Nullable::from(guild.preferred_locale)),
+            afk_channel_id: Patch::Value(Nullable::from(guild.afk_channel_id)),
+            afk_timeout: Patch::Value(Nullable::from(guild.afk_timeout)),
+            verification_level: Patch::Value(Nullable::from(guild.verification_level)),
+            default_message_notifications: Patch::Value(Nullable::from(
+                guild.default_message_notifications,
+            )),
+            explicit_content_filter: Patch::Value(Nullable::from(guild.explicit_content_filter)),
+            mfa_level: Patch::Value(Nullable::from(guild.mfa_level)),
+            application_id: Patch::Value(Nullable::from(guild.application_id)),
+            system_channel_flags: Patch::Value(Nullable::from(guild.system_channel_flags)),
+            public_updates_channel_id: Patch::Value(Nullable::from(
+                guild.public_updates_channel_id,
+            )),
+            nsfw_level: Patch::Value(Nullable::from(guild.nsfw_level)),
+            premium_subscription_count: Patch::Value(Nullable::from(
+                guild.premium_subscription_count,
+            )),
+            premium_progress_bar_enabled: Patch::Value(Nullable::from(
+                guild.premium_progress_bar_enabled,
+            )),
+            safety_alerts_channel_id: Patch::Value(Nullable::from(guild.safety_alerts_channel_id)),
+            approximate_member_count: Patch::Value(Nullable::from(guild.approximate_member_count)),
+            approximate_presence_count: Patch::Value(Nullable::from(
+                guild.approximate_presence_count,
+            )),
+            incidents_data: Patch::Value(Nullable::from(guild.incidents_data)),
+            roles: Patch::Value(guild.roles.into_iter().map(Arc::new).collect()),
+            emojis: Patch::Value(guild.emojis),
+            stickers: Patch::Value(guild.stickers),
         }
     }
 }

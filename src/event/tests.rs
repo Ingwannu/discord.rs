@@ -6,7 +6,7 @@ use super::*;
 use crate::error::DiscordError;
 use crate::model::{
     test_id, AutoModerationActionType, ChannelType, GuildCreatePayload, Id, IdMarker, Interaction,
-    Patch, SubscriptionStatus,
+    Nullable, Patch, SubscriptionStatus,
 };
 
 /// The 2.x-style test entry: decodes a `Value` payload and reports a
@@ -934,7 +934,9 @@ fn decode_event_covers_remaining_success_variants() {
     {
         EventKind::GuildUpdate(event) => {
             assert_eq!(event.id, snowflake("51"));
-            assert_eq!(event.name, "guild-update");
+            assert!(matches!(&event.name, Patch::Value(name) if name == "guild-update"));
+            assert!(matches!(&event.roles, Patch::Value(roles) if roles.is_empty()));
+            assert!(event.description.is_missing());
         }
         other => panic!("unexpected guild update event: {other:?}"),
     }
@@ -1521,6 +1523,45 @@ fn field_map_events_read_escaped_and_repeated_keys_like_the_2x_decoder() {
             panic!("{name} {payload}: {:?}", event.kind());
         };
         assert!(error.message().contains(message), "{name}: {error}");
+    }
+}
+
+#[test]
+fn guild_updates_decode_as_patches_through_the_field_map() {
+    let event = super::decode_event(
+        "GUILD_UPDATE",
+        r#"{"id":"10","name":"g","description":null,"afk_timeout":60,
+            "roles":[{"id":"11","name":"r"}],"features":["COMMUNITY"]}"#,
+    )
+    .unwrap();
+    let EventKind::GuildUpdate(update) = event.kind() else {
+        panic!("{:?}", event.kind());
+    };
+    assert!(matches!(&update.description, Patch::Value(Nullable::Null)));
+    assert!(matches!(
+        update.afk_timeout,
+        Patch::Value(Nullable::Value(60))
+    ));
+    assert!(update.icon.is_missing() && update.emojis.is_missing());
+    let Patch::Value(roles) = &update.roles else {
+        panic!("roles were sent");
+    };
+    assert_eq!(roles[0].name, "r");
+    assert_eq!(Arc::strong_count(&roles[0]), 1);
+
+    // Strict like the derived decoders: `null` for a field that cannot be
+    // null, a wrong type, or no `id` fails the event.
+    for payload in [
+        r#"{"id":"10","name":null}"#,
+        r#"{"id":"10","afk_timeout":"x"}"#,
+        r#"{"name":"g"}"#,
+    ] {
+        let event = super::decode_event("GUILD_UPDATE", payload).unwrap();
+        assert!(
+            matches!(event.kind(), EventKind::DecodeFailed(_)),
+            "{payload}: {:?}",
+            event.kind()
+        );
     }
 }
 

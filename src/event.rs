@@ -38,12 +38,12 @@ use crate::model::{
     Activity, ApplicationCommandPermission, ApplicationId, AuditLogActionType, AuditLogEntry,
     AuditLogEntryId, AutoModerationAction, AutoModerationEventType, AutoModerationRuleId,
     AutoModerationTriggerMetadata, AutoModerationTriggerType, Channel, ChannelId, ClientStatus,
-    CommandPermissionsId, Entitlement, GenericId, Guild, GuildId,
-    GuildScheduledEventEntityMetadata, Integration, IntegrationId, Interaction, InviteTargetType,
-    Member, Message, MessageId, PartialUser, PollAnswerId, Presence, PresenceStatus, ReactionType,
-    Role, RoleId, ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel,
-    ScheduledEventStatus, SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription,
-    ThreadMember, User, UserId, VoiceChannelEffectAnimationType, VoiceServerUpdate, VoiceState,
+    CommandPermissionsId, Entitlement, GenericId, GuildId, GuildScheduledEventEntityMetadata,
+    Integration, IntegrationId, Interaction, InviteTargetType, Member, Message, MessageId,
+    PartialUser, PollAnswerId, Presence, PresenceStatus, ReactionType, Role, RoleId,
+    ScheduledEventEntityType, ScheduledEventId, ScheduledEventPrivacyLevel, ScheduledEventStatus,
+    SoundboardSound, SoundboardSoundId, StageInstance, Sticker, Subscription, ThreadMember, User,
+    UserId, VoiceChannelEffectAnimationType, VoiceServerUpdate, VoiceState,
 };
 use crate::types::Emoji;
 
@@ -656,8 +656,8 @@ pub enum EventKind {
     /// GUILD_CREATE: an available guild split into the units the cache
     /// stores, or an unavailable guild (id only).
     GuildCreate(crate::model::GuildCreatePayload),
-    /// GUILD_UPDATE.
-    GuildUpdate(Box<Guild>),
+    /// GUILD_UPDATE: a typed patch for the cached guild.
+    GuildUpdate(Box<crate::model::GuildUpdate>),
     /// GUILD_DELETE.
     GuildDelete(GuildDeletePayload),
     /// CHANNEL_CREATE.

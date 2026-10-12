@@ -993,7 +993,7 @@ pub trait EventHandler: Send + Sync + 'static {
     fn guild_update(
         &self,
         _ctx: Context,
-        _guild: &crate::model::Guild,
+        _update: &crate::model::GuildUpdate,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }

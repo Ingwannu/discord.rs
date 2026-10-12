@@ -82,9 +82,10 @@ pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
 pub(crate) use gateway_payload::BorrowedKey;
-pub(crate) use gateway_payload::{normalize_presence, shared_members, shared_presences};
+pub(crate) use gateway_payload::{normalize_presence, shared_members, shared_presences, ArcSeq};
 pub use gateway_payload::{
-    GuildCreate, GuildCreatePayload, MemberUpdate, MessageUpdate, PartialUser, UnavailableGuild,
+    GuildCreate, GuildCreatePayload, GuildUpdate, MemberUpdate, MessageUpdate, PartialUser,
+    UnavailableGuild,
 };
 pub use guild::{
     CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,

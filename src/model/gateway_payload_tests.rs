@@ -440,3 +440,44 @@ fn member_updates_keep_omitted_fields_and_refuse_other_users() {
     assert!(!other.apply_to(&mut member));
     assert_eq!(member.user.as_ref().unwrap().id, test_id(5));
 }
+
+#[test]
+fn guild_updates_apply_sent_fields_and_lists_and_refuse_other_guilds() {
+    let mut guild: Guild = serde_json::from_value(json!({
+        "id": "10", "name": "before", "description": "d", "member_count": 7,
+        "roles": [{ "id": "11", "name": "old" }],
+        "emojis": [{ "id": "40", "name": "e" }]
+    }))
+    .unwrap();
+    let mut update = GuildUpdate::new(test_id(10));
+    update.name = Patch::Value("after".to_string());
+    update.description = Patch::Value(Nullable::Null);
+    update.roles = Patch::Value(vec![Arc::new(
+        serde_json::from_value(json!({ "id": "12", "name": "new" })).unwrap(),
+    )]);
+    update.emojis = Patch::Value(Vec::new());
+
+    // The cache's variant leaves the lists alone (its guilds keep none).
+    let mut fields_only = guild.clone();
+    assert!(update.apply_fields(&mut fields_only));
+    assert_eq!(fields_only.name, "after");
+    assert_eq!(fields_only.roles.len(), 1);
+    assert_eq!(fields_only.roles[0].name, "old");
+
+    assert!(update.apply_to(&mut guild));
+    assert_eq!(guild.name, "after");
+    assert_eq!(guild.description, None, "null clears");
+    assert_eq!(guild.member_count, Some(7), "GUILD_CREATE-only fields stay");
+    assert_eq!(guild.roles[0].name, "new");
+    assert!(guild.emojis.is_empty());
+
+    assert!(!GuildUpdate::new(test_id(99)).apply_to(&mut guild));
+    assert_eq!(guild.name, "after");
+
+    // `From<Guild>` sends every field: an absent optional value clears.
+    let rest: Guild = serde_json::from_value(json!({ "id": "10", "name": "rest" })).unwrap();
+    assert!(GuildUpdate::from(rest).apply_to(&mut guild));
+    assert_eq!(guild.name, "rest");
+    assert!(guild.roles.is_empty());
+    assert_eq!(guild.member_count, Some(7));
+}

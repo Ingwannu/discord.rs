@@ -32,9 +32,10 @@ use serde_json::Value;
 
 use crate::model::normalize_presence;
 use crate::model::{
-    marker, ApplicationCommandPermission, ApplicationId, AuditLogEntry, BorrowedKey, ChannelId,
-    ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, Id, Member, MessageId,
-    PartialUser, Presence, PresenceStatus, ReactionType, SoundboardSound, UserId,
+    marker, ApplicationCommandPermission, ApplicationId, ArcSeq, AuditLogEntry, BorrowedKey,
+    ChannelId, ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, GuildUpdate, Id,
+    Member, MessageId, Nullable, NullablePatch, PartialUser, Patch, Presence, PresenceStatus,
+    ReactionType, Role, SoundboardSound, UserId,
 };
 use crate::types::Emoji;
 
@@ -132,7 +133,7 @@ dispatch_table! { data;
     "GUILD_STICKERS_UPDATE" => {
         EventKind::GuildStickersUpdate(decode_guild_stickers_update_event(data)?)
     },
-    "GUILD_UPDATE" => EventKind::GuildUpdate(Box::new(typed(data)?)),
+    "GUILD_UPDATE" => EventKind::GuildUpdate(Box::new(decode_guild_update_event(data)?)),
     "INTEGRATION_CREATE" => EventKind::IntegrationCreate(Box::new(decode_integration_event(data)?)),
     "INTEGRATION_DELETE" => EventKind::IntegrationDelete(decode_integration_delete_event(data)?),
     "INTEGRATION_UPDATE" => EventKind::IntegrationUpdate(Box::new(decode_integration_event(data)?)),
@@ -298,6 +299,28 @@ impl<'a> Fields<'a> {
         }
     }
 
+    /// `key` as a [`Patch`]: absent is `Missing`; a value that is not a `T`
+    /// (`null` included) fails the event, as the derived decoders do.
+    fn patch<T: DeserializeOwned>(&self, key: &str) -> Result<Patch<T>, EventDecodeError> {
+        match self.get(key) {
+            Some(value) => Ok(Patch::Value(serde_json::from_str(value.get())?)),
+            None => Ok(Patch::Missing),
+        }
+    }
+
+    /// `key` as a [`NullablePatch`]: absent is `Missing`, `null` clears.
+    fn nullable<T: DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<NullablePatch<T>, EventDecodeError> {
+        match self.get(key) {
+            Some(value) => Ok(Patch::Value(Nullable::from(serde_json::from_str::<
+                Option<T>,
+            >(value.get())?))),
+            None => Ok(Patch::Missing),
+        }
+    }
+
     /// `key` as raw JSON; absent and `null` are `None`.
     fn value(&self, key: &str) -> Result<Option<Value>, EventDecodeError> {
         match self.get(key) {
@@ -338,6 +361,52 @@ impl<'de> Deserialize<'de> for Fields<'de> {
 #[derive(Deserialize)]
 struct RequiredGuildId {
     guild_id: GuildId,
+}
+
+fn decode_guild_update_event(data: &str) -> Result<GuildUpdate, EventDecodeError> {
+    // Low volume: the field map instead of a derived decoder for 34 fields.
+    let fields = Fields::parse(data)?;
+    let mut update = GuildUpdate::new(fields.required("id")?);
+    update.name = fields.patch("name")?;
+    update.owner_id = fields.nullable("owner_id")?;
+    update.icon = fields.nullable("icon")?;
+    update.splash = fields.nullable("splash")?;
+    update.banner = fields.nullable("banner")?;
+    update.description = fields.nullable("description")?;
+    update.features = fields.patch("features")?;
+    update.premium_tier = fields.nullable("premium_tier")?;
+    update.max_presences = fields.nullable("max_presences")?;
+    update.max_members = fields.nullable("max_members")?;
+    update.vanity_url_code = fields.nullable("vanity_url_code")?;
+    update.system_channel_id = fields.nullable("system_channel_id")?;
+    update.rules_channel_id = fields.nullable("rules_channel_id")?;
+    update.preferred_locale = fields.nullable("preferred_locale")?;
+    update.afk_channel_id = fields.nullable("afk_channel_id")?;
+    update.afk_timeout = fields.nullable("afk_timeout")?;
+    update.verification_level = fields.nullable("verification_level")?;
+    update.default_message_notifications = fields.nullable("default_message_notifications")?;
+    update.explicit_content_filter = fields.nullable("explicit_content_filter")?;
+    update.mfa_level = fields.nullable("mfa_level")?;
+    update.application_id = fields.nullable("application_id")?;
+    update.system_channel_flags = fields.nullable("system_channel_flags")?;
+    update.public_updates_channel_id = fields.nullable("public_updates_channel_id")?;
+    update.nsfw_level = fields.nullable("nsfw_level")?;
+    update.premium_subscription_count = fields.nullable("premium_subscription_count")?;
+    update.premium_progress_bar_enabled = fields.nullable("premium_progress_bar_enabled")?;
+    update.safety_alerts_channel_id = fields.nullable("safety_alerts_channel_id")?;
+    update.approximate_member_count = fields.nullable("approximate_member_count")?;
+    update.approximate_presence_count = fields.nullable("approximate_presence_count")?;
+    update.incidents_data = fields.nullable("incidents_data")?;
+    if let Some(roles) = fields.get("roles") {
+        // Straight into the `Arc`s the role store keeps.
+        let roles =
+            serde_json::Deserializer::from_str(roles.get())
+                .deserialize_seq(ArcSeq::<Role>::new(None))?;
+        update.roles = Patch::Value(roles);
+    }
+    update.emojis = fields.patch("emojis")?;
+    update.stickers = fields.patch("stickers")?;
+    Ok(update)
 }
 
 fn decode_member_event(data: &str) -> Result<MemberEvent, EventDecodeError> {
