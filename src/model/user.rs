@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ConnectionVisibility, GuildId, PartialIntegration, SkuId, UserId, UserPremiumType};
+use super::{
+    ConnectionVisibility, DisplayNameEffect, DisplayNameFont, GuildId, PartialIntegration, SkuId,
+    UserId, UserPremiumType,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Data for a user's avatar decoration.
@@ -51,6 +54,25 @@ pub struct UserPrimaryGuild {
     pub badge: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// How a user's or member's name is displayed: font, effect, and colors
+/// (Discord docs: Display Name Styles Object, documented in
+/// discord-api-docs#8178).
+///
+/// Every field is optional here although the docs mark them required: the
+/// object sits inside every [`User`] and [`Member`](super::Member), so a
+/// shape change in this not yet released part of the API must not fail the
+/// whole message, member, or event that carries the user.
+pub struct DisplayNameStyles {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_id: Option<DisplayNameFont>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effect_id: Option<DisplayNameEffect>,
+    /// Colors as integers representing hexadecimal color codes (at most 2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<u32>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `User`.
 pub struct User {
@@ -90,6 +112,10 @@ pub struct User {
     pub collectibles: Option<UserCollectibles>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_guild: Option<UserPrimaryGuild>,
+    /// Boxed: rarely set, and every cached user, member, and message author
+    /// would otherwise carry its 32 bytes inline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name_styles: Option<Box<DisplayNameStyles>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

@@ -343,7 +343,9 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
             "count": 5,
             "count_details": { "burst": 2, "normal": 3 },
             "me": true,
-            "emoji": { "name": "spark" }
+            "me_burst": true,
+            "emoji": { "name": "spark" },
+            "burst_colors": ["#ff8800", "#0088ff"]
         }]
     }))
     .unwrap();
@@ -369,6 +371,8 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
     let reaction = &message.reactions[0];
     assert_eq!(reaction.count_details.as_ref().unwrap().burst, 2);
     assert_eq!(reaction.count_details.as_ref().unwrap().normal, 3);
+    assert!(reaction.me_burst);
+    assert_eq!(reaction.burst_colors, ["#ff8800", "#0088ff"]);
 
     let create_message = CreateMessage {
         allowed_mentions: Some(AllowedMentions {
@@ -2214,4 +2218,36 @@ fn component_values_read_strings_and_booleans_directly_and_keep_other_json_as_te
     let empty_radio: MessageComponent =
         serde_json::from_value(json!({ "type": 21, "custom_id": "r", "value": null })).unwrap();
     assert_eq!(empty_radio.value, None);
+}
+
+#[test]
+fn display_name_styles_decode_on_users_and_members_and_tolerate_partial_objects() {
+    use super::{DisplayNameEffect, DisplayNameFont, Member, User};
+
+    let user: User = serde_json::from_value(json!({
+        "id": "1",
+        "username": "styled",
+        "display_name_styles": { "font_id": 3, "effect_id": 4, "colors": [16777215] }
+    }))
+    .unwrap();
+    let styles = user.display_name_styles.expect("styles");
+    assert_eq!(styles.font_id, Some(DisplayNameFont::SAKURA));
+    assert_eq!(styles.effect_id, Some(DisplayNameEffect::TOON));
+    assert_eq!(styles.colors, [0x00FF_FFFF]);
+
+    // A value this version has no name for stays open, and a missing field
+    // does not fail the user that carries the object.
+    let member: Member = serde_json::from_value(json!({
+        "roles": [],
+        "display_name_styles": { "font_id": 99, "colors": [] }
+    }))
+    .unwrap();
+    let styles = member.display_name_styles.expect("styles");
+    assert_eq!(styles.font_id, Some(DisplayNameFont::new(99)));
+    assert_eq!(styles.effect_id, None);
+    let user: User = serde_json::from_value(
+        json!({ "id": "2", "username": "plain", "display_name_styles": null }),
+    )
+    .unwrap();
+    assert!(user.display_name_styles.is_none());
 }

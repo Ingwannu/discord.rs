@@ -1317,6 +1317,46 @@ open_discriminant! {
 }
 
 open_discriminant! {
+    /// Display name styles `font_id` (Discord docs: Display Name Font,
+    /// documented in discord-api-docs#8178). The names are the UI names.
+    pub struct DisplayNameFont(u8) {
+        /// Sakura (Cherry Bomb One).
+        SAKURA = 3,
+        /// Jellybean (Chicle).
+        JELLYBEAN = 4,
+        /// Modern (Museo Moderno).
+        MODERN = 6,
+        /// Medieval (Neo Castel).
+        MEDIEVAL = 7,
+        /// 8Bit (Pixelify Sans).
+        EIGHT_BIT = 8,
+        /// Vampyre (Sinistre).
+        VAMPYRE = 10,
+        /// GG Sans, the default font.
+        GG_SANS = 11,
+        /// Tempo (Zilla Slab).
+        TEMPO = 12,
+    }
+}
+
+open_discriminant! {
+    /// Display name styles `effect_id` (Discord docs: Display Name Effect,
+    /// documented in discord-api-docs#8178).
+    pub struct DisplayNameEffect(u8) {
+        /// Displays the first color.
+        SOLID = 1,
+        /// Two-color gradient.
+        GRADIENT = 2,
+        /// Glow around the name.
+        NEON = 3,
+        /// Subtle vertical gradient and stroke.
+        TOON = 4,
+        /// Colored drop shadow.
+        POP = 5,
+    }
+}
+
+open_discriminant! {
     /// Connection `visibility` (Discord docs: Visibility Types).
     pub struct ConnectionVisibility(u8) {
         /// Invisible to everyone except the user.
@@ -1410,7 +1450,7 @@ mod tests {
             InviteTargetUsersJobStatusType: u8, WebhookType: u8, WebhookPayloadType: u8,
             StickerType: u8, StickerFormatType: u8, SkuType: u8, SkuAccessType: u8,
             EntitlementType: u8, EntitlementOwnerType: u8, SubscriptionStatus: u8,
-            UserPremiumType: u8, ConnectionVisibility: u8, ActivityType: u8,
+            UserPremiumType: u8, DisplayNameFont: u8, DisplayNameEffect: u8, ConnectionVisibility: u8, ActivityType: u8,
             BaseTheme: u8, ApplicationEventWebhookStatus: u8, OnboardingMode: u8,
             IntegrationExpireBehavior: u8, RecurrenceRuleFrequency: u8,
             RecurrenceRuleWeekday: u8, RecurrenceRuleMonth: u8,

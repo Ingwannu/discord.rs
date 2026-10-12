@@ -49,13 +49,13 @@ use serde_json::value::RawValue;
 use crate::types::Emoji;
 
 use super::{
-    ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention, Embed,
-    Guild, GuildId, GuildScheduledEvent, Member, Message, MessageActivity, MessageCall,
-    MessageComponent, MessageId, MessageInteraction, MessageInteractionMetadata, MessageReference,
-    MessageSnapshot, MessageType, Nullable, NullablePatch, PartialApplication, Patch, Poll,
-    Presence, Reaction, ResolvedData, RoleId, RoleSubscriptionData, SharedClientTheme,
-    SoundboardSound, StageInstance, Sticker, StickerItem, User, UserCollectibles, UserId,
-    UserPremiumType, UserPrimaryGuild, VoiceState, WebhookId,
+    ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention,
+    DisplayNameStyles, Embed, Guild, GuildId, GuildScheduledEvent, Member, Message,
+    MessageActivity, MessageCall, MessageComponent, MessageId, MessageInteraction,
+    MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, Nullable,
+    NullablePatch, PartialApplication, Patch, Poll, Presence, Reaction, ResolvedData, RoleId,
+    RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker, StickerItem,
+    User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState, WebhookId,
 };
 
 /// A GUILD_CREATE payload, split into the units the cache stores.
@@ -991,6 +991,12 @@ pub struct PartialUser {
         deserialize_with = "present_nullable"
     )]
     pub primary_guild: NullablePatch<UserPrimaryGuild>,
+    #[serde(
+        default,
+        skip_serializing_if = "Patch::is_missing",
+        deserialize_with = "present_nullable"
+    )]
+    pub display_name_styles: NullablePatch<Box<DisplayNameStyles>>,
 }
 
 impl PartialUser {
@@ -1016,6 +1022,7 @@ impl PartialUser {
             avatar_decoration_data: Patch::Missing,
             collectibles: Patch::Missing,
             primary_guild: Patch::Missing,
+            display_name_styles: Patch::Missing,
         }
     }
 
@@ -1046,6 +1053,7 @@ impl PartialUser {
             avatar_decoration_data,
             collectibles,
             primary_guild,
+            display_name_styles,
         } = self;
         let User {
             id: _,
@@ -1067,6 +1075,7 @@ impl PartialUser {
             avatar_decoration_data: target_avatar_decoration_data,
             collectibles: target_collectibles,
             primary_guild: target_primary_guild,
+            display_name_styles: target_display_name_styles,
         } = user;
         apply_patch(target_username, username);
         apply_nullable(target_global_name, global_name);
@@ -1086,6 +1095,7 @@ impl PartialUser {
         apply_nullable(target_avatar_decoration_data, avatar_decoration_data);
         apply_nullable(target_collectibles, collectibles);
         apply_nullable(target_primary_guild, primary_guild);
+        apply_nullable(target_display_name_styles, display_name_styles);
         true
     }
 
@@ -1117,6 +1127,7 @@ impl PartialUser {
             avatar_decoration_data: None,
             collectibles: None,
             primary_guild: None,
+            display_name_styles: None,
         };
         self.apply_to(&mut user);
         Some(user)

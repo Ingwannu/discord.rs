@@ -162,9 +162,9 @@ pub use thread::{
     ThreadMemberQuery, ThreadMetadata,
 };
 pub use user::{
-    AvatarDecorationData, ModifyCurrentUser, UpdateUserApplicationRoleConnection, User,
-    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserNameplate,
-    UserPrimaryGuild,
+    AvatarDecorationData, DisplayNameStyles, ModifyCurrentUser,
+    UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection, UserCollectibles,
+    UserConnection, UserNameplate, UserPrimaryGuild,
 };
 pub use voice::{
     CreateStageInstance, ModifyCurrentUserVoiceState, ModifyStageInstance, ModifyUserVoiceState,
@@ -185,8 +185,8 @@ pub use discriminant::{
     ApplicationIntegrationType, AuditLogActionType, AutoModerationActionType,
     AutoModerationEventType, AutoModerationTriggerType, BaseTheme, ButtonStyle, ChannelType,
     CommandOptionType, CommandPermissionType, CommandType, ComponentType, ConnectionVisibility,
-    DefaultMessageNotificationLevel, EntitlementOwnerType, EntitlementType,
-    ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
+    DefaultMessageNotificationLevel, DisplayNameEffect, DisplayNameFont, EntitlementOwnerType,
+    EntitlementType, ExplicitContentFilterLevel, ForumLayout, ForumSortOrder, GuildNsfwLevel,
     IntegrationExpireBehavior, InteractionContextType, InteractionResponseType, InteractionType,
     InviteTargetType, InviteTargetUsersJobStatusType, InviteType, KeywordPresetType,
     MessageActivityType, MessageReferenceType, MessageType, MfaLevel, OnboardingMode,

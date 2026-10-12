@@ -2,7 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{AvatarDecorationData, ChannelId, Permissions, RoleId, User, UserCollectibles, UserId};
+use super::{
+    AvatarDecorationData, ChannelId, DisplayNameStyles, Permissions, RoleId, User,
+    UserCollectibles, UserId,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `Member`.
@@ -37,6 +40,10 @@ pub struct Member {
     pub collectibles: Option<UserCollectibles>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
+    /// Styles applied to the member's display (or nick) name; boxed like
+    /// [`User::display_name_styles`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name_styles: Option<Box<DisplayNameStyles>>,
 }
 
 /// Request body for adding an OAuth2-authorized user to a guild.

@@ -419,6 +419,12 @@ pub struct Reaction {
     pub count_details: Option<ReactionCountDetails>,
     #[serde(default)]
     pub me: bool,
+    /// Whether the current user super-reacted using this emoji.
+    #[serde(default)]
+    pub me_burst: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji: Option<Emoji>,
+    /// HEX colors (`"#rrggbb"`) used for the super reaction.
+    #[serde(default)]
+    pub burst_colors: Vec<String>,
 }

@@ -708,24 +708,10 @@ fn unknown_discriminants_survive_and_wide_ones_fail() {
 
 /// Keys of Discord's interaction examples the typed models do not keep, each
 /// with the reason. [`assert_keys_kept`] fails on any other dropped key.
-const KEYS_NOT_KEPT: &[(&str, &str)] = &[
-    (
-        "is_pending",
-        "undocumented legacy member key (`pending` is kept)",
-    ),
-    (
-        "display_name_styles",
-        "user display name styles: not in the User model yet",
-    ),
-    (
-        "burst_colors",
-        "super reaction colors: not in the Reaction model yet",
-    ),
-    (
-        "me_burst",
-        "super reaction flag: not in the Reaction model yet",
-    ),
-];
+const KEYS_NOT_KEPT: &[(&str, &str)] = &[(
+    "is_pending",
+    "undocumented legacy member key (`pending` is kept)",
+)];
 
 /// The other direction of [`compare`]: every key of `original` is written
 /// back, except `null` values (the models read `null` and an absent key

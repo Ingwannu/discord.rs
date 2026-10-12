@@ -380,3 +380,24 @@ fn partial_user_applies_only_to_the_same_user() {
     assert_eq!(user.username, "name");
     assert!(same.to_user().is_none());
 }
+
+#[test]
+fn partial_users_patch_display_name_styles() {
+    let mut user: User = serde_json::from_value(json!({ "id": "5", "username": "u" })).unwrap();
+    let set: PartialUser = serde_json::from_value(json!({
+        "id": "5",
+        "display_name_styles": { "font_id": 11, "effect_id": 1, "colors": [1] }
+    }))
+    .unwrap();
+    assert!(set.apply_to(&mut user));
+    assert!(user.display_name_styles.is_some());
+
+    let omitted: PartialUser = serde_json::from_value(json!({ "id": "5" })).unwrap();
+    assert!(omitted.apply_to(&mut user));
+    assert!(user.display_name_styles.is_some(), "omitted keeps");
+
+    let cleared: PartialUser =
+        serde_json::from_value(json!({ "id": "5", "display_name_styles": null })).unwrap();
+    assert!(cleared.apply_to(&mut user));
+    assert!(user.display_name_styles.is_none(), "null clears");
+}
