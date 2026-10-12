@@ -1952,4 +1952,512 @@ mod tests {
             r#"{"allowed_mentions":null}"#
         );
     }
+
+    use crate::model::{test_id, AttachmentId, UploadId};
+    use crate::request::{AttachmentUpload, ButtonRow, Container, LinkButton, TextDisplay};
+
+    /// The validation message without the `Model error: ` prefix.
+    fn message(result: Result<(), DiscordError>) -> String {
+        let error = result.expect_err("expected a validation error").to_string();
+        error
+            .strip_prefix("Model error: ")
+            .unwrap_or(&error)
+            .to_owned()
+    }
+
+    fn json<T: Serialize>(value: &T) -> String {
+        serde_json::to_string(value).unwrap()
+    }
+
+    fn text() -> Component {
+        TextDisplay::new("t").into()
+    }
+
+    fn row() -> Component {
+        let mut button = LinkButton::new("https://e.co");
+        button.label = Some("e".to_owned());
+        ButtonRow::new().add_button(button).into()
+    }
+
+    fn embed(title: &str) -> Embed {
+        let mut embed = Embed::new();
+        embed.title = Some(title.to_owned());
+        embed
+    }
+
+    fn poll() -> CreatePoll {
+        CreatePoll::new("Q").add_answer("A")
+    }
+
+    #[test]
+    fn create_setters_fill_every_field() {
+        let mentions = AllowedMentions::default();
+        let message = CreateMessage::new()
+            .content("c")
+            .tts(true)
+            .embeds(vec![embed("a")])
+            .add_embed(embed("b"))
+            .allowed_mentions(mentions.clone())
+            .components(vec![row()])
+            .add_component(row())
+            .attachments(vec![MessageAttachment::keep(
+                AttachmentId::try_new(1).unwrap(),
+            )])
+            .add_attachment(AttachmentUpload::new(UploadId::new(0)))
+            .flags(SUPPRESS_EMBEDS)
+            .poll(poll())
+            .nonce("n")
+            .reply_to(test_id(9))
+            .sticker_ids(vec![test_id(3)])
+            .shared_client_theme(SharedClientTheme::default());
+        assert_eq!(message.embeds.as_ref().map(Vec::len), Some(2));
+        assert_eq!(message.components.as_ref().map(Vec::len), Some(2));
+        assert_eq!(message.attachments.as_ref().map(Vec::len), Some(2));
+        assert!(!message.is_components_v2());
+        assert_eq!(message.nonce_replay(), None);
+        assert!(message.message_reference.is_some());
+        // add_* start a list when there is none.
+        let fresh = InteractionMessage::new()
+            .add_embed(embed("a"))
+            .add_component(row())
+            .add_attachment(AttachmentUpload::new(UploadId::new(0)));
+        assert_eq!(
+            json(&fresh),
+            r#"{"embeds":[{"title":"a"}],"components":[{"type":1,"components":[{"type":2,"style":5,"label":"e","url":"https://e.co"}]}],"attachments":[{"id":0}]}"#
+        );
+        let v2 = ExecuteWebhook::new()
+            .flags(SUPPRESS_EMBEDS)
+            .components_v2(vec![text()]);
+        assert!(v2.is_components_v2());
+        assert_eq!(
+            v2.flags.map(|flags| flags.bits()),
+            Some(SUPPRESS_EMBEDS | IS_COMPONENTS_V2)
+        );
+        assert!(CreateFollowup::new()
+            .components_v2(Vec::new())
+            .is_components_v2());
+        let forward = CreateMessage::new()
+            .message_reference(MessageReference::forward(test_id(1), test_id(2)));
+        assert!(json(&forward).contains(r#""message_reference":{"type":1"#));
+    }
+
+    #[test]
+    fn ephemeral_sets_and_clears_the_flag() {
+        let on = InteractionMessage::new()
+            .flags(SUPPRESS_EMBEDS)
+            .ephemeral(true);
+        assert!(on.is_ephemeral());
+        assert_eq!(
+            on.flags.map(|flags| flags.bits()),
+            Some(SUPPRESS_EMBEDS | EPHEMERAL)
+        );
+        let off = on.ephemeral(false);
+        assert!(!off.is_ephemeral());
+        assert_eq!(off.flags.map(|flags| flags.bits()), Some(SUPPRESS_EMBEDS));
+        assert!(CreateFollowup::new().ephemeral(true).is_ephemeral());
+        assert!(!CreateFollowup::new().is_ephemeral());
+    }
+
+    #[test]
+    fn patch_setters_replace_clear_and_extend() {
+        let edit = EditMessage::new()
+            .content("c")
+            .embeds(vec![embed("a")])
+            .add_embed(embed("b"))
+            .flags(SUPPRESS_EMBEDS)
+            .allowed_mentions(AllowedMentions::default())
+            .components(vec![row()])
+            .add_component(row())
+            .attachments(Vec::new())
+            .add_attachment(MessageAttachment::keep(AttachmentId::try_new(1).unwrap()));
+        assert_eq!(patch_value(&edit.embeds).map(Vec::len), Some(2));
+        assert_eq!(patch_value(&edit.components).map(Vec::len), Some(2));
+        assert_eq!(patch_value(&edit.attachments).map(Vec::len), Some(1));
+        // components_v2 keeps the flags this edit already sets.
+        let v2 = edit.clone().components_v2(vec![text()]);
+        assert_eq!(
+            patch_value(&v2.flags).map(|flags| flags.bits()),
+            Some(SUPPRESS_EMBEDS | IS_COMPONENTS_V2)
+        );
+        // A null list starts again when appended to.
+        let mut nulled = EditWebhookMessage::new();
+        nulled.embeds = Patch::Value(Nullable::Null);
+        let nulled = nulled.add_embed(embed("x"));
+        assert_eq!(patch_value(&nulled.embeds).map(Vec::len), Some(1));
+        let cleared = UpdateMessage::new()
+            .clear_components()
+            .clear_attachments()
+            .clear_embeds()
+            .clear_content();
+        assert_eq!(
+            json(&cleared),
+            r#"{"content":null,"embeds":[],"components":[],"attachments":[]}"#
+        );
+        let mut flags_null = EditMessage::new();
+        flags_null.flags = Patch::Value(Nullable::Null);
+        assert_eq!(
+            patch_value(&flags_null.components_v2(Vec::new()).flags).map(|flags| flags.bits()),
+            Some(IS_COMPONENTS_V2)
+        );
+    }
+
+    #[test]
+    fn flags_each_endpoint_rejects() {
+        assert_eq!(
+            message(CreateMessage::new().flags(EPHEMERAL).validate()),
+            "message flags EPHEMERAL cannot be set on Create Message"
+        );
+        assert_eq!(
+            message(EditMessage::new().flags(SUPPRESS_NOTIFICATIONS).validate()),
+            "message flags SUPPRESS_NOTIFICATIONS cannot be set on Edit Message"
+        );
+        assert_eq!(
+            message(ExecuteWebhook::new().flags(EPHEMERAL).validate()),
+            "message flags EPHEMERAL cannot be set on Execute Webhook"
+        );
+        assert!(
+            message(CreateFollowup::new().flags(IS_VOICE_MESSAGE).validate())
+                .contains("IS_VOICE_MESSAGE cannot be set on Create Followup Message")
+        );
+        assert!(
+            message(EditWebhookMessage::new().flags(EPHEMERAL).validate())
+                .contains("cannot be set on Edit Webhook Message")
+        );
+        assert!(message(
+            InteractionMessage::new()
+                .flags(message_flags::CROSSPOSTED)
+                .validate()
+        )
+        .contains("CROSSPOSTED cannot be set on interaction callback"));
+        // A bit this version has no name for passes: Discord may have added it.
+        CreateMessage::new()
+            .flags(1_u64 << 40)
+            .validate()
+            .expect("unknown bit");
+        InteractionMessage::new()
+            .content("x")
+            .ephemeral(true)
+            .flags(EPHEMERAL | SUPPRESS_NOTIFICATIONS)
+            .validate()
+            .expect("allowed flags");
+    }
+
+    #[test]
+    fn components_v2_bodies_carry_only_components() {
+        let v2 = || CreateMessage::new().components_v2(vec![text()]);
+        v2().validate().expect("components only");
+        let everything = v2()
+            .content("c")
+            .add_embed(embed("e"))
+            .poll(poll())
+            .sticker_ids(vec![test_id(1)])
+            .shared_client_theme(SharedClientTheme::default());
+        assert_eq!(
+            message(everything.validate()),
+            "a message with the IS_COMPONENTS_V2 flag cannot set content, embeds, poll, \
+             sticker_ids, shared_client_theme"
+        );
+        v2().embeds(Vec::new())
+            .validate()
+            .expect("an empty embeds list is fine");
+        assert!(message(v2().add_component(Container::new()).validate())
+            .contains("container components must contain 1-40 items"));
+    }
+
+    #[test]
+    fn message_limits() {
+        assert_eq!(
+            message(CreateMessage::new().content("c".repeat(2001)).validate()),
+            "message content must be at most 2000 characters, got 2001"
+        );
+        CreateMessage::new()
+            .content("é".repeat(2000))
+            .validate()
+            .expect("codepoints");
+        assert_eq!(
+            message(CreateMessage::new().embeds(vec![embed("e"); 11]).validate()),
+            "message embeds must contain at most 10 items, got 11"
+        );
+        assert_eq!(
+            message(
+                CreateMessage::new()
+                    .add_embed(embed(&"t".repeat(257)))
+                    .validate()
+            ),
+            "embeds[0]: embed title must be at most 256 characters, got 257"
+        );
+        let big = |length: usize| {
+            let mut embed = Embed::new();
+            embed.description = Some("d".repeat(length));
+            embed
+        };
+        assert_eq!(
+            message(
+                CreateMessage::new()
+                    .add_embed(big(4000))
+                    .add_embed(big(2001))
+                    .validate()
+            ),
+            "embed total length across the message must be at most 6000 characters, got 6001"
+        );
+        CreateMessage::new()
+            .add_embed(big(4000))
+            .add_embed(big(2000))
+            .validate()
+            .expect("exactly 6000");
+        assert_eq!(
+            message(
+                CreateMessage::new()
+                    .sticker_ids(vec![test_id(1); 4])
+                    .validate()
+            ),
+            "message sticker_ids must contain at most 3 items, got 4"
+        );
+        assert_eq!(
+            message(CreateMessage::new().nonce("n".repeat(26)).validate()),
+            "message nonce must be at most 25 characters, got 26"
+        );
+        assert_eq!(
+            message(CreateMessage::new().poll(CreatePoll::new("Q")).validate()),
+            "poll: poll answers must contain 1-10 items, got 0"
+        );
+        let mut upload = AttachmentUpload::new(UploadId::new(0));
+        upload.description = Some("d".repeat(1025));
+        assert_eq!(
+            message(CreateMessage::new().add_attachment(upload).validate()),
+            "attachments[0]: attachment description must be at most 1024 characters, got 1025"
+        );
+        assert_eq!(
+            message(CreateMessage::new().components(vec![text()]).validate()),
+            "components[0]: layout and content components need the IS_COMPONENTS_V2 message flag"
+        );
+    }
+
+    #[test]
+    fn every_body_validates_its_own_fields() {
+        let long = "c".repeat(2001);
+        for error in [
+            message(EditMessage::new().content(long.as_str()).validate()),
+            message(InteractionMessage::new().content(long.as_str()).validate()),
+            message(UpdateMessage::new().content(long.as_str()).validate()),
+            message(CreateFollowup::new().content(long.as_str()).validate()),
+            message(ExecuteWebhook::new().content(long.as_str()).validate()),
+            message(EditWebhookMessage::new().content(long.as_str()).validate()),
+        ] {
+            assert_eq!(
+                error,
+                "message content must be at most 2000 characters, got 2001"
+            );
+        }
+        EditWebhookMessage::new()
+            .poll(poll())
+            .validate()
+            .expect("a poll completing a deferred response");
+        assert_eq!(
+            message(
+                EditWebhookMessage::new()
+                    .poll(CreatePoll::new(""))
+                    .validate()
+            ),
+            "poll: poll question must be 1-300 characters, got 0"
+        );
+        ExecuteWebhook::new()
+            .username("u")
+            .avatar_url("https://e.co/a.png")
+            .thread_name("t")
+            .applied_tags(vec![test_id(1)])
+            .content("c")
+            .validate()
+            .expect("valid webhook body");
+    }
+
+    #[test]
+    fn voice_message_body_rules_by_field() {
+        let mut upload = AttachmentUpload::new(UploadId::new(0));
+        upload.duration_secs = Some(1.0);
+        upload.waveform = Some("AA".to_owned());
+        let voice = || {
+            InteractionMessage::new()
+                .flags(IS_VOICE_MESSAGE)
+                .add_attachment(upload.clone())
+        };
+        voice().validate().expect("valid voice response");
+        assert!(voice().is_voice_message());
+        assert_eq!(
+            message(
+                voice()
+                    .add_embed(embed("e"))
+                    .add_component(row())
+                    .poll(poll())
+                    .validate()
+            ),
+            "a voice message (IS_VOICE_MESSAGE) cannot set embeds, components, poll"
+        );
+        assert!(message(
+            CreateMessage::new()
+                .flags(IS_VOICE_MESSAGE)
+                .add_attachment(upload.clone())
+                .sticker_ids(vec![test_id(1)])
+                .shared_client_theme(SharedClientTheme::default())
+                .validate()
+        )
+        .contains("cannot set sticker_ids, shared_client_theme"));
+        let mut only_duration = upload.clone();
+        only_duration.waveform = None;
+        assert!(message(
+            CreateMessage::new()
+                .flags(IS_VOICE_MESSAGE)
+                .add_attachment(only_duration)
+                .validate()
+        )
+        .contains("needs duration_secs and waveform"));
+        assert!(message(
+            CreateMessage::new()
+                .flags(IS_VOICE_MESSAGE)
+                .add_attachment(MessageAttachment::keep(AttachmentId::try_new(1).unwrap()))
+                .validate()
+        )
+        .contains("exactly one uploaded attachment, got 1"));
+        voice()
+            .check_voice_files([Some("audio/ogg")])
+            .expect("one audio file");
+        assert!(InteractionMessage::new()
+            .check_voice_files([None, None])
+            .is_ok());
+    }
+
+    #[test]
+    fn conversions_fail_on_fields_the_target_lacks() {
+        let channel_only = CreateMessage::new()
+            .content("c")
+            .reply_to(test_id(1))
+            .sticker_ids(vec![test_id(2)])
+            .enforce_nonce("n")
+            .shared_client_theme(SharedClientTheme::default());
+        let expected = "message_reference, sticker_ids, nonce, enforce_nonce, shared_client_theme";
+        assert_eq!(
+            message(InteractionMessage::try_from(channel_only.clone()).map(drop)),
+            format!("an interaction response does not accept CreateMessage fields: {expected}")
+        );
+        assert!(CreateFollowup::try_from(channel_only.clone()).is_err());
+        assert!(ExecuteWebhook::try_from(channel_only.clone()).is_err());
+        assert!(UpdateMessage::try_from(channel_only.clone()).is_err());
+        assert_eq!(
+            message(EditMessage::try_from(channel_only.clone().tts(true).poll(poll())).map(drop)),
+            format!("EditMessage does not accept CreateMessage fields: {expected}, tts, poll")
+        );
+        assert_eq!(
+            message(EditWebhookMessage::try_from(channel_only.tts(true)).map(drop)),
+            format!("EditWebhookMessage does not accept CreateMessage fields: {expected}, tts")
+        );
+        assert_eq!(
+            message(UpdateMessage::try_from(CreateMessage::new().tts(true)).map(drop)),
+            "UpdateMessage does not accept CreateMessage fields: tts"
+        );
+        assert_eq!(
+            message(UpdateMessage::try_from(InteractionMessage::new().poll(poll())).map(drop)),
+            "UpdateMessage does not accept InteractionMessage fields: poll"
+        );
+        assert_eq!(
+            message(EditWebhookMessage::try_from(InteractionMessage::new().tts(false)).map(drop)),
+            "EditWebhookMessage does not accept InteractionMessage fields: tts"
+        );
+    }
+
+    #[test]
+    fn conversions_carry_every_shared_field() {
+        let full = CreateMessage::new()
+            .content("c")
+            .add_embed(embed("e"))
+            .allowed_mentions(AllowedMentions::default())
+            .add_component(row())
+            .add_attachment(AttachmentUpload::new(UploadId::new(0)))
+            .flags(SUPPRESS_EMBEDS);
+        let has_shared = |text: String| {
+            text.contains(r#""content":"c""#) && text.contains(r#""embeds":[{"title":"e"}]"#)
+        };
+        let interaction =
+            InteractionMessage::try_from(full.clone().tts(true).poll(poll())).unwrap();
+        assert!(has_shared(json(&interaction)));
+        assert!(json(&interaction).contains(r#""tts":true"#));
+        let followup = CreateFollowup::try_from(full.clone().poll(poll())).unwrap();
+        assert!(json(&followup).contains(r#""poll":"#));
+        assert_eq!(
+            json(&InteractionMessage::from(followup.clone())),
+            json(&InteractionMessage::try_from(full.clone().poll(poll())).unwrap())
+        );
+        let webhook = ExecuteWebhook::try_from(full.clone().tts(false)).unwrap();
+        assert!(has_shared(json(&webhook)));
+        assert!(json(&webhook).contains(r#""tts":false"#));
+        let edit = EditMessage::try_from(full.clone()).unwrap();
+        assert!(has_shared(json(&edit)));
+        assert!(json(&edit).contains(r#""flags":4"#));
+        let webhook_edit = EditWebhookMessage::try_from(full.clone().poll(poll())).unwrap();
+        assert!(json(&webhook_edit).contains(r#""poll":"#));
+        let update = UpdateMessage::try_from(full.clone()).unwrap();
+        assert!(has_shared(json(&update)));
+        let original =
+            EditWebhookMessage::try_from(InteractionMessage::try_from(full).unwrap()).unwrap();
+        assert!(has_shared(json(&original)));
+        let from_edit = EditWebhookMessage::try_from(EditMessage::new().content("x")).unwrap();
+        assert_eq!(json(&from_edit), r#"{"content":"x"}"#);
+        // Unset create fields stay omitted in the patch.
+        assert_eq!(
+            json(&EditMessage::try_from(CreateMessage::new()).unwrap()),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn text_converts_into_every_body() {
+        let expected = r#"{"content":"hi"}"#;
+        assert_eq!(json(&CreateMessage::from("hi")), expected);
+        assert_eq!(json(&CreateMessage::from("hi".to_owned())), expected);
+        assert_eq!(json(&EditMessage::from("hi")), expected);
+        assert_eq!(json(&EditMessage::from("hi".to_owned())), expected);
+        assert_eq!(json(&InteractionMessage::from("hi".to_owned())), expected);
+        assert_eq!(json(&UpdateMessage::from("hi")), expected);
+        assert_eq!(json(&CreateFollowup::from("hi")), expected);
+        assert_eq!(json(&CreateFollowup::from("hi".to_owned())), expected);
+        assert_eq!(json(&ExecuteWebhook::from("hi")), expected);
+        assert_eq!(json(&ExecuteWebhook::from("hi".to_owned())), expected);
+        assert_eq!(json(&EditWebhookMessage::from("hi")), expected);
+        assert_eq!(json(&EditWebhookMessage::from("hi".to_owned())), expected);
+        assert_eq!(json(&UpdateMessage::from("hi".to_owned())), expected);
+    }
+
+    #[test]
+    fn every_body_applies_the_default_mentions_view() {
+        let default = AllowedMentions {
+            replied_user: Some(true),
+            ..AllowedMentions::default()
+        };
+        let with = r#""allowed_mentions":{"replied_user":true}"#;
+        let check = |text: String| assert!(text.contains(with), "{text}");
+        check(json(
+            &InteractionMessage::new().allowed_mentions_or(Some(&default)),
+        ));
+        check(json(
+            &CreateFollowup::new().allowed_mentions_or(Some(&default)),
+        ));
+        check(json(
+            &ExecuteWebhook::new().allowed_mentions_or(Some(&default)),
+        ));
+        check(json(
+            &EditWebhookMessage::new().allowed_mentions_or(Some(&default)),
+        ));
+        check(json(
+            &UpdateMessage::new().allowed_mentions_or(Some(&default)),
+        ));
+        let body = CreateMessage::new();
+        let view = body.allowed_mentions_or(Some(&default));
+        assert_eq!(view.default_mentions(), Some(&default));
+        assert!(view.body().content.is_none());
+        // An explicit value on a patch wins.
+        let own = EditWebhookMessage::new().allowed_mentions(AllowedMentions::default());
+        assert_eq!(
+            json(&own.allowed_mentions_or(Some(&default))),
+            r#"{"allowed_mentions":{}}"#
+        );
+    }
 }

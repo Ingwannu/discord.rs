@@ -1000,6 +1000,129 @@ mod tests {
     }
 
     #[test]
+    fn split_builders_cover_every_setter() {
+        use crate::request::{ActionRow, Component, SectionAccessory};
+
+        let custom = CustomButtonBuilder::new("c")
+            .emoji_unicode("✅")
+            .disabled(false)
+            .id(ComponentId::new(2));
+        custom.validate().expect("emoji is enough");
+        assert_eq!(
+            to_json(&custom.clone().try_build().unwrap()),
+            json!({"type": 2, "id": 2, "style": 1, "emoji": {"name": "✅"}, "custom_id": "c", "disabled": false})
+        );
+        let link = LinkButtonBuilder::new("https://e.co")
+            .label("L")
+            .emoji(Emoji::unicode("🔗"))
+            .disabled(true)
+            .id(ComponentId::new(3));
+        assert_eq!(link.clone().try_build().unwrap(), link.clone().build());
+        let premium = PremiumButtonBuilder::new(test_id(5)).disabled(false);
+        premium.validate().expect("no limits");
+        assert_eq!(
+            premium.clone().try_build().unwrap(),
+            premium.clone().build()
+        );
+        for accessory in [
+            SectionAccessory::from(custom.clone()),
+            SectionAccessory::from(link.clone()),
+            SectionAccessory::from(premium.clone()),
+        ] {
+            assert!(matches!(accessory, SectionAccessory::Button(_)));
+        }
+        assert!(matches!(Button::from(premium), Button::Premium(_)));
+        let row = ActionRowBuilder::new().add_button(custom).add_button(link);
+        assert!(matches!(
+            ActionRow::from(row.clone()),
+            ActionRow::Buttons(_)
+        ));
+        assert!(matches!(Component::from(row), Component::ActionRow(_)));
+    }
+
+    #[test]
+    fn deprecated_builder_covers_every_setter() {
+        let builder = ButtonBuilder::default()
+            .label("Go")
+            .emoji(Emoji::unicode("👍"))
+            .emoji_unicode("👋")
+            .disabled(true)
+            .custom_id("go");
+        builder.validate().expect("valid custom button");
+        assert_eq!(
+            to_json(&builder.try_build().unwrap()),
+            json!({"type": 2, "style": 1, "label": "Go", "emoji": {"name": "👋"}, "custom_id": "go", "disabled": true})
+        );
+        let link = ButtonBuilder::new()
+            .label("Docs")
+            .style(ButtonStyle::SECONDARY)
+            .url("https://e.co");
+        assert!(matches!(link.try_build().unwrap(), Button::Link(_)));
+        assert!(ButtonBuilder::new()
+            .custom_id("x")
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("label or emoji"));
+        assert!(ButtonBuilder::new()
+            .label("x")
+            .try_build()
+            .unwrap_err()
+            .to_string()
+            .contains("custom_id is required"));
+    }
+
+    #[test]
+    fn select_menu_builder_conversions_and_remaining_kinds() {
+        use crate::request::{ActionRow, Component};
+
+        let role = SelectMenuBuilder::role("r")
+            .default_role(test_id(1))
+            .default_mentionable(crate::model::MentionableId::Role(test_id(2)))
+            .max_values(2)
+            .required(true);
+        assert_eq!(
+            to_json(&role.clone().build()),
+            json!({"type": 6, "custom_id": "r", "max_values": 2, "required": true,
+                   "default_values": [{"id": "1", "type": "role"}, {"id": "2", "type": "role"}]})
+        );
+        assert!(matches!(
+            SelectMenu::from(role.clone()),
+            SelectMenu::Role(_)
+        ));
+        assert!(matches!(
+            ActionRow::from(role.clone()),
+            ActionRow::Select(_)
+        ));
+        assert!(matches!(
+            Component::from(role),
+            Component::ActionRow(ActionRow::Select(_))
+        ));
+        // A default of a kind the menu cannot hold is reported, not sent.
+        let unknown = SelectMenuBuilder::channel("c").default_value(SelectDefaultValue::Unknown {
+            kind: "guild".to_owned(),
+            id: test_id(3),
+        });
+        assert!(unknown
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("does not take: guild default value"));
+        assert_eq!(
+            to_json(&unknown.build()),
+            json!({"type": 8, "custom_id": "c"})
+        );
+        let user = SelectMenuBuilder::user("u").default_role(test_id(4));
+        assert!(user.validate().is_err());
+        assert_eq!(to_json(&user.build()), json!({"type": 5, "custom_id": "u"}));
+        assert!(SelectMenuBuilder::mentionable("m")
+            .default_channel(test_id(5))
+            .validate()
+            .is_err());
+        assert!(ComponentsV2Message::default().build().is_empty());
+    }
+
+    #[test]
     fn select_menu_kinds_keep_only_their_fields() {
         let string = SelectMenuBuilder::string("menu")
             .add_option(SelectOption::new("One", "one"))

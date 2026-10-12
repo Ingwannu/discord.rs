@@ -186,3 +186,48 @@ impl Serialize for AttachmentUpload {
         map.end()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AttachmentUpload, ExistingAttachment, MessageAttachment};
+    use crate::model::{AttachmentId, UploadId};
+
+    #[test]
+    fn descriptions_are_limited_on_both_kinds() {
+        let long = "d".repeat(1025);
+        let mut existing = ExistingAttachment::new(AttachmentId::try_new(1).unwrap());
+        existing.description = Some(long.clone());
+        let upload = AttachmentUpload::new(UploadId::new(0)).description(long);
+        for attachment in [
+            MessageAttachment::from(existing),
+            MessageAttachment::from(upload),
+        ] {
+            assert!(attachment
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("attachment description must be at most 1024 characters, got 1025"));
+        }
+        MessageAttachment::keep(AttachmentId::try_new(1).unwrap())
+            .validate()
+            .expect("no description");
+        MessageAttachment::upload(UploadId::new(2))
+            .validate()
+            .expect("no description");
+    }
+
+    #[test]
+    fn upload_setters() {
+        let upload = AttachmentUpload::new(UploadId::new(1))
+            .filename("a.png")
+            .description("alt")
+            .spoiler(true);
+        assert_eq!(upload.filename.as_deref(), Some("a.png"));
+        assert_eq!(upload.description.as_deref(), Some("alt"));
+        assert_eq!(upload.is_spoiler, Some(true));
+        assert_eq!(
+            serde_json::to_string(&MessageAttachment::from(upload)).unwrap(),
+            r#"{"id":1,"filename":"a.png","description":"alt","is_spoiler":true}"#
+        );
+    }
+}

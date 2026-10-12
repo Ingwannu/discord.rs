@@ -1784,15 +1784,50 @@ pub(crate) fn entry_patch<M: SerializeMap, T: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use super::{SelectMenu, StringSelect, UserSelect};
-    use crate::types::SelectOption;
+    use super::*;
+    use crate::model::test_id;
+    use serde_json::json;
 
-    fn error(select: impl Into<SelectMenu>) -> String {
-        let error = select.into().validate().unwrap_err().to_string();
+    /// The validation message without the `Model error: ` prefix.
+    fn message(result: Result<(), DiscordError>) -> String {
+        let error = result.expect_err("expected a validation error").to_string();
         error
             .strip_prefix("Model error: ")
             .unwrap_or(&error)
             .to_owned()
+    }
+
+    fn error(select: impl Into<SelectMenu>) -> String {
+        message(select.into().validate())
+    }
+
+    fn custom(custom_id: &str) -> CustomButton {
+        let mut button = CustomButton::new(ButtonStyle::PRIMARY, custom_id);
+        button.label = Some("Go".to_owned());
+        button
+    }
+
+    fn link() -> LinkButton {
+        let mut button = LinkButton::new("https://example.com");
+        button.label = Some("Docs".to_owned());
+        button
+    }
+
+    fn string_select(custom_id: &str) -> StringSelect {
+        let mut select = StringSelect::new(custom_id);
+        select.options = vec![SelectOption::new("One", "1")];
+        select
+    }
+
+    fn section_with(accessory: impl Into<SectionAccessory>) -> Section {
+        let mut section = Section::new(accessory);
+        section.components = vec![TextDisplay::new("text")];
+        section
+    }
+
+    fn with_id<T>(mut value: T, set: impl FnOnce(&mut T)) -> T {
+        set(&mut value);
+        value
     }
 
     #[test]
@@ -1816,6 +1851,449 @@ mod tests {
         assert_eq!(
             error(user),
             "select menu min_values (4) must not exceed max_values (3)"
+        );
+        // Only an omitted min can be the defaulted side.
+        let mut role = RoleSelect::new("r");
+        role.max_values = Some(1);
+        role.min_values = None;
+        SelectMenu::from(role).validate().expect("1..=1");
+    }
+
+    #[test]
+    fn select_menus_check_their_shared_limits() {
+        assert_eq!(
+            error(string_select("")),
+            "select menu custom_id must be 1-100 characters, got 0"
+        );
+        let mut placeholder = string_select("p");
+        placeholder.placeholder = Some("p".repeat(151));
+        assert_eq!(
+            error(placeholder),
+            "select menu placeholder must be at most 150 characters, got 151"
+        );
+        let mut min = UserSelect::new("u");
+        min.min_values = Some(26);
+        min.max_values = Some(25);
+        assert_eq!(
+            error(min),
+            "select menu min_values must be at most 25, got 26"
+        );
+        let mut max = RoleSelect::new("r");
+        max.max_values = Some(0);
+        assert_eq!(error(max), "select menu max_values must be 1-25, got 0");
+        let mut defaults = ChannelSelect::new("c");
+        defaults.default_values = vec![test_id(1), test_id(2)];
+        assert_eq!(
+            error(defaults.clone()),
+            "select menu default_values must contain 1-1 items (min_values-max_values), got 2"
+        );
+        defaults.max_values = Some(2);
+        SelectMenu::from(defaults)
+            .validate()
+            .expect("two defaults allowed");
+        let mut too_few = MentionableSelect::new("m");
+        too_few.min_values = Some(2);
+        too_few.max_values = Some(3);
+        too_few.default_values = vec![MentionableId::User(test_id(1))];
+        assert_eq!(
+            error(too_few),
+            "select menu default_values must contain 2-3 items (min_values-max_values), got 1"
+        );
+        // Each struct's own validate() is the same check.
+        assert!(StringSelect::new("x").validate().is_err());
+        UserSelect::new("x").validate().expect("no options needed");
+        RoleSelect::new("x").validate().expect("valid");
+        MentionableSelect::new("x").validate().expect("valid");
+        ChannelSelect::new("x").validate().expect("valid");
+    }
+
+    #[test]
+    fn string_select_checks_its_options() {
+        assert_eq!(
+            error(StringSelect::new("s")),
+            "select menu options must contain 1-25 items, got 0"
+        );
+        let mut many = StringSelect::new("s");
+        many.options = (0..26)
+            .map(|index| SelectOption::new(&index.to_string(), "v"))
+            .collect();
+        assert_eq!(
+            error(many),
+            "select menu options must contain 1-25 items, got 26"
+        );
+        let mut label = StringSelect::new("s");
+        label.options = vec![SelectOption::new("", "v")];
+        assert_eq!(
+            error(label),
+            "select menu option \"\" label must be 1-100 characters, got 0"
+        );
+        let mut value = StringSelect::new("s");
+        value.options = vec![SelectOption::new("L", "")];
+        assert_eq!(
+            error(value),
+            "select menu option \"L\" value must be 1-100 characters, got 0"
+        );
+        let mut description = StringSelect::new("s");
+        description.options = vec![SelectOption::new("L", "v").description(&"d".repeat(101))];
+        assert_eq!(
+            error(description),
+            "select menu option \"L\" description must be at most 100 characters, got 101"
+        );
+    }
+
+    #[test]
+    fn buttons_check_their_kind_rules() {
+        let button = |button: CustomButton| message(Button::from(button).validate());
+        let mut link_style = custom("a");
+        link_style.style = ButtonStyle::LINK;
+        assert_eq!(
+            button(link_style),
+            "button style 5 needs a url or sku_id; use LinkButton or PremiumButton"
+        );
+        let mut premium_style = custom("a");
+        premium_style.style = ButtonStyle::PREMIUM;
+        assert!(button(premium_style).contains("button style 6"));
+        assert_eq!(
+            button(custom(&"i".repeat(101))),
+            "button custom_id must be 1-100 characters, got 101"
+        );
+        let mut unlabeled = custom("a");
+        unlabeled.label = None;
+        assert_eq!(
+            button(unlabeled.clone()),
+            "button must have a label or emoji"
+        );
+        unlabeled.emoji = Some(Emoji::unicode("👍"));
+        unlabeled.validate().expect("emoji-only button");
+        let mut long_label = custom("a");
+        long_label.label = Some("l".repeat(81));
+        assert_eq!(
+            button(long_label),
+            "button label must be at most 80 characters, got 81"
+        );
+        // Unknown styles pass; Discord decides.
+        let mut future = custom("a");
+        future.style = ButtonStyle::new(9);
+        future.validate().expect("unknown style passes");
+
+        let mut empty_url = link();
+        empty_url.url = String::new();
+        assert_eq!(
+            message(empty_url.validate()),
+            "button url must be 1-512 characters, got 0"
+        );
+        let mut no_label = link();
+        no_label.label = None;
+        assert_eq!(
+            message(no_label.validate()),
+            "button must have a label or emoji"
+        );
+        link().validate().expect("valid link");
+        Button::from(PremiumButton::new(test_id(1)))
+            .validate()
+            .expect("premium buttons have no limits");
+    }
+
+    #[test]
+    fn rows_count_and_deduplicate_their_children() {
+        assert_eq!(
+            message(ButtonRow::new().validate()),
+            "action row components must contain 1-5 items, got 0"
+        );
+        let full = (0..6).fold(ButtonRow::new(), |row, index| {
+            row.add_button(custom(&format!("b{index}")))
+        });
+        assert_eq!(
+            message(full.validate()),
+            "action row components must contain 1-5 items, got 6"
+        );
+        let duplicate = ButtonRow::new()
+            .add_button(custom("same"))
+            .add_button(custom("same"));
+        assert_eq!(
+            message(duplicate.validate()),
+            "components[1]: custom_id \"same\" is used more than once"
+        );
+        let ids = ButtonRow::new()
+            .add_button(with_id(custom("a"), |b| b.id = Some(ComponentId::new(3))))
+            .add_button(with_id(link(), |b| b.id = Some(ComponentId::new(3))));
+        assert_eq!(
+            message(ids.validate()),
+            "components[1]: component id 3 is used more than once"
+        );
+        // Id 0 means "unset" and may repeat.
+        ButtonRow::new()
+            .add_button(with_id(custom("a"), |b| b.id = Some(ComponentId::new(0))))
+            .add_button(with_id(link(), |b| b.id = Some(ComponentId::new(0))))
+            .validate()
+            .expect("id 0 repeats");
+        let mut select_row = SelectRow::new(string_select("s"));
+        select_row.validate().expect("valid select row");
+        select_row.select = SelectMenu::from(StringSelect::new("s"));
+        assert_eq!(
+            message(select_row.validate()),
+            "components[0]: select menu options must contain 1-25 items, got 0"
+        );
+        ActionRow::from(ButtonRow::new().add_button(link()))
+            .validate()
+            .expect("valid row");
+        ActionRow::from(SelectMenu::from(UserSelect::new("u")))
+            .validate()
+            .expect("valid select row");
+        assert!(
+            ActionRow::from(UserSelect::new("u"))
+                == ActionRow::from(SelectRow::new(UserSelect::new("u")))
+        );
+    }
+
+    #[test]
+    fn layout_components_check_their_limits() {
+        let thumbnail = Thumbnail::new("https://e.co/t.png");
+        assert_eq!(
+            message(Section::new(thumbnail.clone()).validate()),
+            "section components must contain 1-3 items, got 0"
+        );
+        let mut crowded = section_with(thumbnail.clone());
+        crowded.components = vec![TextDisplay::new("a"); 4];
+        assert_eq!(
+            message(crowded.validate()),
+            "section components must contain 1-3 items, got 4"
+        );
+        let mut empty_text = section_with(thumbnail.clone());
+        empty_text.components = vec![TextDisplay::new("")];
+        assert_eq!(
+            message(empty_text.validate()),
+            "components[0]: text display content must be 1-4000 characters, got 0"
+        );
+        let mut long_alt = thumbnail.clone();
+        long_alt.description = Some("d".repeat(1025));
+        assert_eq!(
+            message(section_with(long_alt.clone()).validate()),
+            "accessory: thumbnail description must be at most 1024 characters, got 1025"
+        );
+        assert_eq!(
+            message(long_alt.validate()),
+            "thumbnail description must be at most 1024 characters, got 1025"
+        );
+        let mut bad_button = custom("x");
+        bad_button.label = None;
+        assert_eq!(
+            message(section_with(bad_button).validate()),
+            "accessory: button must have a label or emoji"
+        );
+        section_with(link()).validate().expect("link accessory");
+        section_with(PremiumButton::new(test_id(1)))
+            .validate()
+            .expect("premium accessory");
+        section_with(Button::from(link()))
+            .validate()
+            .expect("button accessory");
+
+        assert_eq!(
+            message(TextDisplay::new("c".repeat(4001)).validate()),
+            "text display content must be 1-4000 characters, got 4001"
+        );
+        assert_eq!(
+            message(MediaGallery::new().validate()),
+            "media gallery items must contain 1-10 items, got 0"
+        );
+        let mut gallery = MediaGallery::new();
+        gallery.items =
+            vec![MediaGalleryItem::new("https://e.co/a.png").description(&"d".repeat(1025))];
+        assert_eq!(
+            message(gallery.validate()),
+            "media gallery item 0 description must be at most 1024 characters, got 1025"
+        );
+        gallery.items = vec![MediaGalleryItem::new("https://e.co/a.png"); 11];
+        assert_eq!(
+            message(gallery.validate()),
+            "media gallery items must contain 1-10 items, got 11"
+        );
+        assert_eq!(
+            message(FileComponent::new("https://e.co/a.zip").validate()),
+            "file component url must use attachment://<filename>, got \"https://e.co/a.zip\""
+        );
+        FileComponent::new("attachment://a.zip")
+            .validate()
+            .expect("attachment reference");
+        let mut separator = Separator::new();
+        separator.spacing = Some(SeparatorSpacing::new(0));
+        assert_eq!(
+            message(separator.validate()),
+            "separator spacing must be 1 (small) or 2 (large), got 0"
+        );
+        separator.spacing = Some(SeparatorSpacing::LARGE);
+        separator.validate().expect("large spacing");
+    }
+
+    #[test]
+    fn containers_check_colour_children_and_nesting() {
+        assert_eq!(
+            message(Container::new().validate()),
+            "container components must contain 1-40 items, got 0"
+        );
+        let mut container = Container::new();
+        container.components = vec![ContainerComponent::from(TextDisplay::new("x"))];
+        container.accent_color = Some(0x0100_0000);
+        assert_eq!(
+            message(container.validate()),
+            "container accent_color must be at most 0xFFFFFF, got 0x1000000"
+        );
+        container.accent_color = Some(0xFF_FFFF);
+        container.validate().expect("max colour");
+        container.components = vec![
+            ContainerComponent::from(ActionRow::from(ButtonRow::new().add_button(link()))),
+            ContainerComponent::from(section_with(link())),
+            ContainerComponent::from(with_id(MediaGallery::new(), |g| {
+                g.items = vec![MediaGalleryItem::new("https://e.co/a.png")];
+            })),
+            ContainerComponent::from(FileComponent::new("attachment://a")),
+            ContainerComponent::from(Separator::new()),
+            ContainerComponent::from(RawComponent::from_json("{}").unwrap()),
+            ContainerComponent::from(SelectRow::new(UserSelect::new("u"))),
+            ContainerComponent::from(ButtonRow::new().add_button(custom("c"))),
+        ];
+        container.validate().expect("every child kind");
+        container
+            .components
+            .push(ContainerComponent::from(TextDisplay::new("")));
+        assert_eq!(
+            message(container.validate()),
+            "components[8]: text display content must be 1-4000 characters, got 0"
+        );
+
+        // Containers do not nest; the conversion returns the container.
+        let inner = Component::from(Container::new());
+        assert!(matches!(
+            ContainerComponent::try_from(inner),
+            Err(Component::Container(_))
+        ));
+        for component in [
+            Component::from(TextDisplay::new("t")),
+            Component::from(ButtonRow::new()),
+            Component::from(section_with(link())),
+            Component::from(MediaGallery::new()),
+            Component::from(FileComponent::new("attachment://a")),
+            Component::from(Separator::new()),
+            Component::from(RawComponent::from_json("1").unwrap()),
+        ] {
+            let child = ContainerComponent::try_from(component.clone()).expect("a container child");
+            assert_eq!(Component::from(child), component);
+        }
+    }
+
+    #[test]
+    fn components_v2_requirement_by_kind() {
+        assert!(!Component::from(ButtonRow::new()).requires_components_v2());
+        assert!(!Component::from(RawComponent::from_json("{}").unwrap()).requires_components_v2());
+        for component in [
+            Component::from(TextDisplay::new("t")),
+            Component::from(section_with(link())),
+            Component::from(MediaGallery::new()),
+            Component::from(FileComponent::new("attachment://a")),
+            Component::from(Separator::new()),
+            Component::from(Container::new()),
+        ] {
+            assert!(component.requires_components_v2(), "{component:?}");
+        }
+        Component::from(RawComponent::from_json("{}").unwrap())
+            .validate()
+            .expect("raw is not checked");
+        Component::from(with_id(Container::new(), |c| {
+            c.components = vec![ContainerComponent::from(TextDisplay::new("x"))];
+        }))
+        .validate()
+        .expect("valid container component");
+    }
+
+    #[test]
+    fn message_components_follow_the_mode() {
+        let text = || Component::from(TextDisplay::new("t"));
+        let row = || Component::from(ButtonRow::new().add_button(link()));
+        assert_eq!(
+            message(check_message_components(
+                &[row(), text()],
+                ComponentsMode::Legacy
+            )),
+            "components[1]: layout and content components need the IS_COMPONENTS_V2 message flag"
+        );
+        assert_eq!(
+            message(check_message_components(
+                &vec![row(); 6],
+                ComponentsMode::Legacy
+            )),
+            "message action rows must contain at most 5 items, got 6"
+        );
+        check_message_components(&vec![row(); 5], ComponentsMode::Legacy).expect("five rows");
+        check_message_components(&[row(), text()], ComponentsMode::V2).expect("v2");
+        check_message_components(&[row(), text()], ComponentsMode::Unknown).expect("unknown");
+        for mode in [ComponentsMode::V2, ComponentsMode::Unknown] {
+            assert_eq!(
+                message(check_message_components(&vec![text(); 41], mode)),
+                "components v2 message components must contain at most 40 items \
+                 (nested components included), got 41"
+            );
+        }
+        // Buttons inside rows count toward 40.
+        let five = (0..5).fold(ButtonRow::new(), |row, index| {
+            row.add_button(custom(&format!("{index}")))
+        });
+        let rows: Vec<Component> = (0..7)
+            .map(|row| {
+                Component::from((0..5).fold(ButtonRow::new(), |r, index| {
+                    r.add_button(custom(&format!("{row}-{index}")))
+                }))
+            })
+            .collect();
+        assert!(message(check_message_components(&rows, ComponentsMode::V2)).contains("got 42"));
+        check_message_components(&[Component::from(five)], ComponentsMode::V2).expect("six");
+    }
+
+    #[test]
+    fn raw_components_keep_their_text() {
+        assert!(RawComponent::from_json("{not json").is_err());
+        let from_text = RawComponent::from_json(r#"{"type":1}"#).unwrap();
+        let value = json!({"type": 1});
+        let from_value = RawComponent::from_value(&value).unwrap();
+        assert_eq!(from_text, from_value);
+        assert_eq!(RawComponent::try_from(&value).unwrap(), from_text);
+        assert_eq!(RawComponent::try_from(value).unwrap(), from_text);
+        assert_eq!(from_text.get(), r#"{"type":1}"#);
+        assert_eq!(format!("{from_text:?}"), r#"RawComponent("{\"type\":1}")"#);
+        assert_ne!(
+            RawComponent::from_json(r#"{ "type": 1 }"#).unwrap(),
+            from_text,
+            "compared as text"
+        );
+        assert_eq!(
+            serde_json::to_string(&Component::from(from_text)).unwrap(),
+            r#"{"type":1}"#
+        );
+    }
+
+    #[test]
+    fn helpers_build_paths_and_messages() {
+        assert_eq!(child_path("", "components", 2), "components[2]");
+        assert_eq!(child_path("a", "items", 0), "a.items[0]");
+        assert_eq!(field_path("", "accessory"), "accessory");
+        assert_eq!(field_path("a", "accessory"), "a.accessory");
+        assert_eq!(
+            message(check_count("p", "things", 3, 0, 2)),
+            "p: things must contain at most 2 items, got 3"
+        );
+        assert_eq!(
+            message(check_count("", "things", 0, 1, 2)),
+            "things must contain 1-2 items, got 0"
+        );
+        check_count("", "things", 1, 1, 2).expect("in range");
+        assert_eq!(
+            message(check_max_len("p", "text", "abc", 2)),
+            "p: text must be at most 2 characters, got 3"
+        );
+        check_len("", "text", "é", 1, 1).expect("codepoints, not bytes");
+        assert_eq!(
+            message(check_len("", "text", "", 1, 2)),
+            "text must be 1-2 characters, got 0"
         );
     }
 }

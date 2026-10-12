@@ -278,3 +278,128 @@ impl From<CreatePoll> for crate::model::CreatePoll {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{CreatePoll, CreatePollAnswer};
+    use crate::model::{PollAnswer, PollAnswerId, PollMedia};
+    use crate::types::Emoji;
+
+    fn message(poll: &CreatePoll) -> String {
+        let error = poll.validate().expect_err("invalid poll").to_string();
+        error
+            .strip_prefix("Model error: ")
+            .unwrap_or(&error)
+            .to_owned()
+    }
+
+    fn valid() -> CreatePoll {
+        CreatePoll::new("Q?")
+            .add_answer("Yes")
+            .add_answer(String::from("No"))
+    }
+
+    #[test]
+    fn poll_limits() {
+        valid()
+            .duration(768)
+            .allow_multiselect(true)
+            .validate()
+            .expect("valid");
+        assert_eq!(
+            message(&CreatePoll::new("").add_answer("a")),
+            "poll question must be 1-300 characters, got 0"
+        );
+        assert_eq!(
+            message(&CreatePoll::new("q".repeat(301)).add_answer("a")),
+            "poll question must be 1-300 characters, got 301"
+        );
+        assert_eq!(
+            message(&CreatePoll::new("Q")),
+            "poll answers must contain 1-10 items, got 0"
+        );
+        let crowded = (0..11).fold(CreatePoll::new("Q"), |poll, index| {
+            poll.add_answer(index.to_string())
+        });
+        assert_eq!(
+            message(&crowded),
+            "poll answers must contain 1-10 items, got 11"
+        );
+        assert_eq!(
+            message(&CreatePoll::new("Q").add_answer("a".repeat(56))),
+            "answers[0]: poll answer text must be at most 55 characters, got 56"
+        );
+        assert_eq!(
+            message(&CreatePoll::new("Q").add_answer(CreatePollAnswer::default())),
+            "answers[0]: poll answer must have text or an emoji"
+        );
+        CreatePoll::new("Q")
+            .add_answer(CreatePollAnswer {
+                text: None,
+                emoji: Some(Emoji::unicode("👍")),
+            })
+            .validate()
+            .expect("emoji-only answer");
+        assert_eq!(
+            message(&valid().duration(0)),
+            "poll duration must be 1-768 hours, got 0"
+        );
+        assert_eq!(
+            message(&valid().duration(769)),
+            "poll duration must be 1-768 hours, got 769"
+        );
+    }
+
+    #[test]
+    fn converts_from_and_to_the_2x_type() {
+        let poll = valid().duration(24);
+        let legacy = crate::model::CreatePoll::from(poll.clone());
+        assert_eq!(legacy.question.text.as_deref(), Some("Q?"));
+        assert_eq!(legacy.duration, Some(24));
+        let back = CreatePoll::try_from(legacy).expect("round trip");
+        assert_eq!(back, poll);
+
+        let with_emoji = crate::model::CreatePoll {
+            question: PollMedia {
+                text: Some("Q".to_owned()),
+                emoji: Some(Emoji::unicode("❓")),
+            },
+            ..crate::model::CreatePoll::default()
+        };
+        assert!(CreatePoll::try_from(with_emoji)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot have an emoji"));
+        assert!(CreatePoll::try_from(crate::model::CreatePoll::default())
+            .unwrap_err()
+            .to_string()
+            .contains("poll question must have text"));
+        let with_id = crate::model::CreatePoll {
+            question: PollMedia {
+                text: Some("Q".to_owned()),
+                emoji: None,
+            },
+            answers: vec![PollAnswer {
+                answer_id: Some(PollAnswerId::new(1)),
+                poll_media: PollMedia::default(),
+            }],
+            ..crate::model::CreatePoll::default()
+        };
+        assert!(CreatePoll::try_from(with_id)
+            .unwrap_err()
+            .to_string()
+            .contains("answers[0]: answer_id is assigned by Discord"));
+        let huge = crate::model::CreatePoll {
+            question: PollMedia {
+                text: Some("Q".to_owned()),
+                emoji: None,
+            },
+            duration: Some(u64::MAX),
+            ..crate::model::CreatePoll::default()
+        };
+        assert!(CreatePoll::try_from(huge)
+            .unwrap_err()
+            .to_string()
+            .contains("does not fit"));
+    }
+}
