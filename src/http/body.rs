@@ -404,20 +404,6 @@ fn quote_non_json(text: &str) -> Option<String> {
     serde_json::to_string(text).ok()
 }
 
-/// [`parse_body_value`] for raw bytes, without copying valid UTF-8 into a
-/// new `String` first: empty is `Null`, JSON is parsed, other text becomes a
-/// `Value::String`, and invalid UTF-8 is replaced before parsing, exactly as
-/// before. It parses through `from_str`, the `&str` parser this crate already
-/// compiles, because `from_slice` would add a second copy of the JSON parser
-/// (about 3,500 LLVM IR lines) to builds without the gateway.
-pub(crate) fn parse_body_bytes(body: &[u8]) -> Value {
-    match std::str::from_utf8(body) {
-        Ok("") => Value::Null,
-        Ok(text) => serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned())),
-        Err(_) => parse_body_value(String::from_utf8_lossy(body).into_owned()),
-    }
-}
-
 pub(crate) fn header_string(value: Option<&HeaderValue>) -> Option<String> {
     value
         .and_then(|value| value.to_str().ok())

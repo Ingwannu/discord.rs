@@ -42,6 +42,7 @@ mod oauth;
 mod paths;
 mod poll;
 mod rate_limit;
+mod raw;
 mod role;
 mod routes;
 mod scheduled_events;
@@ -56,8 +57,8 @@ use crate::model::{AllowedMentions, ApplicationId, CreateMessage};
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
-    decode_json_body, json_body, multipart_body, optional_json_body, parse_body_bytes,
-    parse_body_value, EncodedBody, RequestBody, NO_BODY,
+    decode_json_body, json_body, multipart_body, parse_body_value, EncodedBody, RequestBody,
+    NO_BODY,
 };
 pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use paths::{
@@ -66,6 +67,7 @@ use paths::{
     subscription_query, thread_member_query, RequestRoute,
 };
 use rate_limit::RateLimitState;
+pub use raw::RawRequest;
 
 pub(crate) use paths::redact_path_tokens;
 #[cfg(test)]
@@ -331,82 +333,9 @@ impl RestClient {
     // - Trade-offs: `execute` takes an already-failed body as an argument,
     //   which reads oddly but is what keeps the shims branch-free. New
     //   endpoints must add a manifest row and call these shims rather than
-    //   adding another generic `async fn` that wraps the loop.
-
-    pub async fn request(
-        &self,
-        method: Method,
-        path: &str,
-        body: Option<&Value>,
-    ) -> Result<Value, DiscordError> {
-        self.execute(
-            Target::Raw(&method, RequestAuthorization::Auto),
-            path,
-            optional_json_body(body),
-        )
-        .await
-        .map(RawResponse::into_value)
-    }
-
-    pub async fn request_multipart<B>(
-        &self,
-        method: Method,
-        path: &str,
-        body: &B,
-        files: &[FileAttachment],
-    ) -> Result<Value, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.execute(
-            Target::Raw(&method, RequestAuthorization::Auto),
-            path,
-            multipart_body(body, files),
-        )
-        .await
-        .map(RawResponse::into_value)
-    }
-
-    pub async fn request_typed<T, B>(
-        &self,
-        method: Method,
-        path: &str,
-        body: Option<&B>,
-    ) -> Result<T, DiscordError>
-    where
-        T: DeserializeOwned,
-        B: serde::Serialize + ?Sized,
-    {
-        decode_response(
-            self.execute(
-                Target::Raw(&method, RequestAuthorization::Auto),
-                path,
-                optional_json_body(body),
-            )
-            .await,
-        )
-    }
-
-    pub async fn request_typed_multipart<T, B>(
-        &self,
-        method: Method,
-        path: &str,
-        body: &B,
-        files: &[FileAttachment],
-    ) -> Result<T, DiscordError>
-    where
-        T: DeserializeOwned,
-        B: serde::Serialize + ?Sized,
-    {
-        decode_response(
-            self.execute(
-                Target::Raw(&method, RequestAuthorization::Auto),
-                path,
-                multipart_body(body, files),
-            )
-            .await,
-        )
-    }
+    //   adding another generic `async fn` that wraps the loop. The raw escape
+    //   hatch (`RestClient::request`, `http/raw.rs`) is the one public entry
+    //   without a route; it goes through the same `execute`.
 
     /// Sends `route` and decodes the response into `T`.
     async fn send<T: DeserializeOwned>(
@@ -886,12 +815,6 @@ struct RawResponse {
 }
 
 impl RawResponse {
-    /// The untyped `Value` view used by [`RestClient::request`]: empty is
-    /// `Null`, non-JSON text is a `Value::String`.
-    fn into_value(self) -> Value {
-        parse_body_bytes(&self.body)
-    }
-
     fn discard(self) {}
 }
 

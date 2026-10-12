@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::body::{decode_json_body, header_string, json_body, parse_body_bytes, parse_body_value};
+use super::body::{decode_json_body, header_string, json_body, parse_body_value};
 use super::client_config::default_http_client;
 use super::paths::RequestRoute;
 use super::paths::{
@@ -20,8 +20,8 @@ use super::paths::{
 };
 use super::rate_limit::RateLimitState;
 use super::{
-    discord_api_error, discord_rate_limit_error, sleep_for_retry_after, FileAttachment, RestClient,
-    RouteId,
+    discord_api_error, discord_rate_limit_error, sleep_for_retry_after, FileAttachment, RawRequest,
+    RestClient, RouteId,
 };
 use crate::bitfield::Permissions;
 use crate::command::CommandDefinition;
@@ -1087,15 +1087,22 @@ struct DecodeProbe {
     name: Option<String>,
 }
 
+/// `RestClient::request::<Value>` (a raw request) reads a body like 2.x's
+/// untyped `request`: empty is `null`, non-JSON text is a string, and
+/// invalid UTF-8 is replaced first. The one difference is the documented
+/// phase 4 change for every decoder: JSON with a number out of `f64` range
+/// is an error instead of being returned as a string.
 #[test]
-fn parse_body_bytes_matches_the_lossy_string_parser() {
+fn raw_value_responses_match_the_lossy_string_parser() {
     for body in DECODE_CORPUS {
-        assert_eq!(
-            parse_body_bytes(body),
-            parse_body_value(String::from_utf8_lossy(body).into_owned()),
-            "body {:?}",
-            String::from_utf8_lossy(body)
-        );
+        let before = parse_body_value(String::from_utf8_lossy(body).into_owned());
+        match decode_json_body::<serde_json::Value>(body) {
+            Ok(value) => assert_eq!(value, before, "body {:?}", String::from_utf8_lossy(body)),
+            Err(error) => {
+                assert_eq!(*body, br#"{"id":"1","extra":1e400}"#);
+                assert!(error.to_string().contains("number out of range"), "{error}");
+            }
+        }
     }
 }
 
@@ -1159,20 +1166,12 @@ async fn typed_shims_decode_text_empty_and_no_content_success_bodies_like_before
     ])
     .await;
     let client = RestClient::new_with_base_url("decode-token", 123, base_url);
-    let none = Option::<&serde_json::Value>::None;
-
-    let text: serde_json::Value = client
-        .request_typed(Method::GET, "/users/@me", none)
-        .await
-        .unwrap();
+    let text: serde_json::Value = client.request(RawRequest::get("/users/@me")).await.unwrap();
     assert_eq!(text, json!("plain text"));
-    let empty: serde_json::Value = client
-        .request_typed(Method::GET, "/users/@me", none)
-        .await
-        .unwrap();
+    let empty: serde_json::Value = client.request(RawRequest::get("/users/@me")).await.unwrap();
     assert_eq!(empty, serde_json::Value::Null);
     let error = client
-        .request_typed::<DecodeProbe, serde_json::Value>(Method::GET, "/users/@me", none)
+        .request::<DecodeProbe>(RawRequest::get("/users/@me"))
         .await
         .unwrap_err();
     // The same error as before, plus the text reader's position.
@@ -1208,10 +1207,7 @@ async fn typed_shims_decode_text_empty_and_no_content_success_bodies_like_before
             name: None
         })
     );
-    let untyped = client
-        .request(Method::GET, "/users/@me", None)
-        .await
-        .unwrap();
+    let untyped: serde_json::Value = client.request(RawRequest::get("/users/@me")).await.unwrap();
     assert_eq!(untyped, json!("plain text"));
 
     server.await.unwrap();
@@ -1227,11 +1223,8 @@ async fn multipart_shim_serialization_errors_return_before_network() {
     let files = [FileAttachment::new("a.txt", b"a".to_vec())];
 
     let error = client
-        .request_typed_multipart::<serde_json::Value, _>(
-            Method::POST,
-            "/channels/1/messages",
-            &body,
-            &files,
+        .request::<serde_json::Value>(
+            RawRequest::post("/channels/1/messages").multipart(&body, &files),
         )
         .await
         .unwrap_err();
@@ -5693,12 +5686,8 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
         .await
         .expect("remove all reactions for emoji");
 
-    let raw = client
-        .request(
-            Method::GET,
-            "channels/100/custom",
-            Option::<&serde_json::Value>::None,
-        )
+    let raw: serde_json::Value = client
+        .request(RawRequest::get("channels/100/custom"))
         .await
         .expect("request with normalized path");
     assert_eq!(raw["ok"], json!(true));
@@ -7041,10 +7030,8 @@ async fn request_surfaces_api_and_rate_limit_errors_from_local_server() {
     let client = RestClient::new_with_base_url("err-token", 123, base_url);
 
     match client
-        .request(
-            Method::POST,
-            "/channels/9/messages",
-            Some(&json!({ "content": "boom" })),
+        .request::<serde_json::Value>(
+            RawRequest::post("/channels/9/messages").json(&json!({ "content": "boom" })),
         )
         .await
         .unwrap_err()
@@ -7108,11 +7095,7 @@ async fn request_retries_repeated_rate_limits_until_success() {
 
     assert_eq!(
         client
-            .request(
-                Method::GET,
-                "/channels/9",
-                Option::<&serde_json::Value>::None
-            )
+            .request::<serde_json::Value>(RawRequest::get("/channels/9"))
             .await
             .unwrap()["ok"],
         json!(true)
@@ -7421,10 +7404,9 @@ async fn nonce_bearing_webhook_posts_are_not_replayed() {
 
     let client = RestClient::new_with_base_url("webhook-nonce", 123, base_url);
     client
-        .request(
-            Method::POST,
-            "/webhooks/9/webhook-secret",
-            Some(&json!({ "content": "hi", "nonce": "n", "enforce_nonce": true })),
+        .request::<serde_json::Value>(
+            RawRequest::post("/webhooks/9/webhook-secret")
+                .json(&json!({ "content": "hi", "nonce": "n", "enforce_nonce": true })),
         )
         .await
         .expect_err("webhooks do not deduplicate nonces, so the 502 must surface");
@@ -7485,10 +7467,8 @@ async fn managed_client_does_not_follow_redirects() {
         .build()
         .expect("client");
     let error = client
-        .request(
-            Method::POST,
-            "/channels/9/messages",
-            Some(&json!({ "content": "x" })),
+        .request::<serde_json::Value>(
+            RawRequest::post("/channels/9/messages").json(&json!({ "content": "x" })),
         )
         .await
         .expect_err("a redirect is surfaced, not followed");
@@ -7515,10 +7495,8 @@ async fn custom_clients_do_not_retry_post_connect_failures() {
         .expect("client");
     let started = Instant::now();
     let error = client
-        .request(
-            Method::POST,
-            "/channels/9/messages",
-            Some(&json!({ "content": "x" })),
+        .request::<serde_json::Value>(
+            RawRequest::post("/channels/9/messages").json(&json!({ "content": "x" })),
         )
         .await
         .expect_err("connection refused");
@@ -8495,4 +8473,121 @@ async fn rest_client_application_id_is_optional_and_shared_by_clones() {
             .application_id(),
         Some(test_id(5))
     );
+}
+
+#[tokio::test]
+async fn raw_requests_choose_authorization_from_the_path_or_the_caller() {
+    let (base_url, captured, server) = spawn_test_server(vec![
+        PlannedResponse::json(StatusCode::OK, json!({})),
+        PlannedResponse::json(StatusCode::OK, json!({})),
+        PlannedResponse::json(StatusCode::OK, json!({})),
+        PlannedResponse::json(StatusCode::OK, json!({})),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("raw-token", 123, base_url);
+    let _: serde_json::Value = client
+        .request(RawRequest::get("/channels/1"))
+        .await
+        .unwrap();
+    let _: serde_json::Value = client
+        .request(RawRequest::get("/webhooks/1/hook-secret"))
+        .await
+        .unwrap();
+    let _: serde_json::Value = client
+        .request(RawRequest::get("/users/@me").bearer("user-access"))
+        .await
+        .unwrap();
+    let _: serde_json::Value = client
+        .request(RawRequest::get("/guilds/1/widget.png").without_authorization())
+        .await
+        .unwrap();
+    server.await.unwrap();
+    let auth = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.header("authorization").map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        auth.iter().map(Option::as_deref).collect::<Vec<_>>(),
+        [
+            Some("Bot raw-token"),
+            None,
+            Some("Bearer user-access"),
+            None
+        ]
+    );
+
+    // A bad bearer token fails before anything is sent.
+    let offline = RestClient::new_with_base_url("raw-token", 123, "http://127.0.0.1:9");
+    let error = offline
+        .request::<serde_json::Value>(RawRequest::get("/users/@me").bearer(" "))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("bearer_token"), "{error}");
+}
+
+#[tokio::test]
+async fn raw_posts_are_not_replayed_even_with_an_enforced_nonce() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::text(
+        StatusCode::BAD_GATEWAY,
+        "bad gateway",
+    )])
+    .await;
+    let client = RestClient::new_with_base_url("raw-nonce", 123, base_url);
+    let error = client
+        .request::<serde_json::Value>(
+            RawRequest::post("/channels/9/messages")
+                .json(&json!({ "content": "hi", "nonce": "n", "enforce_nonce": true })),
+        )
+        .await
+        .expect_err("the client cannot know the raw body enforces a nonce");
+    assert!(
+        matches!(error, DiscordError::Api { status: 502, .. }),
+        "{error:?}"
+    );
+    task.await.expect("server task");
+    assert_eq!(captured.lock().expect("captured").len(), 1);
+}
+
+#[tokio::test]
+async fn raw_requests_scrub_the_route_token_and_hide_it_from_debug() {
+    let (base_url, captured, task) = spawn_test_server(vec![PlannedResponse::json(
+        StatusCode::NOT_FOUND,
+        json!({ "code": 10015, "message": "Unknown Webhook /webhooks/9/raw-secret" }),
+    )])
+    .await;
+    let client = RestClient::new_with_base_url("raw", 123, base_url);
+    let request = RawRequest::post("/webhooks/9/raw-secret?wait=true").json(&json!({}));
+    let debug = format!("{request:?}");
+    assert!(!debug.contains("raw-secret"), "{debug}");
+    assert_eq!(request.method(), Method::POST);
+    assert_eq!(request.path(), "/webhooks/9/raw-secret?wait=true");
+    let error = client
+        .request::<serde_json::Value>(request)
+        .await
+        .expect_err("404");
+    let text = format!("{error} {error:?}");
+    assert!(!text.contains("raw-secret"), "token leaked: {text}");
+    task.await.expect("server task");
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests[0].path, "/webhooks/9/raw-secret?wait=true");
+    assert_eq!(requests[0].header("authorization"), None);
+    assert_eq!(requests[0].body, "{}");
+}
+
+#[tokio::test]
+async fn raw_json_bytes_are_sent_as_given() {
+    let (base_url, captured, task) =
+        spawn_test_server(vec![PlannedResponse::empty(StatusCode::NO_CONTENT)]).await;
+    let client = RestClient::new_with_base_url("raw", 123, base_url);
+    client
+        .request::<()>(RawRequest::patch("/channels/1").json_bytes(br#"{"b":1,"a":2}"#.to_vec()))
+        .await
+        .unwrap();
+    task.await.expect("server task");
+    let requests = captured.lock().unwrap();
+    assert_eq!(requests[0].method, "PATCH");
+    assert_eq!(requests[0].body, r#"{"b":1,"a":2}"#);
+    assert_eq!(requests[0].header("content-type"), Some("application/json"));
 }

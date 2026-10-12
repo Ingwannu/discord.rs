@@ -301,7 +301,7 @@ pub use parsers::{
 
 pub use constants::{gateway_intents, MESSAGE_FLAG_IS_COMPONENTS_V2};
 
-pub use http::{DiscordHttpClient, FileAttachment, FileUpload, RestClient};
+pub use http::{DiscordHttpClient, FileAttachment, FileUpload, RawRequest, RestClient};
 
 pub use helpers::{
     defer_and_followup_container, edit_message_with_container, followup_with_container,
