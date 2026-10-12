@@ -1219,7 +1219,7 @@ async fn apply_cache_updates_covers_guild_channel_member_role_and_interaction_pa
         SINGLE_SHARD,
         &Event::from_kind(
             "CHANNEL_CREATE",
-            EventKind::ChannelCreate(Box::new(crate::model::Channel {
+            EventKind::ChannelCreate(Arc::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
@@ -1860,7 +1860,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         ),
         Event::from_kind(
             "CHANNEL_CREATE",
-            EventKind::ChannelCreate(Box::new(crate::model::Channel {
+            EventKind::ChannelCreate(Arc::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
@@ -1870,7 +1870,7 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
         ),
         Event::from_kind(
             "CHANNEL_UPDATE",
-            EventKind::ChannelUpdate(Box::new(crate::model::Channel {
+            EventKind::ChannelUpdate(Arc::new(crate::model::Channel {
                 id: channel_id,
                 guild_id: Some(guild_id),
                 kind: ChannelType::GUILD_TEXT,
@@ -1916,22 +1916,22 @@ async fn event_handler_default_impl_accepts_remaining_event_variants() {
             "GUILD_ROLE_CREATE",
             EventKind::RoleCreate(Box::new(RoleEvent {
                 guild_id,
-                role: Role {
+                role: std::sync::Arc::new(Role {
                     id: role_id,
                     name: "role".to_string(),
                     ..Role::fixture()
-                },
+                }),
             })),
         ),
         Event::from_kind(
             "GUILD_ROLE_UPDATE",
             EventKind::RoleUpdate(Box::new(RoleEvent {
                 guild_id,
-                role: Role {
+                role: std::sync::Arc::new(Role {
                     id: role_id,
                     name: "role-updated".to_string(),
                     ..Role::fixture()
-                },
+                }),
             })),
         ),
         Event::from_kind(
@@ -2066,11 +2066,11 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
             "GUILD_ROLE_CREATE",
             EventKind::RoleCreate(Box::new(RoleEvent {
                 guild_id,
-                role: Role {
+                role: std::sync::Arc::new(Role {
                     id: role_id,
                     name: "reader".to_string(),
                     ..Role::fixture()
-                },
+                }),
             })),
         ),
     )
@@ -2084,11 +2084,11 @@ async fn apply_cache_updates_handles_message_create_delete_and_non_channel_compo
             "GUILD_ROLE_UPDATE",
             EventKind::RoleUpdate(Box::new(RoleEvent {
                 guild_id,
-                role: Role {
+                role: std::sync::Arc::new(Role {
                     id: role_id,
                     name: "writer".to_string(),
                     ..Role::fixture()
-                },
+                }),
             })),
         ),
     )
@@ -3548,7 +3548,7 @@ async fn cache_backend_receives_member_message_and_presence_writes() {
             "GUILD_ROLE_CREATE",
             EventKind::RoleCreate(Box::new(RoleEvent {
                 guild_id: test_id(1),
-                role: Role::fixture(),
+                role: std::sync::Arc::new(Role::fixture()),
             })),
         ),
     )
@@ -4751,6 +4751,75 @@ async fn unavailable_guilds_drop_the_cached_guild_instead_of_replacing_it() {
             "{name}"
         );
     }
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
+async fn channels_and_roles_are_shared_and_guild_roles_follow_role_events() {
+    let cache = crate::cache::CacheHandle::new();
+    let guild = decode_event(
+        "GUILD_CREATE",
+        json!({
+            "id": "9", "name": "g",
+            "roles": [
+                { "id": "12", "name": "second", "position": 2 },
+                { "id": "11", "name": "first", "position": 1 }
+            ],
+            "channels": [{ "id": "20", "type": 0, "name": "general" }]
+        }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &guild).await;
+    let EventKind::GuildCreate(crate::model::GuildCreatePayload::Available(created)) = guild.kind()
+    else {
+        panic!("unexpected {guild:?}");
+    };
+    let cached_channel = cache.channel_arc(test_id(20)).await.unwrap();
+    assert!(Arc::ptr_eq(&created.channels[0], &cached_channel));
+    assert_eq!(cached_channel.guild_id, Some(test_id(9)));
+
+    // The cached guild's roles come from the role store, in position order,
+    // and follow GUILD_ROLE_UPDATE (the guild itself keeps no copy).
+    let names = |guild: crate::model::Guild| {
+        guild
+            .roles
+            .into_iter()
+            .map(|role| role.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(cache.guild(test_id(9)).await.unwrap()),
+        ["first", "second"]
+    );
+    let renamed = decode_event(
+        "GUILD_ROLE_UPDATE",
+        json!({ "guild_id": "9", "role": { "id": "11", "name": "renamed", "position": 3 } }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &renamed).await;
+    assert_eq!(
+        names(cache.guild(test_id(9)).await.unwrap()),
+        ["second", "renamed"]
+    );
+    let guilds = cache.guilds().await;
+    assert_eq!(
+        names(guilds.into_iter().next().unwrap()),
+        ["second", "renamed"]
+    );
+
+    let channel = decode_event(
+        "CHANNEL_CREATE",
+        json!({ "id": "21", "type": 0, "guild_id": "9", "name": "new" }),
+    )
+    .unwrap();
+    super::apply_cache_updates(&cache, SINGLE_SHARD, &channel).await;
+    let EventKind::ChannelCreate(event_channel) = channel.kind() else {
+        panic!("unexpected {channel:?}");
+    };
+    assert!(Arc::ptr_eq(
+        event_channel,
+        &cache.channel_arc(test_id(21)).await.unwrap()
+    ));
 }
 
 #[cfg(feature = "cache")]

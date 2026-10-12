@@ -53,7 +53,7 @@ use super::{
     DisplayNameStyles, Embed, Guild, GuildId, GuildScheduledEvent, Member, Message,
     MessageActivity, MessageCall, MessageComponent, MessageId, MessageInteraction,
     MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, Nullable,
-    NullablePatch, PartialApplication, Patch, Poll, Presence, Reaction, ResolvedData, RoleId,
+    NullablePatch, PartialApplication, Patch, Poll, Presence, Reaction, ResolvedData, Role, RoleId,
     RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker, StickerItem,
     User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VoiceState, WebhookId,
 };
@@ -69,19 +69,26 @@ use super::{
 /// - every channel, thread, and voice state gets `guild_id` set to the guild;
 /// - every presence gets `user_id` set from its partial `user`.
 ///
-/// [`guild`](Self::guild) is the guild itself with those collections empty
-/// (as [`Guild::without_create_collections`] returns it). Build one from a
-/// REST or hand-made [`Guild`] with `GuildCreate::from(guild)`.
+/// Channels, threads, and roles are `Arc`s too, shared with the cache's
+/// channel and role stores. [`guild`](Self::guild) is the guild itself with
+/// those collections empty (as [`Guild::without_create_collections`] returns
+/// it) and, since checkpoint C, without its roles, which are in
+/// [`roles`](Self::roles); the cache fills them back in when it returns the
+/// guild. Build one from a REST or hand-made [`Guild`] with
+/// `GuildCreate::from(guild)`.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct GuildCreate {
-    /// The guild without its GUILD_CREATE-only collections; shared with the
-    /// cache's guild store.
+    /// The guild without its GUILD_CREATE-only collections and roles;
+    /// shared with the cache's guild store.
     pub guild: Arc<Guild>,
-    /// Channels, each with `guild_id` set.
-    pub channels: Vec<Channel>,
-    /// Active threads, each with `guild_id` set.
-    pub threads: Vec<Channel>,
+    /// Roles; the cache's role store keeps these `Arc`s as they are.
+    pub roles: Vec<Arc<Role>>,
+    /// Channels, each with `guild_id` set; the cache keeps these `Arc`s.
+    pub channels: Vec<Arc<Channel>>,
+    /// Active threads, each with `guild_id` set; the cache keeps these
+    /// `Arc`s.
+    pub threads: Vec<Arc<Channel>>,
     /// Members; the cache stores these `Arc`s as they are.
     pub members: Vec<Arc<Member>>,
     /// Presences, each with `user_id` set when Discord sent a `user`; the
@@ -182,20 +189,16 @@ impl GuildCreate {
     /// 2.x `guild_create(ctx, Guild)` hook; reading the fields directly costs
     /// nothing.
     pub fn to_guild(&self) -> Guild {
+        fn unshared<T: Clone>(items: &[Arc<T>]) -> Vec<T> {
+            items.iter().map(|item| (**item).clone()).collect()
+        }
         Guild {
-            channels: self.channels.clone(),
-            threads: self.threads.clone(),
-            members: self
-                .members
-                .iter()
-                .map(|member| (**member).clone())
-                .collect(),
+            roles: unshared(&self.roles),
+            channels: unshared(&self.channels),
+            threads: unshared(&self.threads),
+            members: unshared(&self.members),
             voice_states: self.voice_states.clone(),
-            presences: self
-                .presences
-                .iter()
-                .map(|presence| (**presence).clone())
-                .collect(),
+            presences: unshared(&self.presences),
             emojis: self.emojis.clone(),
             stickers: self.stickers.clone(),
             stage_instances: self.stage_instances.clone(),
@@ -205,28 +208,37 @@ impl GuildCreate {
         }
     }
 
-    /// Splits `guild`'s collections out and normalizes them; members and
-    /// presences arrive already wrapped (and presences normalized).
-    fn assemble(
-        mut guild: Guild,
-        members: Vec<Arc<Member>>,
-        presences: Vec<Arc<Presence>>,
-    ) -> Self {
-        let guild_id = guild.id;
-        // The guild is shared with the cache's guild store for as long as it
-        // is cached: drop the decoder's doubling slack (up to half the list,
-        // about 60 KB for 300 roles) with one reallocation.
-        guild.roles.shrink_to_fit();
-        let mut channels = std::mem::take(&mut guild.channels);
-        let mut threads = std::mem::take(&mut guild.threads);
-        let mut voice_states = std::mem::take(&mut guild.voice_states);
-        for channel in channels.iter_mut().chain(threads.iter_mut()) {
-            channel.guild_id.get_or_insert(guild_id);
+    /// Splits `guild`'s collections out and normalizes them. The fast path
+    /// passes the shared collections it decoded straight into `Arc`s;
+    /// anything still inside `guild` (a REST or hand-made guild) is moved
+    /// into `Arc`s here.
+    fn assemble(mut guild: Guild, shared: SharedCollections) -> Self {
+        fn into_shared<T>(items: Vec<T>) -> impl Iterator<Item = Arc<T>> {
+            items.into_iter().map(Arc::new)
         }
+        let guild_id = guild.id;
+        let SharedCollections {
+            mut roles,
+            mut channels,
+            mut threads,
+            members,
+            presences,
+        } = shared;
+        roles.extend(into_shared(std::mem::take(&mut guild.roles)));
+        channels.extend(into_shared(std::mem::take(&mut guild.channels)));
+        threads.extend(into_shared(std::mem::take(&mut guild.threads)));
+        for channel in channels.iter_mut().chain(threads.iter_mut()) {
+            if channel.guild_id.is_none() {
+                // Unique at this point, so this never copies.
+                Arc::make_mut(channel).guild_id = Some(guild_id);
+            }
+        }
+        let mut voice_states = std::mem::take(&mut guild.voice_states);
         for voice_state in &mut voice_states {
             voice_state.guild_id.get_or_insert(guild_id);
         }
         Self {
+            roles,
             channels,
             threads,
             members,
@@ -248,6 +260,17 @@ impl GuildCreate {
     }
 }
 
+/// The GUILD_CREATE collections the cache shares, as the fast path decodes
+/// them straight into `Arc`s.
+#[derive(Default)]
+struct SharedCollections {
+    roles: Vec<Arc<Role>>,
+    channels: Vec<Arc<Channel>>,
+    threads: Vec<Arc<Channel>>,
+    members: Vec<Arc<Member>>,
+    presences: Vec<Arc<Presence>>,
+}
+
 impl From<Guild> for GuildCreate {
     fn from(mut guild: Guild) -> Self {
         let members = std::mem::take(&mut guild.members)
@@ -261,7 +284,15 @@ impl From<Guild> for GuildCreate {
                 Arc::new(presence)
             })
             .collect();
-        Self::assemble(guild, members, presences)
+        // Roles, channels, and threads are moved into `Arc`s by `assemble`.
+        Self::assemble(
+            guild,
+            SharedCollections {
+                members,
+                presences,
+                ..SharedCollections::default()
+            },
+        )
     }
 }
 
@@ -297,16 +328,19 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<GuildCreatePayload, A::Error> {
-        let mut members = Vec::new();
-        let mut presences = Vec::new();
+        let mut shared = SharedCollections::default();
         let mut rest: Vec<(Cow<'de, str>, &'de RawValue)> =
             Vec::with_capacity(GUILD_CREATE_KEY_HINT);
         while let Some(BorrowedKey(key)) = map.next_key()? {
             match key.as_ref() {
-                "members" => members = map.next_value_seed(ArcSeq::<Member>::new(None))?,
+                "members" => shared.members = map.next_value_seed(ArcSeq::new(None))?,
                 "presences" => {
-                    presences = map.next_value_seed(ArcSeq::new(Some(normalize_presence)))?;
+                    shared.presences =
+                        map.next_value_seed(ArcSeq::new(Some(normalize_presence)))?;
                 }
+                "roles" => shared.roles = map.next_value_seed(ArcSeq::new(None))?,
+                "channels" => shared.channels = map.next_value_seed(ArcSeq::new(None))?,
+                "threads" => shared.threads = map.next_value_seed(ArcSeq::new(None))?,
                 _ => rest.push((key, map.next_value()?)),
             }
         }
@@ -326,7 +360,7 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
         }
         let rest = de::value::MapDeserializer::<_, serde_json::Error>::new(rest.into_iter());
         let guild = Guild::deserialize(rest).map_err(de::Error::custom)?;
-        Ok(GuildCreate::assemble(guild, members, presences).into())
+        Ok(GuildCreate::assemble(guild, shared).into())
     }
 }
 

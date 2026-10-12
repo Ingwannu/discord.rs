@@ -46,7 +46,8 @@ fn guild_create_payload() -> serde_json::Value {
 fn assert_normalized(created: &GuildCreate) {
     assert_eq!(created.id(), test_id(10));
     assert_eq!(created.guild.name, "guild");
-    assert_eq!(created.guild.roles.len(), 1, "roles stay on the guild");
+    assert!(created.guild.roles.is_empty(), "roles move to `roles`");
+    assert_eq!(created.roles.len(), 1);
     assert_eq!(created.guild.member_count, Some(2));
     assert!(created.guild.channels.is_empty());
     assert!(created.guild.members.is_empty());
@@ -123,7 +124,8 @@ fn guild_create_reads_an_unavailable_guild_without_making_one_up() {
 #[test]
 fn guild_create_shares_presences_and_roles_without_spare_capacity() {
     // The cache keeps these allocations for as long as the guild and its
-    // members are cached, so the decoder's doubling slack must not stay.
+    // members are cached, so the decoder's doubling slack must not stay;
+    // roles are separate `Arc`s, not a list inside the shared guild.
     let payload = json!({
         "id": "10",
         "name": "guild",
@@ -137,8 +139,12 @@ fn guild_create_shares_presences_and_roles_without_spare_capacity() {
     let created = decode_available(&payload.to_string()).unwrap();
     let activities = created.presences[0].activities.as_ref().unwrap();
     assert_eq!((activities.len(), activities.capacity()), (1, 1));
-    assert_eq!(created.guild.roles.len(), 5);
-    assert_eq!(created.guild.roles.capacity(), 5);
+    assert_eq!(created.roles.len(), 5);
+    assert!(created.guild.roles.is_empty());
+    assert!(created
+        .roles
+        .iter()
+        .all(|role| Arc::strong_count(role) == 1));
 }
 
 #[test]

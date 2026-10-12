@@ -25,7 +25,7 @@ pub struct Message {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "super::user::shared_user"
+        with = "super::shared::option_arc"
     )]
     pub author: Option<Arc<User>>,
     #[serde(skip_serializing_if = "Option::is_none")]

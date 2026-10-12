@@ -77,11 +77,11 @@ dispatch_table! { data;
     "AUTO_MODERATION_RULE_UPDATE" => {
         EventKind::AutoModerationRuleUpdate(Box::new(decode_auto_moderation_event(data)?))
     },
-    "CHANNEL_CREATE" => EventKind::ChannelCreate(Box::new(typed(data)?)),
+    "CHANNEL_CREATE" => EventKind::ChannelCreate(Arc::new(typed(data)?)),
     "CHANNEL_DELETE" => EventKind::ChannelDelete(Box::new(typed(data)?)),
     "CHANNEL_INFO" => EventKind::ChannelInfo(decode_channel_info_event(data)?),
     "CHANNEL_PINS_UPDATE" => EventKind::ChannelPinsUpdate(decode_channel_pins_update_event(data)?),
-    "CHANNEL_UPDATE" => EventKind::ChannelUpdate(Box::new(typed(data)?)),
+    "CHANNEL_UPDATE" => EventKind::ChannelUpdate(Arc::new(typed(data)?)),
     "ENTITLEMENT_CREATE" => EventKind::EntitlementCreate(Box::new(typed(data)?)),
     "ENTITLEMENT_DELETE" => EventKind::EntitlementDelete(Box::new(typed(data)?)),
     "ENTITLEMENT_UPDATE" => EventKind::EntitlementUpdate(Box::new(typed(data)?)),
@@ -361,7 +361,7 @@ fn decode_thread_event(data: &str, create: bool) -> Result<ThreadEvent, EventDec
         None
     };
     Ok(ThreadEvent {
-        thread: typed(data)?,
+        thread: Arc::new(typed(data)?),
         newly_created,
     })
 }

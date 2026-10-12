@@ -103,12 +103,16 @@ where
 pub(super) struct CacheStore {
     /// Shared with the GUILD_CREATE events that inserted them.
     pub(super) guilds: HashMap<GuildId, Arc<Guild>>,
-    pub(super) channels: HashMap<ChannelId, Channel>,
+    /// Shared with the GUILD_CREATE, CHANNEL_*, and THREAD_* events that
+    /// inserted them.
+    pub(super) channels: HashMap<ChannelId, Arc<Channel>>,
     /// Shared with the members and messages that carried them.
     pub(super) users: HashMap<UserId, Arc<User>>,
     pub(super) members: HashMap<(GuildId, UserId), Arc<Member>>,
     pub(super) messages: HashMap<(ChannelId, MessageId), Arc<Message>>,
-    pub(super) roles: HashMap<(GuildId, RoleId), Role>,
+    /// The only copy of a cached guild's roles (the cached [`Guild`] keeps
+    /// none), shared with the GUILD_CREATE and GUILD_ROLE_* events.
+    pub(super) roles: HashMap<(GuildId, RoleId), Arc<Role>>,
     pub(super) presences: HashMap<(GuildId, UserId), Arc<Presence>>,
     pub(super) voice_states: HashMap<(GuildId, UserId), VoiceState>,
     pub(super) soundboard_sounds: HashMap<(GuildId, SoundboardSoundId), SoundboardSound>,

@@ -245,7 +245,7 @@ fn perf_fixtures_decode() {
                 let guild = guild.available().expect("an available guild");
                 assert_eq!(guild.members.len(), 1_000);
                 assert_eq!(guild.channels.len(), 200);
-                assert_eq!(guild.guild.roles.len(), 300);
+                assert_eq!(guild.roles.len(), 300);
                 assert_eq!(guild.presences.len(), 1_000);
                 assert_eq!(guild.voice_states.len(), 50);
                 assert_eq!(guild.emojis.len(), 30);

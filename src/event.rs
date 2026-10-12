@@ -107,7 +107,9 @@ pub struct GuildMembersChunkPayload {
 /// Typed Discord API object for `RoleEvent`.
 pub struct RoleEvent {
     pub guild_id: GuildId,
-    pub role: Role,
+    /// Shared with the cache, which stores this `Arc` as it is.
+    #[serde(deserialize_with = "crate::model::shared::arc::deserialize")]
+    pub role: Arc<Role>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -285,7 +287,8 @@ pub struct GuildIntegrationsUpdateEvent {
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `ThreadEvent`.
 pub struct ThreadEvent {
-    pub thread: Channel,
+    /// Shared with the cache, which stores this `Arc` as it is.
+    pub thread: Arc<Channel>,
     /// Set on THREAD_CREATE when the gateway marks the thread as newly
     /// created (as opposed to one the current user was just added to).
     pub newly_created: Option<bool>,
@@ -624,9 +627,9 @@ pub enum EventKind {
     /// GUILD_DELETE.
     GuildDelete(GuildDeletePayload),
     /// CHANNEL_CREATE.
-    ChannelCreate(Box<Channel>),
+    ChannelCreate(Arc<Channel>),
     /// CHANNEL_UPDATE.
-    ChannelUpdate(Box<Channel>),
+    ChannelUpdate(Arc<Channel>),
     /// CHANNEL_DELETE.
     ChannelDelete(Box<Channel>),
     /// GUILD_MEMBER_ADD.

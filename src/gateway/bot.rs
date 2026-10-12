@@ -775,8 +775,12 @@ pub trait EventHandler: Send + Sync + 'static {
                 EventKind::GuildCreate(guild) => self.guild_create(ctx, guild).await,
                 EventKind::GuildUpdate(guild) => self.guild_update(ctx, guild).await,
                 EventKind::GuildDelete(data) => self.guild_delete(ctx, data).await,
-                EventKind::ChannelCreate(channel) => self.channel_create(ctx, channel).await,
-                EventKind::ChannelUpdate(channel) => self.channel_update(ctx, channel).await,
+                EventKind::ChannelCreate(channel) => {
+                    self.channel_create(ctx, Arc::clone(channel)).await;
+                }
+                EventKind::ChannelUpdate(channel) => {
+                    self.channel_update(ctx, Arc::clone(channel)).await;
+                }
                 EventKind::ChannelDelete(channel) => self.channel_delete(ctx, channel).await,
                 EventKind::MemberAdd(payload) => {
                     self.member_add(ctx, payload.guild_id, Arc::clone(&payload.member))
@@ -1002,14 +1006,14 @@ pub trait EventHandler: Send + Sync + 'static {
     fn channel_create(
         &self,
         _ctx: Context,
-        _channel: &crate::model::Channel,
+        _channel: Arc<crate::model::Channel>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
     fn channel_update(
         &self,
         _ctx: Context,
-        _channel: &crate::model::Channel,
+        _channel: Arc<crate::model::Channel>,
     ) -> impl Future<Output = ()> + Send {
         async {}
     }
@@ -2775,7 +2779,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
                 .await;
         }
         EventKind::ThreadCreate(event) | EventKind::ThreadUpdate(event) => {
-            cache.upsert_channel(event.thread.clone()).await;
+            cache.upsert_channel(Arc::clone(&event.thread)).await;
         }
         EventKind::ThreadDelete(event) => {
             cache.remove_channel(event.thread.id).await;
@@ -2793,7 +2797,7 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             cache.remove_guild(data.id).await;
         }
         EventKind::ChannelCreate(channel) | EventKind::ChannelUpdate(channel) => {
-            cache.upsert_channel((**channel).clone()).await;
+            cache.upsert_channel(Arc::clone(channel)).await;
         }
         EventKind::ChannelDelete(channel) => {
             cache.remove_channel(channel.id).await;
@@ -2811,7 +2815,9 @@ async fn apply_cache_updates(cache: &CacheHandle, shard: (u32, u32), event: &Eve
             cache.remove_member(data.guild_id, data.user.id).await;
         }
         EventKind::RoleCreate(event) | EventKind::RoleUpdate(event) => {
-            cache.upsert_role(event.guild_id, event.role.clone()).await;
+            cache
+                .upsert_role(event.guild_id, Arc::clone(&event.role))
+                .await;
         }
         EventKind::RoleDelete(data) => {
             cache.remove_role(data.guild_id, data.role_id).await;

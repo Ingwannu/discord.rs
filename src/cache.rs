@@ -90,12 +90,31 @@ fn clear_store(store: &mut CacheStore) {
     store.last_prune = None;
 }
 
+/// The cached roles of `guild_id`, ordered by position and then id (the
+/// store is a hash map, so its own order means nothing).
+#[cfg(feature = "cache")]
+fn guild_roles(store: &CacheStore, guild_id: GuildId) -> Vec<Role> {
+    let mut roles: Vec<Role> = store
+        .roles
+        .iter()
+        .filter(|((stored_guild_id, _), _)| *stored_guild_id == guild_id)
+        .map(|(_, role)| (**role).clone())
+        .collect();
+    sort_roles(&mut roles);
+    roles
+}
+
+#[cfg(feature = "cache")]
+fn sort_roles(roles: &mut [Role]) {
+    roles.sort_by_key(|role| (role.position, role.id));
+}
+
 /// Stores a guild's roles (keyed by guild and role id).
 #[cfg(feature = "cache")]
-fn insert_roles(store: &mut CacheStore, guild_id: GuildId, roles: &[Role]) {
+fn insert_roles(store: &mut CacheStore, guild_id: GuildId, roles: &[Arc<Role>]) {
     for role in roles {
         let key = (guild_id, role.id);
-        store.roles.insert(key, role.clone());
+        store.roles.insert(key, Arc::clone(role));
         remember_key(&mut store.role_order, key);
     }
 }
@@ -298,13 +317,26 @@ impl CacheHandle {
     pub async fn purge_expired(&self) {}
 
     #[cfg(feature = "cache")]
+    ///
+    /// The guild's `roles` move into the role store (where [`Self::guild`]
+    /// reads them back), so the cached guild never holds a second, stale copy.
     pub async fn upsert_guild(&self, guild: impl Into<Arc<Guild>>) {
-        let guild = guild.into();
+        let mut guild = guild.into();
+        let roles: Vec<Arc<Role>> = if guild.roles.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(&mut Arc::make_mut(&mut guild).roles)
+                .into_iter()
+                .map(Arc::new)
+                .collect()
+        };
         let mut store = self.store.write().await;
         let guild_id = guild.id;
         store.guilds.insert(guild_id, guild);
         remember_key(&mut store.guild_order, guild_id);
+        insert_roles(&mut store, guild_id, &roles);
         enforce_guild_limit(&mut store, &self.config);
+        self.enforce_role_limit(&mut store);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -320,13 +352,14 @@ impl CacheHandle {
     pub async fn remove_guild(&self, _guild_id: GuildId) {}
 
     #[cfg(feature = "cache")]
+    ///
+    /// `roles` holds the guild's cached roles (kept current by GUILD_ROLE_*
+    /// events), ordered by position and then id.
     pub async fn guild(&self, guild_id: GuildId) -> Option<Guild> {
-        self.store
-            .read()
-            .await
-            .guilds
-            .get(&guild_id)
-            .map(|guild| guild.as_ref().clone())
+        let store = self.store.read().await;
+        let mut guild = store.guilds.get(&guild_id)?.as_ref().clone();
+        guild.roles = guild_roles(&store, guild_id);
+        Some(guild)
     }
 
     #[cfg(not(feature = "cache"))]
@@ -336,12 +369,21 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn guilds(&self) -> Vec<Guild> {
-        self.store
-            .read()
-            .await
+        let store = self.store.read().await;
+        let mut roles: std::collections::HashMap<GuildId, Vec<Role>> =
+            std::collections::HashMap::new();
+        for ((guild_id, _), role) in &store.roles {
+            roles.entry(*guild_id).or_default().push((**role).clone());
+        }
+        store
             .guilds
             .values()
-            .map(|guild| guild.as_ref().clone())
+            .map(|guild| {
+                let mut guild = guild.as_ref().clone();
+                guild.roles = roles.remove(&guild.id).unwrap_or_default();
+                sort_roles(&mut guild.roles);
+                guild
+            })
             .collect()
     }
 
@@ -355,7 +397,9 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_channel(&self, channel: Channel) {
+    /// Stores a channel; pass the `Arc` an event holds to share it.
+    pub async fn upsert_channel(&self, channel: impl Into<Arc<Channel>>) {
+        let channel = channel.into();
         let mut store = self.store.write().await;
         let channel_id = channel.id;
         store.channels.insert(channel_id, channel);
@@ -364,14 +408,15 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_channel(&self, _channel: Channel) {}
+    pub async fn upsert_channel(&self, _channel: impl Into<Arc<Channel>>) {}
 
     /// Inserts a channel only when the cache does not already hold one with
     /// the same id, so partial channel objects (for example the stubs
     /// derived from component interactions) never clobber a full channel
     /// received from the gateway.
     #[cfg(feature = "cache")]
-    pub async fn upsert_channel_if_absent(&self, channel: Channel) {
+    pub async fn upsert_channel_if_absent(&self, channel: impl Into<Arc<Channel>>) {
+        let channel = channel.into();
         let mut store = self.store.write().await;
         if store.channels.contains_key(&channel.id) {
             return;
@@ -383,7 +428,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_channel_if_absent(&self, _channel: Channel) {}
+    pub async fn upsert_channel_if_absent(&self, _channel: impl Into<Arc<Channel>>) {}
 
     /// Distributes a GUILD_CREATE into the per-entity stores — guild, roles,
     /// channels, threads, members, users, voice states, presences, emojis,
@@ -403,11 +448,11 @@ impl CacheHandle {
 
         store.guilds.insert(guild_id, Arc::clone(&guild.guild));
         remember_key(&mut store.guild_order, guild_id);
-        insert_roles(&mut store, guild_id, &guild.guild.roles);
+        insert_roles(&mut store, guild_id, &guild.roles);
 
         for channel in guild.channels.iter().chain(guild.threads.iter()) {
             let channel_id = channel.id;
-            store.channels.insert(channel_id, channel.clone());
+            store.channels.insert(channel_id, Arc::clone(channel));
             remember_key(&mut store.channel_order, channel_id);
         }
 
@@ -506,13 +551,16 @@ impl CacheHandle {
     /// GUILD_CREATE-only collections it carries) and refreshes its roles.
     #[cfg(feature = "cache")]
     pub async fn apply_guild_update(&self, guild: &Guild) {
+        let mut stored = guild.without_create_collections();
+        let roles: Vec<Arc<Role>> = std::mem::take(&mut stored.roles)
+            .into_iter()
+            .map(Arc::new)
+            .collect();
         let mut store = self.store.write().await;
         let guild_id = guild.id;
-        store
-            .guilds
-            .insert(guild_id, Arc::new(guild.without_create_collections()));
+        store.guilds.insert(guild_id, Arc::new(stored));
         remember_key(&mut store.guild_order, guild_id);
-        insert_roles(&mut store, guild_id, &guild.roles);
+        insert_roles(&mut store, guild_id, &roles);
         enforce_guild_limit(&mut store, &self.config);
         self.enforce_role_limit(&mut store);
     }
@@ -609,12 +657,34 @@ impl CacheHandle {
 
     #[cfg(feature = "cache")]
     pub async fn channel(&self, channel_id: ChannelId) -> Option<Channel> {
+        self.store
+            .read()
+            .await
+            .channels
+            .get(&channel_id)
+            .map(|channel| (**channel).clone())
+    }
+
+    /// The cached channel as the shared `Arc` (no copy).
+    #[cfg(feature = "cache")]
+    pub async fn channel_arc(&self, channel_id: ChannelId) -> Option<Arc<Channel>> {
         self.store.read().await.channels.get(&channel_id).cloned()
+    }
+
+    #[cfg(not(feature = "cache"))]
+    pub async fn channel_arc(&self, _channel_id: ChannelId) -> Option<Arc<Channel>> {
+        None
     }
 
     #[cfg(feature = "cache")]
     pub async fn channels(&self) -> Vec<Channel> {
-        self.store.read().await.channels.values().cloned().collect()
+        self.store
+            .read()
+            .await
+            .channels
+            .values()
+            .map(|channel| (**channel).clone())
+            .collect()
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1029,7 +1099,9 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    pub async fn upsert_role(&self, guild_id: GuildId, role: Role) {
+    /// Stores a role; pass the `Arc` an event holds to share it.
+    pub async fn upsert_role(&self, guild_id: GuildId, role: impl Into<Arc<Role>>) {
+        let role = role.into();
         let mut store = self.store.write().await;
         let key = (guild_id, role.id);
         store.roles.insert(key, role);
@@ -1041,7 +1113,7 @@ impl CacheHandle {
     }
 
     #[cfg(not(feature = "cache"))]
-    pub async fn upsert_role(&self, _guild_id: GuildId, _role: Role) {}
+    pub async fn upsert_role(&self, _guild_id: GuildId, _role: impl Into<Arc<Role>>) {}
 
     #[cfg(feature = "cache")]
     pub async fn remove_role(&self, guild_id: GuildId, role_id: RoleId) {
@@ -1067,7 +1139,7 @@ impl CacheHandle {
             .roles
             .iter()
             .filter(|((stored_guild_id, _), _)| *stored_guild_id == guild_id)
-            .map(|(_, role)| role.clone())
+            .map(|(_, role)| (**role).clone())
             .collect()
     }
 
@@ -1078,7 +1150,7 @@ impl CacheHandle {
             .await
             .roles
             .get(&(guild_id, role_id))
-            .cloned()
+            .map(|role| (**role).clone())
     }
 
     #[cfg(not(feature = "cache"))]

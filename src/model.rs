@@ -39,6 +39,7 @@ mod poll;
 mod presence;
 mod role;
 mod scheduled_event;
+pub(crate) mod shared;
 mod thread;
 mod user;
 mod voice;

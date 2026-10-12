@@ -54,45 +54,6 @@ pub struct UserPrimaryGuild {
     pub badge: Option<String>,
 }
 
-/// Serde for the `Option<Arc<User>>` fields ([`Member::user`](super::Member),
-/// [`Message::author`](super::Message)): exactly the JSON of `Option<User>`.
-///
-/// [Decision Log] Shared users
-/// - Purpose: the cache's user store and the members and messages it keeps
-///   hold one allocation per user instead of a copy each (member to user
-///   copies were most of a large GUILD_CREATE's cache cost).
-/// - Constraint: serde implements `Arc<T>` only with its `rc` feature, a
-///   crate-wide switch in `Cargo.toml`.
-/// - Alternatives: (1) enable `rc`; (2) keep `User` inline and wrap a copy in
-///   the store; (3) these two functions as `#[serde(with)]`.
-/// - Chosen: (3). It reuses `Option<User>`'s decoder unchanged (the same
-///   instances every reader already has), then moves the user into an `Arc`.
-/// - Why: (1) changes how every `Arc` in a downstream build serializes for
-///   the sake of two fields. (2) keeps the copy this change exists to remove.
-/// - Trade-offs: one allocation per decoded user for the `Arc` (it replaces
-///   the cache's copy of the strings); `Member` and `Message` shrink by
-///   400 bytes each.
-pub(crate) mod shared_user {
-    use std::sync::Arc;
-
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use super::User;
-
-    pub(crate) fn serialize<S: Serializer>(
-        user: &Option<Arc<User>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        user.as_deref().serialize(serializer)
-    }
-
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<Arc<User>>, D::Error> {
-        Option::<User>::deserialize(deserializer).map(|user| user.map(Arc::new))
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// How a user's or member's name is displayed: font, effect, and colors
 /// (Discord docs: Display Name Styles Object, documented in
