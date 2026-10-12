@@ -302,8 +302,12 @@ impl<'a> Fields<'a> {
     /// `key` as a [`Patch`]: absent is `Missing`; a value that is not a `T`
     /// (`null` included) fails the event, as the derived decoders do.
     fn patch<T: DeserializeOwned>(&self, key: &str) -> Result<Patch<T>, EventDecodeError> {
+        // A `RawValue` is exactly one value, so no end check is needed (and
+        // `from_str` would add one wrapper instance per type for it).
         match self.get(key) {
-            Some(value) => Ok(Patch::Value(serde_json::from_str(value.get())?)),
+            Some(value) => Ok(Patch::Value(T::deserialize(
+                &mut serde_json::Deserializer::from_str(value.get()),
+            )?)),
             None => Ok(Patch::Missing),
         }
     }
@@ -314,9 +318,9 @@ impl<'a> Fields<'a> {
         key: &str,
     ) -> Result<NullablePatch<T>, EventDecodeError> {
         match self.get(key) {
-            Some(value) => Ok(Patch::Value(Nullable::from(serde_json::from_str::<
-                Option<T>,
-            >(value.get())?))),
+            Some(value) => Ok(Patch::Value(Nullable::from(Option::<T>::deserialize(
+                &mut serde_json::Deserializer::from_str(value.get()),
+            )?))),
             None => Ok(Patch::Missing),
         }
     }

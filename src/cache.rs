@@ -90,23 +90,32 @@ fn clear_store(store: &mut CacheStore) {
     store.last_prune = None;
 }
 
-/// The cached roles of `guild_id`, ordered by position and then id (the
-/// store is a hash map, so its own order means nothing).
+/// The cached roles of `guild` (every guild when `None`), ordered by guild,
+/// position, and id: the store is a hash map, so its own order means
+/// nothing. Non-generic and sorting references, so `guild()` and `guilds()`
+/// share one sort.
 #[cfg(feature = "cache")]
-fn guild_roles(store: &CacheStore, guild_id: GuildId) -> Vec<Role> {
-    let mut roles: Vec<Role> = store
+// Compiled where called (like a generic), so builds that never call it
+// (no gateway) do not compile it.
+#[inline]
+fn ordered_roles(store: &CacheStore, guild: Option<GuildId>) -> Vec<(GuildId, &Arc<Role>)> {
+    let mut roles: Vec<(GuildId, &Arc<Role>)> = store
         .roles
         .iter()
-        .filter(|((stored_guild_id, _), _)| *stored_guild_id == guild_id)
-        .map(|(_, role)| (**role).clone())
+        .filter(|((guild_id, _), _)| guild.is_none_or(|wanted| *guild_id == wanted))
+        .map(|((guild_id, _), role)| (*guild_id, role))
         .collect();
-    sort_roles(&mut roles);
+    roles.sort_unstable_by_key(|(guild_id, role)| (*guild_id, role.position, role.id));
     roles
 }
 
+/// Clones ordered roles out of the store.
 #[cfg(feature = "cache")]
-fn sort_roles(roles: &mut [Role]) {
-    roles.sort_by_key(|role| (role.position, role.id));
+// Compiled where called (like a generic), so builds that never call it
+// (no gateway) do not compile it.
+#[inline]
+fn cloned_roles(roles: &[(GuildId, &Arc<Role>)]) -> Vec<Role> {
+    roles.iter().map(|(_, role)| (***role).clone()).collect()
 }
 
 /// Stores a guild's roles (keyed by guild and role id).
@@ -358,7 +367,7 @@ impl CacheHandle {
     pub async fn guild(&self, guild_id: GuildId) -> Option<Guild> {
         let store = self.store.read().await;
         let mut guild = store.guilds.get(&guild_id)?.as_ref().clone();
-        guild.roles = guild_roles(&store, guild_id);
+        guild.roles = cloned_roles(&ordered_roles(&store, Some(guild_id)));
         Some(guild)
     }
 
@@ -370,18 +379,17 @@ impl CacheHandle {
     #[cfg(feature = "cache")]
     pub async fn guilds(&self) -> Vec<Guild> {
         let store = self.store.read().await;
-        let mut roles: std::collections::HashMap<GuildId, Vec<Role>> =
-            std::collections::HashMap::new();
-        for ((guild_id, _), role) in &store.roles {
-            roles.entry(*guild_id).or_default().push((**role).clone());
-        }
+        // One pass over the role store for every guild, then a binary
+        // search per guild for its run of roles.
+        let roles = ordered_roles(&store, None);
         store
             .guilds
             .values()
             .map(|guild| {
                 let mut guild = guild.as_ref().clone();
-                guild.roles = roles.remove(&guild.id).unwrap_or_default();
-                sort_roles(&mut guild.roles);
+                let start = roles.partition_point(|(guild_id, _)| *guild_id < guild.id);
+                let end = roles.partition_point(|(guild_id, _)| *guild_id <= guild.id);
+                guild.roles = cloned_roles(&roles[start..end]);
                 guild
             })
             .collect()
@@ -564,20 +572,24 @@ impl CacheHandle {
         remember_key(&mut store.guild_order, guild_id);
         // GUILD_UPDATE's lists are complete: they replace what is cached.
         if let Patch::Value(roles) = &update.roles {
-            store
+            let stale: Vec<(GuildId, RoleId)> = store
                 .roles
-                .retain(|(stored_guild_id, _), _| *stored_guild_id != guild_id);
-            store
-                .role_order
-                .retain(|(stored_guild_id, _)| *stored_guild_id != guild_id);
+                .keys()
+                .filter(|(stored_guild_id, _)| *stored_guild_id == guild_id)
+                .copied()
+                .collect();
+            for key in &stale {
+                store.roles.remove(key);
+                store.role_order.remove(key);
+            }
             insert_roles(&mut store, guild_id, roles);
             self.enforce_role_limit(&mut store);
         }
         if let Patch::Value(emojis) = &update.emojis {
-            self.replace_emojis_locked(&mut store, guild_id, emojis.iter().cloned());
+            self.replace_emojis_locked(&mut store, guild_id, emojis.clone());
         }
         if let Patch::Value(stickers) = &update.stickers {
-            self.replace_stickers_locked(&mut store, guild_id, stickers.iter().cloned());
+            self.replace_stickers_locked(&mut store, guild_id, stickers.clone());
         }
         Some(merged)
     }
@@ -753,6 +765,9 @@ impl CacheHandle {
     /// [`Self::apply_partial_user`] under a held lock; returns the cached user
     /// after the patch, if there is one.
     #[cfg(feature = "cache")]
+    // Compiled where called (like a generic), so builds that never call it
+    // (no gateway) do not compile it.
+    #[inline]
     fn patch_user_locked(&self, store: &mut CacheStore, user: &PartialUser) -> Option<Arc<User>> {
         if let Some(cached) = store.users.get_mut(&user.id) {
             // An id-only partial changes nothing; do not copy a shared user.
@@ -1547,12 +1562,10 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
-    fn replace_emojis_locked(
-        &self,
-        store: &mut CacheStore,
-        guild_id: GuildId,
-        emojis: impl IntoIterator<Item = Emoji>,
-    ) {
+    // Compiled where called (like a generic), so builds that never call it
+    // (no gateway) do not compile it.
+    #[inline]
+    fn replace_emojis_locked(&self, store: &mut CacheStore, guild_id: GuildId, emojis: Vec<Emoji>) {
         if !self.config.cache_emojis {
             return;
         }
@@ -1620,11 +1633,14 @@ impl CacheHandle {
     }
 
     #[cfg(feature = "cache")]
+    // Compiled where called (like a generic), so builds that never call it
+    // (no gateway) do not compile it.
+    #[inline]
     fn replace_stickers_locked(
         &self,
         store: &mut CacheStore,
         guild_id: GuildId,
-        stickers: impl IntoIterator<Item = Sticker>,
+        stickers: Vec<Sticker>,
     ) {
         if !self.config.cache_stickers {
             return;

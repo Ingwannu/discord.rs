@@ -1265,103 +1265,212 @@ impl From<Guild> for GuildUpdate {
 /// is nullable), mirroring [`Member`]. The cache merges an update into the
 /// member it holds and never stores one on its own: a member it does not
 /// hold stays uncached, because the omitted fields are unknown.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 #[non_exhaustive]
 pub struct MemberUpdate {
     pub guild_id: GuildId,
     /// The member's user, sent in full; shared with the cache's user store.
-    #[serde(with = "super::shared::arc")]
+    #[serde(serialize_with = "super::shared::arc::serialize")]
     pub user: Arc<User>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub roles: Patch<Vec<RoleId>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub nick: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub joined_at: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub permissions: NullablePatch<Permissions>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub deaf: NullablePatch<bool>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub mute: NullablePatch<bool>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub avatar: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub banner: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub premium_since: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub pending: NullablePatch<bool>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub communication_disabled_until: NullablePatch<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub avatar_decoration_data: NullablePatch<AvatarDecorationData>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub collectibles: NullablePatch<UserCollectibles>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub flags: NullablePatch<u64>,
-    #[serde(
-        default,
-        skip_serializing_if = "Patch::is_missing",
-        deserialize_with = "present_nullable"
-    )]
+    #[serde(skip_serializing_if = "Patch::is_missing")]
     pub display_name_styles: NullablePatch<Box<DisplayNameStyles>>,
+}
+
+/// Hand-written instead of derived: a derived decoder also compiles the
+/// positional (JSON array) form, dead for a gateway object, and one
+/// `deserialize_with` wrapper per field. This one reads the map only and
+/// calls `next_value::<T>` / `next_value::<Option<T>>` directly, the instances
+/// [`Member`]'s own decoder already has. Same rules as the derive: a field
+/// sent twice is an error, unknown fields are skipped, `guild_id` and `user`
+/// are required.
+impl<'de> Deserialize<'de> for MemberUpdate {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(MemberUpdateVisitor)
+    }
+}
+
+struct MemberUpdateVisitor;
+
+impl<'de> Visitor<'de> for MemberUpdateVisitor {
+    type Value = MemberUpdate;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a GUILD_MEMBER_UPDATE object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<MemberUpdate, A::Error> {
+        fn sent<T, E: de::Error>(
+            slot: &mut Patch<T>,
+            name: &'static str,
+            value: Patch<T>,
+        ) -> Result<(), E> {
+            if !slot.is_missing() {
+                return Err(E::duplicate_field(name));
+            }
+            *slot = value;
+            Ok(())
+        }
+        let mut guild_id: Option<GuildId> = None;
+        let mut user: Option<User> = None;
+        let mut roles: Patch<Vec<RoleId>> = Patch::Missing;
+        let mut nick: NullablePatch<String> = Patch::Missing;
+        let mut joined_at: NullablePatch<String> = Patch::Missing;
+        let mut permissions: NullablePatch<Permissions> = Patch::Missing;
+        let mut deaf: NullablePatch<bool> = Patch::Missing;
+        let mut mute: NullablePatch<bool> = Patch::Missing;
+        let mut avatar: NullablePatch<String> = Patch::Missing;
+        let mut banner: NullablePatch<String> = Patch::Missing;
+        let mut premium_since: NullablePatch<String> = Patch::Missing;
+        let mut pending: NullablePatch<bool> = Patch::Missing;
+        let mut communication_disabled_until: NullablePatch<String> = Patch::Missing;
+        let mut avatar_decoration_data: NullablePatch<AvatarDecorationData> = Patch::Missing;
+        let mut collectibles: NullablePatch<UserCollectibles> = Patch::Missing;
+        let mut flags: NullablePatch<u64> = Patch::Missing;
+        let mut display_name_styles: NullablePatch<Box<DisplayNameStyles>> = Patch::Missing;
+        while let Some(BorrowedKey(key)) = map.next_key()? {
+            match key.as_ref() {
+                "guild_id" => {
+                    if guild_id.is_some() {
+                        return Err(de::Error::duplicate_field("guild_id"));
+                    }
+                    guild_id = Some(map.next_value()?);
+                }
+                "user" => {
+                    if user.is_some() {
+                        return Err(de::Error::duplicate_field("user"));
+                    }
+                    user = Some(map.next_value()?);
+                }
+                "roles" => sent(&mut roles, "roles", Patch::Value(map.next_value()?))?,
+                "nick" => sent(
+                    &mut nick,
+                    "nick",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "joined_at" => sent(
+                    &mut joined_at,
+                    "joined_at",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "permissions" => sent(
+                    &mut permissions,
+                    "permissions",
+                    Patch::Value(Nullable::from(map.next_value::<Option<Permissions>>()?)),
+                )?,
+                "deaf" => sent(
+                    &mut deaf,
+                    "deaf",
+                    Patch::Value(Nullable::from(map.next_value::<Option<bool>>()?)),
+                )?,
+                "mute" => sent(
+                    &mut mute,
+                    "mute",
+                    Patch::Value(Nullable::from(map.next_value::<Option<bool>>()?)),
+                )?,
+                "avatar" => sent(
+                    &mut avatar,
+                    "avatar",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "banner" => sent(
+                    &mut banner,
+                    "banner",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "premium_since" => sent(
+                    &mut premium_since,
+                    "premium_since",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "pending" => sent(
+                    &mut pending,
+                    "pending",
+                    Patch::Value(Nullable::from(map.next_value::<Option<bool>>()?)),
+                )?,
+                "communication_disabled_until" => sent(
+                    &mut communication_disabled_until,
+                    "communication_disabled_until",
+                    Patch::Value(Nullable::from(map.next_value::<Option<String>>()?)),
+                )?,
+                "avatar_decoration_data" => sent(
+                    &mut avatar_decoration_data,
+                    "avatar_decoration_data",
+                    Patch::Value(Nullable::from(
+                        map.next_value::<Option<AvatarDecorationData>>()?,
+                    )),
+                )?,
+                "collectibles" => sent(
+                    &mut collectibles,
+                    "collectibles",
+                    Patch::Value(Nullable::from(
+                        map.next_value::<Option<UserCollectibles>>()?,
+                    )),
+                )?,
+                "flags" => sent(
+                    &mut flags,
+                    "flags",
+                    Patch::Value(Nullable::from(map.next_value::<Option<u64>>()?)),
+                )?,
+                "display_name_styles" => sent(
+                    &mut display_name_styles,
+                    "display_name_styles",
+                    Patch::Value(Nullable::from(
+                        map.next_value::<Option<Box<DisplayNameStyles>>>()?,
+                    )),
+                )?,
+                _ => {
+                    map.next_value::<de::IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(MemberUpdate {
+            guild_id: guild_id.ok_or_else(|| de::Error::missing_field("guild_id"))?,
+            user: Arc::new(user.ok_or_else(|| de::Error::missing_field("user"))?),
+            roles,
+            nick,
+            joined_at,
+            permissions,
+            deaf,
+            mute,
+            avatar,
+            banner,
+            premium_since,
+            pending,
+            communication_disabled_until,
+            avatar_decoration_data,
+            collectibles,
+            flags,
+            display_name_styles,
+        })
+    }
 }
 
 impl MemberUpdate {

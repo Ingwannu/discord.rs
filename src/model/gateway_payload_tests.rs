@@ -481,3 +481,43 @@ fn guild_updates_apply_sent_fields_and_lists_and_refuse_other_guilds() {
     assert!(guild.roles.is_empty());
     assert_eq!(guild.member_count, Some(7));
 }
+
+#[test]
+fn member_update_decoder_follows_the_derived_rules() {
+    let ok: MemberUpdate = serde_json::from_str(
+        r#"{"guild_id":"9","user":{"id":"5","username":"u"},"roles":[],"unknown":[1],"nick":null}"#,
+    )
+    .unwrap();
+    assert!(matches!(ok.nick, Patch::Value(Nullable::Null)));
+    assert!(ok.avatar.is_missing());
+    for (text, message) in [
+        (
+            r#"{"user":{"id":"5","username":"u"}}"#,
+            "missing field `guild_id`",
+        ),
+        (r#"{"guild_id":"9"}"#, "missing field `user`"),
+        (
+            r#"{"guild_id":"9","user":{"id":"5","username":"u"},"nick":"a","nick":"b"}"#,
+            "duplicate field `nick`",
+        ),
+        (
+            r#"{"guild_id":"9","guild_id":"9","user":{"id":"5","username":"u"}}"#,
+            "duplicate field `guild_id`",
+        ),
+        (
+            r#"["9",{"id":"5","username":"u"}]"#,
+            "invalid type: sequence",
+        ),
+    ] {
+        let error = serde_json::from_str::<MemberUpdate>(text)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(message), "{text}: {error}");
+    }
+    // Serializes back without the fields that were not sent.
+    let written = serde_json::to_value(&ok).unwrap();
+    assert_eq!(
+        written,
+        json!({ "guild_id": "9", "user": { "id": "5", "username": "u" }, "roles": [], "nick": null })
+    );
+}
