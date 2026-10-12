@@ -8743,6 +8743,75 @@ fn raw_request_constructors_keep_their_method_and_path() {
     }
 }
 
+#[tokio::test]
+async fn raw_responses_are_decoded_unless_discarded() {
+    let connections = || PlannedResponse::json(StatusCode::OK, json!([{ "id": "1" }]));
+    let (base_url, captured, server) = spawn_test_server(vec![
+        connections(),
+        connections(),
+        connections(),
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(
+            StatusCode::NOT_FOUND,
+            json!({ "message": "Unknown Channel", "code": 10003 }),
+        ),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("raw-token", 123, base_url);
+    let connections = || RawRequest::get("/users/@me/connections").bearer("user-access");
+
+    // `()` decodes the body, so it fails on an array that Discord sent with
+    // a 200; `IgnoredAny` accepts any JSON; `request_discard` decodes nothing.
+    assert!(client.request::<()>(connections()).await.is_err());
+    let _: serde::de::IgnoredAny = client.request(connections()).await.unwrap();
+    client.request_discard(connections()).await.unwrap();
+    client
+        .request_discard(RawRequest::put("/channels/1/pins/2"))
+        .await
+        .unwrap();
+    // HTTP errors still surface.
+    let error = client
+        .request_discard(RawRequest::delete("/channels/9"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            DiscordError::Api {
+                status: 404,
+                code: Some(10003),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    server.await.unwrap();
+    let sent = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.path))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sent,
+        [
+            "GET /users/@me/connections",
+            "GET /users/@me/connections",
+            "GET /users/@me/connections",
+            "PUT /channels/1/pins/2",
+            "DELETE /channels/9",
+        ]
+    );
+
+    // A bad bearer token fails before anything is sent.
+    let offline = RestClient::new_with_base_url("raw-token", 123, "http://127.0.0.1:9");
+    let error = offline
+        .request_discard(RawRequest::get("/users/@me").bearer(" "))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("bearer_token"), "{error}");
+}
+
 #[test]
 fn file_bodies_reject_blank_names_before_sending() {
     use super::body::{

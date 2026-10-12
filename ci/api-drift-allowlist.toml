@@ -32,9 +32,9 @@ rest_sources = ["src/http.rs", "src/http/**/*.rs", "src/oauth2.rs"]
 rest_sources_exclude = ["src/http/**/tests.rs", "src/http/**/tests/*"]
 event_sources = ["src/event/decode.rs"]
 event_name_pattern = '"([A-Z][A-Z0-9_]+)"\s*(?:=>|\|)'
-# The raw escape hatch (`RestClient::request(RawRequest)`): any method and
-# path the caller chooses.
-non_endpoint_functions = ["request"]
+# The raw escape hatch (`RestClient::request` / `request_discard` with a
+# `RawRequest`): any method and path the caller chooses.
+non_endpoint_functions = ["request", "request_discard"]
 direct_method_files = ["src/http.rs", "src/http/routes.rs", "src/http/paths.rs", "src/http/raw.rs"]
 # Floors well below today's counts (docs 234 routes / 82 events, crate 240
 # distinct manifest routes / 79 events). Falling under one means the extractor

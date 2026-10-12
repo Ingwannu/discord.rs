@@ -46,7 +46,7 @@ Every method takes a concrete request type and returns a typed model (3.0). For 
 
 ## Raw Requests (`RawRequest`, 3.0)
 
-`RestClient::request::<T>(RawRequest)` sends any method and path through the same transport as the typed methods: route gates, rate limits, `with_reason`, retries, and token redaction in errors and logs. `T` is any `DeserializeOwned` type (`serde_json::Value` for untyped JSON, `()` to ignore the body).
+`RestClient::request::<T>(RawRequest)` sends any method and path through the same transport as the typed methods: route gates, rate limits, `with_reason`, retries, and token redaction in errors and logs. `T` is any `DeserializeOwned` type (`serde_json::Value` for untyped JSON). The body is always decoded, so `()` accepts only an empty or `null` body; to ignore the response use `request_discard(RawRequest)`, which never decodes it (a mutation Discord applied is not reported as failed because its body did not match), or `serde::de::IgnoredAny` to require valid JSON of any shape.
 
 ```rust
 use discordrs::RawRequest;
@@ -56,9 +56,10 @@ let channel: Value = rest.request(RawRequest::get("/channels/123")).await?;
 let created: Value = rest
     .request(RawRequest::post("/channels/123/messages").json(&json!({ "content": "hi" })))
     .await?;
-let _: () = rest
+let connections: Vec<Value> = rest
     .request(RawRequest::get("/users/@me/connections").bearer(&access_token))
     .await?;
+rest.request_discard(RawRequest::put("/channels/123/pins/456")).await?;
 ```
 
 `json(&body)` encodes once when it is called (an encoding error is returned by `request` before anything is sent), `json_bytes(bytes)` sends pre-encoded JSON, and `multipart(&payload, &files)` sends `payload_json` plus `files[n]`. Two rules are stricter than for typed methods, because the client cannot tell what a raw request does: a POST or PATCH is never replayed after an ambiguous failure, even with `enforce_nonce`, unless `retry_non_idempotent_requests(true)` is set; and the `Authorization` header follows the path (the bot token, except on `/webhooks/{id}/{token}…` and `/interactions/…`) unless `bearer(...)` or `without_authorization()` chooses. `Debug` shows only the method and the token-redacted path.

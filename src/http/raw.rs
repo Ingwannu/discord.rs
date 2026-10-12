@@ -9,8 +9,8 @@ use serde::Serialize;
 
 use super::body::{encode_json, EncodedBody, RequestBody, NO_BODY};
 use super::{
-    decode_response, validate_authorization_token, FileAttachment, RequestAuthorization,
-    RestClient, Target,
+    decode_response, validate_authorization_token, FileAttachment, RawResponse,
+    RequestAuthorization, RestClient, Target,
 };
 use crate::error::DiscordError;
 
@@ -159,16 +159,43 @@ impl std::fmt::Debug for RawRequest<'_> {
 }
 
 impl RestClient {
-    /// Sends a [`RawRequest`] and decodes the response into `T`
-    /// (`serde_json::Value` for untyped JSON, `()` to discard it).
+    /// Sends a [`RawRequest`] and decodes the JSON response into `T`
+    /// (`serde_json::Value` for untyped JSON).
     ///
-    /// An empty body decodes as JSON `null` and a non-JSON body as a JSON
-    /// string, as for typed endpoints. See [`RawRequest`] for how retries
-    /// and authorization differ from typed routes.
+    /// The body is always decoded: an empty body reads as JSON `null` and a
+    /// non-JSON body as a JSON string, as for typed endpoints. So `T = ()`
+    /// accepts only an empty or `null` body; to ignore the response use
+    /// [`Self::request_discard`], or `serde::de::IgnoredAny` to require
+    /// valid JSON of any shape. See [`RawRequest`] for how retries and
+    /// authorization differ from typed routes.
     pub async fn request<T: DeserializeOwned>(
         &self,
         request: RawRequest<'_>,
     ) -> Result<T, DiscordError> {
+        decode_response(self.send_raw(request).await)
+    }
+
+    /// Sends a [`RawRequest`] and ignores the response body. Errors are the
+    /// transport's (HTTP status, rate limits, network); the body of a
+    /// successful response is never decoded, so a mutation Discord applied
+    /// is not reported as failed because its response did not match a type.
+    ///
+    /// ```no_run
+    /// # async fn demo(client: discordrs::RestClient) -> Result<(), discordrs::DiscordError> {
+    /// use discordrs::RawRequest;
+    ///
+    /// client
+    ///     .request_discard(RawRequest::put("/channels/123/pins/456"))
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub async fn request_discard(&self, request: RawRequest<'_>) -> Result<(), DiscordError> {
+        self.send_raw(request).await.map(RawResponse::discard)
+    }
+
+    /// The non-generic part of [`Self::request`] and
+    /// [`Self::request_discard`].
+    async fn send_raw(&self, request: RawRequest<'_>) -> Result<RawResponse, DiscordError> {
         let RawRequest {
             method,
             path,
@@ -176,19 +203,13 @@ impl RestClient {
             authorization,
         } = request;
         let authorization = match authorization {
-            RawAuthorization::Path => Ok(RequestAuthorization::Auto),
-            RawAuthorization::Bearer(token) => validate_authorization_token("bearer_token", token)
-                .map(RequestAuthorization::Bearer),
-            RawAuthorization::None => Ok(RequestAuthorization::None),
+            RawAuthorization::Path => RequestAuthorization::Auto,
+            RawAuthorization::Bearer(token) => {
+                RequestAuthorization::Bearer(validate_authorization_token("bearer_token", token)?)
+            }
+            RawAuthorization::None => RequestAuthorization::None,
         };
-        // `match` rather than `?`: one suspend point, no early return per `T`
-        // (see the shim Decision Log in http.rs).
-        match authorization {
-            Ok(authorization) => decode_response(
-                self.execute(Target::Raw(&method, authorization), &path, body)
-                    .await,
-            ),
-            Err(error) => Err(error),
-        }
+        self.execute(Target::Raw(&method, authorization), &path, body)
+            .await
     }
 }

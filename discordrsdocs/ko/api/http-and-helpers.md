@@ -27,7 +27,7 @@
 
 ## 원시 요청 (`RawRequest`, 3.0)
 
-`RestClient::request::<T>(RawRequest)`는 임의의 메서드와 경로를 타입 메서드와 같은 전송 계층(route 게이트, rate limit, `with_reason`, 재시도, 오류·로그의 토큰 가리기)으로 보냅니다. `T`는 `DeserializeOwned`면 무엇이든 됩니다(타입 없는 JSON은 `serde_json::Value`, 본문을 버리려면 `()`).
+`RestClient::request::<T>(RawRequest)`는 임의의 메서드와 경로를 타입 메서드와 같은 전송 계층(route 게이트, rate limit, `with_reason`, 재시도, 오류·로그의 토큰 가리기)으로 보냅니다. `T`는 `DeserializeOwned`면 무엇이든 됩니다(타입 없는 JSON은 `serde_json::Value`). 본문은 항상 디코딩하므로 `()`는 빈 본문이나 `null`만 받습니다. 응답을 버리려면 본문을 디코딩하지 않는 `request_discard(RawRequest)`를 쓰고(Discord가 적용한 변경이 본문 모양 때문에 실패로 보고되지 않습니다), 모양과 무관하게 올바른 JSON만 요구하려면 `serde::de::IgnoredAny`를 쓰세요.
 
 ```rust
 use discordrs::RawRequest;
@@ -37,6 +37,7 @@ let channel: Value = rest.request(RawRequest::get("/channels/123")).await?;
 let created: Value = rest
     .request(RawRequest::post("/channels/123/messages").json(&json!({ "content": "hi" })))
     .await?;
+rest.request_discard(RawRequest::put("/channels/123/pins/456")).await?;
 ```
 
 `json(&body)`는 호출할 때 한 번 인코딩하고(인코딩 오류는 아무것도 보내기 전에 `request`가 돌려줍니다), `json_bytes(bytes)`는 미리 인코딩한 JSON을, `multipart(&payload, &files)`는 `payload_json`과 `files[n]`을 보냅니다. 클라이언트가 원시 요청의 의미를 알 수 없으므로 두 가지는 타입 메서드보다 보수적입니다. POST·PATCH는 `enforce_nonce`가 있어도 모호한 실패 뒤에 다시 보내지 않고(`retry_non_idempotent_requests(true)`일 때만), `Authorization` 헤더는 `bearer(...)`나 `without_authorization()`로 고르지 않으면 경로를 따릅니다(봇 토큰, 단 `/webhooks/{id}/{token}…`과 `/interactions/…`는 헤더 없음). `Debug`는 메서드와 토큰을 가린 경로만 보여 줍니다.
