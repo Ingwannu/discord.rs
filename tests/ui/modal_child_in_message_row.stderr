@@ -1,0 +1,73 @@
+error[E0277]: the trait bound `discordrs::request::Button: From<discordrs::request::TextInput>` is not satisfied
+ --> tests/ui/modal_child_in_message_row.rs:9:48
+  |
+9 |     let _buttons = ButtonRow::new().add_button(TextInput::short("name"));
+  |                                     ---------- ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<discordrs::request::TextInput>` is not implemented for `discordrs::request::Button`
+  |                                     |
+  |                                     required by a bound introduced by this call
+  |
+  = help: `discordrs::request::Button` implements trait `From<T>`:
+            From<CustomButton>
+            From<CustomButtonBuilder>
+            From<LinkButton>
+            From<LinkButtonBuilder>
+            From<PremiumButton>
+            From<PremiumButtonBuilder>
+  = note: required for `discordrs::request::TextInput` to implement `Into<discordrs::request::Button>`
+note: required by a bound in `ButtonRow::add_button`
+ --> src/request/component.rs
+  |
+  |     pub fn add_button(mut self, button: impl Into<Button>) -> Self {
+  |                                              ^^^^^^^^^^^^ required by this bound in `ButtonRow::add_button`
+
+error[E0277]: the trait bound `SelectMenu: From<discordrs::request::TextInput>` is not satisfied
+  --> tests/ui/modal_child_in_message_row.rs:10:34
+   |
+10 |     let _select = SelectRow::new(TextInput::short("name"));
+   |                   -------------- ^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<discordrs::request::TextInput>` is not implemented for `SelectMenu`
+   |                   |
+   |                   required by a bound introduced by this call
+   |
+   = help: `SelectMenu` implements trait `From<T>`:
+             From<ChannelSelectBuilder>
+             From<MentionableSelectBuilder>
+             From<RoleSelectBuilder>
+             From<StringSelectBuilder>
+             From<UserSelectBuilder>
+             From<discordrs::request::ChannelSelect>
+             From<discordrs::request::MentionableSelect>
+             From<discordrs::request::RoleSelect>
+             From<discordrs::request::StringSelect>
+             From<discordrs::request::UserSelect>
+   = note: required for `discordrs::request::TextInput` to implement `Into<SelectMenu>`
+note: required by a bound in `SelectRow::new`
+  --> src/request/component.rs
+   |
+   |     pub fn new(select: impl Into<SelectMenu>) -> Self {
+   |                             ^^^^^^^^^^^^^^^^ required by this bound in `SelectRow::new`
+
+error[E0277]: the trait bound `SelectMenu: From<discordrs::request::Label>` is not satisfied
+  --> tests/ui/modal_child_in_message_row.rs:11:33
+   |
+11 |     let _label = SelectRow::new(Label::new("Agree", Checkbox::new("agree")));
+   |                  -------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<discordrs::request::Label>` is not implemented for `SelectMenu`
+   |                  |
+   |                  required by a bound introduced by this call
+   |
+   = help: `SelectMenu` implements trait `From<T>`:
+             From<ChannelSelectBuilder>
+             From<MentionableSelectBuilder>
+             From<RoleSelectBuilder>
+             From<StringSelectBuilder>
+             From<UserSelectBuilder>
+             From<discordrs::request::ChannelSelect>
+             From<discordrs::request::MentionableSelect>
+             From<discordrs::request::RoleSelect>
+             From<discordrs::request::StringSelect>
+             From<discordrs::request::UserSelect>
+   = note: required for `discordrs::request::Label` to implement `Into<SelectMenu>`
+note: required by a bound in `SelectRow::new`
+  --> src/request/component.rs
+   |
+   |     pub fn new(select: impl Into<SelectMenu>) -> Self {
+   |                             ^^^^^^^^^^^^^^^^ required by this bound in `SelectRow::new`

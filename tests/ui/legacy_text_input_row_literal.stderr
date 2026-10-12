@@ -1,0 +1,16 @@
+error[E0639]: cannot create non-exhaustive struct using struct expression
+  --> tests/ui/legacy_text_input_row_literal.rs:9:16
+   |
+ 9 |       let _row = LegacyTextInputRow {
+   |  ________________^
+10 | |         id: None,
+11 | |         label: String::from("Name"),
+12 | |         input: TextInput::short("name"),
+13 | |     };
+   | |_____^
+
+error[E0599]: no method named `label` found for struct `discordrs::request::TextInput` in the current scope
+  --> tests/ui/legacy_text_input_row_literal.rs:14:46
+   |
+14 |     let _labelled = TextInput::short("name").label("Name");
+   |                                              ^^^^^ method not found in `discordrs::request::TextInput`

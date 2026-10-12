@@ -11,7 +11,13 @@
 //! available with default features, which this test runs with). The phase 5
 //! Component Embed model is pinned too: a preview action row takes only link
 //! buttons, so a custom-ID button cannot be put in it
-//! (`preview_row_custom_id_button.rs`).
+//! (`preview_row_custom_id_button.rs`). The phase 5 interaction responses
+//! too: a modal input or label cannot go into a message button or select row
+//! (`modal_child_in_message_row.rs`), the endpoint's 202 marker
+//! `EndpointReply::Accepted` cannot be encoded or posted as a callback
+//! (`endpoint_reply_is_not_a_callback.rs`), and the deprecated action-row
+//! text input exists only through its deprecated constructor
+//! (`legacy_text_input_row_literal.rs`).
 //!
 //! The expected `.stderr` files in `tests/ui/` are rustc diagnostics, which
 //! change wording between Rust releases. They are therefore kept for one
