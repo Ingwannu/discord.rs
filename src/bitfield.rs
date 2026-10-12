@@ -625,7 +625,9 @@ pub mod permissions {
     pub const BYPASS_SLOWMODE: BitField<PermissionFlags> = BitField::from_bits(1 << 52);
 }
 
-/// Message flags.
+/// Message flags, from "Message Flags" in `resources/message.mdx`
+/// (discord-api-docs 3714862). 2.x had `SUPPRESS_NOTIFICATIONS` at bit 10
+/// and `IS_VOICE_MESSAGE` at bit 12; Discord's values are bits 12 and 13.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MessageFlagBits;
 
@@ -640,8 +642,9 @@ impl BitFieldFlags for MessageFlagBits {
         (1 << 6, "EPHEMERAL"),
         (1 << 7, "LOADING"),
         (1 << 8, "FAILED_TO_MENTION_SOME_ROLES_IN_THREAD"),
-        (1 << 10, "SUPPRESS_NOTIFICATIONS"),
-        (1 << 12, "IS_VOICE_MESSAGE"),
+        (1 << 12, "SUPPRESS_NOTIFICATIONS"),
+        (1 << 13, "IS_VOICE_MESSAGE"),
+        (1 << 14, "HAS_SNAPSHOT"),
         (1 << 15, "IS_COMPONENTS_V2"),
     ];
 }
@@ -672,10 +675,14 @@ pub mod message_flags {
     /// Bit flag constant for `FAILED_TO_MENTION_SOME_ROLES_IN_THREAD`.
     pub const FAILED_TO_MENTION_SOME_ROLES_IN_THREAD: BitField<MessageFlagBits> =
         BitField::from_bits(1 << 8);
-    /// Bit flag constant for `SUPPRESS_NOTIFICATIONS`.
-    pub const SUPPRESS_NOTIFICATIONS: BitField<MessageFlagBits> = BitField::from_bits(1 << 10);
-    /// Bit flag constant for `IS_VOICE_MESSAGE`.
-    pub const IS_VOICE_MESSAGE: BitField<MessageFlagBits> = BitField::from_bits(1 << 12);
+    /// Bit flag constant for `SUPPRESS_NOTIFICATIONS` (bit 12; 2.x wrongly
+    /// used bit 10).
+    pub const SUPPRESS_NOTIFICATIONS: BitField<MessageFlagBits> = BitField::from_bits(1 << 12);
+    /// Bit flag constant for `IS_VOICE_MESSAGE` (bit 13; 2.x wrongly used
+    /// bit 12).
+    pub const IS_VOICE_MESSAGE: BitField<MessageFlagBits> = BitField::from_bits(1 << 13);
+    /// Bit flag constant for `HAS_SNAPSHOT` (a forwarded message).
+    pub const HAS_SNAPSHOT: BitField<MessageFlagBits> = BitField::from_bits(1 << 14);
     /// Bit flag constant for `IS_COMPONENTS_V2`.
     pub const IS_COMPONENTS_V2: BitField<MessageFlagBits> = BitField::from_bits(1 << 15);
 }
@@ -921,6 +928,50 @@ mod tests {
             serde_json::from_value::<MessageFlags>(wire).unwrap(),
             unknown_flags
         );
+    }
+
+    #[test]
+    fn message_flags_match_discord_documentation() {
+        use super::{message_flags, BitFieldFlags, MessageFlagBits};
+
+        // "Message Flags" in resources/message.mdx (discord-api-docs
+        // 3714862), as decimal literals so a shifted constant cannot drift
+        // unnoticed.
+        let documented: [(u64, &str); 13] = [
+            (1, "CROSSPOSTED"),
+            (2, "IS_CROSSPOST"),
+            (4, "SUPPRESS_EMBEDS"),
+            (8, "SOURCE_MESSAGE_DELETED"),
+            (16, "URGENT"),
+            (32, "HAS_THREAD"),
+            (64, "EPHEMERAL"),
+            (128, "LOADING"),
+            (256, "FAILED_TO_MENTION_SOME_ROLES_IN_THREAD"),
+            (4096, "SUPPRESS_NOTIFICATIONS"),
+            (8192, "IS_VOICE_MESSAGE"),
+            (16384, "HAS_SNAPSHOT"),
+            (32768, "IS_COMPONENTS_V2"),
+        ];
+        assert_eq!(MessageFlagBits::BITS, documented.as_slice());
+        let constants = [
+            message_flags::CROSSPOSTED,
+            message_flags::IS_CROSSPOST,
+            message_flags::SUPPRESS_EMBEDS,
+            message_flags::SOURCE_MESSAGE_DELETED,
+            message_flags::URGENT,
+            message_flags::HAS_THREAD,
+            message_flags::EPHEMERAL,
+            message_flags::LOADING,
+            message_flags::FAILED_TO_MENTION_SOME_ROLES_IN_THREAD,
+            message_flags::SUPPRESS_NOTIFICATIONS,
+            message_flags::IS_VOICE_MESSAGE,
+            message_flags::HAS_SNAPSHOT,
+            message_flags::IS_COMPONENTS_V2,
+        ];
+        for (constant, (bits, name)) in constants.into_iter().zip(documented) {
+            assert_eq!(constant.bits(), bits, "{name}");
+            assert_eq!(constant.flag_names(), vec![name]);
+        }
     }
 
     #[test]
