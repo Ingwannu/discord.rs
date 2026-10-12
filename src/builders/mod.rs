@@ -6,6 +6,7 @@ mod container;
 mod embed;
 mod limits;
 mod media;
+mod message;
 mod modal;
 
 /// Select menu defaults are the model type, shared with received components.
@@ -17,6 +18,7 @@ pub use container::{
 };
 pub use embed::EmbedBuilder;
 pub use media::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
+pub use message::MessageBuilder;
 pub use modal::{
     CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, LabelBuilder, ModalBuilder,
     RadioGroupBuilder, TextInputBuilder,

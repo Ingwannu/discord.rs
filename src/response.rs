@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 
-use crate::builders::{ComponentsV2Message, ModalBuilder};
-use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
+pub use crate::builders::MessageBuilder;
+
+use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
 use crate::http::RestClient;
 use crate::model::{
@@ -25,51 +26,6 @@ pub(crate) const EPHEMERAL_FLAG: u64 = crate::bitfield::message_flags::EPHEMERAL
 /// Discord JSON error code for a second initial response: "Interaction has
 /// already been acknowledged".
 const ALREADY_ACKNOWLEDGED_CODE: u64 = 40060;
-
-#[derive(Clone, Debug, Default)]
-/// Typed Discord API object for `MessageBuilder`.
-pub struct MessageBuilder {
-    inner: CreateMessage,
-}
-
-impl MessageBuilder {
-    /// Creates a `new` value.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn content(mut self, content: impl Into<String>) -> Self {
-        self.inner.content = Some(content.into());
-        self
-    }
-
-    pub fn components(mut self, components: Vec<Value>) -> Self {
-        self.inner.components = Some(components);
-        self
-    }
-
-    pub fn components_v2(mut self, message: ComponentsV2Message) -> Self {
-        self.inner.components = Some(message.build());
-        self.inner.flags = Some(self.inner.flags.unwrap_or(0) | MESSAGE_FLAG_IS_COMPONENTS_V2);
-        self
-    }
-
-    pub fn flags(mut self, flags: u64) -> Self {
-        self.inner.flags = Some(flags);
-        self
-    }
-
-    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
-        if ephemeral {
-            self.inner.flags = Some(self.inner.flags.unwrap_or(0) | EPHEMERAL_FLAG);
-        }
-        self
-    }
-
-    pub fn build(self) -> CreateMessage {
-        self.inner
-    }
-}
 
 #[derive(Clone, Debug)]
 /// Typed Discord API object for `InteractionResponseBuilder`.
@@ -257,7 +213,7 @@ impl From<MessageBuilder> for InteractionReplyData {
             sticker_ids: _,
             nonce: _,
             enforce_nonce: _,
-        } = builder.inner;
+        } = builder.build();
         Self {
             content,
             embeds,
