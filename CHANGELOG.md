@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - READY's `session_id` and `resume_gateway_url` are read independently, so a malformed one no longer discards the other.
 - Message component interactions keep `data.resolved` and `data.id`; interactions keep `guild`, `channel`, `message`, `attachment_size_limit`, and `version`; resolved channels keep `permissions` / `app_permissions`; attachments keep `proxy_url`, `placeholder`, and `placeholder_version`. `Interaction::Unknown.raw_data` keeps `data` byte for byte in any key order.
 
+- **Message flag values.** `MessageFlags::SUPPRESS_NOTIFICATIONS` was `1 << 10` and `IS_VOICE_MESSAGE` was `1 << 12`; Discord's values are `1 << 12` (4096) and `1 << 13` (8192). A message sent with "suppress notifications" therefore went out with a reserved bit, and a voice-message flag was read as "suppress notifications". `HAS_SNAPSHOT` (`1 << 14`) is added, and a test pins every flag to its documented value.
+
 ### Added
 - `RestClientBuilder::retry_non_idempotent_requests(bool)` to opt back in to replaying POST/PATCH after ambiguous failures.
 - **Channel obfuscation readiness** (mandatory for all bots from 2026-11-16): `ChannelFlags` with `CHANNEL_OBFUSCATED` and the other documented channel flags, `Channel::channel_flags()` / `Channel::is_obfuscated()`, and IDENTIFY `capabilities` via `GatewayCapabilities`, `GatewayConnectionConfig::capabilities(...)`, and `ClientBuilder::gateway_capabilities(...)` for Discord's temporary early opt-in.
