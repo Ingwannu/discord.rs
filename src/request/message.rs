@@ -8,7 +8,8 @@
 //! |---|---|---|
 //! | [`CreateMessage`] | `POST /channels/{id}/messages` | create; reply/forward, stickers, nonce |
 //! | [`EditMessage`] | `PATCH /channels/{id}/messages/{id}` | patch; no nonce, stickers, reply, tts, poll |
-//! | [`InteractionMessage`] | callback types 4 and 7 (`data`) | create; ephemeral flag, poll |
+//! | [`InteractionMessage`] | callback type 4 (`data`) | create; ephemeral flag, poll |
+//! | [`UpdateMessage`] | callback type 7 (`data`) | patch on the component's message |
 //! | [`CreateFollowup`] | `POST /webhooks/{app}/{token}` | create; ephemeral flag, poll |
 //! | [`ExecuteWebhook`] | `POST /webhooks/{id}/{token}` | create; username, avatar, thread |
 //! | [`EditWebhookMessage`] / [`EditInteractionResponse`] | `PATCH .../messages/{id or @original}` | patch; attachments listed explicitly, poll |
@@ -165,6 +166,7 @@ message_body!(
     CreateMessage,
     EditMessage,
     InteractionMessage,
+    UpdateMessage,
     CreateFollowup,
     ExecuteWebhook,
     EditWebhookMessage,
@@ -695,11 +697,9 @@ impl EditMessage {
 // InteractionMessage
 // ---------------------------------------------------------------------------
 
-/// The `data` of a `CHANNEL_MESSAGE_WITH_SOURCE` (4) or `UPDATE_MESSAGE` (7)
-/// interaction callback.
-///
-/// For `UPDATE_MESSAGE` an omitted field keeps the message's current value
-/// and `Some(vec![])` removes every embed, component, or attachment.
+/// The `data` of a `CHANNEL_MESSAGE_WITH_SOURCE` (4) interaction callback:
+/// a new message. An `UPDATE_MESSAGE` (7) callback edits the component's
+/// message and takes an [`UpdateMessage`].
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct InteractionMessage {
@@ -766,6 +766,90 @@ impl InteractionMessage {
         entry_some(&mut map, "components", &self.components)?;
         entry_some(&mut map, "attachments", &self.attachments)?;
         entry_some(&mut map, "poll", &self.poll)?;
+        map.end()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UpdateMessage
+// ---------------------------------------------------------------------------
+
+/// The `data` of an `UPDATE_MESSAGE` (7) interaction callback, which edits
+/// the message the component is attached to.
+///
+/// Every field is a patch, as on [`EditMessage`]: omitted keeps the current
+/// value, `null` clears it (so a text message can become a Components V2
+/// message with `content: null`), a value replaces it. There is no tts,
+/// and a poll can only be removed ([`Self::clear_poll`]), not added.
+/// [`validate`](Self::validate) applies the Components V2 rules only when
+/// the update sets `IS_COMPONENTS_V2`.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct UpdateMessage {
+    /// New text content.
+    pub content: NullablePatch<String>,
+    /// New embeds.
+    pub embeds: NullablePatch<Vec<Embed>>,
+    /// New flags (`SUPPRESS_EMBEDS`, `IS_COMPONENTS_V2`, ...; the ephemeral
+    /// state of a message cannot change).
+    pub flags: NullablePatch<MessageFlags>,
+    /// Mentions allowed in the new content.
+    pub allowed_mentions: NullablePatch<AllowedMentions>,
+    /// New components.
+    pub components: NullablePatch<Vec<Component>>,
+    /// Every attachment the message keeps (existing and newly uploaded).
+    pub attachments: NullablePatch<Vec<MessageAttachment>>,
+    /// Writes `"poll": null`, removing the message's poll (required when the
+    /// update sets `IS_COMPONENTS_V2` on a message with a poll).
+    pub clear_poll: bool,
+}
+
+impl UpdateMessage {
+    /// An update that changes nothing yet.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    patch_setters!();
+
+    /// Removes the message's poll (`"poll": null`).
+    pub fn clear_poll(mut self) -> Self {
+        self.clear_poll = true;
+        self
+    }
+
+    /// Checks the values this update sets against Discord's limits.
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        check_body(&BodyRef {
+            allowed_flags: INTERACTION_MESSAGE_FLAGS,
+            endpoint: "an UPDATE_MESSAGE callback",
+            patch: true,
+            content: patch_value(&self.content).map(String::as_str),
+            embeds: patch_value(&self.embeds).map(Vec::as_slice),
+            components: patch_value(&self.components).map(Vec::as_slice),
+            flags: patch_value(&self.flags).copied(),
+            poll: None,
+            stickers: 0,
+            attachments: patch_value(&self.attachments).map(Vec::as_slice),
+            shared_client_theme: false,
+        })
+    }
+
+    fn serialize_with<S: Serializer>(
+        &self,
+        serializer: S,
+        default_mentions: Option<&AllowedMentions>,
+    ) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        entry_patch(&mut map, "content", &self.content)?;
+        entry_patch(&mut map, "embeds", &self.embeds)?;
+        entry_patch(&mut map, "flags", &self.flags)?;
+        entry_patch_mentions(&mut map, &self.allowed_mentions, default_mentions)?;
+        entry_patch(&mut map, "components", &self.components)?;
+        entry_patch(&mut map, "attachments", &self.attachments)?;
+        if self.clear_poll {
+            map.serialize_entry("poll", &None::<()>)?;
+        }
         map.end()
     }
 }
@@ -1206,6 +1290,7 @@ from_text!(
     CreateMessage,
     EditMessage,
     InteractionMessage,
+    UpdateMessage,
     CreateFollowup,
     ExecuteWebhook,
     EditWebhookMessage
@@ -1386,6 +1471,56 @@ impl TryFrom<CreateMessage> for EditWebhookMessage {
             attachments: into_patch(attachments),
             poll: into_patch(poll),
         })
+    }
+}
+
+/// An update that sets every field the response sets. Fails on `tts` and
+/// `poll`, which an `UPDATE_MESSAGE` cannot set.
+impl TryFrom<InteractionMessage> for UpdateMessage {
+    type Error = DiscordError;
+
+    fn try_from(message: InteractionMessage) -> Result<Self, Self::Error> {
+        let InteractionMessage {
+            tts,
+            content,
+            embeds,
+            allowed_mentions,
+            flags,
+            components,
+            attachments,
+            poll,
+        } = message;
+        let fields = unsupported(&[("tts", tts.is_some()), ("poll", poll.is_some())]);
+        if !fields.is_empty() {
+            return Err(DiscordError::model(format!(
+                "UpdateMessage does not accept InteractionMessage fields: {}",
+                fields.join(", ")
+            )));
+        }
+        Ok(Self {
+            content: into_patch(content),
+            embeds: into_patch(embeds),
+            flags: into_patch(flags),
+            allowed_mentions: into_patch(allowed_mentions),
+            components: into_patch(components),
+            attachments: into_patch(attachments),
+            clear_poll: false,
+        })
+    }
+}
+
+/// Fails on the channel-only fields and on `tts` and `poll`.
+impl TryFrom<CreateMessage> for UpdateMessage {
+    type Error = DiscordError;
+
+    fn try_from(message: CreateMessage) -> Result<Self, Self::Error> {
+        let mut fields = unsupported(&channel_only(&message));
+        fields.extend(unsupported(&[
+            ("tts", message.tts.is_some()),
+            ("poll", message.poll.is_some()),
+        ]));
+        reject("UpdateMessage", fields)?;
+        InteractionMessage::try_from(message).and_then(Self::try_from)
     }
 }
 
@@ -1589,6 +1724,28 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&EditWebhookMessage::new().clear_poll()).unwrap(),
             r#"{"poll":null}"#
+        );
+    }
+
+    #[test]
+    fn update_message_can_null_content_for_a_v2_transition() {
+        use crate::request::TextDisplay;
+
+        let update = UpdateMessage::new()
+            .clear_content()
+            .components_v2(vec![TextDisplay::new("v2").into()]);
+        update.validate().expect("content: null is not content");
+        assert_eq!(
+            serde_json::to_string(&update).unwrap(),
+            r#"{"content":null,"flags":32768,"components":[{"type":10,"content":"v2"}]}"#
+        );
+        assert!(UpdateMessage::try_from(InteractionMessage::new().tts(true)).is_err());
+        assert_eq!(
+            serde_json::to_string(
+                &UpdateMessage::try_from(InteractionMessage::from("hi")).unwrap()
+            )
+            .unwrap(),
+            r#"{"content":"hi"}"#
         );
     }
 

@@ -6,7 +6,8 @@
 //! stay in [`crate::model`].
 //!
 //! - Message bodies ([`CreateMessage`], [`EditMessage`], [`InteractionMessage`],
-//!   [`CreateFollowup`], [`ExecuteWebhook`], [`EditWebhookMessage`]) and their
+//!   [`UpdateMessage`], [`CreateFollowup`], [`ExecuteWebhook`],
+//!   [`EditWebhookMessage`]) and their
 //!   parts: components ([`Component`] and the types it holds), [`Embed`],
 //!   [`CreatePoll`], and attachment metadata ([`MessageAttachment`]).
 //! - The Component Embed generator, which builds the
@@ -41,6 +42,6 @@ pub use component_embed::{
 pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedImage};
 pub use message::{
     CreateFollowup, CreateMessage, EditInteractionResponse, EditMessage, EditWebhookMessage,
-    ExecuteWebhook, InteractionMessage, WithDefaultMentions,
+    ExecuteWebhook, InteractionMessage, UpdateMessage, WithDefaultMentions,
 };
 pub use poll::{CreatePoll, CreatePollAnswer};
