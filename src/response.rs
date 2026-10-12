@@ -1945,6 +1945,96 @@ pub(crate) mod tests {
         );
     }
 
+    /// Everything a `MessageBuilder` carries reaches the wire on every typed
+    /// response path, `tts` and `attachments` (kept and uploaded) included
+    /// (astra review: the 2.x reply adapter dropped them). The reply and
+    /// follow-up take the builder as is; the update and `@original` edit
+    /// convert with `TryFrom`, which refuses `tts` locally because those
+    /// bodies cannot carry it.
+    #[tokio::test]
+    async fn message_builder_tts_and_attachments_reach_every_response_path() {
+        use crate::request::{
+            AttachmentUpload, EditInteractionResponse, MessageAttachment, UpdateMessage,
+        };
+
+        let mut server = mock::spawn(vec![
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(200, MESSAGE_JSON),
+            mock::Reply::Now(200, MESSAGE_JSON),
+            mock::Reply::Now(204, ""),
+        ])
+        .await;
+        let http = mock_client(&server, Duration::from_secs(10));
+        let files = [FileAttachment::new("report.txt", b"ok".to_vec())];
+        let builder = || {
+            MessageBuilder::new()
+                .content("see attached")
+                .add_attachment(MessageAttachment::keep(test_id(77)))
+                .add_attachment(
+                    AttachmentUpload::new(crate::model::UploadId::new(0)).filename("report.txt"),
+                )
+        };
+        let attachments = json!([{ "id": "77" }, { "id": 0, "filename": "report.txt" }]);
+
+        let context = sample_context();
+        context
+            .reply_with_files(&http, builder().tts(true), &files)
+            .await
+            .unwrap();
+        context
+            .follow_up_with_files(&http, builder().tts(true), &files)
+            .await
+            .unwrap();
+        context
+            .edit_reply_with_files(
+                &http,
+                EditInteractionResponse::try_from(builder()).unwrap(),
+                &files,
+            )
+            .await
+            .unwrap();
+        let component = ComponentInteraction {
+            context: sample_context(),
+            ..ComponentInteraction::fixture()
+        };
+        component
+            .update_message(&http, UpdateMessage::try_from(builder()).unwrap())
+            .await
+            .unwrap();
+
+        // `tts` cannot go on an update or an edit: refused before sending.
+        assert!(UpdateMessage::try_from(builder().tts(true)).is_err());
+        assert!(EditInteractionResponse::try_from(builder().tts(true)).is_err());
+
+        let payload = |body: &[u8]| -> serde_json::Value {
+            let text = String::from_utf8_lossy(body);
+            let start = text.find('{').expect("payload_json part");
+            let end = text[start..]
+                .find("\r\n--")
+                .map_or(text.len(), |offset| start + offset);
+            serde_json::from_str(&text[start..end]).expect("payload_json is JSON")
+        };
+        let (line, body) = server.next_request_with_body().await;
+        assert_eq!(line, "POST /interactions/1/token/callback");
+        let reply = payload(&body);
+        assert_eq!(reply["data"]["tts"], json!(true));
+        assert_eq!(reply["data"]["attachments"], attachments);
+        let (line, body) = server.next_request_with_body().await;
+        assert_eq!(line, "POST /webhooks/2/token");
+        let follow_up = payload(&body);
+        assert_eq!(follow_up["tts"], json!(true));
+        assert_eq!(follow_up["attachments"], attachments);
+        let (line, body) = server.next_request_with_body().await;
+        assert_eq!(line, "PATCH /webhooks/2/token/messages/@original");
+        assert_eq!(payload(&body)["attachments"], attachments);
+        let (line, body) = server.next_request_with_body().await;
+        assert_eq!(line, "POST /interactions/1/token/callback");
+        let update: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(update["type"], json!(7));
+        assert_eq!(update["data"]["attachments"], attachments);
+        assert!(update["data"].get("tts").is_none());
+    }
+
     // --- state machine ------------------------------------------------------
 
     #[test]
