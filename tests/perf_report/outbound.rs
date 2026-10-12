@@ -84,23 +84,23 @@ pub(crate) fn status_card() -> ComponentsV2Message {
 pub(crate) fn run_outbound(report: &mut Report) {
     pub(crate) const ITERATIONS: usize = 5_000;
 
-    // POST /channels/{id}/messages: `create_message` -> `request_typed` ->
-    // http/body.rs `serialize_body` (`serde_json::to_value`) -> reqwest
-    // `.json(&value)` (`serde_json::to_vec`).
+    // POST /channels/{id}/messages: `create_message` -> http/body.rs
+    // `message_json_body` (`encode_json`, one `serde_json::to_vec` of the
+    // typed body). The transport sends those bytes on every attempt; until
+    // 3.0 phase 5 B it built a `Value` tree first (`to_value`) and
+    // re-encoded it per attempt.
     let create_message = |rec: &mut Recorder| {
         let body = rec.step("build", || {
             MessageBuilder::new().components_v2(status_card()).build()
         });
-        let value = rec.step("serialize_body", || serde_json::to_value(&body).unwrap());
-        let bytes = rec.step("encode", || serde_json::to_vec(&value).unwrap());
-        drop(value);
+        let bytes = rec.step("encode", || serde_json::to_vec(&body).unwrap());
         drop(body);
         bytes
     };
     // POST /interactions/{id}/{token}/callback:
     // `InteractionResponseBuilder::channel_message` (to_value of the
-    // message) -> `create_interaction_response_typed` -> `serialize_body`
-    // -> `to_vec`.
+    // message) -> `create_interaction_response_typed` -> `json_body`
+    // (`encode_json`).
     let interaction_reply = |rec: &mut Recorder| {
         let body = rec.step("build", || {
             InteractionResponseBuilder::channel_message(
@@ -111,14 +111,13 @@ pub(crate) fn run_outbound(report: &mut Report) {
             .unwrap()
             .build()
         });
-        let value = rec.step("serialize_body", || serde_json::to_value(&body).unwrap());
-        let bytes = rec.step("encode", || serde_json::to_vec(&value).unwrap());
-        drop(value);
+        let bytes = rec.step("encode", || serde_json::to_vec(&body).unwrap());
         drop(body);
         bytes
     };
     // What the same body costs encoded straight to bytes (phase 5 typed
-    // request bodies).
+    // request bodies). Since the byte transport this is the same path as
+    // `create_message`; kept so the reference series stays continuous.
     let direct = |rec: &mut Recorder| {
         let body = rec.step("build", || {
             MessageBuilder::new().components_v2(status_card()).build()

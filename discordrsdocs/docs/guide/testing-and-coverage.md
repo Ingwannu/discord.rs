@@ -170,10 +170,11 @@ Rules for new code:
 - **REST: thin shims around one transport core.** `RestClient::execute` (`src/http.rs`) is the
   only request loop (route gate, rate limits, replay policy, token scrubbing) and is not generic,
   so it is compiled once. Endpoints encode their body into an `EncodedBody` (`json_body`,
-  `multipart_body`, or `NO_BODY`) and call a shim with their manifest `RouteId`: `send` (decode
-  into `T`), `send_optional` (`None` for 204), `send_unit`, `send_bytes`, `send_response` (custom
-  decoding), and `send_bearer` / `send_bearer_unit` for routes authorized with a caller's OAuth2
-  token. The shims are generic over the response type only, run no `?`, and hand the awaited
+  `multipart_body`, the named-file and sticker forms, or `NO_BODY`) and call a shim with their
+  manifest `RouteId`: `send` (decode into `T`), `send_optional` (`None` for 204), `send_unit`,
+  `send_bytes`, and `send_bearer` / `send_bearer_unit` for routes authorized with a caller's
+  OAuth2 token. Bodies are encoded once with `serde_json::to_vec` (`body::encode_json`, no
+  `Value` tree) and every attempt sends the same bytes. The shims are generic over the response type only, run no `?`, and hand the awaited
   `Result` to `decode_response`. New endpoints add a row to `src/http/routes.rs` and call these
   shims; they do not add another generic `async fn` around the loop. A shim cost about 160 LLVM
   IR lines per `(response, body)` type pair, down from about 275, before body encoding moved to

@@ -7,6 +7,7 @@ use crate::model::{
     UserId,
 };
 
+use super::body::{message_json_body, message_multipart_body};
 use super::paths::query_string;
 use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
@@ -16,11 +17,12 @@ impl RestClient {
         channel_id: ChannelId,
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
+        let enforces_nonce = enforces_nonce(body);
         let body = self.message_with_default_allowed_mentions(body);
         self.send(
             RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            json_body(body.as_ref()),
+            message_json_body(body.as_ref(), enforces_nonce),
         )
         .await
     }
@@ -50,11 +52,12 @@ impl RestClient {
         body: &CreateMessage,
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
+        let enforces_nonce = enforces_nonce(body);
         let body = self.message_with_default_allowed_mentions(body);
         self.send(
             RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            multipart_body(body.as_ref(), files),
+            message_multipart_body(body.as_ref(), files, enforces_nonce),
         )
         .await
     }
@@ -357,7 +360,7 @@ impl RestClient {
         self.send(
             RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            json_body(body),
+            message_json_body(body, value_enforces_nonce(body)),
         )
         .await
     }
@@ -427,6 +430,20 @@ impl RestClient {
         )
         .await
     }
+}
+
+/// Whether a message create enforces its nonce (Discord then deduplicates a
+/// repeated send, which makes a replay safe). A narrow adapter for the 2.x
+/// `CreateMessage` until the endpoints take the phase 5 request types, whose
+/// `nonce_replay()` answers this.
+pub(super) fn enforces_nonce(body: &CreateMessage) -> bool {
+    body.enforce_nonce && body.nonce.is_some()
+}
+
+/// [`enforces_nonce`] for the untyped bodies the message helpers still send.
+pub(super) fn value_enforces_nonce(body: &Value) -> bool {
+    body.get("enforce_nonce").and_then(Value::as_bool) == Some(true)
+        && body.get("nonce").is_some_and(|nonce| !nonce.is_null())
 }
 
 fn channel_pins_query(query: &ChannelPinsQuery) -> String {

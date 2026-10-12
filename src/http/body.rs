@@ -1,60 +1,230 @@
+use bytes::Bytes;
 use reqwest::{
     header::HeaderValue,
     multipart::{Form, Part},
+    Body,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::http::FileAttachment;
+use crate::model::CreateGuildSticker;
 use crate::types::invalid_data_error;
 
+// [Decision Log] Encoded request bodies
+// - Purpose: encode an outgoing body once, straight from the typed request
+//   into bytes, and send those bytes on every attempt (3.0 phase 5,
+//   docs/design/3.0-types-events-requests.md "5단계 실행 결정").
+// - Before: `serialize_body` turned every body into a `serde_json::Value`
+//   tree (`to_value`), the transport re-encoded that tree on every attempt
+//   (`RequestBuilder::json`, `to_string` for `payload_json`), and the replay
+//   policy and the sticker form read fields back out of the tree.
+// - Alternatives: (1) keep `Value` and only cache the encoded bytes; (2) hold
+//   the typed body behind `&dyn erased_serde::Serialize` and encode per
+//   attempt; (3) encode with `serde_json::to_vec` at the call site and keep
+//   `Bytes`, with the metadata the transport needs (nonce replay) recorded
+//   next to them from the typed request.
+// - Chosen: (3). `encode_json` is the only encoder; every body type
+//   serializes through serde_json's one `Serializer<&mut Vec<u8>>`, which
+//   `to_string` also uses, so no second serializer is instantiated. Files
+//   are copied into `Bytes` once at encode time; a retry clones handles.
+// - Why: (1) still builds the tree (most of the transport's allocations for
+//   a Components V2 message) and the reads of it. (2) adds a dependency and
+//   re-encodes per attempt. With (3) the body cannot change between
+//   attempts, and nothing reads JSON back.
+// - Trade-offs: object keys now follow the request type's field order
+//   instead of `Value`'s sorted order (same JSON meaning; Discord does not
+//   depend on key order). A body that fails to encode fails before anything
+//   is sent, as before. `bytes` becomes a direct dependency (it already was
+//   one of reqwest's).
+
+/// An encoded request body, ready to be sent any number of times.
 pub(crate) enum RequestBody {
-    Json(Value),
-    Multipart {
-        payload_json: Value,
-        files: Vec<FileAttachment>,
+    /// `application/json`.
+    Json {
+        bytes: Bytes,
+        /// The body is a message create with `nonce` + `enforce_nonce`,
+        /// read from the typed request when it was encoded.
+        enforces_nonce: bool,
     },
+    /// `multipart/form-data`: `payload_json` plus `files[n]`.
+    Multipart {
+        payload_json: Bytes,
+        files: Vec<EncodedFile>,
+        enforces_nonce: bool,
+    },
+    /// One file under a route-specific field name and nothing else.
     NamedFileMultipart {
         field_name: &'static str,
-        file: FileAttachment,
+        file: EncodedFile,
     },
+    /// `payload_json` plus one file under a route-specific field name.
     PayloadAndNamedFileMultipart {
-        payload_json: Value,
+        payload_json: Bytes,
         field_name: &'static str,
-        file: FileAttachment,
+        file: EncodedFile,
     },
+    /// Create Guild Sticker's form: text fields, not `payload_json`.
     StickerMultipart {
-        payload_json: Value,
-        file: FileAttachment,
+        name: String,
+        description: String,
+        tags: String,
+        file: EncodedFile,
     },
 }
 
+/// A file part: name, content type, and the data as shared bytes.
+#[derive(Clone)]
+pub(crate) struct EncodedFile {
+    filename: String,
+    content_type: Option<String>,
+    data: Bytes,
+}
+
+impl EncodedFile {
+    /// Copies `file` once. An empty file name fails here, before anything is
+    /// sent.
+    fn new(file: &FileAttachment) -> Result<Self, DiscordError> {
+        Self::check(file)?;
+        Ok(Self {
+            filename: file.filename.clone(),
+            content_type: file.content_type.clone(),
+            data: Bytes::copy_from_slice(&file.data),
+        })
+    }
+
+    /// [`Self::new`] without copying the data.
+    fn owned(file: FileAttachment) -> Result<Self, DiscordError> {
+        Self::check(&file)?;
+        Ok(Self {
+            filename: file.filename,
+            content_type: file.content_type,
+            data: Bytes::from(file.data),
+        })
+    }
+
+    fn check(file: &FileAttachment) -> Result<(), DiscordError> {
+        if file.filename.trim().is_empty() {
+            return Err(invalid_data_error("file filename must not be empty"));
+        }
+        Ok(())
+    }
+
+    fn part(&self) -> Result<Part, DiscordError> {
+        let mut part = Part::stream(Body::from(self.data.clone())).file_name(self.filename.clone());
+        if let Some(content_type) = &self.content_type {
+            part = part.mime_str(content_type)?;
+        }
+        Ok(part)
+    }
+}
+
 impl RequestBody {
+    /// A JSON body from bytes the caller already encoded (for example with
+    /// [`encode_json`]); sent as-is on every attempt.
+    pub(crate) fn json(bytes: Vec<u8>) -> Self {
+        Self::Json {
+            bytes: Bytes::from(bytes),
+            enforces_nonce: false,
+        }
+    }
+
+    /// A `payload_json` + `files[n]` body from bytes the caller already
+    /// encoded.
+    pub(crate) fn multipart(payload_json: Vec<u8>, files: &[FileAttachment]) -> EncodedBody {
+        encode_files(files).map(|files| {
+            Some(Self::Multipart {
+                payload_json: Bytes::from(payload_json),
+                files,
+                enforces_nonce: false,
+            })
+        })
+    }
+
     /// Returns true when the payload asks Discord to deduplicate it: a
     /// message create with a non-null `nonce` and `enforce_nonce: true`.
     /// Discord then returns the original message for a repeated nonce
     /// instead of creating a second one, which makes the POST safe to replay.
+    /// The flag comes from the typed request, never from the encoded bytes.
     pub(crate) fn enforces_nonce(&self) -> bool {
-        let payload = match self {
-            Self::Json(payload)
-            | Self::Multipart {
-                payload_json: payload,
-                ..
-            } => payload,
+        match self {
+            Self::Json { enforces_nonce, .. } | Self::Multipart { enforces_nonce, .. } => {
+                *enforces_nonce
+            }
             Self::NamedFileMultipart { .. }
             | Self::PayloadAndNamedFileMultipart { .. }
-            | Self::StickerMultipart { .. } => return false,
-        };
-        payload.get("enforce_nonce").and_then(Value::as_bool) == Some(true)
-            && payload.get("nonce").is_some_and(|nonce| !nonce.is_null())
+            | Self::StickerMultipart { .. } => false,
+        }
+    }
+
+    /// True for the `multipart/form-data` variants.
+    pub(crate) fn is_multipart(&self) -> bool {
+        !matches!(self, Self::Json { .. })
+    }
+
+    /// Hands this body to `request` for one attempt. JSON and `payload_json`
+    /// bytes are shared, not copied; a multipart form is rebuilt per attempt
+    /// because reqwest consumes it.
+    pub(crate) fn attach(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, DiscordError> {
+        Ok(match self {
+            Self::Json { bytes, .. } => request.body(bytes.clone()),
+            Self::Multipart {
+                payload_json,
+                files,
+                ..
+            } => {
+                let mut form = Form::new().part("payload_json", bytes_part(payload_json));
+                for (index, file) in files.iter().enumerate() {
+                    form = form.part(format!("files[{index}]"), file.part()?);
+                }
+                request.multipart(form)
+            }
+            Self::NamedFileMultipart { field_name, file } => {
+                request.multipart(Form::new().part(*field_name, file.part()?))
+            }
+            Self::PayloadAndNamedFileMultipart {
+                payload_json,
+                field_name,
+                file,
+            } => request.multipart(
+                Form::new()
+                    .part("payload_json", bytes_part(payload_json))
+                    .part(*field_name, file.part()?),
+            ),
+            Self::StickerMultipart {
+                name,
+                description,
+                tags,
+                file,
+            } => request.multipart(
+                Form::new()
+                    .text("name", name.clone())
+                    .text("description", description.clone())
+                    .text("tags", tags.clone())
+                    .part("file", file.part()?),
+            ),
+        })
     }
 }
 
-pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(
-    body: &T,
-) -> Result<Value, DiscordError> {
-    serde_json::to_value(body).map_err(Into::into)
+/// A text part over shared bytes (no copy; the length stays known, so the
+/// form keeps its `Content-Length`).
+fn bytes_part(bytes: &Bytes) -> Part {
+    Part::stream(Body::from(bytes.clone()))
+}
+
+fn encode_files(files: &[FileAttachment]) -> Result<Vec<EncodedFile>, DiscordError> {
+    files.iter().map(EncodedFile::new).collect()
+}
+
+/// Encodes `body` as JSON with `serde_json::to_vec`. The one JSON encoder
+/// for outgoing bodies; see the Decision Log above [`RequestBody`].
+pub(crate) fn encode_json<T: serde::Serialize + ?Sized>(body: &T) -> Result<Vec<u8>, DiscordError> {
+    serde_json::to_vec(body).map_err(Into::into)
 }
 
 /// A request body ready for the transport, or the error that encoding it
@@ -69,7 +239,21 @@ pub(crate) const NO_BODY: EncodedBody = Ok(None);
 
 /// Encodes a JSON request body.
 pub(crate) fn json_body<T: serde::Serialize + ?Sized>(body: &T) -> EncodedBody {
-    serialize_body(body).map(|body| Some(RequestBody::Json(body)))
+    encode_json(body).map(|bytes| Some(RequestBody::json(bytes)))
+}
+
+/// [`json_body`] for a message create, recording whether it enforces its
+/// nonce (read from the typed request by the caller).
+pub(crate) fn message_json_body<T: serde::Serialize + ?Sized>(
+    body: &T,
+    enforces_nonce: bool,
+) -> EncodedBody {
+    encode_json(body).map(|bytes| {
+        Some(RequestBody::Json {
+            bytes: Bytes::from(bytes),
+            enforces_nonce,
+        })
+    })
 }
 
 /// [`json_body`] for an optional body.
@@ -85,110 +269,64 @@ pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
     body: &T,
     files: &[FileAttachment],
 ) -> EncodedBody {
-    serialize_body(body).map(|payload_json| {
-        Some(RequestBody::Multipart {
-            payload_json,
-            files: files.to_vec(),
-        })
-    })
+    RequestBody::multipart(encode_json(body)?, files)
+}
+
+/// [`multipart_body`] for a message create; see [`message_json_body`].
+pub(crate) fn message_multipart_body<T: serde::Serialize + ?Sized>(
+    body: &T,
+    files: &[FileAttachment],
+    enforces_nonce: bool,
+) -> EncodedBody {
+    let payload_json = encode_json(body)?;
+    Ok(Some(RequestBody::Multipart {
+        payload_json: Bytes::from(payload_json),
+        files: encode_files(files)?,
+        enforces_nonce,
+    }))
 }
 
 pub(crate) fn named_file_multipart_body(
     field_name: &'static str,
     file: &FileAttachment,
-) -> RequestBody {
-    RequestBody::NamedFileMultipart {
-        field_name,
-        file: file.clone(),
+) -> EncodedBody {
+    if field_name.trim().is_empty() {
+        return Err(invalid_data_error(
+            "multipart file field name must not be empty",
+        ));
     }
+    Ok(Some(RequestBody::NamedFileMultipart {
+        field_name,
+        file: EncodedFile::new(file)?,
+    }))
 }
 
 pub(crate) fn payload_named_file_multipart_body<T: serde::Serialize + ?Sized>(
     body: &T,
     field_name: &'static str,
     file: &FileAttachment,
-) -> Result<RequestBody, DiscordError> {
-    Ok(RequestBody::PayloadAndNamedFileMultipart {
-        payload_json: serialize_body(body)?,
-        field_name,
-        file: file.clone(),
-    })
-}
-
-pub(crate) fn build_multipart_form(
-    payload_json: &Value,
-    files: &[FileAttachment],
-) -> Result<Form, DiscordError> {
-    let payload_json = serde_json::to_string(payload_json)?;
-    let mut form = Form::new().text("payload_json", payload_json);
-
-    for (index, file) in files.iter().enumerate() {
-        if file.filename.trim().is_empty() {
-            return Err(invalid_data_error("file filename must not be empty"));
-        }
-
-        let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
-        if let Some(content_type) = &file.content_type {
-            part = part.mime_str(content_type)?;
-        }
-        form = form.part(format!("files[{index}]"), part);
-    }
-
-    Ok(form)
-}
-
-pub(crate) fn build_named_file_form(
-    payload_json: Option<&Value>,
-    field_name: &'static str,
-    file: &FileAttachment,
-) -> Result<Form, DiscordError> {
+) -> EncodedBody {
     if field_name.trim().is_empty() {
         return Err(invalid_data_error(
             "multipart file field name must not be empty",
         ));
     }
-    if file.filename.trim().is_empty() {
-        return Err(invalid_data_error("file filename must not be empty"));
-    }
-
-    let mut form = Form::new();
-    if let Some(payload_json) = payload_json {
-        form = form.text("payload_json", serde_json::to_string(payload_json)?);
-    }
-
-    let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
-    if let Some(content_type) = &file.content_type {
-        part = part.mime_str(content_type)?;
-    }
-
-    Ok(form.part(field_name, part))
+    Ok(Some(RequestBody::PayloadAndNamedFileMultipart {
+        payload_json: Bytes::from(encode_json(body)?),
+        field_name,
+        file: EncodedFile::new(file)?,
+    }))
 }
 
-pub(crate) fn build_sticker_form(
-    payload_json: &Value,
-    file: &FileAttachment,
-) -> Result<Form, DiscordError> {
-    if file.filename.trim().is_empty() {
-        return Err(invalid_data_error("file filename must not be empty"));
-    }
-
-    let mut form = Form::new();
-    for field in ["name", "description", "tags"] {
-        if let Some(value) = payload_json.get(field).and_then(Value::as_str) {
-            form = form.text(field.to_string(), value.to_string());
-        }
-    }
-
-    let mut part = Part::bytes(file.data.clone()).file_name(file.filename.clone());
-    if let Some(content_type) = &file.content_type {
-        part = part.mime_str(content_type)?;
-    }
-
-    Ok(form.part("file", part))
-}
-
-pub(crate) fn clone_json_body(body: &Value) -> Value {
-    body.clone()
+/// Create Guild Sticker's form from the typed request's fields. Takes the
+/// file by value so its data moves into the body without a copy.
+pub(crate) fn sticker_body(body: &CreateGuildSticker, file: FileAttachment) -> EncodedBody {
+    Ok(Some(RequestBody::StickerMultipart {
+        name: body.name.clone(),
+        description: body.description.clone(),
+        tags: body.tags.clone(),
+        file: EncodedFile::owned(file)?,
+    }))
 }
 
 pub(crate) fn parse_body_value(response_text: String) -> Value {

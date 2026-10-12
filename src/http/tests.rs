@@ -4225,7 +4225,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_guild_sticker_from_request(
+            .create_guild_sticker(
                 test_id(200),
                 &CreateGuildSticker {
                     name: "name".to_string(),
@@ -4587,10 +4587,15 @@ async fn raw_sticker_wrappers_preserve_multipart_and_json_bodies() {
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("admin-token", 555, base_url);
     let body = json!({ "name": "name", "description": "desc", "tags": "tag" });
+    let sticker = CreateGuildSticker {
+        name: "name".to_string(),
+        description: "desc".to_string(),
+        tags: "tag".to_string(),
+    };
 
     assert_eq!(
         client
-            .create_guild_sticker(test_id(200), &body, sample_file("sticker.png", "png"),)
+            .create_guild_sticker(test_id(200), &sticker, sample_file("sticker.png", "png"))
             .await
             .unwrap()
             .id
@@ -7272,8 +7277,17 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
             "{method} is idempotent"
         );
     }
-    let plain = RequestBody::Json(json!({ "content": "hi" }));
-    let enforced = RequestBody::Json(json!({ "nonce": "n", "enforce_nonce": true }));
+    let encoded = |enforces_nonce: bool| {
+        super::body::message_json_body(
+            &json!({ "nonce": "n", "enforce_nonce": true }),
+            enforces_nonce,
+        )
+        .unwrap()
+        .unwrap()
+    };
+    // The flag comes from the typed request, not from the encoded JSON.
+    let plain = encoded(false);
+    let enforced = encoded(true);
     let message_create = "/channels/1/messages";
 
     assert_eq!(
@@ -7323,15 +7337,37 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
         "the explicit opt-in replays every method"
     );
 
-    let unenforced = RequestBody::Json(json!({ "nonce": "n", "enforce_nonce": false }));
-    let null_nonce = RequestBody::Json(json!({ "nonce": null, "enforce_nonce": true }));
-    let multipart = RequestBody::Multipart {
-        payload_json: json!({ "nonce": 5, "enforce_nonce": true }),
-        files: Vec::new(),
-    };
-    assert!(!unenforced.enforces_nonce());
-    assert!(!null_nonce.enforces_nonce());
+    let multipart = super::body::message_multipart_body(&json!({}), &[], true)
+        .unwrap()
+        .unwrap();
     assert!(multipart.enforces_nonce());
+    assert!(
+        !super::body::json_body(&json!({ "nonce": "n", "enforce_nonce": true }))
+            .unwrap()
+            .unwrap()
+            .enforces_nonce()
+    );
+
+    // The 2.x adapters read the same rule from their bodies.
+    use super::messages::{enforces_nonce, value_enforces_nonce};
+    assert!(!value_enforces_nonce(
+        &json!({ "nonce": "n", "enforce_nonce": false })
+    ));
+    assert!(!value_enforces_nonce(
+        &json!({ "nonce": null, "enforce_nonce": true })
+    ));
+    assert!(value_enforces_nonce(
+        &json!({ "nonce": 5, "enforce_nonce": true })
+    ));
+    let mut message = CreateMessage {
+        nonce: Some("n".to_string()),
+        ..CreateMessage::default()
+    };
+    assert!(!enforces_nonce(&message));
+    message.enforce_nonce = true;
+    assert!(enforces_nonce(&message));
+    message.nonce = None;
+    assert!(!enforces_nonce(&message));
 }
 
 #[test]

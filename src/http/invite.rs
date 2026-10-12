@@ -13,7 +13,7 @@ use super::body::{
     named_file_multipart_body, optional_json_body, payload_named_file_multipart_body,
 };
 use super::paths::{invite_query, validate_token_path_segment};
-use super::{decode_response, json_body, FileAttachment, RestClient, RouteId, NO_BODY};
+use super::{json_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
 /// Discord's per-request cap for invite target-user bulk add/delete.
 const MAX_INVITE_TARGET_USERS: usize = 1000;
@@ -84,16 +84,12 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.send_response(
+        self.send_unit(
             RouteId::UpdateTargetUsers,
             &format!("/invites/{code}/target-users"),
-            Ok(Some(named_file_multipart_body(
-                "target_users_file",
-                target_users_file,
-            ))),
+            named_file_multipart_body("target_users_file", target_users_file),
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     /// Adds one user to an invite's target users (`PUT
@@ -240,14 +236,11 @@ impl RestClient {
         body: &CreateChannelInvite,
         target_users_file: &FileAttachment,
     ) -> Result<Invite, DiscordError> {
-        decode_response(
-            self.send_response(
-                RouteId::CreateChannelInvite,
-                &format!("/channels/{}/invites", channel_id),
-                payload_named_file_multipart_body(body, "target_users_file", target_users_file)
-                    .map(Some),
-            )
-            .await,
+        self.send(
+            RouteId::CreateChannelInvite,
+            &format!("/channels/{}/invites", channel_id),
+            payload_named_file_multipart_body(body, "target_users_file", target_users_file),
         )
+        .await
     }
 }

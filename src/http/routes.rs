@@ -440,7 +440,7 @@ route_manifest! {
     GetStickerPack: GET "/sticker-packs/{pack.id}" bot, query [], body () => StickerPack, api [get_sticker_pack];
     ListGuildStickers: GET "/guilds/{guild.id}/stickers" bot, query [], body () => Vec<Sticker>, api [get_guild_stickers];
     GetGuildSticker: GET "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body () => Sticker, api [get_guild_sticker];
-    CreateGuildSticker: POST "/guilds/{guild.id}/stickers" bot, query [], body CreateGuildSticker => Sticker, api [create_guild_sticker, create_guild_sticker_typed, create_guild_sticker_from_request];
+    CreateGuildSticker: POST "/guilds/{guild.id}/stickers" bot, query [], body CreateGuildSticker => Sticker, api [create_guild_sticker], was [create_guild_sticker_typed => create_guild_sticker, create_guild_sticker_from_request => create_guild_sticker];
     ModifyGuildSticker: PATCH "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body ModifyGuildSticker => Sticker, api [modify_guild_sticker, modify_guild_sticker_typed, modify_guild_sticker_from_request];
     DeleteGuildSticker: DELETE "/guilds/{guild.id}/stickers/{sticker.id}" bot, query [], body () => (), api [delete_guild_sticker];
     SendSoundboardSound: POST "/channels/{channel.id}/send-soundboard-sound" bot, query [], body Value => (), api [send_soundboard_sound];

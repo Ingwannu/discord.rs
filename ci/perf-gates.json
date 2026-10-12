@@ -56,6 +56,16 @@
         {"scenario": "inbound.guild_create.large", "metric": "steps.cache_apply.allocs", "max": 12000},
         {"scenario": "storm.guild_create_25", "metric": "retained_bytes", "max": 120000000}
       ]
+    },
+    "P5-transport": {
+      "inherits": "B",
+      "note": "3.0 phase 5 B byte transport (bodies encoded once with serde_json::to_vec, no Value tree): the intermediate caps of the design's phase 5 gate table; the final caps come with the typed builders",
+      "gates": [
+        {"scenario": "outbound.create_message.components_v2", "metric": "allocs", "max": 230},
+        {"scenario": "outbound.create_message.components_v2", "metric": "alloc_bytes", "max": 34000},
+        {"scenario": "outbound.interaction_reply.components_v2", "metric": "allocs", "max": 320},
+        {"scenario": "outbound.interaction_reply.components_v2", "metric": "alloc_bytes", "max": 50000}
+      ]
     }
   }
 }

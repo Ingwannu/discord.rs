@@ -6,10 +6,8 @@ use crate::model::{
     SoundboardSoundList, Sticker, StickerId, StickerPack, StickerPackId, StickerPackList,
 };
 
-use super::{
-    decode_response, json_body, serialize_body, FileAttachment, RequestBody, RestClient, RouteId,
-    NO_BODY,
-};
+use super::body::sticker_body;
+use super::{json_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_sticker(&self, sticker_id: StickerId) -> Result<Sticker, DiscordError> {
@@ -63,56 +61,31 @@ impl RestClient {
         .await
     }
 
+    /// Uploads a guild sticker. Discord takes this route as a form with
+    /// `name`, `description`, and `tags` text fields plus the `file` part,
+    /// not as `payload_json`.
     pub async fn create_guild_sticker(
         &self,
         guild_id: GuildId,
-        body: &Value,
+        body: &CreateGuildSticker,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
-        let path = format!("/guilds/{}/stickers", guild_id);
-        decode_response(
-            self.send_response(
-                RouteId::CreateGuildSticker,
-                &path,
-                Ok(Some(RequestBody::StickerMultipart {
-                    payload_json: body.clone(),
-                    file,
-                })),
-            )
-            .await,
+        self.send(
+            RouteId::CreateGuildSticker,
+            &format!("/guilds/{}/stickers", guild_id),
+            sticker_body(body, file),
         )
+        .await
     }
 
-    pub async fn create_guild_sticker_typed<B>(
-        &self,
-        guild_id: GuildId,
-        body: &B,
-        file: FileAttachment,
-    ) -> Result<Sticker, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        let path = format!("/guilds/{}/stickers", guild_id);
-        decode_response(
-            self.send_response(
-                RouteId::CreateGuildSticker,
-                &path,
-                Ok(Some(RequestBody::StickerMultipart {
-                    payload_json: serialize_body(body)?,
-                    file,
-                })),
-            )
-            .await,
-        )
-    }
-
+    #[deprecated(since = "3.0.0", note = "use `create_guild_sticker`")]
     pub async fn create_guild_sticker_from_request(
         &self,
         guild_id: GuildId,
         body: &CreateGuildSticker,
         file: FileAttachment,
     ) -> Result<Sticker, DiscordError> {
-        self.create_guild_sticker_typed(guild_id, body, file).await
+        self.create_guild_sticker(guild_id, body, file).await
     }
 
     pub async fn modify_guild_sticker(

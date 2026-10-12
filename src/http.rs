@@ -59,9 +59,8 @@ use crate::model::{
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
-    build_multipart_form, build_named_file_form, build_sticker_form, clone_json_body,
     decode_json_body, json_body, multipart_body, optional_json_body, parse_body_bytes,
-    parse_body_value, serialize_body, EncodedBody, RequestBody, NO_BODY,
+    parse_body_value, EncodedBody, RequestBody, NO_BODY,
 };
 pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use paths::{
@@ -343,10 +342,13 @@ impl RestClient {
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, DiscordError> {
-        let body = Ok(body.map(clone_json_body).map(RequestBody::Json));
-        self.execute(Target::Raw(&method, RequestAuthorization::Auto), path, body)
-            .await
-            .map(RawResponse::into_value)
+        self.execute(
+            Target::Raw(&method, RequestAuthorization::Auto),
+            path,
+            optional_json_body(body),
+        )
+        .await
+        .map(RawResponse::into_value)
     }
 
     pub async fn request_multipart<B>(
@@ -447,17 +449,6 @@ impl RestClient {
         self.execute(Target::Route(route), path, NO_BODY)
             .await
             .map(|response| response.body)
-    }
-
-    /// For endpoints that build their own [`RequestBody`] (named-file and
-    /// sticker multipart forms) and decode the response themselves.
-    async fn send_response(
-        &self,
-        route: RouteId,
-        path: &str,
-        body: EncodedBody,
-    ) -> Result<RawResponse, DiscordError> {
-        self.execute(Target::Route(route), path, body).await
     }
 
     /// [`Self::send`] for a `bearer` route with the caller's access token.
@@ -692,15 +683,7 @@ impl RestClient {
             .request(method.clone(), url)
             .header("User-Agent", &self.user_agent);
 
-        if !matches!(
-            body,
-            Some(
-                RequestBody::Multipart { .. }
-                    | RequestBody::NamedFileMultipart { .. }
-                    | RequestBody::PayloadAndNamedFileMultipart { .. }
-                    | RequestBody::StickerMultipart { .. }
-            )
-        ) {
+        if !body.is_some_and(RequestBody::is_multipart) {
             request_builder = request_builder.header("Content-Type", "application/json");
         }
 
@@ -728,28 +711,7 @@ impl RestClient {
         }
 
         if let Some(body) = body {
-            request_builder = match body {
-                RequestBody::Json(value) => request_builder.json(value),
-                RequestBody::Multipart {
-                    payload_json,
-                    files,
-                } => request_builder.multipart(build_multipart_form(payload_json, files)?),
-                RequestBody::NamedFileMultipart { field_name, file } => {
-                    request_builder.multipart(build_named_file_form(None, field_name, file)?)
-                }
-                RequestBody::PayloadAndNamedFileMultipart {
-                    payload_json,
-                    field_name,
-                    file,
-                } => request_builder.multipart(build_named_file_form(
-                    Some(payload_json),
-                    field_name,
-                    file,
-                )?),
-                RequestBody::StickerMultipart { payload_json, file } => {
-                    request_builder.multipart(build_sticker_form(payload_json, file)?)
-                }
-            };
+            request_builder = body.attach(request_builder)?;
         }
 
         let response = request_builder.send().await?;
