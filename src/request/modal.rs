@@ -793,8 +793,9 @@ impl FileUpload {
 
     /// Checks `custom_id` (1-100 characters), `min_values` (0-10, and 0
     /// only with `required(false)`), `max_values` (1-10), `min_values <=
-    /// max_values`, and the `file_types` filter (at most 10 well-formed
-    /// entries).
+    /// max_values` with Discord's default of 1 for an omitted side (so
+    /// `min_values(2)` needs a `max_values` of at least 2), and the
+    /// `file_types` filter (at most 10 well-formed entries).
     pub fn validate(&self) -> Result<(), DiscordError> {
         validation::ensure_len(
             "file upload custom_id",
@@ -808,6 +809,10 @@ impl FileUpload {
             self.max_values,
             self.required,
             Self::MAX_VALUES,
+            OmittedMax {
+                value: 1,
+                source: "Discord's default",
+            },
         )?;
         if let Some(file_types) = &self.file_types {
             validation::ensure_file_types("file upload file_types", file_types)?;
@@ -1005,10 +1010,11 @@ impl CheckboxGroup {
     /// Checks `custom_id` (1-100 characters), 1-10 options whose labels,
     /// values, and descriptions are at most 100 characters (no emoji),
     /// `min_values` 0-10 (0 only with `required(false)`), `max_values`
-    /// 1-10, and `min_values <= max_values`.
+    /// 1-10, and `min_values <= max_values`, where an omitted `max_values`
+    /// is the number of options (Discord's default).
     ///
-    /// The values are not compared with the number of options because
-    /// Discord documents no such rule.
+    /// An explicit `max_values` is not compared with the number of options
+    /// because Discord documents no such rule.
     pub fn validate(&self) -> Result<(), DiscordError> {
         validation::ensure_len(
             "checkbox group custom_id",
@@ -1029,6 +1035,11 @@ impl CheckboxGroup {
             self.max_values,
             self.required,
             Self::MAX_VALUES,
+            OmittedMax {
+                // At most `MAX_OPTIONS` (10) here: the count was checked above.
+                value: u8::try_from(self.options.len()).unwrap_or(u8::MAX),
+                source: "the number of options",
+            },
         )
     }
 }
@@ -1176,17 +1187,28 @@ fn at_path(path: &str, kind: &str, error: DiscordError) -> DiscordError {
     }
 }
 
+/// What Discord uses for an omitted `max_values`: the value and how the
+/// docs describe it (for the error message).
+struct OmittedMax {
+    value: u8,
+    source: &'static str,
+}
+
 /// `min_values`/`max_values`/`required` rules shared by file uploads and
-/// checkbox groups: `min_values` 0..=`max`, `max_values` 1..=`max`, `min
-/// <= max`, and the footnote "`min_values` must be either omitted or at
-/// least `1` if `required` is omitted or `true`" (`required` defaults to
-/// `true`, so only an explicit `required(false)` allows 0).
+/// checkbox groups: `min_values` 0..=`max`, `max_values` 1..=`max`, the
+/// footnote "`min_values` must be either omitted or at least `1` if
+/// `required` is omitted or `true`" (`required` defaults to `true`, so only
+/// an explicit `required(false)` allows 0), and `min <= max` with Discord's
+/// defaults for an omitted side: `min_values` defaults to 1 for both
+/// components, an omitted `max_values` is `omitted_max` (1 for a file
+/// upload, the number of options for a checkbox group).
 fn check_value_range(
     component: &str,
     min_values: Option<u8>,
     max_values: Option<u8>,
     required: Option<bool>,
     max: u8,
+    omitted_max: OmittedMax,
 ) -> Result<(), DiscordError> {
     if let Some(min) = min_values {
         if min > max {
@@ -1209,15 +1231,25 @@ fn check_value_range(
         }
     }
     // Not a separate rule in the docs, but a minimum above the maximum can
-    // never be met; select menus and text inputs apply the same check.
-    if let (Some(min), Some(max_values)) = (min_values, max_values) {
-        if min > max_values {
-            return Err(DiscordError::model(format!(
-                "{component} min_values ({min}) must not exceed max_values ({max_values})"
-            )));
-        }
+    // never be met; select menus and text inputs apply the same check. An
+    // omitted side takes Discord's default, so `min_values(2)` alone on a
+    // file upload (whose `max_values` defaults to 1) is caught too. With
+    // `min_values` omitted the minimum is 1, which every valid `max_values`
+    // allows.
+    let Some(min) = min_values else {
+        return Ok(());
+    };
+    match max_values {
+        Some(max_values) if min > max_values => Err(DiscordError::model(format!(
+            "{component} min_values ({min}) must not exceed max_values ({max_values})"
+        ))),
+        None if min > omitted_max.value => Err(DiscordError::model(format!(
+            "{component} min_values ({min}) must not exceed max_values, which is {} when \
+             omitted ({})",
+            omitted_max.value, omitted_max.source
+        ))),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Checks each radio or checkbox group option's `label`, `value`, and

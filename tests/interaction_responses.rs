@@ -647,3 +647,54 @@ fn modal_inputs_carry_their_component_id() {
         assert_eq!(wire(&component), golden);
     }
 }
+
+/// Regression (astra review): `min_values` was compared with `max_values`
+/// only when both were set, so `min_values(2)` alone on a file upload (whose
+/// `max_values` defaults to 1) passed. An omitted side now takes Discord's
+/// default.
+#[test]
+fn omitted_max_values_take_discords_default() {
+    let one =
+        |component: LabelComponent| Modal::new("m", "T").component(Label::new("L", component));
+
+    // File upload: `max_values` defaults to 1.
+    let error = modal_error(&one(FileUpload::new("f").min_values(2).into()));
+    assert!(
+        error.contains("file upload min_values (2) must not exceed max_values, which is 1 when omitted (Discord's default)"),
+        "{error}"
+    );
+    one(FileUpload::new("f").min_values(1).into())
+        .validate()
+        .expect("min 1 with the default max 1");
+    one(FileUpload::new("f").min_values(2).max_values(2).into())
+        .validate()
+        .expect("explicit max");
+    // `min_values` defaults to 1, which any valid `max_values` allows.
+    one(FileUpload::new("f").max_values(1).into())
+        .validate()
+        .expect("min omitted");
+
+    // Checkbox group: `max_values` defaults to the number of options.
+    let three = || {
+        CheckboxGroup::new("c")
+            .option(SelectOption::new("A", "a"))
+            .option(SelectOption::new("B", "b"))
+            .option(SelectOption::new("C", "c"))
+    };
+    one(three().min_values(3).into())
+        .validate()
+        .expect("min equal to the number of options");
+    let error = modal_error(&one(CheckboxGroup::new("c")
+        .option(SelectOption::new("A", "a"))
+        .option(SelectOption::new("B", "b"))
+        .min_values(3)
+        .into()));
+    assert!(
+        error.contains("checkbox group min_values (3) must not exceed max_values, which is 2 when omitted (the number of options)"),
+        "{error}"
+    );
+    // An explicit max is still not compared with the number of options.
+    one(three().max_values(10).into())
+        .validate()
+        .expect("explicit max above the option count");
+}
