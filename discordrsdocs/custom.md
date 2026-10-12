@@ -63,18 +63,20 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
 
 - **Purpose:** Build individual interactive components and assemble component messages.
 - **Key Types:**
-  - `ButtonBuilder`: configure style, label, emoji, custom ID or URL, disabled state.
-  - `SelectMenuBuilder`: create dropdown menus with options, placeholder, limits.
-  - `ActionRowBuilder`: group up to five components in a row.
-  - `ComponentsV2Message`: top-level container of built components.
+  - `CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`: the three button kinds, each with only the fields Discord allows it (the 2.x `ButtonBuilder` is deprecated and converts only with `Button::try_from`).
+  - `SelectMenuBuilder`: create dropdown menus with options, placeholder, limits; a select menu is its own action row.
+  - `ActionRowBuilder`: a row of up to five buttons.
+  - `ComponentsV2Message`: the top-level components of a Components V2 message.
+  - Every `build()` returns the typed model from `discordrs::request` (no `serde_json::Value`); see the Builders API page.
 - **Usage Example:**
   ```rust
-  let button = ButtonBuilder::new()
+  let button = CustomButtonBuilder::new("btn_1")
       .label("Click me")
-      .style(ButtonStyle::PRIMARY)
-      .custom_id("btn_1");
+      .style(ButtonStyle::PRIMARY);
   let row = ActionRowBuilder::new().add_button(button);
-  let message = ComponentsV2Message::new().add_action_row(row);
+  let message = ComponentsV2Message::new()
+      .add_action_row(row)
+      .add_action_row(SelectMenuBuilder::user("pick_user"));
   ```
 
 ### 1.2 Container (`src/builders/container.rs`)
@@ -93,7 +95,7 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
 - **Purpose:** Build media-rich sections and galleries.
 - **Key Types:**
   - `MediaGalleryBuilder`: assemble multiple images into a scrollable gallery.
-  - `SectionBuilder`: combine text, thumbnails, and accessory components into a section.
+  - `SectionBuilder`: combine text with a thumbnail or button accessory; the accessory is required and tracked in the builder's type.
   - `FileBuilder` & `ThumbnailBuilder`: attach files or thumbnails to messages.
 
 ### 1.4 Modal (`src/builders/modal.rs`)
@@ -104,14 +106,20 @@ The **builders** crate offers a fluent, type-safe API for constructing Discord C
   - `TextInputBuilder`: single-line or paragraph text inputs with labels, placeholders, length limits.
   - `RadioGroupBuilder` & `CheckboxGroupBuilder`: choice selection groups.
   - `FileUploadBuilder`, `LabelBuilder`: embed file inputs or descriptive labels.
-- **Pattern:** Components are wrapped in `ActionRowBuilder` before inclusion.
+- **Pattern:** Modal inputs sit in labels (`LabelBuilder`); message action rows are not modal components.
 
 ### 1.5 Module Exports (`src/builders/mod.rs`)
 
 Re-exports the supported builder surface for ergonomic import. Use `discordrs::builders::{...}` or the crate-root re-exports; the implementation submodules (`components`, `container`, `media`, `modal`) are internal and not part of the public path contract.
 
 ```rust
-pub use components::{ActionRowBuilder, ButtonBuilder, ComponentsV2Message, SelectMenuBuilder};
+pub use components::ButtonBuilder; // deprecated
+pub use components::{
+    ActionRowBuilder, ComponentsV2Message, CustomButtonBuilder, LinkButtonBuilder,
+    PremiumButtonBuilder, SelectMenuBuilder,
+};
+pub use embed::EmbedBuilder;
+pub use message::MessageBuilder;
 pub use container::{create_container, ContainerBuilder, SeparatorBuilder, TextDisplayBuilder};
 pub use media::{FileBuilder, MediaGalleryBuilder, SectionBuilder, ThumbnailBuilder};
 pub use modal::{CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, LabelBuilder, ModalBuilder, RadioGroupBuilder, TextInputBuilder};

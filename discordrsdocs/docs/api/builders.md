@@ -1,46 +1,132 @@
 # Builders API
 
-The builders module gives a fluent API for Components V2 and modal payloads.
+The builders module gives a fluent API for message bodies, Components V2 layouts, embeds, and modals. Since 3.0 (phase 5) every message builder holds a typed request model from `discordrs::request` and `build()` returns it; nothing is assembled as `serde_json::Value`. The models serialize straight to the bytes the REST client sends.
 
 ## Key Submodules
 
-- `components.rs`: low-level message components (`ButtonBuilder`, `SelectMenuBuilder`, `ActionRowBuilder`)
-- `container.rs`: high-level container layouts + helper factories
-- `media.rs`: sections, thumbnails, media galleries
+- `message.rs`: `MessageBuilder` (builds a `request::CreateMessage`)
+- `components.rs`: buttons (`CustomButtonBuilder`, `LinkButtonBuilder`, `PremiumButtonBuilder`; the 2.x `ButtonBuilder` is deprecated), `ActionRowBuilder` (a row of buttons), `SelectMenuBuilder`, `ComponentsV2Message`
+- `container.rs`: `ContainerBuilder`, `TextDisplayBuilder`, `SeparatorBuilder`, and the `create_container` helper
+- `media.rs`: `SectionBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder`
+- `embed.rs`: `EmbedBuilder` (builds a `request::Embed`)
 - `modal.rs`: text input, radio, checkbox, file upload, labels
+
+| Builder | `build()` / `try_build()` returns |
+| --- | --- |
+| `MessageBuilder` | `request::CreateMessage` (converts into `InteractionMessage`, `CreateFollowup`; `TryFrom` into `UpdateMessage`, `EditInteractionResponse`) |
+| `ComponentsV2Message` | `Vec<request::Component>` |
+| `ContainerBuilder` | `request::Container` |
+| `ActionRowBuilder` | `request::ActionRow` (a `ButtonRow`) |
+| `SelectMenuBuilder` | `request::SelectMenu` |
+| `CustomButtonBuilder` / `LinkButtonBuilder` / `PremiumButtonBuilder` | `CustomButton` / `LinkButton` / `PremiumButton` |
+| `SectionBuilder<SectionAccessory>` | `request::Section` |
+| `TextDisplayBuilder`, `SeparatorBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder` | the model of the same name (`FileComponent` for files) |
+| `EmbedBuilder` | `request::Embed` |
 
 ## Common Pattern
 
 ```rust
-use discordrs::{ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentsV2Message};
+use discordrs::{
+    ActionRowBuilder, ButtonStyle, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder,
+    LinkButtonBuilder, MessageBuilder, SelectMenuBuilder, SelectOption, TextDisplayBuilder,
+};
+use discordrs::request::CreateMessage;
 
-let btn = ButtonBuilder::new()
-    .label("Open")
-    .style(ButtonStyle::PRIMARY)
-    .custom_id("open_ticket");
+let buttons = ActionRowBuilder::new()
+    .add_button(CustomButtonBuilder::new("open_ticket").label("Open").style(ButtonStyle::PRIMARY))
+    .add_button(LinkButtonBuilder::new("https://example.com/help").label("Help"));
 
-let row = ActionRowBuilder::new().add_button(btn);
-let message = ComponentsV2Message::new().add_action_row(row);
+let container = ContainerBuilder::new()
+    .add_text_display(TextDisplayBuilder::new("## Support"))
+    .add_action_row(buttons)
+    // A select menu is its own row: pass the select builder where a row goes.
+    .add_action_row(SelectMenuBuilder::string("topic").add_option(SelectOption::new("Billing", "billing")));
+
+let message: CreateMessage = MessageBuilder::new()
+    .components_v2(ComponentsV2Message::new().add_container(container))
+    .try_build()?;
 ```
+
+`components_v2(..)` sets the `IS_COMPONENTS_V2` flag. Every builder also converts into its position with `Into` (a container into a `Component`, a button builder into a `Button` or `SectionAccessory`, a select builder into a `SelectMenu` or `ActionRow`), so builders and typed models mix freely.
+
+### Buttons
+
+A button is one of three kinds, each with only the fields Discord allows it:
+
+- `CustomButtonBuilder::new(custom_id)`: primary (default), secondary, success, or danger; sends an interaction.
+- `LinkButtonBuilder::new(url)`: style 5, opens the URL; there is no `custom_id` setter.
+- `PremiumButtonBuilder::new(sku_id)`: style 6, opens the SKU's purchase flow; there is no label, emoji, URL, or `custom_id`.
+
+A link button with a `custom_id` or a premium button with a label does not compile (`tests/ui/link_button_custom_id.rs`, `premium_button_label_url.rs`).
+
+### Rows and select menus
+
+A row holds 1-5 buttons or exactly one select menu. `ActionRowBuilder` builds a row of buttons; a select menu row is the `SelectMenuBuilder` itself, accepted wherever a row is (`add_action_row(impl Into<ActionRow>)`). A row mixing buttons and a select menu does not compile (`tests/ui/mixed_button_select_row.rs`).
 
 Auto-populated selects support Discord's `default_values`, `id`, and modal `required` fields:
 
 ```rust
-use discordrs::{ActionRowBuilder, ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::{ComponentId, ComponentsV2Message, RoleId, SelectDefaultValue, SelectMenuBuilder};
 
 // Default values carry typed IDs (`SelectDefaultValue::{User, Role, Channel}`),
 // so a role cannot be listed as a user; `default_user`, `default_role`,
 // `default_channel`, and `default_mentionable` are shorthands.
 let moderators: RoleId = "701".parse()?;
-let row = ActionRowBuilder::new().add_select_menu(
+let message = ComponentsV2Message::new().add_action_row(
     SelectMenuBuilder::mentionable("notify_targets")
         .id(ComponentId::new(12))
         .default_value(SelectDefaultValue::role(moderators))
         .min_values(0)
-        .max_values(2)
-        .required(false),
+        .max_values(2),
 );
 ```
+
+One `SelectMenuBuilder` covers all five kinds, so a setter can name a field the kind does not have (options on a user select, a channel default on a role select). `build()` leaves those out, as 2.x did; `validate()` / `try_build()` report them. The typed models (`StringSelect`, `UserSelect`, `RoleSelect`, `MentionableSelect`, `ChannelSelect`) cannot hold them at all. `required` is modal-only (Discord ignores it in messages); `disabled` is message-only (a modal rejects it).
+
+### Sections
+
+Discord requires a section's accessory, and `SectionBuilder` tracks it in its type: `SectionBuilder::new()` is a `SectionBuilder<()>`, and `set_thumbnail_accessory` / `set_button_accessory` make it a `SectionBuilder<SectionAccessory>`, the only state with `build()` and the only one `add_section` accepts. Text can be added before or after the accessory.
+
+### Raw components
+
+Anything this version cannot express goes through `request::RawComponent` (`from_json`, `from_value`), accepted by every `add_component`. It is written verbatim (it holds a `serde_json::value::RawValue`, not a `Value` tree), counts as one component in validation, and is not otherwise checked.
+
+## Message Bodies (`discordrs::request`)
+
+Each endpoint family has its own body type, holding only the fields that endpoint accepts:
+
+| Type | Endpoint | Semantics |
+| --- | --- | --- |
+| `CreateMessage` | `POST /channels/{id}/messages` | create; reply/forward, stickers, nonce, `shared_client_theme` |
+| `EditMessage` | `PATCH /channels/{id}/messages/{id}` | patch; no nonce, stickers, reply, tts, poll (`clear_stickers()` / `clear_poll()` only) |
+| `InteractionMessage` | callback type 4 `data` | create; ephemeral flag, poll |
+| `UpdateMessage` | callback type 7 `data` | patch on the component's message |
+| `CreateFollowup` | `POST /webhooks/{app}/{token}` | create; ephemeral flag, poll |
+| `ExecuteWebhook` | `POST /webhooks/{id}/{token}` | create; username, avatar, thread name/tags |
+| `EditWebhookMessage` (= `EditInteractionResponse`) | `PATCH .../messages/{id or @original}` | patch; attachments listed explicitly, poll |
+
+Create bodies use `Option` (`None` omits the key; `Some(vec![])` writes `[]`). Patch bodies use `NullablePatch`: omitted keeps the current value, `null` clears it, a value replaces it. Query parameters (`wait`, `thread_id`, `with_components`) are in `WebhookExecuteQuery` / `WebhookMessageQuery`. Each body also has setters (`content`, `add_embed`, `components_v2`, `ephemeral`, ...), `From<&str>`, and conversions that fail instead of dropping a field (`InteractionMessage::try_from(create_message)` fails on a reply reference, stickers, or a nonce).
+
+Attachments are `MessageAttachment::Existing(ExistingAttachment { id: AttachmentId, .. })` (keep a stored attachment) or `MessageAttachment::Upload(AttachmentUpload { id: UploadId, .. })` (describe `files[n]`); the two id types cannot be swapped. `request::Embed` and `request::CreatePoll` are the outgoing embed and poll (a poll question is text only).
+
+## Validation
+
+`build()` never checks limits; `try_build()` checks them and returns the same type; `validate()` checks without consuming. A builder delegates to its model's `validate()`, and a parent validates its children recursively, so builder and model limits cannot disagree. The message bodies add the message-wide rules:
+
+| Rule | Limit | Source |
+| --- | --- | --- |
+| Content | 2000 characters | Create Message |
+| Embeds | 10 per message, 6000 characters across all of them | Embed Limits |
+| Stickers / nonce | 3 / 25 characters | Create Message |
+| Flags | only those the endpoint accepts (unknown bits pass) | each endpoint's `flags` row |
+| `IS_COMPONENTS_V2` | no content, embeds, poll, stickers, or shared theme | Create Message footnote |
+| Legacy messages | only action rows, at most 5 | Legacy Message Component Behavior |
+| Components V2 | at most 40 components, nested ones included | components/reference |
+| `id` / `custom_id` | unique within the message (`id` 0 may repeat) | components/reference |
+| Voice messages | one `Upload` attachment with `duration_secs` and `waveform`, nothing else; the file must be `audio/*` (`check_voice_files`) | Voice Messages |
+| Select menus | `min_values` ≤ `max_values` with omitted ones read as 1; defaults within that range | select menu structures |
+
+An edit that does not set `IS_COMPONENTS_V2` keeps the message in whatever mode it has, so only the rules both modes share are checked. The limits are named constants in `builders/limits.rs`, each citing its documentation source.
 
 ## Container Helper
 
@@ -121,7 +207,7 @@ let option = CommandOptionBuilder::attachment("file", "Upload a clip").file_type
 Since 2026-10-05 a website can replace its Discord link preview with a Components V2 layout by serving a `discord:component-embed` JSON document ([Discord docs](https://docs.discord.com/developers/link-previews/component-embeds)). No bot or app is involved: Discord's crawler reads the document from the page. `discordrs::request::ComponentEmbed` builds it from a restricted model, separate from these message builders and from the receiving side (`Embed::components`):
 
 - `ComponentEmbed { component: PreviewContainer }`. The container holds `PreviewComponent`s: text displays, sections (with a link button or thumbnail accessory), media galleries, separators, and action rows of link buttons.
-- `PreviewLinkButton` is the only button. It emits only `id`, `type`, `url`, `style` (always 5), `label`, `emoji`, and `disabled`. Nested containers, select menus, files, custom-ID buttons, and raw JSON cannot be expressed; `PreviewActionRow::add_button(ButtonBuilder)` does not compile.
+- `PreviewLinkButton` is the only button. It emits only `id`, `type`, `url`, `style` (always 5), `label`, `emoji`, and `disabled`. Nested containers, select menus, files, custom-ID buttons, and raw JSON cannot be expressed; `PreviewActionRow::add_button(CustomButtonBuilder)` does not compile.
 
 ```rust
 use discordrs::request::{
@@ -177,7 +263,26 @@ Not checked, because the spec does not require it or it cannot be known here: me
 
 Escaping: `to_json()` returns compact JSON in which every `<`, `>`, `&`, U+2028, U+2029, U+FFFE, and U+FFFF inside a string is written as `\u003c`, `\u003e`, `\u0026`, `\u2028`, `\u2029`, `\ufffe`, `\uffff`; JSON already escapes the C0 controls. No `</script>` or `<!--` can end or alter the element, and the text stays well-formed inside an XHTML page (which Discord also accepts): with the C0 controls, U+FFFE and U+FFFF are the only characters XML 1.0 forbids that a Rust string can hold. JSON parsers read the escapes back as the same characters. The 3,000-byte limit is checked on exactly this string, and `to_script_tag()` puts it inside the element with no added whitespace. Other non-ASCII text stays UTF-8, so serve the page as UTF-8.
 
-Existing message builders convert with `TryFrom`, failing with the offending path instead of dropping anything: `ComponentEmbed::try_from(container_builder)`, `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&section_builder.build())`, and `ComponentEmbed::try_from(&document)` for a hand-written `{"component": ...}` file. Custom-ID or premium buttons, selects, text inputs, files, nested containers, raw components, and unknown keys fail. Conversion is lossless or fails: the spec's nullable fields (`accent_color`, thumbnail and gallery item `description`) are `NullablePatch` and keep an explicit `null` apart from an omitted key, and `null` anywhere else fails with `NullNotAllowed` and its path (emoji keys included, since the shared `Emoji` type cannot hold `null`). Conversion checks shape only; the limits, including separator `spacing` being 1 or 2, are checked on output.
+Existing message builders convert with `TryFrom`, failing with the offending path instead of dropping anything: `ComponentEmbed::try_from(container_builder)` and `PreviewContainer::try_from(container)` convert the typed message container field by field; `PreviewContainer::try_from(&value)`, `PreviewComponent::try_from(&value)`, and `ComponentEmbed::try_from(&document)` read JSON (a hand-written `{"component": ...}` file, for example), and a `RawComponent` child of a container goes through the same reader. Custom-ID or premium buttons, selects, text inputs, files, nested containers, non-preview raw components, and unknown keys fail. Conversion is lossless or fails: the spec's nullable fields (`accent_color`, thumbnail and gallery item `description`) are `NullablePatch` and keep an explicit `null` apart from an omitted key, and `null` anywhere else fails with `NullNotAllowed` and its path (emoji keys included, since the shared `Emoji` type cannot hold `null`). Conversion checks shape only; the limits, including separator `spacing` being 1 or 2, are checked on output.
+
+## Migrating from 2.x builders
+
+| 2.x | 3.0 |
+| --- | --- |
+| `ButtonBuilder::new().style(..).custom_id(id)` | `CustomButtonBuilder::new(id).style(..)` |
+| `ButtonBuilder::new().url(url)` | `LinkButtonBuilder::new(url)` |
+| premium style on `ButtonBuilder` (no SKU) | `PremiumButtonBuilder::new(sku_id)` |
+| keeping a `ButtonBuilder` | deprecated; `Button::try_from(builder)?` or `builder.build()?` (fails for a premium style or a missing `custom_id`) |
+| `ActionRowBuilder::new().add_select_menu(menu)` | pass `menu` where the row goes (`add_action_row(menu)`) |
+| `ActionRowBuilder::add_text_input` / `add_component(Value)` | removed; text inputs belong to modals, raw JSON is `RawComponent` |
+| `add_component(json!(..))` on containers and messages | `add_component(RawComponent::from_value(&json!(..))?)` |
+| `SectionBuilder::new()` without an accessory, checked at `validate()` | does not compile where a section is added; set the accessory |
+| `X::build() -> serde_json::Value` | `X::build()` returns the typed model; `serde_json::to_value(&x)` if JSON is needed |
+| `MessageBuilder::build() -> model::CreateMessage`, `components(Vec<Value>)` | `-> request::CreateMessage`, `components(Vec<Component>)` / `add_component(..)` |
+| `MessageBuilder::flags(u64)` | `flags(impl Into<MessageFlags>)` (`u64` still works) |
+| `EmbedBuilder::build() -> Value` | `-> request::Embed`; `MessageBuilder::add_embed(builder)` |
+| `SelectMenuBuilder` silently dropped fields of other kinds | still dropped by `build()`, now reported by `validate()` |
+| `message_flags::SUPPRESS_NOTIFICATIONS` = 1 << 10, `IS_VOICE_MESSAGE` = 1 << 12 | 1 << 12 and 1 << 13 (Discord's values); `HAS_SNAPSHOT` = 1 << 14 added |
 
 ## Practical Advice
 

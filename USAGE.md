@@ -505,10 +505,10 @@ async fn guild_admin(http: &DiscordHttpClient) -> Result<(), discordrs::DiscordE
 
 ## 5. Send Messages with Typed Helpers
 
-If you want a typed message body instead of hand-written JSON, use `MessageBuilder` and `send_message`.
+If you want a typed message body instead of hand-written JSON, use `MessageBuilder`. It builds a `discordrs::request::CreateMessage` (3.0), which the REST client encodes straight to JSON bytes.
 
 ```rust
-use discordrs::{send_message, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageBuilder};
+use discordrs::{ActionRowBuilder, ButtonStyle, CustomButtonBuilder, MessageBuilder};
 
 async fn send_panel(
     http: &discordrs::DiscordHttpClient,
@@ -516,18 +516,16 @@ async fn send_panel(
 ) -> Result<(), discordrs::DiscordError> {
     let message = MessageBuilder::new()
         .content("Support panel")
-        .components(vec![
-            ActionRowBuilder::new()
-                .add_button(
-                    ButtonBuilder::new()
-                        .custom_id("ticket_open")
-                        .label("Open Ticket")
-                        .style(ButtonStyle::PRIMARY),
-                )
-                .build(),
-        ]);
+        .add_component(
+            ActionRowBuilder::new().add_button(
+                CustomButtonBuilder::new("ticket_open")
+                    .label("Open Ticket")
+                    .style(ButtonStyle::PRIMARY),
+            ),
+        )
+        .try_build()?;
 
-    send_message(http, channel_id, message.build()).await?;
+    http.create_message(channel_id, &message).await?;
     Ok(())
 }
 ```
@@ -563,18 +561,18 @@ async fn send_support_panel(
 Auto-populated select menus preserve Discord's current `default_values`, component `id`, and modal `required` fields:
 
 ```rust
-use discordrs::{ActionRowBuilder, ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
+use discordrs::request::ActionRow;
+use discordrs::{ComponentId, RoleId, SelectDefaultValue, SelectMenuBuilder};
 
 // Default values carry typed IDs, so a role cannot be listed as a user.
+// A select menu is its own action row.
 let moderators: RoleId = "701".parse()?;
-let row = ActionRowBuilder::new().add_select_menu(
-    SelectMenuBuilder::mentionable("notify_targets")
-        .id(ComponentId::new(12))
-        .default_value(SelectDefaultValue::role(moderators))
-        .min_values(0)
-        .max_values(2)
-        .required(false),
-);
+let row: ActionRow = SelectMenuBuilder::mentionable("notify_targets")
+    .id(ComponentId::new(12))
+    .default_value(SelectDefaultValue::role(moderators))
+    .min_values(0)
+    .max_values(2)
+    .into();
 ```
 
 ## 5.4 Sticker Resource Helpers
