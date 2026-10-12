@@ -4,7 +4,9 @@
 //! It holds a typed [`CreateMessage`] and has setters only for the fields
 //! every message endpoint shares (content, embeds, components, flags,
 //! allowed mentions, attachments, poll, tts), so it converts losslessly into
-//! an [`InteractionMessage`] or [`CreateFollowup`] as well. Channel-only
+//! an [`InteractionMessage`] or [`CreateFollowup`] as well (and, failing on
+//! `tts` or a poll, into an [`UpdateMessage`] or [`EditInteractionResponse`]).
+//! Channel-only
 //! fields (reply reference, stickers, nonce) are set on the built
 //! [`CreateMessage`].
 
@@ -12,8 +14,8 @@ use crate::bitfield::{message_flags, MessageFlags};
 use crate::error::DiscordError;
 use crate::model::AllowedMentions;
 use crate::request::{
-    Component, CreateFollowup, CreateMessage, CreatePoll, Embed, InteractionMessage,
-    MessageAttachment,
+    Component, CreateFollowup, CreateMessage, CreatePoll, EditInteractionResponse, Embed,
+    InteractionMessage, MessageAttachment, UpdateMessage,
 };
 
 use super::components::ComponentsV2Message;
@@ -200,6 +202,26 @@ impl From<MessageBuilder> for CreateFollowup {
     }
 }
 
+/// The `UPDATE_MESSAGE` (7) body setting every field the builder set.
+/// Fails when the builder set `tts` or a poll, which an update cannot set.
+impl TryFrom<MessageBuilder> for UpdateMessage {
+    type Error = DiscordError;
+
+    fn try_from(builder: MessageBuilder) -> Result<Self, Self::Error> {
+        UpdateMessage::try_from(InteractionMessage::from(builder))
+    }
+}
+
+/// The `@original` / follow-up edit setting every field the builder set.
+/// Fails when the builder set `tts`, which an edit cannot set.
+impl TryFrom<MessageBuilder> for EditInteractionResponse {
+    type Error = DiscordError;
+
+    fn try_from(builder: MessageBuilder) -> Result<Self, Self::Error> {
+        EditInteractionResponse::try_from(InteractionMessage::from(builder))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::MessageBuilder;
@@ -240,6 +262,57 @@ mod tests {
             expected
         );
         builder.validate().expect("ephemeral is fine for a builder");
+    }
+
+    #[test]
+    fn every_setter_reaches_the_body() {
+        use crate::model::{AllowedMentions, UploadId};
+        use crate::request::{
+            AttachmentUpload, CreateMessage, CreatePoll, EditInteractionResponse, TextDisplay,
+            UpdateMessage,
+        };
+
+        let builder = MessageBuilder::new()
+            .content("c")
+            .components(vec![TextDisplay::new("t").into()])
+            .add_component(TextDisplay::new("u"))
+            .flags(1 << 2)
+            .ephemeral(false)
+            .embeds(vec![EmbedBuilder::new().title("a").build()])
+            .add_embed(EmbedBuilder::new().title("b"))
+            .allowed_mentions(AllowedMentions::default())
+            .add_attachment(AttachmentUpload::new(UploadId::new(0)))
+            .poll(CreatePoll::new("Q").add_answer("A"))
+            .tts(true);
+        let message = CreateMessage::from(builder.clone());
+        assert_eq!(message.components.as_ref().map(Vec::len), Some(2));
+        assert_eq!(message.embeds.as_ref().map(Vec::len), Some(2));
+        assert_eq!(message.flags.map(|flags| flags.bits()), Some(1 << 2));
+        assert_eq!(message.tts, Some(true));
+        assert!(message.poll.is_some() && message.attachments.is_some());
+        assert!(message.allowed_mentions.is_some());
+        // tts and poll cannot be set by an update; tts not by an edit.
+        assert!(UpdateMessage::try_from(builder.clone()).is_err());
+        assert!(EditInteractionResponse::try_from(builder.clone()).is_err());
+        let plain = MessageBuilder::new().content("x");
+        assert_eq!(
+            serde_json::to_value(UpdateMessage::try_from(plain.clone()).unwrap()).unwrap(),
+            json!({"content": "x"})
+        );
+        assert_eq!(
+            serde_json::to_value(EditInteractionResponse::try_from(plain).unwrap()).unwrap(),
+            json!({"content": "x"})
+        );
+        // Layout components without the V2 flag are a legacy-message error.
+        assert!(builder
+            .try_build()
+            .unwrap_err()
+            .to_string()
+            .contains("IS_COMPONENTS_V2"));
+        MessageBuilder::new()
+            .content("ok")
+            .try_build()
+            .expect("valid");
     }
 
     #[test]
