@@ -220,7 +220,7 @@ Interactions decode straight from JSON text (`decode_interaction`, or `Interacti
 
 | 2.x / early 3.0 | 3.0 |
 |---|---|
-| `parse_interaction(&value)` on a parsed `Value` | `decode_interaction(text)` (or `serde_json::from_slice::<Interaction>(body)`); `parse_interaction(&Value)` still works |
+| `parse_interaction(&value)` on a parsed `Value` | `decode_interaction(text)` (or `serde_json::from_str::<Interaction>(text)`); `parse_interaction(&Value)` still works (it goes through text) |
 | `Interaction` serialized as `{"ChatInputCommand": {"context": .., "data": ..}}` | Discord's wire format (`{"id", "type", "data", "token", ..}`); the same for `V2ModalSubmission` / `V2ModalComponent` (`{"type": 4, "custom_id", "value"}`) |
 | `Interaction::Unknown { raw_data: Value }` (`Value::Null` without `data`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())` to read it |
 | `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |

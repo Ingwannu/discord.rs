@@ -18,6 +18,8 @@
          "note": "size_of::<EventKind>() (tests/perf_report/main.rs layout scenario); 48 since phase 4 B"},
         {"scenario": "layout.size_of", "metric": "empty_collector_hub_bytes", "max": 4096,
          "note": "256-slot empty journal storage <= 4 KiB; measured as the heap of CollectorHub::new(), so the hub's fixed overhead (136 B at 23775d1) counts too"},
+        {"scenario": "layout.size_of", "metric": "channel", "max": 520,
+         "note": "+2% rule exception (23775d1: 488): Channel.permissions and app_permissions, the invoking user's and the bot's computed permissions on interaction channels (2 x 16 B); 3.0-types-events-requests.md '4단계 모델·파서 결과'"},
         {"scenario": "collectors.payload_copies", "metric": "k64_minus_k1", "max": 0.25,
          "note": "0 extra copies; the 0.25 margin absorbs end-to-end counting noise (one copy is tens of allocations)"},
         {"scenario": "storm.guild_create_25", "metric": "retained_bytes", "max": 190000000},
@@ -39,8 +41,8 @@
          "note": "+2% rule exception (23775d1: 6,112): the journal holds the Arc<MessageUpdate>; 3.0-types-events-requests.md '4단계 B 후속'"},
         {"scenario": "inbound.message_update.partial", "metric": "steps.decode_event.retained_bytes", "max": 6268,
          "note": "+2% rule exception (23775d1: 3,625): the journal holds the Arc<MessageUpdate>; 23775d1 freed the handler copy in handler_drop instead; 3.0-types-events-requests.md '4단계 B 후속'"},
-        {"scenario": "inbound.interaction_create.chat_input", "metric": "steps.decode_event.alloc_bytes", "max": 78212,
-         "note": "+2% rule exception (23775d1: 74,518): the d Value parse moved into this step from parse_frame/envelope; the scenario total halved; 3.0-types-events-requests.md '4단계 B 후속'"}
+        {"scenario": "inbound.interaction_create.chat_input", "metric": "steps.decode_event.alloc_bytes", "max": 16696,
+         "note": "tightened to the measured 16,368 +2% once decode_event read INTERACTION_CREATE with the direct interaction decoder (23775d1: 74,518; B with the Value parser: 76,678, cap 78,212); 3.0-types-events-requests.md '4단계 모델·파서 결과'"}
       ]
     },
     "C": {

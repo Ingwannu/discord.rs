@@ -9,7 +9,7 @@
 - `parse_raw_interaction(&Value)`
 - `parse_interaction_context(&Value)`
 
-`Interaction`의 `Serialize`/`Deserialize`는 Discord 와이어 형식입니다(3.0. 2.x는 `{"ChatInputCommand": {...}}` 외부 태그 형식이었음). 그래서 `serde_json::from_slice::<Interaction>(bytes)`, `Interaction::deserialize(&*raw_value)`도 됩니다. 디코더는 payload를 한 번만 읽습니다. `Value` 트리를 만들지 않고 `data`·`resolved`·`member`를 복제하지 않습니다. resolved 사용자·멤버·채널·역할·첨부가 든 3.9 KB 채팅 입력 payload에서 할당은 60회입니다(2.x `decode_event`는 652회).
+`Interaction`의 `Serialize`/`Deserialize`는 Discord 와이어 형식입니다(3.0. 2.x는 `{"ChatInputCommand": {...}}` 외부 태그 형식이었음). 그래서 `serde_json::from_str::<Interaction>(text)`, `Interaction::deserialize(&*raw_value)`도 됩니다. 게이트웨이·인터랙션 엔드포인트·REST는 모두 텍스트에서 디코딩합니다. 다른 리더(`from_slice`, `Value`)도 동작하지만 모든 모델 디코더가 한 벌 더 컴파일되므로, `parse_interaction(&Value)`는 값을 텍스트로 다시 쓴 뒤 읽습니다. 디코더는 payload를 한 번만 읽습니다. `Value` 트리를 만들지 않고 `data`·`resolved`·`member`를 복제하지 않습니다. resolved 사용자·멤버·채널·역할·첨부가 든 3.9 KB 채팅 입력 payload에서 할당은 60회입니다(2.x `decode_event`는 652회).
 
 키 순서: JSON 객체에는 순서가 없고 `data`의 모양은 `type`에 따라 다릅니다. `type`이 먼저 오면(Discord 게이트웨이의 순서) 컴포넌트·자동완성·모달 제출의 `data`는 그 자리에서 디코딩합니다. 애플리케이션 명령의 `data`는 변형이 그 안의 명령 `type`에 달려 있고 모르는 명령 타입은 `data`를 받은 그대로 지켜야 하므로, 항상 JSON 텍스트로 먼저 잡았다가 객체 끝에서 디코딩합니다(`data` 복사 1회). `data`가 `type`보다 먼저 와도 같은 방식입니다. 결과는 같습니다.
 

@@ -216,7 +216,7 @@ fn describe(channel: &Channel) -> &'static str {
 
 | 2.x / 초기 3.0 | 3.0 |
 |---|---|
-| 파싱한 `Value`에 `parse_interaction(&value)` | `decode_interaction(text)`(또는 `serde_json::from_slice::<Interaction>(body)`); `parse_interaction(&Value)`도 그대로 동작 |
+| 파싱한 `Value`에 `parse_interaction(&value)` | `decode_interaction(text)`(또는 `serde_json::from_str::<Interaction>(text)`); `parse_interaction(&Value)`도 그대로 동작(텍스트를 거침) |
 | `Interaction`이 `{"ChatInputCommand": {"context": .., "data": ..}}`로 직렬화 | Discord 와이어 형식(`{"id", "type", "data", "token", ..}`); `V2ModalSubmission` / `V2ModalComponent`도 같음(`{"type": 4, "custom_id", "value"}`) |
 | `Interaction::Unknown { raw_data: Value }`(`data`가 없으면 `Value::Null`) | `raw_data: Option<Box<RawValue>>`; `serde_json::from_str(raw.get())`로 읽음 |
 | `CommandInteractionOption::value: Option<Value>`, `option.value == Some(json!("x"))` | `Option<CommandOptionValue>`: `value.as_str()`, `as_i64()`, `as_f64()`, `as_bool()`, `as_id()` |
