@@ -24,16 +24,19 @@
 
 use serde_json::Value;
 
+use crate::bitfield::MessageFlags;
 use crate::builders::{create_container, ComponentsV2Message, ContainerBuilder, ModalBuilder};
 use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
 use crate::error::DiscordError;
 use crate::http::DiscordHttpClient;
 use crate::model::{
-    ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionCallbackResponse,
-    InteractionContextData, InteractionId, InteractionResponseType, Message, MessageId,
+    ApplicationCommandOptionChoice, ChannelId, CreateMessage, InteractionContextData,
+    InteractionId, Message, MessageId,
 };
-use crate::request::Component;
-use crate::response::InteractionReplyData;
+use crate::request::{
+    self, Component, CreateFollowup, EditInteractionResponse, InteractionMessage,
+    InteractionResponse,
+};
 use crate::types::ButtonConfig;
 
 fn components_v2_flags(ephemeral: bool) -> u64 {
@@ -44,29 +47,46 @@ fn components_v2_flags(ephemeral: bool) -> u64 {
     flags
 }
 
+/// A Components V2 channel-message body for the JSON channel-message
+/// helpers (`send_container_message`, `send_components_v2`,
+/// `edit_message_with_container`), which keep their 2.x JSON results until
+/// the REST message endpoints take the typed request bodies.
 struct ComponentsV2Payload {
     components: Vec<Component>,
-    ephemeral: bool,
 }
 
 impl ComponentsV2Payload {
     fn new(components: Vec<Component>) -> Self {
-        Self {
-            components,
-            ephemeral: false,
-        }
-    }
-
-    fn ephemeral(mut self, ephemeral: bool) -> Self {
-        self.ephemeral = ephemeral;
-        self
+        Self { components }
     }
 
     fn into_value(self) -> Value {
         serde_json::json!({
             "components": self.components,
-            "flags": components_v2_flags(self.ephemeral),
+            "flags": components_v2_flags(false),
         })
+    }
+}
+
+/// The flags of a Components V2 message.
+fn components_v2_message_flags(ephemeral: bool) -> MessageFlags {
+    MessageFlags::from_bits(components_v2_flags(ephemeral))
+}
+
+/// A Components V2 message callback: `UPDATE_MESSAGE` when `update`,
+/// otherwise `CHANNEL_MESSAGE_WITH_SOURCE`.
+fn components_v2_callback(
+    update: bool,
+    components: Vec<Component>,
+    ephemeral: bool,
+) -> InteractionResponse {
+    let message = InteractionMessage::new()
+        .components(components)
+        .flags(components_v2_message_flags(ephemeral));
+    if update {
+        InteractionResponse::UpdateMessage(message)
+    } else {
+        InteractionResponse::ChannelMessage(message)
     }
 }
 
@@ -114,15 +134,8 @@ pub async fn respond_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build().into()])
-        .ephemeral(ephemeral)
-        .into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(false, vec![container.build().into()], ephemeral);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -133,7 +146,7 @@ pub async fn respond_with_container(
 pub async fn respond_to_interaction(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    response: InteractionCallbackResponse,
+    response: InteractionResponse,
 ) -> Result<(), DiscordError> {
     context.create_response(http, &response).await
 }
@@ -142,25 +155,26 @@ pub async fn respond_to_interaction(
 ///
 /// State-aware: delegates to [`InteractionContextData::reply`]. Fails before
 /// any request when `message` sets channel-message-only fields (see
-/// [`InteractionReplyData`]'s `TryFrom<CreateMessage>`). Prefer
+/// [`InteractionMessage`]'s `TryFrom<request::CreateMessage>`). Prefer
 /// `reply`/`reply_ephemeral` on the interaction; this helper will be
 /// deprecated once the bundled examples have moved off it.
 pub async fn respond_with_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message: CreateMessage,
+    message: request::CreateMessage,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    context.reply(http, reply_data(message, ephemeral)?).await
-}
-
-/// Converts a `CreateMessage` into reply data, adding the ephemeral flag.
-fn reply_data(
-    message: CreateMessage,
-    ephemeral: bool,
-) -> Result<InteractionReplyData, DiscordError> {
-    let data = InteractionReplyData::try_from(message)?;
-    Ok(if ephemeral { data.ephemeral() } else { data })
+    let message = InteractionMessage::try_from(message)?;
+    context
+        .reply(
+            http,
+            if ephemeral {
+                message.ephemeral(true)
+            } else {
+                message
+            },
+        )
+        .await
 }
 
 /// Replies (type 4) to a component interaction with a Components V2
@@ -176,15 +190,8 @@ pub async fn respond_component_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build().into()])
-        .ephemeral(ephemeral)
-        .into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(false, vec![container.build().into()], ephemeral);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -200,15 +207,8 @@ pub async fn respond_modal_with_container(
     container: ContainerBuilder,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build().into()])
-        .ephemeral(ephemeral)
-        .into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(false, vec![container.build().into()], ephemeral);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -225,12 +225,11 @@ pub async fn followup_with_container(
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
-) -> Result<Value, DiscordError> {
-    let body = ComponentsV2Payload::new(vec![container.build().into()])
-        .ephemeral(ephemeral)
-        .into_value();
-    http.create_followup_message_json(interaction_token, &body)
-        .await
+) -> Result<Message, DiscordError> {
+    let body = CreateFollowup::new()
+        .components(vec![container.build().into()])
+        .flags(components_v2_message_flags(ephemeral));
+    http.create_followup_message(interaction_token, &body).await
 }
 
 /// Sends a follow-up message, optionally ephemeral.
@@ -245,11 +244,19 @@ pub async fn followup_with_container(
 pub async fn followup_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message: CreateMessage,
+    message: request::CreateMessage,
     ephemeral: bool,
 ) -> Result<Message, DiscordError> {
+    let message = CreateFollowup::try_from(message)?;
     context
-        .follow_up(http, reply_data(message, ephemeral)?)
+        .follow_up(
+            http,
+            if ephemeral {
+                message.ephemeral(true)
+            } else {
+                message
+            },
+        )
         .await
 }
 
@@ -279,10 +286,10 @@ pub async fn get_original_response(
 pub async fn edit_original_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message: CreateMessage,
+    message: request::CreateMessage,
 ) -> Result<Message, DiscordError> {
     context
-        .edit_reply(http, InteractionReplyData::try_from(message)?)
+        .edit_reply(http, EditInteractionResponse::try_from(message)?)
         .await
 }
 
@@ -326,10 +333,14 @@ pub async fn edit_followup_response(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
     message_id: MessageId,
-    message: CreateMessage,
+    message: request::CreateMessage,
 ) -> Result<Message, DiscordError> {
     context
-        .edit_follow_up(http, message_id, InteractionReplyData::try_from(message)?)
+        .edit_follow_up(
+            http,
+            message_id,
+            EditInteractionResponse::try_from(message)?,
+        )
         .await
 }
 
@@ -355,13 +366,8 @@ pub async fn update_component_with_container(
     interaction_token: &str,
     container: ContainerBuilder,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(vec![container.build().into()]).into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::UPDATE_MESSAGE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(true, vec![container.build().into()], false);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -376,12 +382,8 @@ pub async fn respond_with_modal(
     interaction_token: &str,
     modal: ModalBuilder,
 ) -> Result<(), DiscordError> {
-    let response = serde_json::json!({
-        "type": InteractionResponseType::MODAL,
-        "data": modal.build(),
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = InteractionResponse::Modal(modal.build());
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -445,10 +447,10 @@ pub async fn defer_update_interaction(
 pub async fn update_interaction_message(
     http: &DiscordHttpClient,
     context: &InteractionContextData,
-    message: CreateMessage,
+    message: request::CreateMessage,
 ) -> Result<(), DiscordError> {
     context
-        .update_message(http, InteractionReplyData::try_from(message)?)
+        .update_message(http, InteractionMessage::try_from(message)?)
         .await
 }
 
@@ -465,13 +467,7 @@ pub async fn respond_with_autocomplete_choices(
     choices: Vec<ApplicationCommandOptionChoice>,
 ) -> Result<(), DiscordError> {
     context
-        .create_response(
-            http,
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-                data: Some(serde_json::json!({ "choices": choices })),
-            },
-        )
+        .create_response(http, &InteractionResponse::AutocompleteResult(choices))
         .await
 }
 
@@ -483,13 +479,7 @@ pub async fn launch_activity(
     context: &InteractionContextData,
 ) -> Result<(), DiscordError> {
     context
-        .create_response(
-            http,
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::LAUNCH_ACTIVITY,
-                data: None,
-            },
-        )
+        .create_response(http, &InteractionResponse::LaunchActivity)
         .await
 }
 
@@ -504,19 +494,13 @@ pub async fn defer_and_followup_container(
     interaction_token: &str,
     container: ContainerBuilder,
     ephemeral: bool,
-) -> Result<Value, DiscordError> {
-    let mut flags: u64 = 0;
-    if ephemeral {
-        flags |= crate::response::EPHEMERAL_FLAG;
-    }
-
-    let defer_data = serde_json::json!({
-        "type": InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": { "flags": flags },
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &defer_data)
-        .await?;
+) -> Result<Message, DiscordError> {
+    http.create_interaction_response(
+        interaction_id,
+        interaction_token,
+        &InteractionResponse::defer(ephemeral),
+    )
+    .await?;
 
     followup_with_container(http, interaction_token, container, ephemeral).await
 }
@@ -543,15 +527,8 @@ pub async fn respond_with_components_v2(
     message: ComponentsV2Message,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(message.build())
-        .ephemeral(ephemeral)
-        .into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(false, message.build(), ephemeral);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -568,15 +545,8 @@ pub async fn respond_component_with_components_v2(
     message: ComponentsV2Message,
     ephemeral: bool,
 ) -> Result<(), DiscordError> {
-    let data = ComponentsV2Payload::new(message.build())
-        .ephemeral(ephemeral)
-        .into_value();
-    let response = serde_json::json!({
-        "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        "data": data,
-    });
-
-    http.create_interaction_response_json(interaction_id, interaction_token, &response)
+    let response = components_v2_callback(false, message.build(), ephemeral);
+    http.create_interaction_response(interaction_id, interaction_token, &response)
         .await
 }
 
@@ -585,9 +555,9 @@ pub async fn respond_component_with_components_v2(
 #[expect(deprecated, reason = "covers the deprecated helpers")]
 mod tests {
     use crate::model::{
-        test_id, ApplicationCommandOptionChoice, CreateMessage, InteractionCallbackResponse,
-        InteractionContextData, InteractionResponseType,
+        test_id, ApplicationCommandOptionChoice, InteractionContextData, InteractionResponseType,
     };
+    use crate::request::{CreateMessage, InteractionResponse};
     use serde_json::json;
 
     use super::{
@@ -643,11 +613,7 @@ mod tests {
     }
 
     fn sample_message() -> CreateMessage {
-        CreateMessage {
-            content: Some("hello".to_string()),
-            flags: Some(8),
-            ..CreateMessage::default()
-        }
+        CreateMessage::new().content("hello").flags(4_u64)
     }
 
     fn assert_model_error_contains(error: DiscordError, expected: &str) {
@@ -683,27 +649,34 @@ mod tests {
 
     #[test]
     fn components_v2_payload_serializes_components_and_flags() {
-        let component = json!({ "type": 10, "content": "hello" });
-        let typed = || vec![crate::request::TextDisplay::new("hello").into()];
+        let component = crate::request::Component::from(crate::request::TextDisplay::new("hello"));
 
-        let standard = ComponentsV2Payload::new(typed()).into_value();
+        let standard = ComponentsV2Payload::new(vec![component.clone()]).into_value();
         assert_eq!(
             standard,
             json!({
-                "components": [component.clone()],
+                "components": [{ "type": 10, "content": "hello" }],
                 "flags": MESSAGE_FLAG_IS_COMPONENTS_V2,
             })
         );
 
-        let ephemeral = ComponentsV2Payload::new(typed())
-            .ephemeral(true)
-            .into_value();
+        let reply = serde_json::to_value(super::components_v2_callback(
+            false,
+            vec![component.clone()],
+            true,
+        ))
+        .unwrap();
         assert_eq!(
-            ephemeral,
-            json!({
-                "components": [component],
-                "flags": MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6),
-            })
+            reply["data"]["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6))
+        );
+        let update =
+            serde_json::to_value(super::components_v2_callback(true, vec![component], false))
+                .unwrap();
+        assert_eq!(update["type"], json!(7));
+        assert_eq!(
+            update["data"]["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2)
         );
     }
 
@@ -797,16 +770,9 @@ mod tests {
         let context = sample_context("456", "bad/token");
 
         assert_model_error_contains(
-            respond_to_interaction(
-                &http,
-                &context,
-                InteractionCallbackResponse {
-                    kind: InteractionResponseType::UPDATE_MESSAGE,
-                    data: Some(json!({ "content": "hello" })),
-                },
-            )
-            .await
-            .unwrap_err(),
+            respond_to_interaction(&http, &context, InteractionResponse::update("hello"))
+                .await
+                .unwrap_err(),
             "interaction_token",
         );
         assert_model_error_contains(
@@ -925,16 +891,9 @@ mod tests {
             respond_with_message(&http, &context, sample_message(), true)
                 .await
                 .unwrap_err(),
-            respond_to_interaction(
-                &http,
-                &context,
-                InteractionCallbackResponse {
-                    kind: InteractionResponseType::UPDATE_MESSAGE,
-                    data: None,
-                },
-            )
-            .await
-            .unwrap_err(),
+            respond_to_interaction(&http, &context, InteractionResponse::DeferredUpdateMessage)
+                .await
+                .unwrap_err(),
             respond_with_modal_typed(&http, &context, sample_modal())
                 .await
                 .unwrap_err(),
@@ -961,10 +920,7 @@ mod tests {
     async fn create_message_helpers_reject_channel_message_only_fields() {
         let http = sample_http(123);
         let context = acknowledged(sample_context("456", "followup-token"));
-        let referencing = || CreateMessage {
-            message_reference: Some(crate::model::MessageReference::default()),
-            ..sample_message()
-        };
+        let referencing = || sample_message().reply_to(test_id(1));
 
         for error in [
             respond_with_message(&http, &sample_context("456", "t"), referencing(), false)

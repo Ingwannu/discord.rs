@@ -467,9 +467,9 @@ mod cached_manager {
 mod interaction_handlers {
     use discordrs::{
         parse_interaction, parse_interaction_context, parse_raw_interaction,
-        try_interactions_endpoint, try_typed_interactions_endpoint, AppFramework, Interaction,
-        InteractionContext, InteractionContextData, InteractionHandler, InteractionResponse,
-        RawInteraction, TypedInteractionHandler,
+        try_interactions_endpoint, try_typed_interactions_endpoint, AppFramework, EndpointReply,
+        Interaction, InteractionContext, InteractionContextData, InteractionHandler,
+        InteractionResponse, RawInteraction, TypedInteractionHandler,
     };
     use serde_json::{json, Value};
 
@@ -486,9 +486,9 @@ mod interaction_handlers {
             &self,
             ctx: InteractionContext,
             _interaction: RawInteraction,
-        ) -> InteractionResponse {
+        ) -> EndpointReply {
             tokio::task::yield_now().await;
-            InteractionResponse::ChannelMessage(json!({ "content": ctx.id.to_string() }))
+            InteractionResponse::reply(ctx.id.to_string()).into()
         }
     }
 
@@ -500,11 +500,11 @@ mod interaction_handlers {
             &self,
             _ctx: InteractionContextData,
             interaction: Interaction,
-        ) -> InteractionResponse {
+        ) -> EndpointReply {
             tokio::task::yield_now().await;
             match interaction {
-                Interaction::ChatInputCommand(_) => InteractionResponse::DeferredMessage,
-                _ => InteractionResponse::DeferredUpdate,
+                Interaction::ChatInputCommand(_) => InteractionResponse::defer(false).into(),
+                _ => InteractionResponse::DeferredUpdateMessage.into(),
             }
         }
     }
@@ -529,10 +529,13 @@ mod interaction_handlers {
         let response = tokio::spawn(spawnable(async move { Raw.handle(ctx, raw).await }))
             .await
             .expect("raw handler completes");
-        assert!(matches!(
-            response,
-            InteractionResponse::ChannelMessage(body) if body["content"] == "100"
-        ));
+        let EndpointReply::Inline(response) = response else {
+            panic!("expected an inline reply");
+        };
+        assert_eq!(
+            serde_json::to_value(&response).expect("encodes")["data"]["content"],
+            "100"
+        );
 
         let interaction = parse_interaction(&payload).expect("typed interaction parses");
         let context = interaction.context().clone();
@@ -541,7 +544,13 @@ mod interaction_handlers {
         }))
         .await
         .expect("typed handler completes");
-        assert!(matches!(response, InteractionResponse::DeferredMessage));
+        let EndpointReply::Inline(response) = response else {
+            panic!("expected an inline reply");
+        };
+        assert!(matches!(
+            *response,
+            InteractionResponse::DeferredChannelMessage { ephemeral: false }
+        ));
     }
 
     #[test]

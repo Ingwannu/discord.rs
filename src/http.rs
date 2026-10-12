@@ -52,10 +52,7 @@ mod voice;
 mod webhook;
 
 use crate::error::DiscordError;
-use crate::model::{
-    AllowedMentions, ApplicationId, CreateMessage, InteractionCallbackResponse,
-    InteractionResponseType,
-};
+use crate::model::{AllowedMentions, ApplicationId, CreateMessage};
 use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
@@ -762,35 +759,6 @@ impl RestClient {
         let mut object = object.clone();
         object.insert("allowed_mentions".to_string(), default_value);
         Cow::Owned(Value::Object(object))
-    }
-
-    /// Applies the default `allowed_mentions` to message-bearing interaction
-    /// callbacks (`CHANNEL_MESSAGE_WITH_SOURCE`, `UPDATE_MESSAGE`) whose data
-    /// object leaves it unset.
-    fn interaction_response_with_default_allowed_mentions<'a>(
-        &self,
-        body: &'a InteractionCallbackResponse,
-    ) -> Cow<'a, InteractionCallbackResponse> {
-        if self.default_allowed_mentions.is_none()
-            || !matches!(
-                body.kind,
-                InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
-                    | InteractionResponseType::UPDATE_MESSAGE
-            )
-        {
-            return Cow::Borrowed(body);
-        }
-        let Some(data) = body.data.as_ref() else {
-            return Cow::Borrowed(body);
-        };
-        match self.json_with_default_allowed_mentions(data) {
-            Cow::Borrowed(_) => Cow::Borrowed(body),
-            Cow::Owned(data) => {
-                let mut body = body.clone();
-                body.data = Some(data);
-                Cow::Owned(body)
-            }
-        }
     }
 }
 

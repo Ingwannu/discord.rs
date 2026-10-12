@@ -2,8 +2,8 @@
 use axum::Router;
 #[cfg(feature = "interactions")]
 use discordrs::{
-    create_container, try_interactions_endpoint, CreateMessage, DiscordError, InteractionContext,
-    InteractionHandler, InteractionResponse, RawInteraction,
+    try_interactions_endpoint, DiscordError, EndpointReply, InteractionContext, InteractionHandler,
+    InteractionResponse, RawInteraction,
 };
 
 #[cfg(feature = "interactions")]
@@ -12,24 +12,14 @@ struct Handler;
 
 #[cfg(feature = "interactions")]
 impl InteractionHandler for Handler {
-    async fn handle(
-        &self,
-        _ctx: InteractionContext,
-        interaction: RawInteraction,
-    ) -> InteractionResponse {
+    async fn handle(&self, _ctx: InteractionContext, interaction: RawInteraction) -> EndpointReply {
         match interaction {
+            // Answered inline: the endpoint returns this callback as the
+            // body of Discord's request.
             RawInteraction::Command { name, .. } if name.as_deref() == Some("hello") => {
-                let _ = _ctx;
-                InteractionResponse::ChannelMessage(serde_json::json!({
-                    "components": [create_container("Hello", "From discordrs", vec![], None).build()],
-                    "content": CreateMessage {
-                        content: Some("legacy raw interaction handler".to_string()),
-                        ..CreateMessage::default()
-                    }.content,
-                    "flags": 1 << 15,
-                }))
+                InteractionResponse::reply("hello from the raw interaction handler").into()
             }
-            _ => InteractionResponse::DeferredMessage,
+            _ => InteractionResponse::defer(false).into(),
         }
     }
 }

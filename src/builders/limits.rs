@@ -52,13 +52,21 @@ pub(crate) const MAX_MEDIA_DESCRIPTION_LENGTH: usize = 1024;
 /// Text components in a section: 1-3.
 pub(crate) const MAX_SECTION_COMPONENTS: usize = 3;
 
-/// Text input labels: 1-45 characters.
+/// Label component text ("The label text; max 45 characters", Label
+/// Structure) and the deprecated `label` of a text input in an action row:
+/// 1-45 characters.
 pub(crate) const MAX_TEXT_INPUT_LABEL_LENGTH: usize = 45;
+/// Label component `description`: "An optional description text for the
+/// label; max 100 characters" (Label Structure).
+pub(crate) const MAX_LABEL_DESCRIPTION_LENGTH: usize = 100;
 /// Text input placeholders: up to 100 characters.
 pub(crate) const MAX_TEXT_INPUT_PLACEHOLDER_LENGTH: usize = 100;
 /// Text input values, and the upper bound of `min_length` (0-4000) and
 /// `max_length` (1-4000).
 pub(crate) const MAX_TEXT_INPUT_LENGTH: u16 = 4000;
+/// Upper bound of a file upload's `min_values` ("min 0 (see note), max 10")
+/// and `max_values` ("max 10"), from the File Upload Structure.
+pub(crate) const MAX_FILE_UPLOAD_VALUES: u8 = 10;
 /// Modal titles: 1-45 characters.
 pub(crate) const MAX_MODAL_TITLE_LENGTH: usize = 45;
 /// Top-level components in a modal: 1-5.

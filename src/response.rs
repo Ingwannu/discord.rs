@@ -1,22 +1,22 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tokio::sync::watch;
 
 pub use crate::builders::MessageBuilder;
 
 use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
-use crate::http::RestClient;
+use crate::http::{FileAttachment, RestClient};
 use crate::model::{
-    AllowedMentions, AutocompleteInteraction, ChatInputCommandInteraction, ComponentInteraction,
-    CreateMessage, CreatePoll, InteractionCallbackResponse, InteractionCallbackResult,
-    InteractionContextData, InteractionResponseType, Message, MessageContextMenuInteraction,
-    MessageId, ModalSubmitInteraction, PrimaryEntryPointInteraction, UserContextMenuInteraction,
+    ApplicationCommandOptionChoice, AutocompleteInteraction, ChatInputCommandInteraction,
+    ComponentInteraction, InteractionCallbackResult, InteractionContextData,
+    InteractionResponseType, Message, MessageContextMenuInteraction, MessageId,
+    ModalSubmitInteraction, PrimaryEntryPointInteraction, UserContextMenuInteraction,
+};
+use crate::request::{
+    CreateFollowup, EditInteractionResponse, InteractionMessage, InteractionResponse, Modal,
 };
 
 /// Discord message flag marking a response as ephemeral, as raw bits for
@@ -27,334 +27,71 @@ pub(crate) const EPHEMERAL_FLAG: u64 = crate::bitfield::message_flags::EPHEMERAL
 /// already been acknowledged".
 const ALREADY_ACKNOWLEDGED_CODE: u64 = 40060;
 
+/// The 2.x builder for interaction callbacks; it now produces the typed
+/// [`InteractionResponse`].
+#[deprecated(
+    since = "3.0.0",
+    note = "use the InteractionResponse constructors (reply, update, defer, modal) or variants"
+)]
 #[derive(Clone, Debug)]
-/// Typed Discord API object for `InteractionResponseBuilder`.
 pub struct InteractionResponseBuilder {
-    inner: InteractionCallbackResponse,
+    inner: InteractionResponse,
 }
 
+#[expect(deprecated, reason = "the deprecated builder's own methods")]
 impl InteractionResponseBuilder {
-    /// Creates a `channel_message` value.
+    /// A `CHANNEL_MESSAGE_WITH_SOURCE` callback. Never fails (the builder
+    /// converts losslessly); the `Result` is kept from 2.x.
     pub fn channel_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
-            inner: InteractionCallbackResponse {
-                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(serde_json::to_value(message.build())?),
-            },
+            inner: InteractionResponse::ChannelMessage(message.into()),
         })
     }
 
-    /// Creates a `deferred_channel_message` value.
+    /// A `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE` callback.
     pub fn deferred_channel_message(ephemeral: bool) -> Self {
-        let mut flags = 0_u64;
-        if ephemeral {
-            flags |= EPHEMERAL_FLAG;
-        }
-
         Self {
-            inner: InteractionCallbackResponse {
-                kind: InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(serde_json::json!({ "flags": flags })),
-            },
+            inner: InteractionResponse::DeferredChannelMessage { ephemeral },
         }
     }
 
-    /// Creates a `update_message` value.
+    /// An `UPDATE_MESSAGE` callback. Never fails; the `Result` is kept from
+    /// 2.x.
     pub fn update_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
-            inner: InteractionCallbackResponse {
-                kind: InteractionResponseType::UPDATE_MESSAGE,
-                data: Some(serde_json::to_value(message.build())?),
-            },
+            inner: InteractionResponse::UpdateMessage(message.into()),
         })
     }
 
-    /// Creates a `modal` value.
+    /// A `MODAL` callback. Never fails; the `Result` is kept from 2.x.
     pub fn modal(modal: ModalBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
-            inner: InteractionCallbackResponse {
-                kind: InteractionResponseType::MODAL,
-                data: Some(serde_json::to_value(modal.build())?),
-            },
+            inner: InteractionResponse::Modal(modal.build()),
         })
     }
 
-    pub fn build(self) -> InteractionCallbackResponse {
+    /// Returns the callback.
+    pub fn build(self) -> InteractionResponse {
         self.inner
     }
 }
 
-#[derive(Clone, Debug, Default)]
-/// Message payload accepted by the discord.js-style interaction response
-/// methods (`reply`, `edit_reply`, `follow_up`, `update_message`).
-///
-/// Holds the message fields that initial responses, follow-ups, and
-/// `@original` edits all accept. Converts from `&str`/`String`
-/// (content-only) and [`MessageBuilder`], so both
-/// `interaction.reply(&http, "hi")` and built payloads work. A
-/// [`CreateMessage`] converts with `InteractionReplyData::try_from`, which
-/// rejects channel-message-only fields instead of dropping them.
-pub struct InteractionReplyData {
-    /// Message text content.
-    pub content: Option<String>,
-    /// Raw embed objects.
-    pub embeds: Option<Vec<Value>>,
-    /// Raw component objects (action rows or components-v2 payloads).
-    pub components: Option<Vec<Value>>,
-    /// Message flags (e.g. `1 << 6` for ephemeral).
-    pub flags: Option<u64>,
-    /// Allowed-mentions overrides.
-    pub allowed_mentions: Option<AllowedMentions>,
-    /// Poll attached to the message. Discord accepts polls on replies and
-    /// follow-ups, and on an `@original` edit only when that edit completes
-    /// a deferred response.
-    pub poll: Option<CreatePoll>,
-}
+/// The 2.x name of the reply payload; the responder now takes the request
+/// type of each endpoint: [`InteractionMessage`] for initial replies and
+/// message updates, [`CreateFollowup`] for follow-ups, and
+/// [`EditInteractionResponse`] for edits. All three convert from `&str` and
+/// `String`.
+#[deprecated(
+    since = "3.0.0",
+    note = "use request::InteractionMessage (reply, update_message), request::CreateFollowup \
+            (follow_up), or request::EditInteractionResponse (edit_reply, edit_follow_up)"
+)]
+pub type InteractionReplyData = InteractionMessage;
 
-impl InteractionReplyData {
-    /// Creates an empty payload.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the message content.
-    pub fn content(mut self, content: impl Into<String>) -> Self {
-        self.content = Some(content.into());
-        self
-    }
-
-    /// Sets raw embed objects.
-    pub fn embeds(mut self, embeds: Vec<Value>) -> Self {
-        self.embeds = Some(embeds);
-        self
-    }
-
-    /// Sets raw component objects.
-    pub fn components(mut self, components: Vec<Value>) -> Self {
-        self.components = Some(components);
-        self
-    }
-
-    /// Sets the message flags, replacing any previous value.
-    pub fn flags(mut self, flags: u64) -> Self {
-        self.flags = Some(flags);
-        self
-    }
-
-    /// Sets the allowed-mentions overrides.
-    pub fn allowed_mentions(mut self, allowed_mentions: AllowedMentions) -> Self {
-        self.allowed_mentions = Some(allowed_mentions);
-        self
-    }
-
-    /// Attaches a poll.
-    pub fn poll(mut self, poll: CreatePoll) -> Self {
-        self.poll = Some(poll);
-        self
-    }
-
-    /// Marks the response ephemeral (message flag `1 << 6`).
-    pub fn ephemeral(mut self) -> Self {
-        self.flags = Some(self.flags.unwrap_or(0) | EPHEMERAL_FLAG);
-        self
-    }
-
-    /// Converts into the REST `CreateMessage` payload.
-    fn into_create_message(self) -> CreateMessage {
-        // Destructured so a field added to `InteractionReplyData` cannot be
-        // forgotten here.
-        let Self {
-            content,
-            embeds,
-            components,
-            flags,
-            allowed_mentions,
-            poll,
-        } = self;
-        CreateMessage {
-            content,
-            components,
-            flags,
-            embeds,
-            allowed_mentions,
-            poll,
-            ..CreateMessage::default()
-        }
-    }
-}
-
-impl From<&str> for InteractionReplyData {
-    fn from(content: &str) -> Self {
-        Self::new().content(content)
-    }
-}
-
-impl From<String> for InteractionReplyData {
-    fn from(content: String) -> Self {
-        Self::new().content(content)
-    }
-}
-
-/// Temporary adapter (phase 5 worker A): `MessageBuilder` now builds the
-/// typed `request::CreateMessage`, while this 2.x payload still holds JSON.
-/// Worker C replaces `InteractionReplyData` with `request::InteractionMessage`
-/// (which converts from `MessageBuilder` losslessly); until then the typed
-/// embeds and components are encoded here. `tts` and attachment metadata,
-/// which this type has no field for, are not carried.
-impl From<MessageBuilder> for InteractionReplyData {
-    fn from(builder: MessageBuilder) -> Self {
-        let message = builder.build();
-        Self {
-            content: message.content,
-            embeds: message.embeds.map(|embeds| {
-                embeds
-                    .into_iter()
-                    .map(crate::types::to_json_value)
-                    .collect()
-            }),
-            components: message.components.map(|components| {
-                components
-                    .into_iter()
-                    .map(crate::types::to_json_value)
-                    .collect()
-            }),
-            flags: message.flags.map(|flags| flags.bits()),
-            allowed_mentions: message.allowed_mentions,
-            poll: message.poll.map(Into::into),
-        }
-    }
-}
-
-/// Converts a channel-message body, carrying every field interaction
-/// responses accept.
-///
-/// Fails with `DiscordError::Model` when the message sets a field that only
-/// `POST /channels/{id}/messages` accepts: `message_reference`,
-/// `sticker_ids`, `nonce`, or `enforce_nonce`. Interaction callback,
-/// follow-up, and `@original` edit bodies have no such fields, so dropping
-/// them would silently change the message (an intended reply would arrive
-/// as a plain response, stickers would vanish). 2.2.0 had an infallible
-/// `From` that did exactly that, and also dropped `poll`.
-impl TryFrom<CreateMessage> for InteractionReplyData {
-    type Error = DiscordError;
-
-    fn try_from(message: CreateMessage) -> Result<Self, Self::Error> {
-        // Exhaustive on purpose: a field added to `CreateMessage` must be
-        // either carried or rejected here, never dropped by accident.
-        let CreateMessage {
-            content,
-            components,
-            flags,
-            embeds,
-            allowed_mentions,
-            poll,
-            message_reference,
-            sticker_ids,
-            nonce,
-            enforce_nonce,
-        } = message;
-        let unsupported: Vec<&str> = [
-            ("message_reference", message_reference.is_some()),
-            ("sticker_ids", sticker_ids.is_some()),
-            ("nonce", nonce.is_some()),
-            ("enforce_nonce", enforce_nonce),
-        ]
-        .into_iter()
-        .filter_map(|(field, set)| set.then_some(field))
-        .collect();
-        if !unsupported.is_empty() {
-            return Err(DiscordError::model(format!(
-                "interaction responses do not accept CreateMessage fields: {}",
-                unsupported.join(", ")
-            )));
-        }
-        Ok(Self {
-            content,
-            embeds,
-            components,
-            flags,
-            allowed_mentions,
-            poll,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-/// One autocomplete choice sent with
-/// [`InteractionContextData::respond_autocomplete`].
-pub struct AutocompleteChoice {
-    /// Choice name shown to the user (1-100 characters).
-    pub name: String,
-    /// Choice value returned when selected (string, integer, or double).
-    pub value: Value,
-    /// Localized choice names keyed by locale.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name_localizations: Option<HashMap<String, String>>,
-}
-
-impl AutocompleteChoice {
-    /// Creates a choice from a name and value.
-    pub fn new(name: impl Into<String>, value: impl Into<Value>) -> Self {
-        Self {
-            name: name.into(),
-            value: value.into(),
-            name_localizations: None,
-        }
-    }
-
-    /// Sets localized names keyed by locale (e.g. `"de"`, `"fr"`).
-    pub fn name_localizations(mut self, localizations: HashMap<String, String>) -> Self {
-        self.name_localizations = Some(localizations);
-        self
-    }
-}
-
-/// Builds a `CHANNEL_MESSAGE_WITH_SOURCE` (reply) or `UPDATE_MESSAGE`
-/// callback payload.
-fn message_callback(
-    kind: InteractionResponseType,
-    data: InteractionReplyData,
-) -> Result<InteractionCallbackResponse, DiscordError> {
-    Ok(InteractionCallbackResponse {
-        kind,
-        data: Some(serde_json::to_value(data.into_create_message())?),
-    })
-}
-
-/// Builds a type 5 (deferred channel message) callback payload.
-fn deferred_message_callback(ephemeral: bool) -> InteractionCallbackResponse {
-    let flags = if ephemeral { EPHEMERAL_FLAG } else { 0 };
-    InteractionCallbackResponse {
-        kind: InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE,
-        data: Some(serde_json::json!({ "flags": flags })),
-    }
-}
-
-/// Builds a type 6 (deferred message update) callback payload.
-fn deferred_update_callback() -> InteractionCallbackResponse {
-    InteractionCallbackResponse {
-        kind: InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
-        data: None,
-    }
-}
-
-/// Builds a type 9 (modal) callback payload.
-fn modal_callback(modal: ModalBuilder) -> InteractionCallbackResponse {
-    InteractionCallbackResponse {
-        kind: InteractionResponseType::MODAL,
-        data: Some(modal.build()),
-    }
-}
-
-/// Builds a type 8 (autocomplete result) callback payload.
-fn autocomplete_callback(
-    choices: Vec<AutocompleteChoice>,
-) -> Result<InteractionCallbackResponse, DiscordError> {
-    Ok(InteractionCallbackResponse {
-        kind: InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-        data: Some(serde_json::json!({ "choices": serde_json::to_value(choices)? })),
-    })
-}
+/// The 2.x name of an autocomplete choice; it is now the same type as a
+/// command option choice, with a typed value (string, integer, or number).
+#[deprecated(since = "3.0.0", note = "use ApplicationCommandOptionChoice")]
+pub type AutocompleteChoice = ApplicationCommandOptionChoice;
 
 // ---------------------------------------------------------------------------
 // Initial-response state machine
@@ -887,28 +624,33 @@ impl InteractionContextData {
     pub async fn reply(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<(), DiscordError> {
-        let response = message_callback(
-            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data.into(),
-        )?;
-        self.send_initial_response(http, AckKind::Replied, &response)
-            .await
+        let response = InteractionResponse::ChannelMessage(data.into());
+        self.send_initial_response(http, &response, &[]).await
     }
 
     /// Sends the initial reply as an ephemeral message (flag `1 << 6`).
     pub async fn reply_ephemeral(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<(), DiscordError> {
-        let response = message_callback(
-            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data.into().ephemeral(),
-        )?;
-        self.send_initial_response(http, AckKind::Replied, &response)
-            .await
+        let response = InteractionResponse::ChannelMessage(data.into().ephemeral(true));
+        self.send_initial_response(http, &response, &[]).await
+    }
+
+    /// Sends the initial reply (type 4) with file uploads. Reference each
+    /// upload from the message's `attachments`
+    /// ([`MessageAttachment`](crate::request::MessageAttachment)).
+    pub async fn reply_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<InteractionMessage>,
+        files: &[FileAttachment],
+    ) -> Result<(), DiscordError> {
+        let response = InteractionResponse::ChannelMessage(data.into());
+        self.send_initial_response(http, &response, files).await
     }
 
     /// Sends the initial reply with `with_response=true` and returns the
@@ -920,18 +662,16 @@ impl InteractionContextData {
     pub async fn reply_with_result(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<InteractionCallbackResult, DiscordError> {
-        let response = message_callback(
-            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data.into(),
-        )?;
+        let response = InteractionResponse::ChannelMessage(data.into());
+        let body = http.encode_interaction_callback(&response)?;
         let claim = self.response_state.begin(AckKind::Replied)?;
         let result = http
-            .create_interaction_response_with_result(self.id, &self.token, &response)
+            .post_interaction_callback_with_result(self.id, &self.token, body)
             .await;
-        // The request body is an already-serialized `Value`, so a JSON error
-        // can only come from decoding a 2xx response: Discord accepted it.
+        // The body was encoded before the claim, so a JSON error here can
+        // only come from decoding a 2xx response: Discord accepted it.
         let outcome = match &result {
             Err(DiscordError::Json(_)) => CallbackOutcome::Accepted,
             other => CallbackOutcome::of(other),
@@ -942,20 +682,20 @@ impl InteractionContextData {
 
     /// Defers the reply (type 5), showing a public "thinking" state.
     pub async fn defer(&self, http: &RestClient) -> Result<(), DiscordError> {
-        self.send_initial_response(http, AckKind::Deferred, &deferred_message_callback(false))
+        self.send_initial_response(http, &InteractionResponse::defer(false), &[])
             .await
     }
 
     /// Defers the reply (type 5) with an ephemeral "thinking" state.
     pub async fn defer_ephemeral(&self, http: &RestClient) -> Result<(), DiscordError> {
-        self.send_initial_response(http, AckKind::Deferred, &deferred_message_callback(true))
+        self.send_initial_response(http, &InteractionResponse::defer(true), &[])
             .await
     }
 
     /// Acknowledges without any visible response (type 6). Valid only for
     /// component and modal-submit interactions.
     pub async fn defer_update(&self, http: &RestClient) -> Result<(), DiscordError> {
-        self.send_initial_response(http, AckKind::Deferred, &deferred_update_callback())
+        self.send_initial_response(http, &InteractionResponse::DeferredUpdateMessage, &[])
             .await
     }
 
@@ -964,21 +704,21 @@ impl InteractionContextData {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<(), DiscordError> {
-        let response = message_callback(InteractionResponseType::UPDATE_MESSAGE, data.into())?;
-        self.send_initial_response(http, AckKind::Replied, &response)
-            .await
+        let response = InteractionResponse::UpdateMessage(data.into());
+        self.send_initial_response(http, &response, &[]).await
     }
 
-    /// Opens a modal (type 9). Discord accepts this only as the initial
-    /// response of command and component interactions.
+    /// Opens a modal (type 9): a [`Modal`] or a
+    /// [`ModalBuilder`](crate::builders::ModalBuilder). Discord accepts this
+    /// only as the initial response of command and component interactions.
     pub async fn show_modal(
         &self,
         http: &RestClient,
-        modal: ModalBuilder,
+        modal: impl Into<Modal>,
     ) -> Result<(), DiscordError> {
-        self.send_initial_response(http, AckKind::Replied, &modal_callback(modal))
+        self.send_initial_response(http, &InteractionResponse::Modal(modal.into()), &[])
             .await
     }
 
@@ -987,31 +727,25 @@ impl InteractionContextData {
     pub async fn respond_autocomplete(
         &self,
         http: &RestClient,
-        choices: Vec<AutocompleteChoice>,
+        choices: Vec<ApplicationCommandOptionChoice>,
     ) -> Result<(), DiscordError> {
-        let response = autocomplete_callback(choices)?;
-        self.send_initial_response(http, AckKind::Replied, &response)
+        self.send_initial_response(http, &InteractionResponse::AutocompleteResult(choices), &[])
             .await
     }
 
-    /// Sends an arbitrary initial response callback through the shared
-    /// response state, for callback types without a dedicated method (for
-    /// example `LAUNCH_ACTIVITY`, type 12).
+    /// Sends any initial response callback through the shared response
+    /// state, for callback types without a dedicated method (for example
+    /// `LAUNCH_ACTIVITY`, type 12, or a [`Raw`](InteractionResponse::Raw)
+    /// callback).
     ///
     /// Types 5 and 6 record a deferred response, `PONG` (type 1) is sent
     /// without touching the state, and every other type records a reply.
     pub async fn create_response(
         &self,
         http: &RestClient,
-        response: &InteractionCallbackResponse,
+        response: &InteractionResponse,
     ) -> Result<(), DiscordError> {
-        match AckKind::for_callback_type(response.kind) {
-            Some(kind) => self.send_initial_response(http, kind, response).await,
-            None => {
-                http.create_interaction_response_typed(self.id, &self.token, response)
-                    .await
-            }
-        }
+        self.send_initial_response(http, response, &[]).await
     }
 
     /// Edits the original response (PATCH `@original`) and returns the
@@ -1024,17 +758,38 @@ impl InteractionContextData {
     pub async fn edit_reply(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<EditInteractionResponse>,
+    ) -> Result<Message, DiscordError> {
+        self.edit_reply_with_files(http, data, &[]).await
+    }
+
+    /// [`Self::edit_reply`] with file uploads. The edit's `attachments`
+    /// must list every attachment the message keeps, the new uploads
+    /// included.
+    pub async fn edit_reply_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<EditInteractionResponse>,
+        files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let data = data.into();
         self.response_state.require_acknowledged().await?;
-        let message = http
-            .edit_original_interaction_response_with_application_id(
+        let message = if files.is_empty() {
+            http.edit_original_interaction_response_with_application_id(
                 self.application_id,
                 &self.token,
-                &data.into_create_message(),
+                &data,
             )
-            .await?;
+            .await?
+        } else {
+            http.edit_original_interaction_response_with_application_id_and_files(
+                self.application_id,
+                &self.token,
+                &data,
+                files,
+            )
+            .await?
+        };
         self.response_state.confirm_original(OriginalSeen::Edited);
         Ok(message)
     }
@@ -1072,25 +827,46 @@ impl InteractionContextData {
     pub async fn follow_up(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<CreateFollowup>,
     ) -> Result<Message, DiscordError> {
-        let data = data.into();
-        self.response_state.require_acknowledged().await?;
-        http.create_followup_message_with_application_id(
-            self.application_id,
-            &self.token,
-            &data.into_create_message(),
-        )
-        .await
+        self.follow_up_with_files(http, data, &[]).await
     }
 
     /// Sends an ephemeral follow-up message and returns it.
     pub async fn follow_up_ephemeral(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<CreateFollowup>,
     ) -> Result<Message, DiscordError> {
-        self.follow_up(http, data.into().ephemeral()).await
+        self.follow_up(http, data.into().ephemeral(true)).await
+    }
+
+    /// [`Self::follow_up`] with file uploads. Reference each upload from the
+    /// message's `attachments`.
+    pub async fn follow_up_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<CreateFollowup>,
+        files: &[FileAttachment],
+    ) -> Result<Message, DiscordError> {
+        let data = data.into();
+        self.response_state.require_acknowledged().await?;
+        if files.is_empty() {
+            http.create_followup_message_with_application_id(
+                self.application_id,
+                &self.token,
+                &data,
+            )
+            .await
+        } else {
+            http.create_followup_message_with_application_id_and_files(
+                self.application_id,
+                &self.token,
+                &data,
+                files,
+            )
+            .await
+        }
     }
 
     /// Edits a follow-up message sent for this interaction.
@@ -1101,7 +877,7 @@ impl InteractionContextData {
         &self,
         http: &RestClient,
         message_id: MessageId,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<EditInteractionResponse>,
     ) -> Result<Message, DiscordError> {
         let data = data.into();
         self.response_state.require_acknowledged().await?;
@@ -1109,7 +885,7 @@ impl InteractionContextData {
             self.application_id,
             &self.token,
             &message_id.to_string(),
-            &data.into_create_message(),
+            &data,
         )
         .await
     }
@@ -1132,17 +908,29 @@ impl InteractionContextData {
         .await
     }
 
-    /// Claims the initial-response slot, posts the callback, and settles the
-    /// slot from the outcome (see [`CallbackOutcome`]).
+    /// Encodes the callback, claims the initial-response slot, posts the
+    /// callback, and settles the slot from the outcome (see
+    /// [`CallbackOutcome`]). `PONG` never acknowledges an interaction, so it
+    /// is posted without touching the slot.
+    ///
+    /// Encoding comes first so a body that cannot be encoded fails without
+    /// claiming anything, and every error after the claim comes from the
+    /// transport.
     async fn send_initial_response(
         &self,
         http: &RestClient,
-        kind: AckKind,
-        response: &InteractionCallbackResponse,
+        response: &InteractionResponse,
+        files: &[FileAttachment],
     ) -> Result<(), DiscordError> {
+        let body = http.encode_interaction_callback(response)?;
+        let Some(kind) = AckKind::for_callback_type(response.kind()) else {
+            return http
+                .post_interaction_callback(self.id, &self.token, body, files)
+                .await;
+        };
         let claim = self.response_state.begin(kind)?;
         let result = http
-            .create_interaction_response_typed(self.id, &self.token, response)
+            .post_interaction_callback(self.id, &self.token, body, files)
             .await;
         claim.settle(CallbackOutcome::of(&result));
         result
@@ -1201,7 +989,7 @@ pub trait InteractionResponder {
     fn reply(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send {
         self.responder_context().reply(http, data.into())
     }
@@ -1210,7 +998,7 @@ pub trait InteractionResponder {
     fn reply_ephemeral(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send {
         self.responder_context().reply_ephemeral(http, data.into())
     }
@@ -1219,7 +1007,7 @@ pub trait InteractionResponder {
     fn reply_with_result(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> impl Future<Output = Result<InteractionCallbackResult, DiscordError>> + Send {
         self.responder_context()
             .reply_with_result(http, data.into())
@@ -1238,13 +1026,37 @@ pub trait InteractionResponder {
         self.responder_context().defer_ephemeral(http)
     }
 
+    /// Sends the initial reply (type 4) with file uploads. See
+    /// [`InteractionContextData::reply_with_files`].
+    fn reply_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<InteractionMessage>,
+        files: &[FileAttachment],
+    ) -> impl Future<Output = Result<(), DiscordError>> + Send {
+        self.responder_context()
+            .reply_with_files(http, data.into(), files)
+    }
+
     /// Edits the original response and returns the resulting message.
     fn edit_reply(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<EditInteractionResponse>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context().edit_reply(http, data.into())
+    }
+
+    /// Edits the original response with file uploads. See
+    /// [`InteractionContextData::edit_reply_with_files`].
+    fn edit_reply_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<EditInteractionResponse>,
+        files: &[FileAttachment],
+    ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
+        self.responder_context()
+            .edit_reply_with_files(http, data.into(), files)
     }
 
     /// Fetches the original response message.
@@ -1267,7 +1079,7 @@ pub trait InteractionResponder {
     fn follow_up(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<CreateFollowup>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context().follow_up(http, data.into())
     }
@@ -1276,10 +1088,22 @@ pub trait InteractionResponder {
     fn follow_up_ephemeral(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<CreateFollowup>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context()
             .follow_up_ephemeral(http, data.into())
+    }
+
+    /// Sends a follow-up message with file uploads. See
+    /// [`InteractionContextData::follow_up_with_files`].
+    fn follow_up_with_files(
+        &self,
+        http: &RestClient,
+        data: impl Into<CreateFollowup>,
+        files: &[FileAttachment],
+    ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
+        self.responder_context()
+            .follow_up_with_files(http, data.into(), files)
     }
 
     /// Edits a follow-up message sent for this interaction.
@@ -1287,7 +1111,7 @@ pub trait InteractionResponder {
         &self,
         http: &RestClient,
         message_id: MessageId,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<EditInteractionResponse>,
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context()
             .edit_follow_up(http, message_id, data.into())
@@ -1307,9 +1131,9 @@ pub trait InteractionResponder {
     fn show_modal(
         &self,
         http: &RestClient,
-        modal: ModalBuilder,
+        modal: impl Into<Modal>,
     ) -> impl Future<Output = Result<(), DiscordError>> + Send {
-        self.responder_context().show_modal(http, modal)
+        self.responder_context().show_modal(http, modal.into())
     }
 }
 
@@ -1360,7 +1184,7 @@ impl ComponentInteraction {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<(), DiscordError> {
         self.context.update_message(http, data).await
     }
@@ -1377,7 +1201,7 @@ impl ModalSubmitInteraction {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionReplyData>,
+        data: impl Into<InteractionMessage>,
     ) -> Result<(), DiscordError> {
         self.context.update_message(http, data).await
     }
@@ -1389,7 +1213,7 @@ impl AutocompleteInteraction {
     pub async fn respond_autocomplete(
         &self,
         http: &RestClient,
-        choices: Vec<AutocompleteChoice>,
+        choices: Vec<ApplicationCommandOptionChoice>,
     ) -> Result<(), DiscordError> {
         self.context.respond_autocomplete(http, choices).await
     }
@@ -1398,10 +1222,10 @@ impl AutocompleteInteraction {
 #[cfg(test)]
 mod tests {
     use crate::model::{
-        test_id, AllowedMentions, ChatInputCommandInteraction, ComponentInteraction, CreateMessage,
-        CreatePoll, InteractionCallbackResponse, InteractionContextData, InteractionResponseType,
-        InteractionType, MessageReference, ModalSubmitInteraction, PollAnswer, PollMedia,
+        test_id, AllowedMentions, ChatInputCommandInteraction, ComponentInteraction,
+        InteractionContextData, InteractionResponseType, InteractionType, ModalSubmitInteraction,
     };
+    use crate::request::{CreatePoll, Embed, InteractionMessage};
     use std::collections::HashMap;
     use std::time::Duration;
 
@@ -1412,13 +1236,19 @@ mod tests {
     use crate::error::DiscordError;
     use crate::http::RestClient;
 
+    #[expect(deprecated, reason = "covers the deprecated builder")]
+    use super::InteractionResponseBuilder;
     use super::{
-        autocomplete_callback, deferred_message_callback, deferred_update_callback,
-        message_callback, modal_callback, AckKind, AutocompleteChoice, CallbackOutcome,
-        InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
-        InteractionResponsePhase, InteractionResponseState, MessageBuilder, OriginalSeen, Phase,
-        PossibleKinds,
+        AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
+        InteractionResponseState, MessageBuilder, OriginalSeen, Phase, PossibleKinds,
     };
+    use crate::model::ApplicationCommandOptionChoice;
+    use crate::request::InteractionResponse;
+
+    /// The callback as Discord receives it.
+    fn wire(response: &InteractionResponse) -> serde_json::Value {
+        serde_json::to_value(response).unwrap()
+    }
 
     const MESSAGE_JSON: &str = r#"{"id":"30","channel_id":"40","content":"ok"}"#;
     const ALREADY_ACKNOWLEDGED_JSON: &str =
@@ -1645,6 +1475,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated, reason = "covers the deprecated builder")]
     fn interaction_response_builder_wraps_message_payload() {
         let response =
             InteractionResponseBuilder::channel_message(MessageBuilder::new().content("hello"))
@@ -1652,30 +1483,32 @@ mod tests {
                 .build();
 
         assert_eq!(
-            response.kind,
+            response.kind(),
             InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
         );
-        assert_eq!(response.data.unwrap()["content"], "hello");
+        assert_eq!(wire(&response)["data"]["content"], "hello");
     }
 
     #[test]
+    #[expect(deprecated, reason = "covers the deprecated builder")]
     fn interaction_response_builder_serializes_deferred_channel_message_flags() {
         let public_response = InteractionResponseBuilder::deferred_channel_message(false).build();
         let ephemeral_response = InteractionResponseBuilder::deferred_channel_message(true).build();
 
         assert_eq!(
-            public_response.kind,
+            public_response.kind(),
             InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         );
-        assert_eq!(public_response.data.unwrap()["flags"], json!(0));
+        assert_eq!(wire(&public_response)["data"]["flags"], json!(0));
         assert_eq!(
-            ephemeral_response.kind,
+            ephemeral_response.kind(),
             InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         );
-        assert_eq!(ephemeral_response.data.unwrap()["flags"], json!(1 << 6));
+        assert_eq!(wire(&ephemeral_response)["data"]["flags"], json!(1 << 6));
     }
 
     #[test]
+    #[expect(deprecated, reason = "covers the deprecated builder")]
     fn interaction_response_builder_wraps_update_message_payload() {
         let response = InteractionResponseBuilder::update_message(
             MessageBuilder::new()
@@ -1685,231 +1518,108 @@ mod tests {
         .unwrap()
         .build();
 
-        let data = response.data.unwrap();
-        assert_eq!(response.kind, InteractionResponseType::UPDATE_MESSAGE);
+        let data = wire(&response)["data"].take();
+        assert_eq!(response.kind(), InteractionResponseType::UPDATE_MESSAGE);
         assert_eq!(data["content"], json!("updated"));
         assert_eq!(data["components"], json!([]));
         assert_eq!(data["flags"], json!(MESSAGE_FLAG_IS_COMPONENTS_V2));
     }
 
     #[test]
+    #[expect(deprecated, reason = "covers the deprecated builder")]
     fn interaction_response_builder_wraps_modal_payload() {
         let response = InteractionResponseBuilder::modal(ModalBuilder::new("feedback", "Feedback"))
             .unwrap()
             .build();
 
-        let data = response.data.unwrap();
-        assert_eq!(response.kind, InteractionResponseType::MODAL);
+        let data = wire(&response)["data"].take();
+        assert_eq!(response.kind(), InteractionResponseType::MODAL);
         assert_eq!(data["custom_id"], json!("feedback"));
         assert_eq!(data["title"], json!("Feedback"));
         assert_eq!(data["components"], json!([]));
     }
 
+    /// A `MessageBuilder` converts into the callback message without
+    /// losing a field.
     #[test]
-    fn reply_data_converts_from_str_string_builder_and_create_message() {
-        let from_str = InteractionReplyData::from("hi");
-        assert_eq!(from_str.content.as_deref(), Some("hi"));
-        assert_eq!(from_str.flags, None);
-
-        let from_string = InteractionReplyData::from(String::from("hello"));
-        assert_eq!(from_string.content.as_deref(), Some("hello"));
-
-        let from_builder =
-            InteractionReplyData::from(MessageBuilder::new().content("built").ephemeral(true));
-        assert_eq!(from_builder.content.as_deref(), Some("built"));
-        assert_eq!(from_builder.flags, Some(1 << 6));
-
-        let from_message = InteractionReplyData::try_from(CreateMessage {
-            content: Some("full".to_string()),
-            embeds: Some(vec![json!({"title": "t"})]),
-            components: Some(vec![json!({"type": 1, "components": []})]),
-            flags: Some(1 << 2),
-            ..CreateMessage::default()
-        })
-        .unwrap();
-        assert_eq!(from_message.content.as_deref(), Some("full"));
-        assert_eq!(from_message.embeds.as_ref().unwrap().len(), 1);
-        assert_eq!(from_message.components.as_ref().unwrap().len(), 1);
-        assert_eq!(from_message.flags, Some(1 << 2));
-    }
-
-    fn sample_poll() -> CreatePoll {
-        CreatePoll {
-            question: PollMedia {
-                text: Some("Lunch?".to_string()),
-                ..PollMedia::default()
-            },
-            answers: vec![PollAnswer {
-                poll_media: PollMedia {
-                    text: Some("Pizza".to_string()),
-                    ..PollMedia::default()
-                },
-                ..PollAnswer::default()
-            }],
-            duration: Some(24),
-            allow_multiselect: Some(false),
-            layout_type: None,
-        }
-    }
-
-    fn interaction_message() -> CreateMessage {
-        CreateMessage {
-            content: Some("vote".to_string()),
-            components: Some(vec![json!({"type": 1, "components": []})]),
-            flags: Some(1 << 12),
-            embeds: Some(vec![json!({"title": "poll"})]),
-            allowed_mentions: Some(AllowedMentions::default()),
-            poll: Some(sample_poll()),
-            ..CreateMessage::default()
-        }
-    }
-
-    /// Regression: 2.2.0 copied five fields and silently dropped `poll`.
-    #[test]
-    fn reply_data_try_from_create_message_keeps_every_interaction_field() {
-        let message = interaction_message();
-        let expected = serde_json::to_value(&message).unwrap();
-
-        let data = InteractionReplyData::try_from(message).unwrap();
-        assert!(data.poll.is_some());
-        assert!(data.allowed_mentions.is_some());
-
-        let callback = message_callback(
-            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data.clone(),
-        )
-        .unwrap();
-        assert_eq!(callback.data.unwrap(), expected);
-        assert_eq!(
-            serde_json::to_value(data.into_create_message()).unwrap(),
-            expected
+    fn message_builder_fields_reach_the_callback_message() {
+        let message = InteractionMessage::from(
+            MessageBuilder::new()
+                .content("built")
+                .components_v2(ComponentsV2Message::new())
+                .ephemeral(true),
         );
+        let data = wire(&InteractionResponse::reply(message))["data"].take();
+        assert_eq!(data["content"], json!("built"));
+        assert_eq!(data["components"], json!([]));
+        assert_eq!(
+            data["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6))
+        );
+    }
+
+    /// Regression: 2.2.0 copied five fields and silently dropped `poll`. The
+    /// callback writes the whole message, `allowed_mentions` and `poll`
+    /// included.
+    #[test]
+    fn callback_messages_carry_every_interaction_field() {
+        let message = InteractionMessage::new()
+            .content("vote")
+            .tts(false)
+            .add_embed(Embed::new())
+            .allowed_mentions(AllowedMentions::default())
+            .poll(CreatePoll::new("Lunch?").add_answer("Pizza"))
+            .ephemeral(true);
+        let expected = serde_json::to_value(&message).unwrap();
+        let callback = InteractionResponse::reply(message);
+        assert_eq!(wire(&callback)["data"], expected);
         assert_eq!(
             expected["poll"]["question"]["text"],
             json!("Lunch?"),
             "poll must reach the callback body"
         );
-    }
-
-    /// Regression: the infallible conversion silently dropped channel-only
-    /// fields, e.g. turning an intended reply-to-message into a plain reply.
-    #[test]
-    fn reply_data_try_from_rejects_channel_message_only_fields() {
-        let cases = [
-            (
-                CreateMessage {
-                    message_reference: Some(MessageReference::default()),
-                    ..interaction_message()
-                },
-                "message_reference",
-            ),
-            (
-                CreateMessage {
-                    sticker_ids: Some(vec![test_id(9)]),
-                    ..interaction_message()
-                },
-                "sticker_ids",
-            ),
-            (
-                CreateMessage {
-                    nonce: Some("nonce".to_string()),
-                    ..interaction_message()
-                },
-                "nonce",
-            ),
-            (
-                CreateMessage {
-                    enforce_nonce: true,
-                    ..interaction_message()
-                },
-                "enforce_nonce",
-            ),
-        ];
-        for (message, field) in cases {
-            let error = InteractionReplyData::try_from(message).unwrap_err();
-            assert_model_error(&error, field);
-        }
-
-        let all = CreateMessage {
-            message_reference: Some(MessageReference::default()),
-            sticker_ids: Some(Vec::new()),
-            nonce: Some("n".to_string()),
-            enforce_nonce: true,
-            ..CreateMessage::default()
-        };
-        assert_model_error(
-            &InteractionReplyData::try_from(all).unwrap_err(),
-            "message_reference, sticker_ids, nonce, enforce_nonce",
-        );
-    }
-
-    #[test]
-    fn reply_data_builder_sets_poll_and_allowed_mentions() {
-        let data = InteractionReplyData::new()
-            .embeds(vec![json!({"title": "t"})])
-            .allowed_mentions(AllowedMentions::default())
-            .poll(sample_poll());
-        let message = data.into_create_message();
-        assert!(message.poll.is_some());
-        assert!(message.allowed_mentions.is_some());
-        assert_eq!(message.embeds.unwrap().len(), 1);
-    }
-
-    #[test]
-    fn reply_data_ephemeral_merges_with_existing_flags() {
-        let data = InteractionReplyData::new().flags(1 << 2).ephemeral();
-        assert_eq!(data.flags, Some((1 << 2) | (1 << 6)));
-
-        let plain = InteractionReplyData::from("x").ephemeral();
-        assert_eq!(plain.flags, Some(1 << 6));
+        assert_eq!(expected["allowed_mentions"], json!({}));
     }
 
     #[test]
     fn message_callback_wraps_reply_and_update_payloads() {
-        let reply = message_callback(
-            InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            InteractionReplyData::from("hi").ephemeral(),
-        )
-        .unwrap();
+        let reply = InteractionResponse::reply(InteractionMessage::from("hi").ephemeral(true));
         assert_eq!(
-            reply.kind,
+            reply.kind(),
             InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
         );
-        let data = reply.data.unwrap();
+        let data = wire(&reply)["data"].take();
         assert_eq!(data["content"], json!("hi"));
         assert_eq!(data["flags"], json!(1 << 6));
 
-        let update = message_callback(
-            InteractionResponseType::UPDATE_MESSAGE,
-            InteractionReplyData::new().components(vec![json!({"type": 1, "components": []})]),
-        )
-        .unwrap();
-        assert_eq!(update.kind, InteractionResponseType::UPDATE_MESSAGE);
-        assert_eq!(update.data.unwrap()["components"][0]["type"], json!(1));
+        // `Some(vec![])` is written: UPDATE_MESSAGE reads it as "remove all".
+        let update = InteractionResponse::update(InteractionMessage::new().components(Vec::new()));
+        assert_eq!(update.kind(), InteractionResponseType::UPDATE_MESSAGE);
+        assert_eq!(wire(&update)["data"], json!({ "components": [] }));
     }
 
     #[test]
     fn deferred_and_modal_callbacks_use_expected_kinds() {
-        let public = deferred_message_callback(false);
+        let public = InteractionResponse::defer(false);
         assert_eq!(
-            public.kind,
+            public.kind(),
             InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
         );
-        assert_eq!(public.data.unwrap()["flags"], json!(0));
+        assert_eq!(wire(&public)["data"]["flags"], json!(0));
 
-        let ephemeral = deferred_message_callback(true);
-        assert_eq!(ephemeral.data.unwrap()["flags"], json!(1 << 6));
+        let ephemeral = InteractionResponse::defer(true);
+        assert_eq!(wire(&ephemeral)["data"]["flags"], json!(1 << 6));
 
-        let update = deferred_update_callback();
+        let update = InteractionResponse::DeferredUpdateMessage;
         assert_eq!(
-            update.kind,
+            update.kind(),
             InteractionResponseType::DEFERRED_UPDATE_MESSAGE
         );
-        assert!(update.data.is_none());
+        assert!(wire(&update).get("data").is_none());
 
-        let modal = modal_callback(ModalBuilder::new("feedback", "Feedback"));
-        assert_eq!(modal.kind, InteractionResponseType::MODAL);
-        assert_eq!(modal.data.unwrap()["custom_id"], json!("feedback"));
+        let modal = InteractionResponse::modal(ModalBuilder::new("feedback", "Feedback"));
+        assert_eq!(modal.kind(), InteractionResponseType::MODAL);
+        assert_eq!(wire(&modal)["data"]["custom_id"], json!("feedback"));
     }
 
     #[test]
@@ -1917,17 +1627,18 @@ mod tests {
         let mut localizations = HashMap::new();
         localizations.insert("de".to_string(), "Abrechnung".to_string());
 
-        let response = autocomplete_callback(vec![
-            AutocompleteChoice::new("billing", "billing-value"),
-            AutocompleteChoice::new("priority", 2).name_localizations(localizations),
-        ])
-        .unwrap();
+        let mut localized = ApplicationCommandOptionChoice::new("priority", 2);
+        localized.name_localizations = Some(localizations);
+        let response = InteractionResponse::autocomplete([
+            ApplicationCommandOptionChoice::new("billing", "billing-value"),
+            localized,
+        ]);
 
         assert_eq!(
-            response.kind,
+            response.kind(),
             InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT
         );
-        let data = response.data.unwrap();
+        let data = wire(&response)["data"].take();
         let choices = data["choices"].as_array().unwrap();
         assert_eq!(choices.len(), 2);
         assert_eq!(choices[0]["name"], json!("billing"));
@@ -2681,15 +2392,9 @@ mod tests {
         let http = mock_client(&server, Duration::from_secs(10));
 
         let pong = sample_context();
-        pong.create_response(
-            &http,
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::PONG,
-                data: None,
-            },
-        )
-        .await
-        .unwrap();
+        pong.create_response(&http, &InteractionResponse::Pong)
+            .await
+            .unwrap();
         assert_eq!(
             pong.response_phase(),
             InteractionResponsePhase::Unacknowledged
@@ -2697,26 +2402,14 @@ mod tests {
 
         let deferred = sample_context();
         deferred
-            .create_response(
-                &http,
-                &InteractionCallbackResponse {
-                    kind: InteractionResponseType::DEFERRED_UPDATE_MESSAGE,
-                    data: None,
-                },
-            )
+            .create_response(&http, &InteractionResponse::DeferredUpdateMessage)
             .await
             .unwrap();
         assert!(deferred.is_deferred());
 
         let activity = sample_context();
         activity
-            .create_response(
-                &http,
-                &InteractionCallbackResponse {
-                    kind: InteractionResponseType::LAUNCH_ACTIVITY,
-                    data: None,
-                },
-            )
+            .create_response(&http, &InteractionResponse::LaunchActivity)
             .await
             .unwrap();
         assert!(activity.is_replied());
@@ -2795,11 +2488,11 @@ mod tests {
                 .await
                 .unwrap_err(),
             context
-                .respond_autocomplete(&http, vec![AutocompleteChoice::new("a", "b")])
+                .respond_autocomplete(&http, vec![ApplicationCommandOptionChoice::new("a", "b")])
                 .await
                 .unwrap_err(),
             context
-                .create_response(&http, &deferred_update_callback())
+                .create_response(&http, &InteractionResponse::DeferredUpdateMessage)
                 .await
                 .unwrap_err(),
         ] {
@@ -2854,13 +2547,7 @@ mod tests {
             context.reply_with_result(&http, "hi").await.unwrap_err(),
             context.defer(&http).await.unwrap_err(),
             context
-                .create_response(
-                    &http,
-                    &InteractionCallbackResponse {
-                        kind: InteractionResponseType::PONG,
-                        data: None,
-                    },
-                )
+                .create_response(&http, &InteractionResponse::Pong)
                 .await
                 .unwrap_err(),
         ] {
@@ -3000,7 +2687,7 @@ mod tests {
         };
         assert_model_error(
             &autocomplete
-                .respond_autocomplete(&http, vec![AutocompleteChoice::new("a", "b")])
+                .respond_autocomplete(&http, vec![ApplicationCommandOptionChoice::new("a", "b")])
                 .await
                 .unwrap_err(),
             "interaction_token",

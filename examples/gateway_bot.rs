@@ -1,7 +1,7 @@
 #[cfg(feature = "gateway")]
 use discordrs::{
-    gateway_intents, respond_with_message, Client, Context, CreateMessage, Event, EventHandler,
-    EventKind, Interaction,
+    gateway_intents, Client, Context, Event, EventHandler, EventKind, Interaction,
+    InteractionResponder,
 };
 #[cfg(feature = "gateway")]
 use std::sync::Arc;
@@ -19,16 +19,9 @@ impl EventHandler for Handler {
             EventKind::InteractionCreate(interaction) => {
                 if let Interaction::ChatInputCommand(command) = &**interaction {
                     if command.data.name.as_deref() == Some("hello") {
-                        if let Err(error) = respond_with_message(
-                            ctx.rest().as_ref(),
-                            &command.context,
-                            CreateMessage {
-                                content: Some("hello from the gateway runtime".to_string()),
-                                ..CreateMessage::default()
-                            },
-                            true,
-                        )
-                        .await
+                        if let Err(error) = command
+                            .reply_ephemeral(ctx.rest().as_ref(), "hello from the gateway runtime")
+                            .await
                         {
                             eprintln!("failed to answer /hello: {error}");
                         }

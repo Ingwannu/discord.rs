@@ -87,10 +87,14 @@ pub use crate::oauth2::{
     OAuth2TokenResponse,
 };
 pub use crate::permissions::{ChannelPermissions, ComputedPermissions, PermissionDataError};
-pub use crate::response::{
-    AutocompleteChoice, InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
-    InteractionResponsePhase, MessageBuilder,
+pub use crate::request::{
+    CreateFollowup, EditInteractionResponse, EndpointReply, InteractionMessage, InteractionResponse,
 };
+pub use crate::response::{InteractionResponder, InteractionResponsePhase, MessageBuilder};
+// Deprecated in 3.0 in favour of `InteractionResponse`, the message request
+// types, and `ApplicationCommandOptionChoice`.
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
+pub use crate::response::{AutocompleteChoice, InteractionReplyData, InteractionResponseBuilder};
 #[cfg(feature = "voice")]
 pub use crate::voice::{
     AudioTrack, VoiceConnectionConfig, VoiceEncryptionMode, VoiceGatewayCommand, VoiceManager,
@@ -168,7 +172,8 @@ mod tests {
 
         let command = crate::model::ChatInputCommandInteraction::fixture();
         assert_eq!(phase_of(&command), InteractionResponsePhase::Unacknowledged);
-        let _reply = InteractionReplyData::from("hi").ephemeral();
-        let _choice = AutocompleteChoice::new("name", "value");
+        let _reply = InteractionMessage::from("hi").ephemeral(true);
+        let _choice = ApplicationCommandOptionChoice::new("name", "value");
+        let _reply: EndpointReply = InteractionResponse::defer(true).into();
     }
 }

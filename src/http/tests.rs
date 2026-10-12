@@ -664,6 +664,14 @@ fn sample_interaction_response() -> InteractionCallbackResponse {
     }
 }
 
+fn sample_followup() -> crate::request::CreateFollowup {
+    crate::request::CreateFollowup::from("hello")
+}
+
+fn sample_edit() -> crate::request::EditInteractionResponse {
+    crate::request::EditInteractionResponse::from("hello")
+}
+
 fn sample_file(name: &str, data: &str) -> FileAttachment {
     FileAttachment::new(name, data.as_bytes().to_vec()).with_content_type("text/plain")
 }
@@ -1692,7 +1700,6 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("bot-token", 123, base_url);
-    let body = sample_message();
     let files = vec![sample_file("tokenized.txt", "tokenized file")];
 
     assert_eq!(
@@ -1711,14 +1718,14 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
         .create_interaction_response_with_files(
             test_id(778),
             "token",
-            &sample_interaction_response(),
+            &crate::request::InteractionResponse::reply("ack"),
             &files,
         )
         .await
         .expect("create interaction response with files");
     assert_eq!(
         client
-            .create_followup_message_with_files("token", &body, &files)
+            .create_followup_message_with_files("token", &sample_followup(), &files)
             .await
             .expect("create followup with files")
             .content,
@@ -1726,7 +1733,7 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     );
     assert_eq!(
         client
-            .edit_original_interaction_response_with_files("token", &body, &files)
+            .edit_original_interaction_response_with_files("token", &sample_edit(), &files)
             .await
             .expect("edit original with files")
             .content,
@@ -1734,7 +1741,7 @@ async fn tokenized_file_helpers_send_multipart_without_bot_authorization() {
     );
     assert_eq!(
         client
-            .edit_followup_message_with_files("token", "55", &body, &files)
+            .edit_followup_message_with_files("token", "55", &sample_edit(), &files)
             .await
             .expect("edit followup with files")
             .content,
@@ -5305,7 +5312,6 @@ async fn client_methods_reject_missing_application_id_before_request() {
     let client = RestClient::new("token", None);
     let command = sample_command();
     let commands = vec![command.clone()];
-    let body = sample_message();
 
     assert_model_error_contains(
         client
@@ -5331,14 +5337,14 @@ async fn client_methods_reject_missing_application_id_before_request() {
     );
     assert_model_error_contains(
         client
-            .create_followup_message_json("token", &json!({ "content": "hi" }))
+            .create_followup_message("token", &sample_followup())
             .await
             .unwrap_err(),
         "application_id must be set",
     );
     assert_model_error_contains(
         client
-            .create_followup_message("token", &body)
+            .create_followup_message("token", &sample_followup())
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -5352,7 +5358,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
     );
     assert_model_error_contains(
         client
-            .edit_original_interaction_response("token", &body)
+            .edit_original_interaction_response("token", &sample_edit())
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -5366,7 +5372,7 @@ async fn client_methods_reject_missing_application_id_before_request() {
     );
     assert_model_error_contains(
         client
-            .edit_followup_message("token", "123", &body)
+            .edit_followup_message("token", "123", &sample_edit())
             .await
             .unwrap_err(),
         "application_id must be set",
@@ -5383,7 +5389,6 @@ async fn client_methods_reject_missing_application_id_before_request() {
 #[tokio::test]
 async fn client_methods_reject_unsafe_tokens_before_request() {
     let client = RestClient::new("token", Some(test_id(123)));
-    let body = sample_message();
     let response = sample_interaction_response();
 
     assert_model_error_contains(
@@ -5402,24 +5407,32 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
     );
     assert_model_error_contains(
         client
-            .create_interaction_response_json(test_id(789), "bad/token", &json!({}))
+            .create_interaction_response(
+                test_id(789),
+                "bad/token",
+                &crate::request::InteractionResponse::Pong,
+            )
             .await
             .unwrap_err(),
         "interaction_token",
     );
     assert_model_error_contains(
         client
-            .create_followup_message_with_application_id(test_id(123), "bad/token", &body)
-            .await
-            .unwrap_err(),
-        "interaction_token",
-    );
-    assert_model_error_contains(
-        client
-            .create_followup_message_json_with_application_id(
+            .create_followup_message_with_application_id(
                 test_id(123),
                 "bad/token",
-                &json!({ "content": "hi" }),
+                &sample_followup(),
+            )
+            .await
+            .unwrap_err(),
+        "interaction_token",
+    );
+    assert_model_error_contains(
+        client
+            .create_followup_message_with_application_id(
+                test_id(123),
+                "bad/token",
+                &sample_followup(),
             )
             .await
             .unwrap_err(),
@@ -5437,7 +5450,7 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
             .edit_original_interaction_response_with_application_id(
                 test_id(123),
                 "bad/token",
-                &body,
+                &sample_edit(),
             )
             .await
             .unwrap_err(),
@@ -5455,11 +5468,15 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
 #[tokio::test]
 async fn client_followup_methods_validate_application_and_message_segments() {
     let client = RestClient::new("token", Some(test_id(123)));
-    let body = sample_message();
 
     assert_model_error_contains(
         client
-            .edit_followup_message_with_application_id(test_id(123), "token", "bad/id", &body)
+            .edit_followup_message_with_application_id(
+                test_id(123),
+                "token",
+                "bad/id",
+                &sample_edit(),
+            )
             .await
             .unwrap_err(),
         "message_id",
@@ -6733,8 +6750,8 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         PlannedResponse::json(StatusCode::OK, channel_payload("501", 3, Some("group"))),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
         PlannedResponse::empty(StatusCode::NO_CONTENT),
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "902" })),
-        PlannedResponse::json(StatusCode::OK, json!({ "id": "903" })),
+        PlannedResponse::json(StatusCode::OK, message_payload("902", "500", "json")),
+        PlannedResponse::json(StatusCode::OK, message_payload("903", "500", "implicit")),
         PlannedResponse::json(StatusCode::OK, message_payload("904", "500", "followup")),
         PlannedResponse::json(StatusCode::OK, message_payload("905", "500", "followup")),
         PlannedResponse::json(StatusCode::OK, message_payload("906", "500", "original")),
@@ -6756,7 +6773,6 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     ];
     let (base_url, captured, server) = spawn_test_server(responses).await;
     let client = RestClient::new_with_base_url("hook-token", 123, base_url);
-    let body = sample_message();
 
     let webhook = client
         .create_webhook(test_id(500), &json!({ "name": "hook" }))
@@ -6804,35 +6820,37 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
         .await
         .expect("create interaction response typed");
     client
-        .create_interaction_response_json(
+        .create_interaction_response(
             test_id(778),
             "token",
-            &json!({ "type": 4, "data": { "content": "json" } }),
+            &crate::request::InteractionResponse::reply("json"),
         )
         .await
-        .expect("create interaction response json");
+        .expect("create interaction response");
 
     assert_eq!(
         client
-            .create_followup_message_json_with_application_id(
+            .create_followup_message_with_application_id(
                 test_id(123),
                 "token",
-                &json!({ "content": "json" }),
+                &crate::request::CreateFollowup::from("json"),
             )
             .await
-            .expect("explicit followup json")["id"],
-        json!("902")
+            .expect("explicit followup")
+            .id,
+        test_id(902)
     );
     assert_eq!(
         client
-            .create_followup_message_json("token", &json!({ "content": "implicit" }))
+            .create_followup_message("token", &crate::request::CreateFollowup::from("implicit"))
             .await
-            .expect("implicit followup json")["id"],
-        json!("903")
+            .expect("implicit followup")
+            .id,
+        test_id(903)
     );
     assert_eq!(
         client
-            .create_followup_message_with_application_id(test_id(123), "token", &body)
+            .create_followup_message_with_application_id(test_id(123), "token", &sample_followup())
             .await
             .expect("explicit followup message")
             .content,
@@ -6840,7 +6858,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .create_followup_message("token", &body)
+            .create_followup_message("token", &sample_followup())
             .await
             .expect("implicit followup message")
             .content,
@@ -6864,7 +6882,11 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .edit_original_interaction_response_with_application_id(test_id(123), "token", &body)
+            .edit_original_interaction_response_with_application_id(
+                test_id(123),
+                "token",
+                &sample_edit()
+            )
             .await
             .expect("explicit original edit")
             .content,
@@ -6872,7 +6894,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .edit_original_interaction_response("token", &body)
+            .edit_original_interaction_response("token", &sample_edit())
             .await
             .expect("implicit original edit")
             .content,
@@ -6889,7 +6911,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
 
     assert_eq!(
         client
-            .edit_followup_message_with_application_id(test_id(123), "token", "55", &body)
+            .edit_followup_message_with_application_id(test_id(123), "token", "55", &sample_edit())
             .await
             .expect("explicit followup edit")
             .content,
@@ -6897,7 +6919,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     );
     assert_eq!(
         client
-            .edit_followup_message("token", "55", &body)
+            .edit_followup_message("token", "55", &sample_edit())
             .await
             .expect("implicit followup edit")
             .content,
@@ -7696,10 +7718,7 @@ async fn interaction_response_with_result_requests_callback_resource() {
         .create_interaction_response_with_result(
             test_id(10),
             "interactiontoken",
-            &crate::model::InteractionCallbackResponse {
-                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(json!({ "content": "hello" })),
-            },
+            &crate::request::InteractionResponse::reply("hello"),
         )
         .await
         .expect("callback result");

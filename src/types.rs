@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{ButtonStyle, EmojiId};
@@ -7,10 +6,6 @@ use crate::model::{ButtonStyle, EmojiId};
 /// Backward-compatible error type alias. Prefer `DiscordError` directly.
 #[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
 pub type Error = DiscordError;
-
-pub(crate) fn to_json_value<T: Serialize>(value: T) -> Value {
-    serde_json::to_value(value).unwrap_or(Value::Null)
-}
 
 pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
     DiscordError::model(message)
@@ -166,9 +161,7 @@ mod tests {
     use crate::model::test_id;
     use serde_json::{json, Value};
 
-    use super::{
-        invalid_data_error, to_json_value, ButtonConfig, Emoji, MediaGalleryItem, SelectOption,
-    };
+    use super::{invalid_data_error, ButtonConfig, Emoji, MediaGalleryItem, SelectOption};
     use crate::error::DiscordError;
     use crate::model::ButtonStyle;
 
@@ -180,7 +173,7 @@ mod tests {
             DiscordError::Model { message } if message == "bad data"
         ));
 
-        let value = to_json_value(SelectOption::new("Alpha", "alpha"));
+        let value = serde_json::to_value(SelectOption::new("Alpha", "alpha")).unwrap();
         assert_eq!(
             value,
             json!({

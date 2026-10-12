@@ -1,13 +1,8 @@
-#![allow(
-    clippy::expect_used,
-    reason = "an example stops with a message when its setup or input is wrong"
-)]
-
 #[cfg(feature = "interactions")]
 use axum::Router;
 #[cfg(feature = "interactions")]
 use discordrs::{
-    try_typed_interactions_endpoint, ChatInputCommandInteraction, CreateMessage, DiscordError,
+    try_typed_interactions_endpoint, ChatInputCommandInteraction, DiscordError, EndpointReply,
     Interaction, InteractionContextData, InteractionResponse, TypedInteractionHandler,
 };
 
@@ -21,20 +16,14 @@ impl TypedInteractionHandler for Handler {
         &self,
         _ctx: InteractionContextData,
         interaction: Interaction,
-    ) -> InteractionResponse {
+    ) -> EndpointReply {
         match interaction {
             Interaction::ChatInputCommand(ChatInputCommandInteraction { data, .. })
                 if data.name.as_deref() == Some("hello") =>
             {
-                InteractionResponse::ChannelMessage(
-                    serde_json::to_value(CreateMessage {
-                        content: Some("hello from typed endpoint".to_string()),
-                        ..CreateMessage::default()
-                    })
-                    .expect("create message should serialize"),
-                )
+                InteractionResponse::reply("hello from typed endpoint").into()
             }
-            _ => InteractionResponse::DeferredMessage,
+            _ => InteractionResponse::defer(false).into(),
         }
     }
 }

@@ -1,81 +1,28 @@
 use axum::{
-    body::Bytes,
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::post,
-    Json, Router,
+    Router,
 };
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
 use std::future::Future;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::warn;
+use tracing::{error, warn};
 
-use crate::builders::ModalBuilder;
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationCommandOptionChoice, Interaction, InteractionContextData, InteractionId,
-    InteractionResponseState, InteractionResponseType, InteractionType,
+    Interaction, InteractionContextData, InteractionId, InteractionResponseState, InteractionType,
 };
 use crate::parsers::{
     decode_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
     InteractionContext, RawInteraction,
 };
+use crate::request::{encode_interaction_response, EndpointReply, InteractionResponse};
 use crate::response::{AckKind, InteractionResponsePhase};
 use crate::types::invalid_data_error;
-
-/// Typed Discord API enum for `InteractionResponse`.
-pub enum InteractionResponse {
-    /// Discord API enum variant `Pong`.
-    Pong,
-    /// Discord API enum variant `ChannelMessage`.
-    ChannelMessage(Value),
-    /// Discord API enum variant `DeferredMessage`.
-    DeferredMessage,
-    /// Discord API enum variant `DeferredUpdate`.
-    DeferredUpdate,
-    /// Discord API enum variant `AutocompleteResult`.
-    AutocompleteResult(Vec<ApplicationCommandOptionChoice>),
-    /// Discord API enum variant `Modal`.
-    Modal(ModalBuilder),
-    /// Discord API enum variant `UpdateMessage`.
-    UpdateMessage(Value),
-    /// Discord API enum variant `LaunchActivity`.
-    LaunchActivity,
-    /// Answers Discord's HTTP request with `202 Accepted` and no body: the
-    /// initial response is sent through the REST callback endpoint instead,
-    /// before the handler returns or from a task it spawned (for example
-    /// with `InteractionResponder::defer`). Discord specifies exactly this
-    /// answer when the callback endpoint is used for an interaction received
-    /// over HTTP. If nothing is sent over REST within 3 seconds, the
-    /// interaction fails.
-    Accepted,
-    /// Discord API enum variant `Raw`.
-    Raw(Value),
-}
-
-impl InteractionResponse {
-    /// Acknowledgement Discord records when it accepts this response, or
-    /// `None` for `Pong`, `Accepted`, and raw payloads without a numeric
-    /// `type`.
-    fn ack_kind(&self) -> Option<AckKind> {
-        match self {
-            Self::Pong | Self::Accepted => None,
-            Self::DeferredMessage | Self::DeferredUpdate => Some(AckKind::Deferred),
-            Self::ChannelMessage(_)
-            | Self::AutocompleteResult(_)
-            | Self::Modal(_)
-            | Self::UpdateMessage(_)
-            | Self::LaunchActivity => Some(AckKind::Replied),
-            Self::Raw(payload) => payload
-                .get("type")
-                .and_then(value_to_u8)
-                .map(InteractionResponseType::new)
-                .and_then(AckKind::for_callback_type),
-        }
-    }
-}
 
 /// Handles verified raw interactions for [`interactions_endpoint`].
 ///
@@ -87,7 +34,8 @@ impl InteractionResponse {
 /// error at the impl.
 ///
 /// ```no_run
-/// use discordrs::{InteractionContext, InteractionHandler, InteractionResponse, RawInteraction};
+/// use discordrs::request::{EndpointReply, InteractionResponse};
+/// use discordrs::{InteractionContext, InteractionHandler, RawInteraction};
 ///
 /// #[derive(Clone)]
 /// struct Handler;
@@ -97,8 +45,8 @@ impl InteractionResponse {
 ///         &self,
 ///         _ctx: InteractionContext,
 ///         _interaction: RawInteraction,
-///     ) -> InteractionResponse {
-///         InteractionResponse::DeferredMessage
+///     ) -> EndpointReply {
+///         InteractionResponse::defer(false).into()
 ///     }
 /// }
 /// ```
@@ -108,7 +56,7 @@ pub trait InteractionHandler: Send + Sync {
         &self,
         ctx: InteractionContext,
         interaction: RawInteraction,
-    ) -> impl Future<Output = InteractionResponse> + Send;
+    ) -> impl Future<Output = EndpointReply> + Send;
 }
 
 /// Trait for `TypedInteractionHandler` behavior.
@@ -122,8 +70,8 @@ pub trait InteractionHandler: Send + Sync {
 ///   by a spawned task sees the interaction as acknowledged and can call
 ///   `follow_up` or `edit_reply` over REST afterwards.
 /// - The handler sent (or started sending) the initial response over REST,
-///   or returns [`InteractionResponse::Accepted`]: the endpoint answers
-///   `202 Accepted` with no body, as Discord specifies, and any other
+///   or returns [`EndpointReply::Accepted`]: the endpoint answers
+///   `202 Accepted` with no body, as Discord specifies, and any inline
 ///   response the handler returned is discarded with a warning.
 ///
 /// Implement [`handle_typed`](Self::handle_typed) as a plain `async fn`; the
@@ -135,7 +83,7 @@ pub trait TypedInteractionHandler: Send + Sync {
         &self,
         ctx: InteractionContextData,
         interaction: Interaction,
-    ) -> impl Future<Output = InteractionResponse> + Send;
+    ) -> impl Future<Output = EndpointReply> + Send;
 }
 
 #[derive(Clone)]
@@ -269,63 +217,79 @@ pub fn verify_discord_signature(
     verify_signature_with_key(&verifying_key, signature, timestamp, body)
 }
 
-/// Builds the body of an inline answer; `None` for
-/// [`InteractionResponse::Accepted`], which has no body.
-fn interaction_response_payload(response: InteractionResponse) -> Option<Value> {
-    Some(match response {
-        InteractionResponse::Accepted => return None,
-        InteractionResponse::Pong => serde_json::json!({ "type": InteractionResponseType::PONG }),
-        InteractionResponse::ChannelMessage(data) => serde_json::json!({
-            "type": InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            "data": data,
-        }),
-        InteractionResponse::DeferredMessage => {
-            serde_json::json!({ "type": InteractionResponseType::DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE })
-        }
-        InteractionResponse::DeferredUpdate => {
-            serde_json::json!({ "type": InteractionResponseType::DEFERRED_UPDATE_MESSAGE })
-        }
-        InteractionResponse::AutocompleteResult(choices) => serde_json::json!({
-            "type": InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT,
-            "data": { "choices": choices },
-        }),
-        InteractionResponse::Modal(modal) => serde_json::json!({
-            "type": InteractionResponseType::MODAL,
-            "data": modal.build(),
-        }),
-        InteractionResponse::UpdateMessage(data) => serde_json::json!({
-            "type": InteractionResponseType::UPDATE_MESSAGE,
-            "data": data,
-        }),
-        InteractionResponse::LaunchActivity => {
-            serde_json::json!({ "type": InteractionResponseType::LAUNCH_ACTIVITY })
-        }
-        InteractionResponse::Raw(data) => data,
-    })
-}
+/// The body of the PING answer, `{"type":1}`: what
+/// [`InteractionResponse::Pong`] encodes to (pinned by a test), kept as a
+/// constant because verification pings arrive before any handler runs.
+const PONG_BODY: &[u8] = br#"{"type":1}"#;
 
 /// How the endpoint answers Discord's HTTP request.
 #[derive(Debug, PartialEq)]
 enum EndpointAnswer {
-    /// `200 OK` with this interaction response as the body.
-    Inline(Value),
+    /// `200 OK` with this encoded interaction response as the body.
+    Inline(Vec<u8>),
     /// `202 Accepted` with no body: the initial response goes (or went)
     /// through the REST callback endpoint.
     Accepted,
+    /// `500` with no body: the handler's response could not be encoded.
+    /// Discord then reports the interaction as failed, which is what would
+    /// happen anyway without a valid answer.
+    EncodeFailed,
 }
 
 impl IntoResponse for EndpointAnswer {
     fn into_response(self) -> Response {
         match self {
-            Self::Inline(payload) => (StatusCode::OK, Json(payload)).into_response(),
+            Self::Inline(body) => json_response(StatusCode::OK, body),
             Self::Accepted => StatusCode::ACCEPTED.into_response(),
+            Self::EncodeFailed => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
 }
 
 impl EndpointAnswer {
-    fn from_response(response: InteractionResponse) -> Self {
-        interaction_response_payload(response).map_or(Self::Accepted, Self::Inline)
+    /// Encodes an inline answer with the same encoder the REST callback
+    /// uses, so both transports send identical bytes for one response.
+    fn from_reply(reply: EndpointReply) -> Self {
+        match reply {
+            EndpointReply::Accepted => Self::Accepted,
+            EndpointReply::Inline(response) => Self::encode(&response),
+        }
+    }
+
+    fn encode(response: &InteractionResponse) -> Self {
+        match encode_interaction_response(response, None) {
+            Ok(body) => Self::Inline(body),
+            Err(encode_error) => {
+                error!(
+                    error = %encode_error,
+                    "could not encode the handler's interaction response; answering 500"
+                );
+                Self::EncodeFailed
+            }
+        }
+    }
+}
+
+/// A response with an `application/json` body that is already encoded.
+fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
+    let mut response = Response::new(Body::from(body));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
+/// `400 Bad Request` with `{"error": message}`.
+fn bad_request(message: &str) -> Response {
+    #[derive(serde::Serialize)]
+    struct ErrorBody<'a> {
+        error: &'a str,
+    }
+    match serde_json::to_vec(&ErrorBody { error: message }) {
+        Ok(body) => json_response(StatusCode::BAD_REQUEST, body),
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
 }
 
@@ -349,13 +313,7 @@ where
         .and_then(|text| serde_json::from_str(text).map_err(|error| error.to_string()))
     {
         Ok(payload) => payload,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response();
-        }
+        Err(error) => return bad_request(&error),
     };
 
     let interaction_type = match payload
@@ -364,48 +322,26 @@ where
         .map(InteractionType::new)
     {
         Some(interaction_type) => interaction_type,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "missing or invalid interaction.type" })),
-            )
-                .into_response();
-        }
+        None => return bad_request("missing or invalid interaction.type"),
     };
 
     if interaction_type == InteractionType::PING {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
-        )
-            .into_response();
+        return pong();
     }
 
     let context = match parse_interaction_context(&payload) {
         Ok(context) => context,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
+        Err(error) => return bad_request(&error.to_string()),
     };
 
     let interaction = match parse_raw_interaction(&payload) {
         Ok(interaction) => interaction,
-        Err(error) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
+        Err(error) => return bad_request(&error.to_string()),
     };
 
     // Raw handlers have no shared response state: they own the answer.
-    let response = state.handler.handle(context, interaction).await;
-    EndpointAnswer::from_response(response).into_response()
+    let reply = state.handler.handle(context, interaction).await;
+    EndpointAnswer::from_reply(reply).into_response()
 }
 
 /// Provides the `try_interactions_endpoint` helper.
@@ -475,11 +411,7 @@ where
             if is_ping(body.as_ref()) {
                 return pong();
             }
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": error })),
-            )
-                .into_response();
+            return bad_request(&error);
         }
     };
     if matches!(interaction, Interaction::Ping(_)) {
@@ -489,17 +421,13 @@ where
     let interaction_id = context.id;
     let response_state = context.response_state.clone();
 
-    let response = state.handler.handle_typed(context, interaction).await;
-    typed_endpoint_answer(&response_state, interaction_id, response).into_response()
+    let reply = state.handler.handle_typed(context, interaction).await;
+    typed_endpoint_answer(&response_state, interaction_id, reply).into_response()
 }
 
 /// Answers a PING.
 fn pong() -> Response {
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "type": InteractionResponseType::PONG })),
-    )
-        .into_response()
+    json_response(StatusCode::OK, PONG_BODY.to_vec())
 }
 
 /// Whether `body` is a JSON object whose `type` is PING, reading only that
@@ -538,26 +466,25 @@ fn body_json(body: &[u8]) -> Result<&str, String> {
 fn typed_endpoint_answer(
     state: &InteractionResponseState,
     interaction_id: InteractionId,
-    response: InteractionResponse,
+    reply: EndpointReply,
 ) -> EndpointAnswer {
-    if matches!(response, InteractionResponse::Accepted) {
+    let EndpointReply::Inline(response) = reply else {
         return EndpointAnswer::Accepted;
-    }
-    let inline_owns = match response.ack_kind() {
+    };
+    let inline_owns = match AckKind::for_callback_type(response.kind()) {
         Some(kind) => state.commit_inline(kind),
-        // Not an initial response (e.g. a raw payload without a callback
-        // type): it cannot compete for the slot, so only REST ownership
-        // matters.
+        // `PONG` is not an initial response: it cannot compete for the
+        // slot, so only REST ownership matters.
         None => state.phase() == InteractionResponsePhase::Unacknowledged,
     };
     if inline_owns {
-        return EndpointAnswer::from_response(response);
+        return EndpointAnswer::encode(&response);
     }
     warn!(
         interaction_id = %interaction_id,
         phase = ?state.phase(),
         "discarding the handler's inline response: the initial response is handled over REST, \
-         so Discord is answered with 202 and no body (return InteractionResponse::Accepted to \
+         so Discord is answered with 202 and no body (return EndpointReply::Accepted to \
          silence this)"
     );
     EndpointAnswer::Accepted
@@ -616,20 +543,23 @@ where
 mod tests {
     use super::{
         current_unix_timestamp, decode_verifying_key, handle_interactions_request,
-        handle_typed_interactions_request, interaction_response_payload, try_interactions_endpoint,
+        handle_typed_interactions_request, try_interactions_endpoint,
         try_typed_interactions_endpoint, typed_endpoint_answer,
         verify_discord_request_signature_at_time, verify_discord_signature,
-        verify_signature_with_key_at_time, EndpointAnswer, InteractionHandler, InteractionResponse,
-        InteractionsState, TypedInteractionHandler, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
+        verify_signature_with_key_at_time, EndpointAnswer, InteractionHandler, InteractionsState,
+        TypedInteractionHandler, PONG_BODY, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
     use crate::builders::ModalBuilder;
     use crate::framework::{AppContext, AppFramework};
     use crate::http::RestClient;
     use crate::model::{
         test_id, ApplicationCommandOptionChoice, Interaction, InteractionContextData,
-        InteractionResponseState,
+        InteractionResponseState, InteractionResponseType,
     };
     use crate::parsers::{InteractionContext, RawInteraction};
+    use crate::request::{
+        encode_interaction_response, EndpointReply, InteractionResponse, RawInteractionResponse,
+    };
     use crate::response::{
         AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
     };
@@ -648,7 +578,17 @@ mod tests {
     const TEST_NOW_UNIX_TIMESTAMP: i64 = 1_700_000_000;
 
     fn inline_payload(response: InteractionResponse) -> Value {
-        interaction_response_payload(response).expect("inline response has a body")
+        serde_json::from_slice(&encode_interaction_response(&response, None).unwrap()).unwrap()
+    }
+
+    /// A hand-written callback from its whole JSON (`{"type": N, "data": ..}`).
+    fn raw(payload: &Value) -> InteractionResponse {
+        let kind = u8::try_from(payload["type"].as_u64().expect("numeric type")).unwrap();
+        let mut raw = RawInteractionResponse::new(InteractionResponseType::new(kind));
+        if let Some(data) = payload.get("data") {
+            raw = raw.data(data).unwrap();
+        }
+        InteractionResponse::Raw(raw)
     }
 
     #[derive(Clone)]
@@ -659,8 +599,8 @@ mod tests {
             &self,
             _ctx: InteractionContext,
             _interaction: RawInteraction,
-        ) -> InteractionResponse {
-            InteractionResponse::Raw(Value::Null)
+        ) -> EndpointReply {
+            EndpointReply::Accepted
         }
     }
 
@@ -683,8 +623,8 @@ mod tests {
             &self,
             _ctx: InteractionContextData,
             _interaction: Interaction,
-        ) -> InteractionResponse {
-            InteractionResponse::Raw(Value::Null)
+        ) -> EndpointReply {
+            EndpointReply::Accepted
         }
     }
 
@@ -700,10 +640,10 @@ mod tests {
             &self,
             ctx: InteractionContext,
             interaction: RawInteraction,
-        ) -> InteractionResponse {
+        ) -> EndpointReply {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.records.lock().unwrap().push((ctx, interaction));
-            InteractionResponse::Raw(self.response.clone())
+            raw(&self.response).into()
         }
     }
 
@@ -719,10 +659,10 @@ mod tests {
             &self,
             ctx: InteractionContextData,
             interaction: Interaction,
-        ) -> InteractionResponse {
+        ) -> EndpointReply {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.records.lock().unwrap().push((ctx, interaction));
-            InteractionResponse::Raw(self.response.clone())
+            raw(&self.response).into()
         }
     }
 
@@ -733,8 +673,16 @@ mod tests {
     }
 
     #[test]
+    fn pong_body_is_the_encoded_pong() {
+        assert_eq!(
+            encode_interaction_response(&InteractionResponse::Pong, None).unwrap(),
+            PONG_BODY
+        );
+    }
+
+    #[test]
     fn interaction_response_payload_supports_deferred_update() {
-        let payload = inline_payload(InteractionResponse::DeferredUpdate);
+        let payload = inline_payload(InteractionResponse::DeferredUpdateMessage);
         assert_eq!(payload["type"], 6);
     }
 
@@ -1055,31 +1003,27 @@ mod tests {
             json!({ "type": 1 })
         );
         assert_eq!(
-            inline_payload(InteractionResponse::ChannelMessage(
-                json!({ "content": "hello" })
-            )),
+            inline_payload(InteractionResponse::reply("hello")),
             json!({
                 "type": 4,
                 "data": { "content": "hello" }
             })
         );
         assert_eq!(
-            inline_payload(InteractionResponse::UpdateMessage(
-                json!({ "content": "updated" })
-            )),
+            inline_payload(InteractionResponse::update("updated")),
             json!({
                 "type": 7,
                 "data": { "content": "updated" }
             })
         );
         assert_eq!(
-            inline_payload(InteractionResponse::Modal(ModalBuilder::new(
+            inline_payload(InteractionResponse::modal(ModalBuilder::new(
                 "feedback", "Feedback"
             )))["type"],
             json!(9)
         );
         assert_eq!(
-            inline_payload(InteractionResponse::Raw(json!({ "type": 99 }))),
+            inline_payload(raw(&json!({ "type": 99 }))),
             json!({ "type": 99 })
         );
     }
@@ -1414,8 +1358,8 @@ mod tests {
         assert!(matches!(records[1].1, Interaction::Unknown { .. }));
     }
 
-    fn answer(state: &InteractionResponseState, response: InteractionResponse) -> EndpointAnswer {
-        typed_endpoint_answer(state, test_id(1), response)
+    fn answer(state: &InteractionResponseState, reply: impl Into<EndpointReply>) -> EndpointAnswer {
+        typed_endpoint_answer(state, test_id(1), reply.into())
     }
 
     #[test]
@@ -1426,15 +1370,15 @@ mod tests {
                 InteractionResponsePhase::Unacknowledged,
             ),
             (
-                InteractionResponse::ChannelMessage(json!({ "content": "hi" })),
+                InteractionResponse::reply("hi"),
                 InteractionResponsePhase::Replied,
             ),
             (
-                InteractionResponse::DeferredMessage,
+                InteractionResponse::defer(false),
                 InteractionResponsePhase::Deferred,
             ),
             (
-                InteractionResponse::DeferredUpdate,
+                InteractionResponse::DeferredUpdateMessage,
                 InteractionResponsePhase::Deferred,
             ),
             (
@@ -1442,11 +1386,11 @@ mod tests {
                 InteractionResponsePhase::Replied,
             ),
             (
-                InteractionResponse::Modal(ModalBuilder::new("m", "M")),
+                InteractionResponse::modal(ModalBuilder::new("m", "M")),
                 InteractionResponsePhase::Replied,
             ),
             (
-                InteractionResponse::UpdateMessage(json!({ "content": "new" })),
+                InteractionResponse::update("new"),
                 InteractionResponsePhase::Replied,
             ),
             (
@@ -1454,19 +1398,15 @@ mod tests {
                 InteractionResponsePhase::Replied,
             ),
             (
-                InteractionResponse::Raw(json!({ "type": 6 })),
+                raw(&json!({ "type": 6 })),
                 InteractionResponsePhase::Deferred,
             ),
             (
-                InteractionResponse::Raw(json!({ "type": 4, "data": {} })),
+                raw(&json!({ "type": 4, "data": {} })),
                 InteractionResponsePhase::Replied,
             ),
             (
-                InteractionResponse::Raw(json!({ "type": 1 })),
-                InteractionResponsePhase::Unacknowledged,
-            ),
-            (
-                InteractionResponse::Raw(Value::Null),
+                raw(&json!({ "type": 1 })),
                 InteractionResponsePhase::Unacknowledged,
             ),
         ];
@@ -1482,13 +1422,9 @@ mod tests {
 
     #[test]
     fn accepted_answers_202_and_leaves_the_slot_to_rest() {
-        assert_eq!(
-            interaction_response_payload(InteractionResponse::Accepted),
-            None
-        );
         let state = InteractionResponseState::new();
         assert_eq!(
-            answer(&state, InteractionResponse::Accepted),
+            answer(&state, EndpointReply::Accepted),
             EndpointAnswer::Accepted
         );
         assert_eq!(state.phase(), InteractionResponsePhase::Unacknowledged);
@@ -1506,10 +1442,7 @@ mod tests {
             .unwrap()
             .settle(CallbackOutcome::Accepted);
         assert_eq!(
-            answer(
-                &sent,
-                InteractionResponse::ChannelMessage(json!({ "content": "late" }))
-            ),
+            answer(&sent, InteractionResponse::reply("late")),
             EndpointAnswer::Accepted
         );
         assert!(sent.is_deferred());
@@ -1519,7 +1452,7 @@ mod tests {
         let in_flight = InteractionResponseState::new();
         let claim = in_flight.begin(AckKind::Replied).unwrap();
         assert_eq!(
-            answer(&in_flight, InteractionResponse::DeferredMessage),
+            answer(&in_flight, InteractionResponse::defer(false)),
             EndpointAnswer::Accepted
         );
         claim.settle(CallbackOutcome::Rejected);
@@ -1531,7 +1464,7 @@ mod tests {
             .unwrap()
             .settle(CallbackOutcome::Ambiguous);
         assert_eq!(
-            answer(&uncertain, InteractionResponse::Raw(Value::Null)),
+            answer(&uncertain, InteractionResponse::Pong),
             EndpointAnswer::Accepted
         );
         assert_eq!(uncertain.phase(), InteractionResponsePhase::Uncertain);
@@ -1562,7 +1495,7 @@ mod tests {
                 let retained = Arc::clone(&retained);
                 move |ctx: AppContext| {
                     *retained.lock().unwrap() = Some(ctx);
-                    async { InteractionResponse::DeferredMessage }
+                    async { InteractionResponse::defer(false) }
                 }
             })
             .build();
@@ -1577,7 +1510,10 @@ mod tests {
             Bytes::from(body),
         )
         .await;
-        assert_eq!(json_response(response).await, json!({ "type": 5 }));
+        assert_eq!(
+            json_response(response).await,
+            json!({ "type": 5, "data": { "flags": 0 } })
+        );
 
         let ctx = retained.lock().unwrap().take().expect("route ran");
         assert!(ctx.is_deferred());
@@ -1600,13 +1536,13 @@ mod tests {
             &self,
             ctx: InteractionContextData,
             _interaction: Interaction,
-        ) -> InteractionResponse {
+        ) -> EndpointReply {
             // Stands in for a successful `ctx.defer(&http)` over REST.
             ctx.response_state
                 .begin(AckKind::Deferred)
                 .unwrap()
                 .settle(CallbackOutcome::Accepted);
-            InteractionResponse::ChannelMessage(json!({ "content": "inline" }))
+            InteractionResponse::reply("inline").into()
         }
     }
 
@@ -1638,8 +1574,8 @@ mod tests {
             &self,
             _ctx: InteractionContext,
             _interaction: RawInteraction,
-        ) -> InteractionResponse {
-            InteractionResponse::Accepted
+        ) -> EndpointReply {
+            EndpointReply::Accepted
         }
     }
 

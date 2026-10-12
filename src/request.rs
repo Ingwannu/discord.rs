@@ -24,7 +24,9 @@ mod attachment;
 mod component;
 mod component_embed;
 mod embed;
+mod interaction;
 mod message;
+mod modal;
 mod poll;
 
 pub(crate) use component::{check_message_components, ComponentsMode};
@@ -42,8 +44,14 @@ pub use component_embed::{
     PreviewSection, PreviewSeparator, PreviewTextDisplay, PreviewThumbnail,
 };
 pub use embed::{Embed, EmbedAuthor, EmbedField, EmbedFooter, EmbedImage};
+pub(crate) use interaction::encode_interaction_response;
+pub use interaction::{EndpointReply, InteractionResponse, RawInteractionResponse};
 pub use message::{
     CreateFollowup, CreateMessage, EditInteractionResponse, EditMessage, EditWebhookMessage,
     ExecuteWebhook, InteractionMessage, UpdateMessage, WithDefaultMentions,
+};
+pub use modal::{
+    Checkbox, CheckboxGroup, FileUpload, Label, LabelComponent, LegacyTextInputRow, Modal,
+    ModalComponent, RadioGroup, TextInput,
 };
 pub use poll::{CreatePoll, CreatePollAnswer};

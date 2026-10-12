@@ -228,10 +228,14 @@ pub use permissions::{
     ChannelClass, ChannelPermissionInput, ChannelPermissions, ComputedPermissions,
     MemberPermissionInput, PermissionDataError, PermissionSource,
 };
+pub use request::{EndpointReply, InteractionResponse};
 pub use response::{
-    AutocompleteChoice, InteractionReplyData, InteractionResponder, InteractionResponseBuilder,
-    InteractionResponsePhase, InteractionResponseState, MessageBuilder,
+    InteractionResponder, InteractionResponsePhase, InteractionResponseState, MessageBuilder,
 };
+// Deprecated in 3.0 in favour of `InteractionResponse`, the message request
+// types, and `ApplicationCommandOptionChoice`.
+#[expect(deprecated, reason = "deliberate re-export of deprecated items")]
+pub use response::{AutocompleteChoice, InteractionReplyData, InteractionResponseBuilder};
 #[cfg(feature = "sharding")]
 pub use sharding::{
     ShardConfig, ShardInfo, ShardIpcMessage, ShardRuntimeState, ShardRuntimeStatus,
@@ -329,7 +333,7 @@ pub use gateway::{
 #[cfg(feature = "interactions")]
 pub use interactions::{
     try_interactions_endpoint, try_typed_interactions_endpoint, verify_discord_signature,
-    InteractionHandler, InteractionResponse, TypedInteractionHandler,
+    InteractionHandler, TypedInteractionHandler,
 };
 // Deprecated in 3.0: they panic on an invalid public key.
 #[cfg(feature = "interactions")]

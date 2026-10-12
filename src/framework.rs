@@ -6,16 +6,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::json;
-
 use crate::{
-    interactions::{InteractionResponse, TypedInteractionHandler},
+    interactions::TypedInteractionHandler,
     model::{Interaction, InteractionContextData, UserId},
+    request::{EndpointReply, InteractionMessage, InteractionResponse},
     response::InteractionResponder,
 };
 
 /// Boxed future returned by application framework route handlers.
-pub type FrameworkFuture = Pin<Box<dyn Future<Output = InteractionResponse> + Send>>;
+pub type FrameworkFuture = Pin<Box<dyn Future<Output = EndpointReply> + Send>>;
 
 /// Route key used by the application framework.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -37,7 +36,7 @@ pub enum RouteKey {
 /// clones share one response state with the interaction: once the endpoint
 /// returns the route's inline response, `follow_up` and `edit_reply` on a
 /// retained clone are accepted. A route that sends its initial response over
-/// REST should return [`InteractionResponse::Accepted`], which the endpoint
+/// REST should return [`EndpointReply::Accepted`], which the endpoint
 /// answers with `202` and no body. `Debug` output never contains the token.
 #[derive(Clone, Debug)]
 pub struct AppContext {
@@ -69,34 +68,47 @@ impl InteractionResponder for AppContext {
 }
 
 /// Async route handler used by [`AppFramework`].
+///
+/// Any `Fn(AppContext) -> impl Future` whose output converts into an
+/// [`EndpointReply`] is a handler, so a route can return an
+/// [`InteractionResponse`] (answered inline) or [`EndpointReply::Accepted`].
 pub trait AppRouteHandler: Send + Sync + 'static {
-    /// Handles a matched route and returns a Discord interaction response.
+    /// Handles a matched route and returns how the endpoint answers.
     fn handle(&self, ctx: AppContext) -> FrameworkFuture;
 }
 
-impl<F, Fut> AppRouteHandler for F
+impl<F, Fut, R> AppRouteHandler for F
 where
     F: Fn(AppContext) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = InteractionResponse> + Send + 'static,
+    Fut: Future<Output = R> + Send + 'static,
+    R: Into<EndpointReply>,
 {
     fn handle(&self, ctx: AppContext) -> FrameworkFuture {
-        Box::pin((self)(ctx))
+        let future = (self)(ctx);
+        Box::pin(async move { future.await.into() })
     }
 }
 
 /// Synchronous guard for rejecting a route before it reaches its handler.
 pub trait AppGuard: Send + Sync + 'static {
-    /// Allows a route to continue or returns the response that should be sent.
-    fn check(&self, ctx: &AppContext) -> Result<(), InteractionResponse>;
+    /// Allows a route to continue or returns how the endpoint answers
+    /// instead.
+    fn check(&self, ctx: &AppContext) -> Result<(), EndpointReply>;
 }
 
 impl<F> AppGuard for F
 where
-    F: Fn(&AppContext) -> Result<(), InteractionResponse> + Send + Sync + 'static,
+    F: Fn(&AppContext) -> Result<(), EndpointReply> + Send + Sync + 'static,
 {
-    fn check(&self, ctx: &AppContext) -> Result<(), InteractionResponse> {
+    fn check(&self, ctx: &AppContext) -> Result<(), EndpointReply> {
         (self)(ctx)
     }
+}
+
+/// An ephemeral inline reply with this text, for the framework's own
+/// cooldown and unknown-route answers.
+fn ephemeral_notice(content: &str) -> EndpointReply {
+    InteractionResponse::reply(InteractionMessage::from(content).ephemeral(true)).into()
 }
 
 /// Minimal high-level interaction router for command, component, and modal apps.
@@ -139,7 +151,7 @@ impl AppFramework {
         &self,
         context: InteractionContextData,
         interaction: Interaction,
-    ) -> InteractionResponse {
+    ) -> EndpointReply {
         let route = route_key(&interaction);
         let app_context = AppContext {
             context,
@@ -164,7 +176,7 @@ impl AppFramework {
             .await
     }
 
-    fn check_cooldown(&self, ctx: &AppContext) -> Option<InteractionResponse> {
+    fn check_cooldown(&self, ctx: &AppContext) -> Option<EndpointReply> {
         let cooldown = self.cooldowns.get(&ctx.route)?;
         let user_id = ctx.user_id()?;
         let now = Instant::now();
@@ -180,10 +192,7 @@ impl AppFramework {
         if let Some(last_seen) = state.get(&key) {
             let elapsed = now.saturating_duration_since(*last_seen);
             if elapsed < *cooldown {
-                return Some(InteractionResponse::ChannelMessage(json!({
-                    "content": "This action is on cooldown.",
-                    "flags": crate::response::EPHEMERAL_FLAG
-                })));
+                return Some(ephemeral_notice("This action is on cooldown."));
             }
         }
 
@@ -197,7 +206,7 @@ impl TypedInteractionHandler for AppFramework {
         &self,
         ctx: InteractionContextData,
         interaction: Interaction,
-    ) -> InteractionResponse {
+    ) -> EndpointReply {
         self.dispatch(ctx, interaction).await
     }
 }
@@ -274,12 +283,7 @@ impl AppFrameworkBuilder {
             cooldowns: self.cooldowns,
             cooldown_state: Arc::new(Mutex::new(HashMap::new())),
             fallback: self.fallback.unwrap_or_else(|| {
-                Arc::new(|_ctx: AppContext| async {
-                    InteractionResponse::ChannelMessage(json!({
-                        "content": "Unknown interaction.",
-                        "flags": crate::response::EPHEMERAL_FLAG
-                    }))
-                })
+                Arc::new(|_ctx: AppContext| async { ephemeral_notice("Unknown interaction.") })
             }),
         }
     }
@@ -337,6 +341,21 @@ mod tests {
         ModalSubmitInteraction, PingInteraction, User, UserContextMenuInteraction,
     };
     use crate::parsers::modal::V2ModalSubmission;
+    use serde_json::Value;
+
+    /// The `content` of an inline channel-message reply, read from its wire
+    /// JSON (the stub-independent way to look inside it).
+    fn reply_content(reply: EndpointReply) -> String {
+        let EndpointReply::Inline(response) = reply else {
+            panic!("expected an inline reply");
+        };
+        assert_eq!(
+            response.kind(),
+            crate::model::InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
+        );
+        let wire: Value = serde_json::to_value(&response).unwrap();
+        wire["data"]["content"].as_str().unwrap().to_owned()
+    }
 
     fn context(user_id: &str) -> InteractionContextData {
         InteractionContextData {
@@ -376,34 +395,29 @@ mod tests {
     #[tokio::test]
     async fn app_framework_routes_commands_and_fallbacks() {
         let framework = AppFramework::builder()
-            .command("ping", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "pong" }))
-            })
+            .command("ping", |_ctx| async { InteractionResponse::reply("pong") })
             .build();
 
         let (ctx, interaction) = command("ping", "10");
-        match framework.dispatch(ctx, interaction).await {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("pong"));
-            }
-            _ => panic!("unexpected response"),
-        }
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "pong"
+        );
 
         let unknown_ctx = context("10");
-        match framework
-            .dispatch(
-                unknown_ctx.clone(),
-                Interaction::Ping(PingInteraction {
-                    context: unknown_ctx,
-                }),
-            )
-            .await
-        {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("Unknown interaction."));
-            }
-            _ => panic!("unexpected response"),
-        }
+        assert_eq!(
+            reply_content(
+                framework
+                    .dispatch(
+                        unknown_ctx.clone(),
+                        Interaction::Ping(PingInteraction {
+                            context: unknown_ctx,
+                        }),
+                    )
+                    .await
+            ),
+            "Unknown interaction."
+        );
     }
 
     #[tokio::test]
@@ -411,16 +425,11 @@ mod tests {
         let framework = AppFramework::builder()
             .guard(|ctx: &AppContext| {
                 if ctx.context.guild_id.is_none() {
-                    return Err(InteractionResponse::ChannelMessage(json!({
-                        "content": "guild only",
-                        "flags": 64
-                    })));
+                    return Err(InteractionResponse::reply("guild only").into());
                 }
                 Ok(())
             })
-            .command("secure", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "ok" }))
-            })
+            .command("secure", |_ctx| async { InteractionResponse::reply("ok") })
             .cooldown(
                 RouteKey::Command("secure".to_string()),
                 Duration::from_secs(30),
@@ -428,33 +437,27 @@ mod tests {
             .build();
 
         let (ctx, interaction) = command("secure", "11");
-        match framework.dispatch(ctx, interaction).await {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("guild only"));
-            }
-            _ => panic!("unexpected response"),
-        }
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "guild only"
+        );
 
         let (mut ctx, interaction) = command("secure", "11");
         ctx.guild_id = Some(test_id(200));
-        assert!(matches!(
-            framework.dispatch(ctx, interaction).await,
-            InteractionResponse::ChannelMessage(_)
-        ));
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "ok"
+        );
 
         let (mut ctx, interaction) = command("secure", "11");
         ctx.guild_id = Some(test_id(200));
-        match framework.dispatch(ctx, interaction).await {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("This action is on cooldown."));
-            }
-            _ => panic!("unexpected response"),
-        }
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "This action is on cooldown."
+        );
 
         let framework = AppFramework::builder()
-            .command("short", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "ok" }))
-            })
+            .command("short", |_ctx| async { InteractionResponse::reply("ok") })
             .cooldown(
                 RouteKey::Command("short".to_string()),
                 Duration::from_millis(1),
@@ -463,19 +466,17 @@ mod tests {
 
         let (mut ctx, interaction) = command("short", "12");
         ctx.guild_id = Some(test_id(200));
-        assert!(matches!(
-            framework.dispatch(ctx, interaction).await,
-            InteractionResponse::ChannelMessage(_)
-        ));
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "ok"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
         let (mut ctx, interaction) = command("short", "12");
         ctx.guild_id = Some(test_id(200));
-        match framework.dispatch(ctx, interaction).await {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("ok"));
-            }
-            _ => panic!("unexpected response"),
-        }
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "ok"
+        );
         assert_eq!(framework.lock_cooldowns().len(), 1);
     }
 
@@ -487,18 +488,16 @@ mod tests {
                     RouteKey::Command(name) => format!("command:{name}"),
                     _ => "wrong".to_string(),
                 };
-                InteractionResponse::ChannelMessage(json!({ "content": content }))
+                InteractionResponse::reply(content.as_str())
             })
             .component("button:ok", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "component" }))
+                InteractionResponse::reply("component")
             })
             .modal("modal:ok", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "modal" }))
+                InteractionResponse::reply("modal")
             })
             .fallback(|ctx: AppContext| async move {
-                InteractionResponse::ChannelMessage(json!({
-                    "content": format!("{:?}", ctx.route)
-                }))
+                InteractionResponse::reply(format!("{:?}", ctx.route).as_str())
             })
             .build();
 
@@ -516,79 +515,72 @@ mod tests {
                 data: command_data("inspect"),
             }),
         ] {
-            match framework.dispatch(context("12"), interaction).await {
-                InteractionResponse::ChannelMessage(value) => {
-                    assert_eq!(value["content"], json!("command:inspect"));
-                }
-                _ => panic!("unexpected command response"),
-            }
+            assert_eq!(
+                reply_content(framework.dispatch(context("12"), interaction).await),
+                "command:inspect"
+            );
         }
 
-        match framework
-            .dispatch(
-                context("12"),
-                Interaction::Component(ComponentInteraction {
-                    context: context("12"),
-                    data: ComponentInteractionData {
-                        custom_id: "button:ok".to_string(),
-                        component_type: ComponentType::BUTTON,
-                        id: None,
-                        values: Vec::new(),
-                        resolved: None,
-                    },
-                }),
-            )
-            .await
-        {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("component"));
-            }
-            _ => panic!("unexpected component response"),
-        }
+        assert_eq!(
+            reply_content(
+                framework
+                    .dispatch(
+                        context("12"),
+                        Interaction::Component(ComponentInteraction {
+                            context: context("12"),
+                            data: ComponentInteractionData {
+                                custom_id: "button:ok".to_string(),
+                                component_type: ComponentType::BUTTON,
+                                id: None,
+                                values: Vec::new(),
+                                resolved: None,
+                            },
+                        }),
+                    )
+                    .await
+            ),
+            "component"
+        );
 
-        match framework
-            .dispatch(
-                context("12"),
-                Interaction::ModalSubmit(ModalSubmitInteraction {
-                    context: context("12"),
-                    submission: V2ModalSubmission {
-                        custom_id: "modal:ok".to_string(),
-                        components: Vec::new(),
-                    },
-                    resolved: None,
-                }),
-            )
-            .await
-        {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("modal"));
-            }
-            _ => panic!("unexpected modal response"),
-        }
+        assert_eq!(
+            reply_content(
+                framework
+                    .dispatch(
+                        context("12"),
+                        Interaction::ModalSubmit(ModalSubmitInteraction {
+                            context: context("12"),
+                            submission: V2ModalSubmission {
+                                custom_id: "modal:ok".to_string(),
+                                components: Vec::new(),
+                            },
+                            resolved: None,
+                        }),
+                    )
+                    .await
+            ),
+            "modal"
+        );
 
-        match framework
-            .dispatch(
-                context("12"),
-                Interaction::ChatInputCommand(ChatInputCommandInteraction {
-                    context: context("12"),
-                    data: CommandInteractionData::default(),
-                }),
-            )
-            .await
-        {
-            InteractionResponse::ChannelMessage(value) => {
-                assert_eq!(value["content"], json!("Unknown"));
-            }
-            _ => panic!("unexpected fallback response"),
-        }
+        assert_eq!(
+            reply_content(
+                framework
+                    .dispatch(
+                        context("12"),
+                        Interaction::ChatInputCommand(ChatInputCommandInteraction {
+                            context: context("12"),
+                            data: CommandInteractionData::default(),
+                        }),
+                    )
+                    .await
+            ),
+            "Unknown"
+        );
     }
 
     #[test]
     fn app_framework_is_accepted_by_the_typed_endpoint_and_clones_share_cooldowns() {
         let framework = AppFramework::builder()
-            .command("limited", |_ctx| async {
-                InteractionResponse::ChannelMessage(json!({ "content": "ok" }))
-            })
+            .command("limited", |_ctx| async { InteractionResponse::reply("ok") })
             .cooldown(
                 RouteKey::Command("limited".to_string()),
                 Duration::from_secs(30),
@@ -605,16 +597,15 @@ mod tests {
             .build()
             .unwrap();
         let (ctx, interaction) = command("limited", "13");
-        assert!(matches!(
-            runtime.block_on(framework.dispatch(ctx, interaction)),
-            InteractionResponse::ChannelMessage(value) if value["content"] == json!("ok")
-        ));
+        assert_eq!(
+            reply_content(runtime.block_on(framework.dispatch(ctx, interaction))),
+            "ok"
+        );
         let (ctx, interaction) = command("limited", "13");
-        assert!(matches!(
-            runtime.block_on(clone.dispatch(ctx, interaction)),
-            InteractionResponse::ChannelMessage(value)
-                if value["content"] == json!("This action is on cooldown.")
-        ));
+        assert_eq!(
+            reply_content(runtime.block_on(clone.dispatch(ctx, interaction))),
+            "This action is on cooldown."
+        );
     }
 
     #[tokio::test]

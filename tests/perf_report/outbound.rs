@@ -4,11 +4,11 @@
 use std::hint::black_box;
 use std::time::Instant;
 
+use discordrs::request::InteractionResponse;
 use discordrs::{
     ActionRowBuilder, ButtonStyle, ComponentsV2Message, ContainerBuilder, CustomButtonBuilder,
-    InteractionResponseBuilder, LinkButtonBuilder, MediaGalleryBuilder, MediaGalleryItem,
-    MessageBuilder, SectionBuilder, SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder,
-    ThumbnailBuilder,
+    LinkButtonBuilder, MediaGalleryBuilder, MediaGalleryItem, MessageBuilder, SectionBuilder,
+    SeparatorBuilder, SeparatorSpacing, TextDisplayBuilder, ThumbnailBuilder,
 };
 
 use crate::alloc::{Recorder, Uncounted};
@@ -93,19 +93,19 @@ pub(crate) fn run_outbound(report: &mut Report) {
         drop(body);
         bytes
     };
-    // POST /interactions/{id}/{token}/callback:
-    // `InteractionResponseBuilder::channel_message` (to_value of the
-    // message) -> `create_interaction_response_typed` -> `json_body`
-    // (`encode_json`).
+    // POST /interactions/{id}/{token}/callback (phase 5): the typed
+    // `InteractionResponse` a `reply(MessageBuilder)` sends (the builder
+    // converts into the callback message without copying its parts),
+    // encoded once with `to_vec` (`request::encode_interaction_response`,
+    // shared by the REST callback and the HTTP endpoint; no default
+    // allowed_mentions configured here).
     let interaction_reply = |rec: &mut Recorder| {
         let body = rec.step("build", || {
-            InteractionResponseBuilder::channel_message(
+            InteractionResponse::reply(
                 MessageBuilder::new()
                     .components_v2(status_card())
                     .ephemeral(true),
             )
-            .unwrap()
-            .build()
         });
         let bytes = rec.step("encode", || serde_json::to_vec(&body).unwrap());
         drop(body);

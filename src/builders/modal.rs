@@ -1,462 +1,295 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+//! Builders for modals and their components.
+//!
+//! Each builder holds the typed request model from [`crate::request`] and
+//! returns it from `build()` (no intermediate JSON); `try_build()` checks
+//! the documented limits first and returns the same type. A modal's inputs
+//! go into Labels by default; the Action Row + Text Input layout Discord
+//! deprecated is only reachable through
+//! [`ModalBuilder::add_text_input_row`].
 
 use crate::command::validation;
 use crate::error::DiscordError;
-use crate::model::{ComponentId, ComponentType, TextInputStyle};
-use crate::types::{to_json_value, SelectOption};
+use crate::model::{ComponentId, TextInputStyle};
+use crate::request::{
+    Checkbox, CheckboxGroup, FileUpload, Label, LabelComponent, LegacyTextInputRow, Modal,
+    ModalComponent, RadioGroup, SelectMenu, TextDisplay, TextInput,
+};
+use crate::types::SelectOption;
 
-use super::components::ActionRowBuilder;
-use super::limits;
-use crate::request::SelectMenu;
-
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `TextInputBuilder`.
+/// Builds a text input together with the text of the [`Label`] around it.
+///
+/// Discord moved a text input's `label` to the Label component, so
+/// [`Self::build`] returns that Label; [`ModalBuilder::add_text_input`]
+/// adds it to a modal.
+///
+/// ```
+/// use discordrs::TextInputBuilder;
+///
+/// let label = TextInputBuilder::short("name", "Your name").required(true).build();
+/// assert_eq!(
+///     serde_json::to_string(&label).unwrap(),
+///     r#"{"type":18,"label":"Your name","component":{"type":4,"custom_id":"name","style":1,"required":true}}"#
+/// );
+/// ```
+#[derive(Clone, Debug)]
 pub struct TextInputBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    custom_id: String,
-    style: TextInputStyle,
     label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    placeholder: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_length: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_length: Option<u16>,
+    description: Option<String>,
+    input: TextInput,
 }
 
 impl TextInputBuilder {
-    /// Creates a `new` value.
+    /// A text input with this `custom_id`, label text, and style.
     pub fn new(custom_id: &str, label: &str, style: TextInputStyle) -> Self {
         Self {
-            component_type: ComponentType::TEXT_INPUT,
-            custom_id: custom_id.to_string(),
-            style,
-            label: label.to_string(),
-            placeholder: None,
-            value: None,
-            required: None,
-            min_length: None,
-            max_length: None,
+            label: label.to_owned(),
+            description: None,
+            input: TextInput::new(custom_id, style),
         }
     }
 
-    /// Creates a `short` value.
+    /// A single-line text input.
     pub fn short(custom_id: &str, label: &str) -> Self {
         Self::new(custom_id, label, TextInputStyle::SHORT)
     }
 
-    /// Creates a `paragraph` value.
+    /// A multi-line text input.
     pub fn paragraph(custom_id: &str, label: &str) -> Self {
         Self::new(custom_id, label, TextInputStyle::PARAGRAPH)
     }
 
+    /// Sets the description shown with the label (at most 100 characters).
+    pub fn description(mut self, description: &str) -> Self {
+        self.description = Some(description.to_owned());
+        self
+    }
+
+    /// Sets the placeholder shown while the input is empty.
     pub fn placeholder(mut self, placeholder: &str) -> Self {
-        self.placeholder = Some(placeholder.to_string());
+        self.input.placeholder = Some(placeholder.to_owned());
         self
     }
 
+    /// Sets the pre-filled text.
     pub fn value(mut self, value: &str) -> Self {
-        self.value = Some(value.to_string());
+        self.input.value = Some(value.to_owned());
         self
     }
 
+    /// Sets whether the input must be filled.
     pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
+        self.input.required = Some(required);
         self
     }
 
+    /// Sets the minimum input length.
     pub fn min_length(mut self, min: u16) -> Self {
-        self.min_length = Some(min);
+        self.input.min_length = Some(min);
         self
     }
 
+    /// Sets the maximum input length.
     pub fn max_length(mut self, max: u16) -> Self {
-        self.max_length = Some(max);
+        self.input.max_length = Some(max);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Sets the text input's component `id`.
+    pub fn id(mut self, id: ComponentId) -> Self {
+        self.input.id = Some(id);
+        self
     }
 
-    /// Validates the text input against Discord's limits without consuming
+    /// Returns the [`Label`] holding the text input, without checking any
+    /// limit.
+    pub fn build(self) -> Label {
+        let label = Label::new(self.label, self.input);
+        match self.description {
+            Some(description) => label.description(description),
+            None => label,
+        }
+    }
+
+    /// Checks the label text (1-45 characters), the description (at most
+    /// 100), and the text input ([`TextInput::validate`]) without consuming
     /// the builder.
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len(
-            "text input custom_id",
-            &self.custom_id,
-            1,
-            limits::MAX_CUSTOM_ID_LENGTH,
-        )?;
-        validation::ensure_len(
-            "text input label",
-            &self.label,
-            1,
-            limits::MAX_TEXT_INPUT_LABEL_LENGTH,
-        )?;
-        if let Some(placeholder) = &self.placeholder {
+        validation::ensure_len("text input label", &self.label, 1, Label::MAX_LABEL_LENGTH)?;
+        if let Some(description) = &self.description {
             validation::ensure_max_len(
-                "text input placeholder",
-                placeholder,
-                limits::MAX_TEXT_INPUT_PLACEHOLDER_LENGTH,
+                "text input description",
+                description,
+                Label::MAX_DESCRIPTION_LENGTH,
             )?;
         }
-        if let Some(value) = &self.value {
-            validation::ensure_max_len(
-                "text input value",
-                value,
-                usize::from(limits::MAX_TEXT_INPUT_LENGTH),
-            )?;
-        }
-        if let Some(min) = self.min_length {
-            if min > limits::MAX_TEXT_INPUT_LENGTH {
-                return Err(DiscordError::model(format!(
-                    "text input min_length must be 0-{}, got {min}",
-                    limits::MAX_TEXT_INPUT_LENGTH
-                )));
-            }
-        }
-        if let Some(max) = self.max_length {
-            if !(1..=limits::MAX_TEXT_INPUT_LENGTH).contains(&max) {
-                return Err(DiscordError::model(format!(
-                    "text input max_length must be 1-{}, got {max}",
-                    limits::MAX_TEXT_INPUT_LENGTH
-                )));
-            }
-        }
-        if let (Some(min), Some(max)) = (self.min_length, self.max_length) {
-            if min > max {
-                return Err(DiscordError::model(format!(
-                    "text input min_length ({min}) must not exceed max_length ({max})"
-                )));
-            }
-        }
-        Ok(())
+        self.input.validate()
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
     /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    pub fn try_build(self) -> Result<Label, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
+
+    /// The text input in the deprecated action-row layout, with the label as
+    /// the input's own `label`.
+    fn into_legacy_row(self) -> LegacyTextInputRow {
+        #[expect(
+            deprecated,
+            reason = "the only place the builders create the deprecated layout"
+        )]
+        LegacyTextInputRow::new(self.label, self.input)
+    }
 }
 
-// [Decision Log]
-// - 목적과 의도: 모달 전용 컴포넌트(라디오 그룹, 체크박스 그룹, 체크박스) 빌더가 Discord 문서
-//   (components/reference, 3714862)대로 받아들여지는 페이로드만 만들게 한다.
-// - 기존 구현 및 제약 조건: 세 빌더 모두 `disabled` setter가 있었다. 문서는 "모달에서 `disabled`를
-//   쓰면 오류"라고 하고, 이 셋은 모달에만 들어간다. 체크박스는 `checked` 키로 초기 상태를 보냈지만
-//   문서의 키는 `default`이고, 문서는 체크박스에 `required`를 둘 수 없다고 한다.
-// - 검토한 주요 대안: (1) setter를 deprecated로 두고 계속 내보내기, (2) deprecated + 아무것도 하지
-//   않기, (3) 삭제(컴파일 오류 + 마이그레이션 노트), 초기 상태는 `default_checked`로 내보내고
-//   `checked`는 같은 일을 하는 deprecated 별칭.
-// - 선택한 방식: (3).
-// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 항상 거절될 페이로드를 계속 만든다. (2)는 사용자
-//   의도를 조용히 버린다. 3.0은 어차피 파괴적 변경이므로 컴파일 오류로 알리는 편이 정확하다.
-//   `checked`의 뜻(초기 상태)은 유효하므로 별칭으로 남겨 올바른 키를 내보낸다.
-// - 장점, 단점 및 영향: `RadioGroupBuilder::disabled`, `CheckboxGroupBuilder::disabled`,
-//   `CheckboxBuilder::{disabled, required}` 삭제. 필수 체크박스는 옵션 하나짜리 체크박스 그룹 +
-//   `required(true)`로 만든다(문서의 권장).
-/// A radio group (modals only; wrap it in a label). Modals cannot contain
+/// Builds a [`RadioGroup`]: pick exactly one option. Modals cannot contain
 /// disabled components, so there is no `disabled` setter.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct RadioGroupBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    custom_id: String,
-    options: Vec<SelectOption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: RadioGroup,
 }
 
 impl RadioGroupBuilder {
-    /// Creates a `new` value.
+    /// A radio group with this `custom_id`.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: ComponentType::RADIO_GROUP,
-            custom_id: custom_id.to_string(),
-            options: Vec::new(),
-            required: None,
-            id: None,
+            inner: RadioGroup::new(custom_id),
         }
     }
 
+    /// Appends an option.
     pub fn add_option(mut self, option: SelectOption) -> Self {
-        self.options.push(option);
+        self.inner.options.push(option);
         self
     }
 
+    /// Appends several options.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
-        self.options.extend(options);
+        self.inner.options.extend(options);
         self
     }
 
+    /// Sets whether a selection is required.
     pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
+        self.inner.required = Some(required);
         self
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Returns the radio group without checking any limit.
+    pub fn build(self) -> RadioGroup {
+        self.inner
     }
 
-    /// Validates the radio group against Discord's documented limits without
-    /// consuming the builder: `custom_id` 1-100 characters, 2-10 options, and
-    /// option labels, values, and descriptions of at most 100 characters.
-    ///
-    /// [`LabelBuilder`] and [`ModalBuilder`] do not re-check a group they
-    /// wrap, so call this before handing the builder to them.
+    /// Checks the documented limits without consuming the builder; see
+    /// [`RadioGroup::validate`].
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len(
-            "radio group custom_id",
-            &self.custom_id,
-            1,
-            limits::MAX_CUSTOM_ID_LENGTH,
-        )?;
-        validation::ensure_count(
-            "radio group options",
-            self.options.len(),
-            limits::MIN_RADIO_GROUP_OPTIONS,
-            limits::MAX_RADIO_GROUP_OPTIONS,
-        )?;
-        validate_group_options("radio group", &self.options)
+        self.inner.validate()
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// Validating counterpart to [`Self::build`].
+    pub fn try_build(self) -> Result<RadioGroup, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
 }
 
-// [Decision Log]
-// - 목적과 의도: 라디오 그룹, 체크박스 그룹, 체크박스도 다른 빌더처럼 `validate()`/`try_build()`로
-//   문서(components/reference, 3714862)의 제한 위반을 Discord 400 전에 로컬에서 잡는다.
-// - 기존 구현 및 제약 조건: `build()`는 검증하지 않는 동작을 유지한다. 두 그룹의 옵션 구조는
-//   label/value/description에 "max 100 characters"만 적는데, 문자열 선택 메뉴 검증기는 label과
-//   value를 1자 이상으로도 검사한다. `LabelBuilder`/`ModalBuilder`는 자식을 `Value`로 저장하므로
-//   자식 빌더 검증을 따라갈 경로가 없다.
-// - 검토한 주요 대안: (1) 선택 메뉴의 옵션 검사 루프를 components.rs 공용 함수로 빼서 같이 쓰기,
-//   (2) 두 그룹만 쓰는 모듈 내부 함수, (3) 옵션 수와 min/max_values의 관계(max_values ≤ 옵션 수 등)도
-//   검사하기.
-// - 선택한 방식: (2). 문서에 적힌 규칙만 검사하고, min_values ≤ max_values는 "최소/최대 선택 수"의
-//   정의상 항상 성립해야 하므로(선택 메뉴, 텍스트 입력과 같은 검사) 포함한다.
-// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 선택 메뉴의 최소 1자 규칙을 매개변수로 갈라야 해서
-//   선택 메뉴 동작을 건드릴 위험만 늘린다. (3)은 문서에 없는 규칙이라 Discord가 받는 페이로드를
-//   로컬에서 거절할 수 있다.
-// - 장점, 단점 및 영향: 로컬 검증이 문서보다 엄격해지지 않는다. 대신 옵션 수보다 큰 min_values 같은
-//   실수는 Discord가 알려 준다. 라벨이나 모달에 넣을 그룹은 넣기 전에 각자 `validate()`해야 한다.
-/// Checks each radio or checkbox group option's `label`, `value`, and
-/// `description` against the documented "max 100 characters". Unlike the
-/// string select check, an empty label or value is not rejected: the group
-/// option structures give only a maximum.
-fn validate_group_options(component: &str, options: &[SelectOption]) -> Result<(), DiscordError> {
-    for option in options {
-        let label = &option.label;
-        validation::ensure_max_len(
-            &format!("{component} option \"{label}\" label"),
-            label,
-            limits::MAX_SELECT_OPTION_TEXT_LENGTH,
-        )?;
-        validation::ensure_max_len(
-            &format!("{component} option \"{label}\" value"),
-            &option.value,
-            limits::MAX_SELECT_OPTION_TEXT_LENGTH,
-        )?;
-        if let Some(description) = &option.description {
-            validation::ensure_max_len(
-                &format!("{component} option \"{label}\" description"),
-                description,
-                limits::MAX_SELECT_OPTION_TEXT_LENGTH,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// A checkbox group (modals only; wrap it in a label). Modals cannot contain
-/// disabled components, so there is no `disabled` setter.
-#[derive(Clone, Serialize, Deserialize)]
+/// Builds a [`CheckboxGroup`]: pick any number of options. There is no
+/// `disabled` setter.
+#[derive(Clone, Debug)]
 pub struct CheckboxGroupBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    custom_id: String,
-    options: Vec<SelectOption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_values: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_values: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: CheckboxGroup,
 }
 
 impl CheckboxGroupBuilder {
-    /// Creates a `new` value.
+    /// A checkbox group with this `custom_id`.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: ComponentType::CHECKBOX_GROUP,
-            custom_id: custom_id.to_string(),
-            options: Vec::new(),
-            min_values: None,
-            max_values: None,
-            required: None,
-            id: None,
+            inner: CheckboxGroup::new(custom_id),
         }
     }
 
+    /// Appends an option.
     pub fn add_option(mut self, option: SelectOption) -> Self {
-        self.options.push(option);
+        self.inner.options.push(option);
         self
     }
 
+    /// Appends several options.
     pub fn add_options(mut self, options: Vec<SelectOption>) -> Self {
-        self.options.extend(options);
+        self.inner.options.extend(options);
         self
     }
 
+    /// Sets the minimum number of checked options.
     pub fn min_values(mut self, min: u8) -> Self {
-        self.min_values = Some(min);
+        self.inner.min_values = Some(min);
         self
     }
 
+    /// Sets the maximum number of checked options.
     pub fn max_values(mut self, max: u8) -> Self {
-        self.max_values = Some(max);
+        self.inner.max_values = Some(max);
         self
     }
 
+    /// Sets whether a selection is required.
     pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
+        self.inner.required = Some(required);
         self
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Returns the checkbox group without checking any limit.
+    pub fn build(self) -> CheckboxGroup {
+        self.inner
     }
 
-    /// Validates the checkbox group against Discord's documented limits
-    /// without consuming the builder: `custom_id` 1-100 characters, 1-10
-    /// options whose labels, values, and descriptions are at most 100
-    /// characters, `min_values` 0-10, `max_values` 1-10, `min_values` not
-    /// above `max_values`, and `min_values` 0 only with `required(false)`.
-    ///
-    /// The values are not compared with the number of options because
-    /// Discord documents no such rule. [`LabelBuilder`] and [`ModalBuilder`]
-    /// do not re-check a group they wrap, so call this before handing the
-    /// builder to them.
+    /// Checks the documented limits without consuming the builder; see
+    /// [`CheckboxGroup::validate`].
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len(
-            "checkbox group custom_id",
-            &self.custom_id,
-            1,
-            limits::MAX_CUSTOM_ID_LENGTH,
-        )?;
-        validation::ensure_count(
-            "checkbox group options",
-            self.options.len(),
-            1,
-            limits::MAX_CHECKBOX_GROUP_OPTIONS,
-        )?;
-        validate_group_options("checkbox group", &self.options)?;
-        if let Some(min) = self.min_values {
-            if min > limits::MAX_CHECKBOX_GROUP_VALUES {
-                return Err(DiscordError::model(format!(
-                    "checkbox group min_values must be at most {}, got {min}",
-                    limits::MAX_CHECKBOX_GROUP_VALUES
-                )));
-            }
-            // Checkbox Group Structure footnote: "`min_values` must be either
-            // omitted or at least `1` if `required` is omitted or `true`."
-            // `required` defaults to true, so only an explicit
-            // `required(false)` allows 0.
-            if min == 0 && self.required != Some(false) {
-                return Err(DiscordError::model(
-                    "checkbox group min_values must be at least 1 when required is omitted \
-                     or true, got 0",
-                ));
-            }
-        }
-        if let Some(max) = self.max_values {
-            if !(1..=limits::MAX_CHECKBOX_GROUP_VALUES).contains(&max) {
-                return Err(DiscordError::model(format!(
-                    "checkbox group max_values must be 1-{}, got {max}",
-                    limits::MAX_CHECKBOX_GROUP_VALUES
-                )));
-            }
-        }
-        // Not a separate rule in the docs, but a minimum number of choices
-        // above the maximum can never be met; select menus and text inputs
-        // apply the same check.
-        if let (Some(min), Some(max)) = (self.min_values, self.max_values) {
-            if min > max {
-                return Err(DiscordError::model(format!(
-                    "checkbox group min_values ({min}) must not exceed max_values ({max})"
-                )));
-            }
-        }
-        Ok(())
+        self.inner.validate()
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// Validating counterpart to [`Self::build`].
+    pub fn try_build(self) -> Result<CheckboxGroup, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
 }
 
-/// A single yes/no checkbox (modals only; wrap it in a label).
+/// Builds a single [`Checkbox`].
 ///
 /// Discord does not let a checkbox be required or disabled; for a box the
 /// user must tick, use a [`CheckboxGroupBuilder`] with one option and
 /// `required(true)`.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct CheckboxBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    custom_id: String,
-    /// Initial state, sent as `default`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    default: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: Checkbox,
 }
 
 impl CheckboxBuilder {
-    /// Creates a `new` value.
+    /// A checkbox with this `custom_id`.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: ComponentType::CHECKBOX,
-            custom_id: custom_id.to_string(),
-            default: None,
-            id: None,
+            inner: Checkbox::new(custom_id),
         }
     }
 
     /// Whether the checkbox starts checked (Discord's `default`).
     pub fn default_checked(mut self, checked: bool) -> Self {
-        self.default = Some(checked);
+        self.inner.default = Some(checked);
         self
     }
 
@@ -467,67 +300,41 @@ impl CheckboxBuilder {
         self.default_checked(checked)
     }
 
+    /// Sets the component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Returns the checkbox without checking any limit.
+    pub fn build(self) -> Checkbox {
+        self.inner
     }
 
-    /// Validates the checkbox against Discord's documented limits without
-    /// consuming the builder: `custom_id` 1-100 characters, the only limit
-    /// the Checkbox Structure gives.
-    ///
-    /// [`LabelBuilder`] and [`ModalBuilder`] do not re-check a checkbox they
-    /// wrap, so call this before handing the builder to them.
+    /// Checks the documented limits without consuming the builder; see
+    /// [`Checkbox::validate`].
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len(
-            "checkbox custom_id",
-            &self.custom_id,
-            1,
-            limits::MAX_CUSTOM_ID_LENGTH,
-        )
+        self.inner.validate()
     }
 
-    /// Validating counterpart to [`Self::build`]: fails locally with a
-    /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// Validating counterpart to [`Self::build`].
+    pub fn try_build(self) -> Result<Checkbox, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `FileUploadBuilder`.
+/// Builds a [`FileUpload`].
+#[derive(Clone, Debug)]
 pub struct FileUploadBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    custom_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    min_values: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_values: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    file_types: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: FileUpload,
 }
 
 impl FileUploadBuilder {
-    /// Creates a `new` value.
+    /// A file upload with this `custom_id`.
     pub fn new(custom_id: &str) -> Self {
         Self {
-            component_type: ComponentType::FILE_UPLOAD,
-            custom_id: custom_id.to_string(),
-            min_values: None,
-            max_values: None,
-            required: None,
-            file_types: None,
-            id: None,
+            inner: FileUpload::new(custom_id),
         }
     }
 
@@ -539,340 +346,355 @@ impl FileUploadBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.file_types = Some(file_types.into_iter().map(Into::into).collect());
+        self.inner.file_types = Some(file_types.into_iter().map(Into::into).collect());
         self
     }
 
-    /// Checks the `file_types` filter against Discord's documented limits.
-    pub fn validate(&self) -> Result<(), DiscordError> {
-        if let Some(file_types) = &self.file_types {
-            validation::ensure_file_types("file upload file_types", file_types)?;
-        }
-        Ok(())
+    /// Sets the minimum number of files.
+    pub fn min_values(mut self, min: u8) -> Self {
+        self.inner.min_values = Some(min);
+        self
     }
 
-    /// Validates, then builds the component JSON.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    /// Sets the maximum number of files.
+    pub fn max_values(mut self, max: u8) -> Self {
+        self.inner.max_values = Some(max);
+        self
+    }
+
+    /// Sets whether files must be uploaded.
+    pub fn required(mut self, required: bool) -> Self {
+        self.inner.required = Some(required);
+        self
+    }
+
+    /// Sets the component `id`.
+    pub fn id(mut self, id: ComponentId) -> Self {
+        self.inner.id = Some(id);
+        self
+    }
+
+    /// Returns the file upload without checking any limit.
+    pub fn build(self) -> FileUpload {
+        self.inner
+    }
+
+    /// Checks the documented limits without consuming the builder; see
+    /// [`FileUpload::validate`].
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        self.inner.validate()
+    }
+
+    /// Validating counterpart to [`Self::build`].
+    pub fn try_build(self) -> Result<FileUpload, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
-
-    pub fn min_values(mut self, min: u8) -> Self {
-        self.min_values = Some(min);
-        self
-    }
-
-    pub fn max_values(mut self, max: u8) -> Self {
-        self.max_values = Some(max);
-        self
-    }
-
-    pub fn required(mut self, required: bool) -> Self {
-        self.required = Some(required);
-        self
-    }
-
-    pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
-        self
-    }
-
-    pub fn build(self) -> Value {
-        to_json_value(self)
-    }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-/// Typed Discord API object for `LabelBuilder`.
+/// Builds a [`Label`] around one modal input.
+#[derive(Clone, Debug)]
 pub struct LabelBuilder {
-    #[serde(rename = "type")]
-    component_type: ComponentType,
-    label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    component: Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<ComponentId>,
+    inner: Label,
 }
 
 impl LabelBuilder {
-    /// Creates a `with_select_menu` value.
+    fn with(label: &str, component: impl Into<LabelComponent>) -> Self {
+        Self {
+            inner: Label::new(label, component),
+        }
+    }
+
+    /// A label around a text input. The builder's own label text is
+    /// replaced by `label`.
+    pub fn with_text_input(label: &str, input: TextInputBuilder) -> Self {
+        Self::with(label, input.input)
+    }
+
+    /// A label around a select menu.
     pub fn with_select_menu(label: &str, select: impl Into<SelectMenu>) -> Self {
-        Self {
-            component_type: ComponentType::LABEL,
-            label: label.to_string(),
-            description: None,
-            component: to_json_value(select.into()),
-            id: None,
-        }
+        Self::with(label, select_component(select))
     }
 
-    /// Creates a `with_file_upload` value.
+    /// A label around a file upload.
     pub fn with_file_upload(label: &str, file_upload: FileUploadBuilder) -> Self {
-        Self {
-            component_type: ComponentType::LABEL,
-            label: label.to_string(),
-            description: None,
-            component: file_upload.build(),
-            id: None,
-        }
+        Self::with(label, file_upload.build())
     }
 
-    /// Creates a `with_radio_group` value.
+    /// A label around a radio group.
     pub fn with_radio_group(label: &str, radio_group: RadioGroupBuilder) -> Self {
-        Self {
-            component_type: ComponentType::LABEL,
-            label: label.to_string(),
-            description: None,
-            component: radio_group.build(),
-            id: None,
-        }
+        Self::with(label, radio_group.build())
     }
 
-    /// Creates a `with_checkbox_group` value.
+    /// A label around a checkbox group.
     pub fn with_checkbox_group(label: &str, checkbox_group: CheckboxGroupBuilder) -> Self {
-        Self {
-            component_type: ComponentType::LABEL,
-            label: label.to_string(),
-            description: None,
-            component: checkbox_group.build(),
-            id: None,
-        }
+        Self::with(label, checkbox_group.build())
     }
 
-    /// Creates a `with_checkbox` value.
+    /// A label around a checkbox.
     pub fn with_checkbox(label: &str, checkbox: CheckboxBuilder) -> Self {
-        Self {
-            component_type: ComponentType::LABEL,
-            label: label.to_string(),
-            description: None,
-            component: checkbox.build(),
-            id: None,
-        }
+        Self::with(label, checkbox.build())
     }
 
+    /// Sets the description shown with the label.
     pub fn description(mut self, desc: &str) -> Self {
-        self.description = Some(desc.to_string());
+        self.inner.description = Some(desc.to_owned());
         self
     }
 
+    /// Sets the label's component `id`.
     pub fn id(mut self, id: ComponentId) -> Self {
-        self.id = Some(id);
+        self.inner.id = Some(id);
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Returns the label without checking any limit.
+    pub fn build(self) -> Label {
+        self.inner
+    }
+
+    /// Checks the label and its input without consuming the builder; see
+    /// [`Label::validate`].
+    pub fn validate(&self) -> Result<(), DiscordError> {
+        self.inner.validate()
+    }
+
+    /// Validating counterpart to [`Self::build`].
+    pub fn try_build(self) -> Result<Label, DiscordError> {
+        self.validate()?;
+        Ok(self.build())
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `ModalBuilder`.
+/// A select menu (a per-kind select builder such as
+/// [`SelectMenuBuilder::string`](super::SelectMenuBuilder::string), a model
+/// struct, or a [`SelectMenu`]) as a label child.
+fn select_component(select: impl Into<SelectMenu>) -> LabelComponent {
+    LabelComponent::from(select.into())
+}
+
+/// Builds a [`Modal`]: a title and 1-5 top-level components.
+///
+/// Inputs are wrapped in Labels: [`Self::add_text_input`] uses the text
+/// input builder's label text, the other `add_*` methods take the label
+/// text and an optional description.
+///
+/// ```
+/// use discordrs::{CheckboxBuilder, ModalBuilder, TextInputBuilder};
+///
+/// let modal = ModalBuilder::new("signup", "Sign up")
+///     .add_text_input(TextInputBuilder::short("nick", "Nickname"))
+///     .add_checkbox("Newsletter", None, CheckboxBuilder::new("news"))
+///     .try_build()
+///     .unwrap();
+/// assert_eq!(modal.components.len(), 2);
+/// ```
+#[derive(Clone, Debug)]
 pub struct ModalBuilder {
-    custom_id: String,
-    title: String,
-    components: Vec<Value>,
+    inner: Modal,
 }
 
 impl ModalBuilder {
-    fn with_optional_description(label: LabelBuilder, description: Option<&str>) -> LabelBuilder {
-        if let Some(description) = description {
-            label.description(description)
-        } else {
-            label
+    fn label(
+        label: &str,
+        description: Option<&str>,
+        component: impl Into<LabelComponent>,
+    ) -> Label {
+        let label = Label::new(label, component);
+        match description {
+            Some(description) => label.description(description),
+            None => label,
         }
     }
 
-    /// Creates a `new` value.
+    /// A modal with this `custom_id` and title.
     pub fn new(custom_id: &str, title: &str) -> Self {
         Self {
-            custom_id: custom_id.to_string(),
-            title: title.to_string(),
-            components: Vec::new(),
+            inner: Modal::new(custom_id, title),
         }
     }
 
+    /// Adds a text input inside a Label carrying the input builder's label
+    /// text (and description, if set).
     pub fn add_text_input(mut self, input: TextInputBuilder) -> Self {
-        // The legacy modal row; message action rows are typed and hold
-        // only buttons or a select menu.
-        self.components.push(serde_json::json!({
-            "type": ComponentType::ACTION_ROW,
-            "components": [input.build()],
-        }));
+        self.inner.components.push(input.build().into());
         self
     }
 
+    /// Adds a text input in an Action Row with the input's own `label`, the
+    /// layout Discord deprecated in favour of Labels.
+    #[deprecated(
+        since = "3.0.0",
+        note = "Discord deprecated text inputs in action rows; use add_text_input (a Label)"
+    )]
+    pub fn add_text_input_row(mut self, input: TextInputBuilder) -> Self {
+        self.inner.components.push(input.into_legacy_row().into());
+        self
+    }
+
+    /// Adds a select menu inside a Label.
     pub fn add_select_menu(
         mut self,
         label: &str,
         description: Option<&str>,
         select: impl Into<SelectMenu>,
     ) -> Self {
-        self.components.push(
-            Self::with_optional_description(
-                LabelBuilder::with_select_menu(label, select),
-                description,
-            )
-            .build(),
-        );
+        self.inner
+            .components
+            .push(Self::label(label, description, select_component(select)).into());
         self
     }
 
+    /// Adds a file upload inside a Label.
     pub fn add_file_upload(
         mut self,
         label: &str,
         description: Option<&str>,
         file_upload: FileUploadBuilder,
     ) -> Self {
-        self.components.push(
-            Self::with_optional_description(
-                LabelBuilder::with_file_upload(label, file_upload),
-                description,
-            )
-            .build(),
-        );
+        self.inner
+            .components
+            .push(Self::label(label, description, file_upload.build()).into());
         self
     }
 
+    /// Adds a radio group inside a Label.
     pub fn add_radio_group(
         mut self,
         label: &str,
         description: Option<&str>,
         radio_group: RadioGroupBuilder,
     ) -> Self {
-        self.components.push(
-            Self::with_optional_description(
-                LabelBuilder::with_radio_group(label, radio_group),
-                description,
-            )
-            .build(),
-        );
+        self.inner
+            .components
+            .push(Self::label(label, description, radio_group.build()).into());
         self
     }
 
+    /// Adds a checkbox group inside a Label.
     pub fn add_checkbox_group(
         mut self,
         label: &str,
         description: Option<&str>,
         checkbox_group: CheckboxGroupBuilder,
     ) -> Self {
-        self.components.push(
-            Self::with_optional_description(
-                LabelBuilder::with_checkbox_group(label, checkbox_group),
-                description,
-            )
-            .build(),
-        );
+        self.inner
+            .components
+            .push(Self::label(label, description, checkbox_group.build()).into());
         self
     }
 
+    /// Adds a checkbox inside a Label.
     pub fn add_checkbox(
         mut self,
         label: &str,
         description: Option<&str>,
         checkbox: CheckboxBuilder,
     ) -> Self {
-        self.components.push(
-            Self::with_optional_description(
-                LabelBuilder::with_checkbox(label, checkbox),
-                description,
-            )
-            .build(),
-        );
+        self.inner
+            .components
+            .push(Self::label(label, description, checkbox.build()).into());
         self
     }
 
+    /// Adds a Label built separately.
     pub fn add_label(mut self, label: LabelBuilder) -> Self {
-        self.components.push(label.build());
+        self.inner.components.push(label.build().into());
         self
     }
 
-    pub fn add_action_row(mut self, row: ActionRowBuilder) -> Self {
-        self.components.push(to_json_value(row.build()));
+    /// Adds a Text Display: Markdown shown between the inputs.
+    pub fn add_text_display(mut self, content: &str) -> Self {
+        self.inner.components.push(TextDisplay::new(content).into());
         self
     }
 
-    pub fn add_component(mut self, component: Value) -> Self {
-        self.components.push(component);
+    /// Adds any top-level modal component: a [`Label`], a
+    /// [`TextDisplay`], or a [`RawComponent`](crate::request::RawComponent)
+    /// for a component type this crate does not model yet.
+    pub fn add_component(mut self, component: impl Into<ModalComponent>) -> Self {
+        self.inner.components.push(component.into());
         self
     }
 
-    pub fn build(self) -> Value {
-        to_json_value(self)
+    /// Returns the modal without checking any limit.
+    pub fn build(self) -> Modal {
+        self.inner
     }
 
-    /// Validates the modal against Discord's limits without consuming the
-    /// builder: custom_id 1-100 characters, title 1-45 characters, and 1-5
-    /// top-level components.
+    /// Checks the modal and every component in it without consuming the
+    /// builder; see [`Modal::validate`].
     pub fn validate(&self) -> Result<(), DiscordError> {
-        validation::ensure_len(
-            "modal custom_id",
-            &self.custom_id,
-            1,
-            limits::MAX_CUSTOM_ID_LENGTH,
-        )?;
-        validation::ensure_len(
-            "modal title",
-            &self.title,
-            1,
-            limits::MAX_MODAL_TITLE_LENGTH,
-        )?;
-        validation::ensure_count(
-            "modal components",
-            self.components.len(),
-            1,
-            limits::MAX_MODAL_COMPONENTS,
-        )
+        self.inner.validate()
     }
 
     /// Validating counterpart to [`Self::build`]: fails locally with a
     /// descriptive [`DiscordError::Model`] instead of a Discord 400.
-    pub fn try_build(self) -> Result<Value, DiscordError> {
+    pub fn try_build(self) -> Result<Modal, DiscordError> {
         self.validate()?;
         Ok(self.build())
     }
 }
 
+impl From<ModalBuilder> for Modal {
+    fn from(builder: ModalBuilder) -> Self {
+        builder.build()
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::model::{ComponentId, ComponentType, TextInputStyle};
-    use serde_json::json;
+    use crate::request::{RawComponent, TextDisplay};
+    use serde_json::{json, Value};
 
     use super::{
         CheckboxBuilder, CheckboxGroupBuilder, FileUploadBuilder, LabelBuilder, ModalBuilder,
         RadioGroupBuilder, TextInputBuilder,
     };
-    use crate::builders::{ActionRowBuilder, CustomButtonBuilder, SelectMenuBuilder};
+    use crate::builders::SelectMenuBuilder;
     use crate::types::SelectOption;
 
+    /// What a built component sends.
+    fn to_json(value: impl serde::Serialize) -> Value {
+        serde_json::to_value(value).unwrap()
+    }
+
     #[test]
-    fn text_input_builder_serializes_helpers_and_optional_fields() {
-        let short = TextInputBuilder::short("short-id", "Short").build();
+    fn text_input_builder_builds_a_label_around_the_input() {
+        let short = to_json(TextInputBuilder::short("short-id", "Short").build());
         assert_eq!(
-            short.get("style").and_then(|value| value.as_u64()),
-            Some(u64::from(TextInputStyle::SHORT.get()))
+            short["component"]["style"],
+            json!(TextInputStyle::SHORT.get())
         );
 
         let paragraph = TextInputBuilder::paragraph("paragraph-id", "Paragraph")
+            .description("tell us")
             .placeholder("type here")
             .value("seed")
             .required(true)
             .min_length(5)
             .max_length(25)
+            .id(ComponentId::new(3))
             .build();
 
+        // The label text moved to the Label; the input carries no `label`.
         assert_eq!(
-            paragraph,
+            to_json(paragraph),
             json!({
-                "type": ComponentType::TEXT_INPUT,
-                "custom_id": "paragraph-id",
-                "style": TextInputStyle::PARAGRAPH,
+                "type": ComponentType::LABEL,
                 "label": "Paragraph",
-                "placeholder": "type here",
-                "value": "seed",
-                "required": true,
-                "min_length": 5,
-                "max_length": 25,
+                "description": "tell us",
+                "component": {
+                    "type": ComponentType::TEXT_INPUT,
+                    "id": 3,
+                    "custom_id": "paragraph-id",
+                    "style": TextInputStyle::PARAGRAPH,
+                    "min_length": 5,
+                    "max_length": 25,
+                    "required": true,
+                    "value": "seed",
+                    "placeholder": "type here",
+                },
             })
         );
     }
@@ -885,6 +707,7 @@ mod tests {
             .required(true)
             .id(ComponentId::new(4))
             .build();
+        let payload = to_json(payload);
 
         assert_eq!(
             payload.get("type").and_then(|value| value.as_u64()),
@@ -917,7 +740,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            payload,
+            to_json(payload),
             json!({
                 "type": ComponentType::CHECKBOX_GROUP,
                 "custom_id": "checks",
@@ -942,7 +765,7 @@ mod tests {
 
         // Discord's create field for the initial state is `default`.
         assert_eq!(
-            checkbox,
+            to_json(checkbox),
             json!({
                 "type": ComponentType::CHECKBOX,
                 "custom_id": "terms",
@@ -951,7 +774,7 @@ mod tests {
             })
         );
         #[expect(deprecated, reason = "the 2.x setter must send the documented key too")]
-        let legacy = CheckboxBuilder::new("terms").checked(false).build();
+        let legacy = to_json(CheckboxBuilder::new("terms").checked(false).build());
         assert_eq!(legacy["default"], json!(false));
         assert!(legacy.get("checked").is_none());
 
@@ -963,7 +786,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            upload,
+            to_json(upload),
             json!({
                 "type": ComponentType::FILE_UPLOAD,
                 "custom_id": "attachment",
@@ -1015,6 +838,7 @@ mod tests {
         ];
 
         for (index, (payload, expected_type)) in cases.into_iter().enumerate() {
+            let payload = to_json(payload);
             assert_eq!(
                 payload.get("type").and_then(|value| value.as_u64()),
                 Some(u64::from(ComponentType::LABEL.get()))
@@ -1059,7 +883,10 @@ mod tests {
                 .max_length(100)
                 .required(true)
         };
-        assert_eq!(make().build(), make().try_build().expect("valid input"));
+        assert_eq!(
+            to_json(make().build()),
+            to_json(make().try_build().expect("valid input"))
+        );
     }
 
     #[test]
@@ -1115,7 +942,10 @@ mod tests {
             ModalBuilder::new("modal-id", "Modal Title")
                 .add_text_input(TextInputBuilder::short("name", "Name"))
         };
-        assert_eq!(make().build(), make().try_build().expect("valid modal"));
+        assert_eq!(
+            to_json(make().build()),
+            to_json(make().try_build().expect("valid modal"))
+        );
 
         expect_model_error(
             ModalBuilder::new(&"i".repeat(101), "Title")
@@ -1147,7 +977,8 @@ mod tests {
 
     #[test]
     fn modal_builder_composes_components_and_optional_descriptions() {
-        let payload = ModalBuilder::new("modal-id", "Modal Title")
+        #[expect(deprecated, reason = "covers the legacy action-row layout")]
+        let builder = ModalBuilder::new("modal-id", "Modal Title")
             .add_text_input(
                 TextInputBuilder::short("name", "Name")
                     .placeholder("Jane")
@@ -1174,70 +1005,66 @@ mod tests {
                 "Standalone",
                 CheckboxBuilder::new("solo"),
             ))
-            .add_action_row(
-                ActionRowBuilder::new()
-                    .add_button(CustomButtonBuilder::new("btn").label("Ignored in modal tests")),
-            )
-            .add_component(json!({"type": 250, "custom": true}))
-            .build();
+            .add_text_display("Read this first")
+            .add_component(TextDisplay::new("And this"))
+            .add_component(RawComponent::from_json(r#"{"type":250,"custom":true}"#).unwrap())
+            .add_text_input_row(TextInputBuilder::paragraph("legacy", "Legacy"));
+        let payload = to_json(builder.build());
 
         let components = payload
             .get("components")
             .and_then(|value| value.as_array())
             .expect("modal components");
 
-        assert_eq!(
-            payload.get("custom_id").and_then(|value| value.as_str()),
-            Some("modal-id")
-        );
-        assert_eq!(
-            payload.get("title").and_then(|value| value.as_str()),
-            Some("Modal Title")
-        );
-        assert_eq!(components.len(), 9);
-        assert_eq!(
-            components[0].get("type").and_then(|value| value.as_u64()),
-            Some(u64::from(ComponentType::ACTION_ROW.get()))
-        );
-        assert_eq!(
-            components[1]
-                .get("description")
-                .and_then(|value| value.as_str()),
-            Some("Pick exactly one")
-        );
+        assert_eq!(payload["custom_id"], json!("modal-id"));
+        assert_eq!(payload["title"], json!("Modal Title"));
+        assert_eq!(components.len(), 11);
+        // Inputs are wrapped in Labels by default.
+        for label in &components[..7] {
+            assert_eq!(label["type"], json!(ComponentType::LABEL.get()));
+        }
+        assert_eq!(components[0]["label"], json!("Name"));
+        assert_eq!(components[0]["component"]["type"], json!(4));
+        assert!(components[0]["component"].get("label").is_none());
+        assert_eq!(components[1]["description"], json!("Pick exactly one"));
+        assert_eq!(components[1]["component"]["type"], json!(3));
         assert!(components[2].get("description").is_none());
-        assert_eq!(
-            components[3]
-                .get("description")
-                .and_then(|value| value.as_str()),
-            Some("Required choice")
-        );
+        assert_eq!(components[3]["description"], json!("Required choice"));
         assert!(components[4].get("description").is_none());
+        assert_eq!(components[5]["description"], json!("Terms"));
         assert_eq!(
-            components[5]
-                .get("description")
-                .and_then(|value| value.as_str()),
-            Some("Terms")
+            components[7],
+            json!({"type": 10, "content": "Read this first"})
         );
+        assert_eq!(components[8], json!({"type": 10, "content": "And this"}));
+        assert_eq!(components[9], json!({"type": 250, "custom": true}));
+        // Only the deprecated path produces an action row, with the input's
+        // own label.
         assert_eq!(
-            components[8].get("type").and_then(|value| value.as_u64()),
-            Some(250)
+            components[10],
+            json!({
+                "type": 1,
+                "components": [
+                    {"type": 4, "custom_id": "legacy", "style": 2, "label": "Legacy"}
+                ]
+            })
         );
     }
 
     #[test]
     fn file_upload_builder_supports_file_type_filters() {
-        let built = super::FileUploadBuilder::new("upload")
-            .file_types(["video", ".mov"])
-            .try_build()
-            .expect("valid filter");
+        let built = to_json(
+            super::FileUploadBuilder::new("upload")
+                .file_types(["video", ".mov"])
+                .try_build()
+                .expect("valid filter"),
+        );
         assert_eq!(built["file_types"], serde_json::json!(["video", ".mov"]));
         assert!(super::FileUploadBuilder::new("upload")
             .file_types((0..11).map(|index| format!(".e{index}")))
             .try_build()
             .is_err());
-        assert!(super::FileUploadBuilder::new("upload")
-            .build()
+        assert!(to_json(super::FileUploadBuilder::new("upload").build())
             .get("file_types")
             .is_none());
     }
@@ -1259,8 +1086,8 @@ mod tests {
                 .id(ComponentId::new(2))
         };
         assert_eq!(
-            make().build(),
-            make().try_build().expect("valid radio group")
+            to_json(make().build()),
+            to_json(make().try_build().expect("valid radio group"))
         );
     }
 
@@ -1336,8 +1163,8 @@ mod tests {
                 .id(ComponentId::new(5))
         };
         assert_eq!(
-            make().build(),
-            make().try_build().expect("valid checkbox group")
+            to_json(make().build()),
+            to_json(make().try_build().expect("valid checkbox group"))
         );
     }
 
@@ -1447,7 +1274,10 @@ mod tests {
                 .default_checked(true)
                 .id(ComponentId::new(7))
         };
-        assert_eq!(make().build(), make().try_build().expect("valid checkbox"));
+        assert_eq!(
+            to_json(make().build()),
+            to_json(make().try_build().expect("valid checkbox"))
+        );
 
         CheckboxBuilder::new(&"i".repeat(100))
             .validate()
