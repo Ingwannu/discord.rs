@@ -1521,17 +1521,30 @@ impl Serialize for Container {
 // Message-wide validation
 // ---------------------------------------------------------------------------
 
+/// Which component rules a message body is checked under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComponentsMode {
+    /// `IS_COMPONENTS_V2` is not set: only action rows (and raw components)
+    /// at the top level, at most 5.
+    Legacy,
+    /// `IS_COMPONENTS_V2` is set: any component, at most 40 counting nested
+    /// ones.
+    V2,
+    /// An edit that does not set the flags: the message keeps whatever mode
+    /// it has, which the body cannot see. Only the rules both modes share
+    /// are checked (each component's own limits, unique ids, at most 40).
+    Unknown,
+}
+
 /// Checks a message's `components` array: the per-component limits, plus
-/// the message-wide rules. Without `IS_COMPONENTS_V2` only action rows (and
-/// raw components) may appear, at most 5; with it, at most 40 components in
-/// total, nested ones included. Non-zero `id`s and `custom_id`s must be
+/// the message-wide rules of `mode`. Non-zero `id`s and `custom_id`s must be
 /// unique within the message.
 pub(crate) fn check_message_components(
     components: &[Component],
-    components_v2: bool,
+    mode: ComponentsMode,
 ) -> Result<(), DiscordError> {
     let mut tally = Tally::default();
-    if !components_v2 {
+    if mode == ComponentsMode::Legacy {
         if let Some((index, _)) = components
             .iter()
             .enumerate()
@@ -1553,7 +1566,9 @@ pub(crate) fn check_message_components(
     for (index, component) in components.iter().enumerate() {
         component.check(&child_path("", "components", index), &mut tally)?;
     }
-    if components_v2 && tally.components > limits::MAX_COMPONENTS_V2_TOTAL {
+    // The legacy cap (5 rows of at most 5) is far below 40, so 40 holds in
+    // every mode.
+    if tally.components > limits::MAX_COMPONENTS_V2_TOTAL {
         return Err(DiscordError::model(format!(
             "components v2 message components must contain at most {} items \
              (nested components included), got {}",

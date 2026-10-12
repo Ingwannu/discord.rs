@@ -67,7 +67,7 @@ use crate::model::{
 use super::attachment::MessageAttachment;
 use super::component::{
     check_count, check_max_len, check_message_components, child_path, entry_patch, entry_some,
-    Component,
+    Component, ComponentsMode,
 };
 use super::embed::Embed;
 use super::poll::CreatePoll;
@@ -545,6 +545,7 @@ impl CreateMessage {
         check_body(&BodyRef {
             allowed_flags: CREATE_MESSAGE_FLAGS,
             endpoint: "Create Message",
+            patch: false,
             content: self.content.as_deref(),
             embeds: self.embeds.as_deref(),
             components: self.components.as_deref(),
@@ -594,6 +595,12 @@ impl CreateMessage {
 /// Every field is a patch: omitted keeps the current value, `null` clears
 /// it, a value replaces it. There is no nonce, sticker, reply reference, tts,
 /// or poll: Discord does not accept them on an edit.
+///
+/// [`validate`](Self::validate) applies the Components V2 rules only when
+/// this edit sets `IS_COMPONENTS_V2`. An edit that omits `flags`, or sets
+/// them without that bit (which cannot be removed once set), leaves the
+/// message in whatever mode it has, so only the rules both modes share are
+/// checked.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct EditMessage {
@@ -625,6 +632,7 @@ impl EditMessage {
         check_body(&BodyRef {
             allowed_flags: EDIT_MESSAGE_FLAGS,
             endpoint: "Edit Message",
+            patch: true,
             content: patch_value(&self.content).map(String::as_str),
             embeds: patch_value(&self.embeds).map(Vec::as_slice),
             components: patch_value(&self.components).map(Vec::as_slice),
@@ -697,6 +705,7 @@ impl InteractionMessage {
         check_body(&BodyRef {
             allowed_flags: INTERACTION_MESSAGE_FLAGS,
             endpoint: "interaction callback",
+            patch: false,
             content: self.content.as_deref(),
             embeds: self.embeds.as_deref(),
             components: self.components.as_deref(),
@@ -773,6 +782,7 @@ impl CreateFollowup {
         check_body(&BodyRef {
             allowed_flags: FOLLOWUP_FLAGS,
             endpoint: "Create Followup Message",
+            patch: false,
             content: self.content.as_deref(),
             embeds: self.embeds.as_deref(),
             components: self.components.as_deref(),
@@ -879,6 +889,7 @@ impl ExecuteWebhook {
         check_body(&BodyRef {
             allowed_flags: EXECUTE_WEBHOOK_FLAGS,
             endpoint: "Execute Webhook",
+            patch: false,
             content: self.content.as_deref(),
             embeds: self.embeds.as_deref(),
             components: self.components.as_deref(),
@@ -931,6 +942,9 @@ impl ExecuteWebhook {
 /// appended, and existing attachments missing from a present list are
 /// removed. A poll can be added only when the edit completes a deferred
 /// interaction response.
+///
+/// As with [`EditMessage`], [`validate`](Self::validate) applies the
+/// Components V2 rules only when this edit sets `IS_COMPONENTS_V2`.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct EditWebhookMessage {
@@ -974,6 +988,7 @@ impl EditWebhookMessage {
         check_body(&BodyRef {
             allowed_flags: EDIT_MESSAGE_FLAGS,
             endpoint: "Edit Webhook Message",
+            patch: true,
             content: patch_value(&self.content).map(String::as_str),
             embeds: patch_value(&self.embeds).map(Vec::as_slice),
             components: patch_value(&self.components).map(Vec::as_slice),
@@ -1011,6 +1026,12 @@ impl EditWebhookMessage {
 struct BodyRef<'a> {
     allowed_flags: u64,
     endpoint: &'static str,
+    /// Whether the body replaces an existing message's fields. An edit that
+    /// omits `flags` (or sets them without `IS_COMPONENTS_V2`, which cannot
+    /// be removed once set) leaves the message's mode as it is, so the
+    /// Components V2 and legacy rules are applied only when the body itself
+    /// sets `IS_COMPONENTS_V2`.
+    patch: bool,
     content: Option<&'a str>,
     embeds: Option<&'a [Embed]>,
     components: Option<&'a [Component]>,
@@ -1036,8 +1057,14 @@ fn check_body(body: &BodyRef<'_>) -> Result<(), DiscordError> {
             body.endpoint
         )));
     }
-    let components_v2 = flags.contains(IS_COMPONENTS_V2);
-    if components_v2 {
+    let mode = if flags.contains(IS_COMPONENTS_V2) {
+        ComponentsMode::V2
+    } else if body.patch {
+        ComponentsMode::Unknown
+    } else {
+        ComponentsMode::Legacy
+    };
+    if mode == ComponentsMode::V2 {
         // "When the flag IS_COMPONENTS_V2 is set, the message can only
         // contain components" (Create Message, Execute Webhook). An empty
         // embeds list is the documented way to clear them on an edit.
@@ -1095,7 +1122,7 @@ fn check_body(body: &BodyRef<'_>) -> Result<(), DiscordError> {
         }
     }
     if let Some(components) = body.components {
-        check_message_components(components, components_v2)?;
+        check_message_components(components, mode)?;
     }
     check_count(
         "",
@@ -1445,6 +1472,40 @@ mod tests {
         let mut message = CreateMessage::new();
         message.enforce_nonce = true;
         assert_eq!(message.nonce_replay(), None);
+    }
+
+    #[test]
+    fn edits_without_flags_keep_the_message_mode() {
+        use crate::request::TextDisplay;
+
+        // A create body without flags is a legacy message: no text display.
+        let create = CreateMessage::new().add_component(TextDisplay::new("x"));
+        assert!(create
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("need the IS_COMPONENTS_V2 message flag"));
+
+        // An edit that omits `flags` (or sets them without the V2 bit, which
+        // cannot be removed) may target a V2 message: allowed.
+        let edit = EditMessage::new().add_component(TextDisplay::new("x"));
+        edit.validate()
+            .expect("mode unknown: only shared rules apply");
+        edit.clone()
+            .flags(SUPPRESS_EMBEDS)
+            .validate()
+            .expect("flags without IS_COMPONENTS_V2 do not make it legacy");
+        let webhook_edit = EditWebhookMessage::new().add_component(TextDisplay::new("x"));
+        webhook_edit.validate().expect("same for webhook edits");
+
+        // Once the edit sets the V2 bit, the V2 exclusions apply.
+        assert!(edit
+            .flags(IS_COMPONENTS_V2)
+            .content("text")
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("IS_COMPONENTS_V2 flag cannot set content"));
     }
 
     #[test]
