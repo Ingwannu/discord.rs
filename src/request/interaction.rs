@@ -37,7 +37,7 @@ use crate::error::DiscordError;
 use crate::model::{AllowedMentions, ApplicationCommandOptionChoice, InteractionResponseType};
 use crate::response::EPHEMERAL_FLAG;
 
-use super::{InteractionMessage, Modal};
+use super::{InteractionMessage, Modal, UpdateMessage};
 
 /// An interaction callback: what Discord shows in response to an
 /// interaction.
@@ -77,8 +77,9 @@ pub enum InteractionResponse {
     /// acknowledges without a loading state and edits the message later.
     DeferredUpdateMessage,
     /// `UPDATE_MESSAGE` (7): components and modal submits only; edits the
-    /// message the component is on.
-    UpdateMessage(InteractionMessage),
+    /// message the component is on (patch semantics: omitted fields keep
+    /// their value).
+    UpdateMessage(UpdateMessage),
     /// `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT` (8): up to 25 suggested
     /// choices.
     AutocompleteResult(Vec<ApplicationCommandOptionChoice>),
@@ -105,8 +106,8 @@ impl InteractionResponse {
         Self::ChannelMessage(message.into())
     }
 
-    /// `UPDATE_MESSAGE` with this message.
-    pub fn update(message: impl Into<InteractionMessage>) -> Self {
+    /// `UPDATE_MESSAGE` with this update.
+    pub fn update(message: impl Into<UpdateMessage>) -> Self {
         Self::UpdateMessage(message.into())
     }
 
@@ -223,9 +224,11 @@ impl Serialize for Wire<'_> {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("type", &response.kind())?;
         match response {
-            InteractionResponse::ChannelMessage(message)
-            | InteractionResponse::UpdateMessage(message) => {
+            InteractionResponse::ChannelMessage(message) => {
                 map.serialize_entry("data", &message.allowed_mentions_or(self.default))?;
+            }
+            InteractionResponse::UpdateMessage(update) => {
+                map.serialize_entry("data", &update.allowed_mentions_or(self.default))?;
             }
             InteractionResponse::DeferredChannelMessage { ephemeral } => {
                 // `flags` is always written (0 when not ephemeral), as the

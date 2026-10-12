@@ -35,7 +35,7 @@ use crate::model::{
 };
 use crate::request::{
     self, Component, CreateFollowup, EditInteractionResponse, InteractionMessage,
-    InteractionResponse,
+    InteractionResponse, UpdateMessage,
 };
 use crate::types::ButtonConfig;
 
@@ -80,13 +80,15 @@ fn components_v2_callback(
     components: Vec<Component>,
     ephemeral: bool,
 ) -> InteractionResponse {
-    let message = InteractionMessage::new()
-        .components(components)
-        .flags(components_v2_message_flags(ephemeral));
+    let flags = components_v2_message_flags(ephemeral);
     if update {
-        InteractionResponse::UpdateMessage(message)
+        InteractionResponse::UpdateMessage(UpdateMessage::new().components(components).flags(flags))
     } else {
-        InteractionResponse::ChannelMessage(message)
+        InteractionResponse::ChannelMessage(
+            InteractionMessage::new()
+                .components(components)
+                .flags(flags),
+        )
     }
 }
 
@@ -450,7 +452,7 @@ pub async fn update_interaction_message(
     message: request::CreateMessage,
 ) -> Result<(), DiscordError> {
     context
-        .update_message(http, InteractionMessage::try_from(message)?)
+        .update_message(http, UpdateMessage::try_from(message)?)
         .await
 }
 

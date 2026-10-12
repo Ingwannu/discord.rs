@@ -17,6 +17,7 @@ use crate::model::{
 };
 use crate::request::{
     CreateFollowup, EditInteractionResponse, InteractionMessage, InteractionResponse, Modal,
+    UpdateMessage,
 };
 
 /// Discord message flag marking a response as ephemeral, as raw bits for
@@ -55,11 +56,11 @@ impl InteractionResponseBuilder {
         }
     }
 
-    /// An `UPDATE_MESSAGE` callback. Never fails; the `Result` is kept from
-    /// 2.x.
+    /// An `UPDATE_MESSAGE` callback. Fails when the builder set `tts` or a
+    /// poll, which a message update cannot carry.
     pub fn update_message(message: MessageBuilder) -> Result<Self, DiscordError> {
         Ok(Self {
-            inner: InteractionResponse::UpdateMessage(message.into()),
+            inner: InteractionResponse::UpdateMessage(UpdateMessage::try_from(message)?),
         })
     }
 
@@ -704,7 +705,7 @@ impl InteractionContextData {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionMessage>,
+        data: impl Into<UpdateMessage>,
     ) -> Result<(), DiscordError> {
         let response = InteractionResponse::UpdateMessage(data.into());
         self.send_initial_response(http, &response, &[]).await
@@ -1184,7 +1185,7 @@ impl ComponentInteraction {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionMessage>,
+        data: impl Into<UpdateMessage>,
     ) -> Result<(), DiscordError> {
         self.context.update_message(http, data).await
     }
@@ -1201,7 +1202,7 @@ impl ModalSubmitInteraction {
     pub async fn update_message(
         &self,
         http: &RestClient,
-        data: impl Into<InteractionMessage>,
+        data: impl Into<UpdateMessage>,
     ) -> Result<(), DiscordError> {
         self.context.update_message(http, data).await
     }
@@ -1225,16 +1226,16 @@ mod tests {
         test_id, AllowedMentions, ChatInputCommandInteraction, ComponentInteraction,
         InteractionContextData, InteractionResponseType, InteractionType, ModalSubmitInteraction,
     };
-    use crate::request::{CreatePoll, Embed, InteractionMessage};
+    use crate::request::{CreatePoll, Embed, InteractionMessage, UpdateMessage};
     use std::collections::HashMap;
     use std::time::Duration;
 
     use serde_json::json;
 
-    use crate::builders::{ComponentsV2Message, ModalBuilder};
+    use crate::builders::{ComponentsV2Message, ModalBuilder, TextInputBuilder};
     use crate::constants::MESSAGE_FLAG_IS_COMPONENTS_V2;
     use crate::error::DiscordError;
-    use crate::http::RestClient;
+    use crate::http::{FileAttachment, RestClient};
 
     #[expect(deprecated, reason = "covers the deprecated builder")]
     use super::InteractionResponseBuilder;
@@ -1319,13 +1320,19 @@ mod tests {
 
         pub(super) struct Server {
             pub(super) base_url: String,
-            pub(super) arrivals: mpsc::UnboundedReceiver<String>,
+            pub(super) arrivals: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
             accept_task: JoinHandle<()>,
         }
 
         impl Server {
             /// Waits for the next request and returns `"METHOD /path"`.
             pub(super) async fn next_request(&mut self) -> String {
+                self.next_request_with_body().await.0
+            }
+
+            /// Waits for the next request and returns `"METHOD /path"` and
+            /// its body bytes.
+            pub(super) async fn next_request_with_body(&mut self) -> (String, Vec<u8>) {
                 self.arrivals.recv().await.expect("mock server running")
             }
 
@@ -1360,7 +1367,7 @@ mod tests {
         async fn serve(
             mut stream: TcpStream,
             script: Arc<Mutex<VecDeque<Reply>>>,
-            arrivals: mpsc::UnboundedSender<String>,
+            arrivals: mpsc::UnboundedSender<(String, Vec<u8>)>,
         ) {
             let Some(request) = read_request(&mut stream).await else {
                 return;
@@ -1402,7 +1409,7 @@ mod tests {
             let _ = stream.shutdown().await;
         }
 
-        async fn read_request(stream: &mut TcpStream) -> Option<String> {
+        async fn read_request(stream: &mut TcpStream) -> Option<(String, Vec<u8>)> {
             let mut buffer = Vec::new();
             let mut chunk = [0_u8; 4096];
             loop {
@@ -1422,7 +1429,8 @@ mod tests {
                         buffer.extend_from_slice(&chunk[..read]);
                     }
                     let mut request_line = head.lines().next()?.split_whitespace();
-                    return Some(format!("{} {}", request_line.next()?, request_line.next()?));
+                    let line = format!("{} {}", request_line.next()?, request_line.next()?);
+                    return Some((line, buffer[end + 4..end + 4 + length].to_vec()));
                 }
                 let read = stream.read(&mut chunk).await.ok()?;
                 if read == 0 {
@@ -1593,7 +1601,7 @@ mod tests {
         assert_eq!(data["flags"], json!(1 << 6));
 
         // `Some(vec![])` is written: UPDATE_MESSAGE reads it as "remove all".
-        let update = InteractionResponse::update(InteractionMessage::new().components(Vec::new()));
+        let update = InteractionResponse::update(UpdateMessage::new().components(Vec::new()));
         assert_eq!(update.kind(), InteractionResponseType::UPDATE_MESSAGE);
         assert_eq!(wire(&update)["data"], json!({ "components": [] }));
     }
@@ -1646,6 +1654,176 @@ mod tests {
         assert!(choices[0].get("name_localizations").is_none());
         assert_eq!(choices[1]["value"], json!(2));
         assert_eq!(choices[1]["name_localizations"]["de"], json!("Abrechnung"));
+    }
+
+    /// The inline HTTP answer and the REST callback compete for one slot.
+    /// Whatever the interleaving, exactly one of them owns the initial
+    /// response.
+    #[test]
+    fn inline_and_rest_claims_race_for_one_slot() {
+        for _ in 0..64 {
+            let state = InteractionResponseState::new();
+            let (inline, rest): (Vec<bool>, Vec<bool>) = std::thread::scope(|scope| {
+                let inline: Vec<_> = (0..4)
+                    .map(|_| {
+                        let state = &state;
+                        scope.spawn(move || state.commit_inline(AckKind::Replied))
+                    })
+                    .collect();
+                let rest: Vec<_> = (0..4)
+                    .map(|_| {
+                        let state = &state;
+                        scope.spawn(move || {
+                            state
+                                .begin(AckKind::Deferred)
+                                .map(|claim| claim.settle(CallbackOutcome::Accepted))
+                                .is_ok()
+                        })
+                    })
+                    .collect();
+                (
+                    inline.into_iter().map(|h| h.join().unwrap()).collect(),
+                    rest.into_iter().map(|h| h.join().unwrap()).collect(),
+                )
+            });
+            let winners = inline.iter().chain(rest.iter()).filter(|won| **won).count();
+            assert_eq!(winners, 1, "inline {inline:?}, rest {rest:?}");
+            assert!(state.is_acknowledged());
+            if inline.contains(&true) {
+                assert!(state.is_replied());
+            } else {
+                assert!(state.is_deferred());
+            }
+        }
+    }
+
+    /// The REST callback sends exactly the bytes the HTTP endpoint would
+    /// answer with (one encoder), and a client without default mentions adds
+    /// nothing.
+    #[tokio::test]
+    async fn rest_callbacks_send_the_endpoint_bytes() {
+        let mut server = mock::spawn(vec![
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+        ])
+        .await;
+        let http = mock_client(&server, Duration::from_secs(10));
+
+        let reply = InteractionMessage::from("hi").ephemeral(true);
+        let cases = [
+            InteractionResponse::reply(reply.clone()),
+            InteractionResponse::defer(true),
+            InteractionResponse::modal(
+                ModalBuilder::new("m", "M").add_text_input(TextInputBuilder::short("t", "T")),
+            ),
+        ];
+        sample_context().reply(&http, reply).await.unwrap();
+        sample_context().defer_ephemeral(&http).await.unwrap();
+        sample_context()
+            .show_modal(
+                &http,
+                ModalBuilder::new("m", "M").add_text_input(TextInputBuilder::short("t", "T")),
+            )
+            .await
+            .unwrap();
+        for expected in &cases {
+            let (line, body) = server.next_request_with_body().await;
+            assert_eq!(line, "POST /interactions/1/token/callback");
+            assert_eq!(
+                body,
+                crate::request::encode_interaction_response(expected, None).unwrap()
+            );
+        }
+    }
+
+    /// The client's default `allowed_mentions` fills message callbacks,
+    /// follow-ups, and edits that leave it unset; an explicit value wins and
+    /// callbacks without a message get nothing.
+    #[tokio::test]
+    async fn default_allowed_mentions_fill_unset_message_bodies() {
+        let mut server = mock::spawn(vec![
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(200, MESSAGE_JSON),
+            mock::Reply::Now(200, MESSAGE_JSON),
+        ])
+        .await;
+        let http = RestClient::builder("bot-token", Some(test_id(2)))
+            .api_base(server.base_url.clone())
+            .default_allowed_mentions(AllowedMentions {
+                replied_user: Some(false),
+                ..AllowedMentions::default()
+            })
+            .build()
+            .unwrap();
+        let explicit = AllowedMentions {
+            parse: vec!["users".to_string()],
+            ..AllowedMentions::default()
+        };
+
+        let context = sample_context();
+        context.reply(&http, "hi").await.unwrap();
+        sample_context()
+            .reply(
+                &http,
+                InteractionMessage::from("hi").allowed_mentions(explicit.clone()),
+            )
+            .await
+            .unwrap();
+        sample_context().defer(&http).await.unwrap();
+        context.follow_up(&http, "later").await.unwrap();
+        context.edit_reply(&http, "edited").await.unwrap();
+
+        let mut bodies = Vec::new();
+        for _ in 0..5 {
+            let (_, body) = server.next_request_with_body().await;
+            bodies.push(serde_json::from_slice::<serde_json::Value>(&body).unwrap());
+        }
+        let default = json!({ "replied_user": false });
+        assert_eq!(bodies[0]["data"]["allowed_mentions"], default);
+        assert_eq!(
+            bodies[1]["data"]["allowed_mentions"],
+            json!({ "parse": ["users"] })
+        );
+        assert_eq!(bodies[2], json!({ "type": 5, "data": { "flags": 0 } }));
+        assert_eq!(bodies[3]["allowed_mentions"], default);
+        assert_eq!(bodies[4]["allowed_mentions"], default);
+    }
+
+    /// A reply with files is still exactly one initial response: it claims
+    /// the slot, goes out as multipart with the encoded callback as
+    /// `payload_json`, and settles to replied.
+    #[tokio::test]
+    async fn reply_with_files_is_one_initial_response() {
+        let mut server = mock::spawn(vec![mock::Reply::Now(204, "")]).await;
+        let http = mock_client(&server, Duration::from_secs(10));
+        let context = sample_context();
+        let files = [FileAttachment::new("report.txt", b"ok".to_vec())];
+
+        context
+            .reply_with_files(&http, "see attached", &files)
+            .await
+            .unwrap();
+        assert!(context.is_replied());
+        let (line, body) = server.next_request_with_body().await;
+        assert_eq!(line, "POST /interactions/1/token/callback");
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("name=\"payload_json\""), "{body}");
+        assert!(
+            body.contains(r#"{"type":4,"data":{"content":"see attached"}}"#),
+            "{body}"
+        );
+        assert!(body.contains("filename=\"report.txt\""), "{body}");
+
+        // A second initial response with files fails locally.
+        let error = context
+            .reply_with_files(&http, "again", &files)
+            .await
+            .unwrap_err();
+        assert_model_error(&error, "already acknowledged");
+        assert!(!server.has_pending_request());
     }
 
     // --- state machine ------------------------------------------------------
