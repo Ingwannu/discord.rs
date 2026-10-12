@@ -870,46 +870,47 @@ Other helpers: `message.edit/edit_with/delete/unreact/unpin/crosspost`, `member.
 `Context` now exposes direct gateway control helpers, and the helpers module exposes typed response helpers.
 
 ```rust
-use discordrs::{
-    defer_interaction, followup_message, gateway_intents, Client, Context, EventHandler,
-    Interaction, MessageBuilder,
-};
+use discordrs::{gateway_intents, Client, Context, EventHandler, Interaction};
 
 struct Handler;
 
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: &Interaction) {
-        let interaction_ctx = interaction.context().clone();
-        let response = MessageBuilder::new().content("Working...").build();
-
-        let _ = defer_interaction(&ctx.http, &interaction_ctx, true).await;
-        let _ = followup_message(&ctx.http, &interaction_ctx, response, true).await;
+        // The response methods live on the shared context (and on every
+        // interaction variant through `InteractionResponder`, see 6.1).
+        let interaction_ctx = interaction.context();
+        let _ = interaction_ctx.defer_ephemeral(&ctx.http).await;
+        let _ = interaction_ctx
+            .follow_up_ephemeral(&ctx.http, "Working...")
+            .await;
     }
 }
 ```
 
 Other typed helper entry points:
 
-- `respond_to_interaction(...)`
-- `respond_with_message(...)`
-- `update_interaction_message(...)`
-- `respond_with_modal_typed(...)`
+- `respond_to_interaction(...)` sends any `request::InteractionResponse` through the shared response state
+- `respond_with_message(...)` replies with a `request::CreateMessage`, failing on channel-only fields
+- `update_interaction_message(...)` and `respond_with_modal_typed(...)` are deprecated in favour of `update_message` / `show_modal`
 
 ## 6.1 discord.js-Style Interaction Responses (`InteractionResponder`)
 
 The `discordrs::response::InteractionResponder` trait puts `reply`, `defer`, `edit_reply`, `follow_up`, and friends directly on every responding-capable interaction variant (`ChatInputCommandInteraction`, `UserContextMenuInteraction`, `MessageContextMenuInteraction`, `ComponentInteraction`, `ModalSubmitInteraction`). Import the trait so the methods resolve:
 
 ```rust
-use discordrs::response::{AutocompleteChoice, InteractionResponder};
-use discordrs::{Context, Interaction, ModalBuilder, TextInputBuilder, TextInputStyle};
+use discordrs::response::InteractionResponder;
+use discordrs::{
+    ApplicationCommandOptionChoice, Context, Interaction, ModalBuilder, TextInputBuilder,
+    TextInputStyle,
+};
 
 // `interaction` is the payload of `EventKind::InteractionCreate` (or the
 // `interaction_create` hook's argument), cloned where the arm keeps it.
 async fn handle(ctx: Context, interaction: Interaction) -> Result<(), discordrs::DiscordError> {
     match interaction {
         Interaction::ChatInputCommand(command) => match command.data.name.as_deref() {
-            // Initial reply (type 4). &str, String, MessageBuilder, and
-            // CreateMessage all convert into the reply data.
+            // Initial reply (type 4). Takes a request::InteractionMessage;
+            // &str and String convert into one.
             Some("hello") => command.reply(&ctx.http, "hi").await?,
 
             // Ephemeral initial reply.
@@ -929,7 +930,8 @@ async fn handle(ctx: Context, interaction: Interaction) -> Result<(), discordrs:
                 println!("follow-up message {}", followup.id);
             }
 
-            // Open a modal (type 9).
+            // Open a modal (type 9). The text input goes into a Label (the
+            // input builder's label text); a Modal or ModalBuilder works.
             Some("form") => {
                 let modal = ModalBuilder::new("feedback", "Feedback").add_text_input(
                     TextInputBuilder::new(
@@ -952,7 +954,10 @@ async fn handle(ctx: Context, interaction: Interaction) -> Result<(), discordrs:
         // Autocomplete responds with typed choices (type 8).
         Interaction::Autocomplete(autocomplete) => {
             autocomplete
-                .respond_autocomplete(&ctx.http, vec![AutocompleteChoice::new("First", "first")])
+                .respond_autocomplete(
+                    &ctx.http,
+                    vec![ApplicationCommandOptionChoice::new("First", "first")],
+                )
                 .await?;
         }
         _ => {}
@@ -968,14 +973,15 @@ The acknowledgement state is shared atomically across clones of one interaction 
 - the state slot is claimed atomically before the HTTP call and rolled back if the transport fails, so a failed reply can be retried
 - `is_replied()`, `is_deferred()`, and `is_acknowledged()` report the current state
 
-`reply_with_result(...)` returns the typed `InteractionCallbackResult` (the `with_response=true` flow), `fetch_reply`/`delete_reply` manage the original response, `defer_ephemeral` defers with an ephemeral "thinking" state, and `discordrs::response::InteractionReplyData` supports `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `ephemeral()` for structured replies.
+`reply_with_result(...)` returns the typed `InteractionCallbackResult` (the `with_response=true` flow), `fetch_reply`/`delete_reply` manage the original response, and `defer_ephemeral` defers with an ephemeral "thinking" state. Each method takes the request type of its endpoint (all convert from `&str` and `String`): `reply`/`reply_ephemeral` a `request::InteractionMessage`, `update_message` a `request::UpdateMessage` (patch: omitted fields stay), `follow_up` a `request::CreateFollowup`, and `edit_reply`/`edit_follow_up` a `request::EditInteractionResponse`. `reply_with_files`, `follow_up_with_files`, and `edit_reply_with_files` upload files; reference them from the body's `attachments`. The client's default `allowed_mentions` fills any of these bodies that leaves it unset. The 2.x `InteractionReplyData` is a deprecated alias of `InteractionMessage`.
 
 ## 6.5 Interaction Callbacks with `with_response=true`
 
 `create_interaction_response_with_result(...)` sends the callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource, mirroring discord.js's `withResponse: true`. Use it when you need the created message (or activity instance) immediately instead of fetching it afterwards:
 
 ```rust
-use discordrs::{DiscordHttpClient, InteractionCallbackResponse, InteractionResponseType};
+use discordrs::request::InteractionResponse;
+use discordrs::DiscordHttpClient;
 
 async fn respond_and_inspect(
     http: &DiscordHttpClient,
@@ -986,10 +992,7 @@ async fn respond_and_inspect(
         .create_interaction_response_with_result(
             interaction_id,
             interaction_token,
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(serde_json::json!({ "content": "Ticket created" })),
-            },
+            &InteractionResponse::reply("Ticket created"),
         )
         .await?;
 
@@ -1002,7 +1005,7 @@ async fn respond_and_inspect(
 }
 ```
 
-`create_interaction_response_typed(...)` remains the fire-and-forget variant when you do not need the callback resource.
+`create_interaction_response(...)` is the fire-and-forget variant when you do not need the callback resource. Both take the same `request::InteractionResponse` the HTTP endpoint returns; the 2.x `create_interaction_response_typed(...)` (an `InteractionCallbackResponse` with JSON `data`) stays until the 3.0 REST names are consolidated.
 
 ## 7. Build a Typed Interactions Endpoint
 
@@ -1010,9 +1013,9 @@ If you run an outgoing-interactions HTTP server instead of the gateway runtime, 
 
 ```rust
 use axum::Router;
+use discordrs::request::{EndpointReply, InteractionResponse};
 use discordrs::{
-    Interaction, InteractionContextData, InteractionResponse, TypedInteractionHandler,
-    try_typed_interactions_endpoint,
+    Interaction, InteractionContextData, TypedInteractionHandler, try_typed_interactions_endpoint,
 };
 
 #[derive(Clone)]
@@ -1023,16 +1026,14 @@ impl TypedInteractionHandler for Handler {
         &self,
         _ctx: InteractionContextData,
         interaction: Interaction,
-    ) -> InteractionResponse {
+    ) -> EndpointReply {
         match interaction {
             Interaction::ChatInputCommand(command)
                 if command.data.name.as_deref() == Some("hello") =>
             {
-                InteractionResponse::ChannelMessage(serde_json::json!({
-                    "content": "Hello from typed endpoint"
-                }))
+                InteractionResponse::reply("Hello from typed endpoint").into()
             }
-            _ => InteractionResponse::DeferredMessage,
+            _ => InteractionResponse::defer(false).into(),
         }
     }
 }
@@ -1043,7 +1044,7 @@ fn build_router(public_key: &str) -> Router {
 }
 ```
 
-Use `try_interactions_endpoint(...)` instead when you intentionally want the raw interaction surface.
+Handlers return an `EndpointReply`: `Inline(..)` (from `InteractionResponse::...into()`) is answered with `200` and the encoded callback, `Accepted` with `202` and no body when the handler responds over REST. Use `try_interactions_endpoint(...)` instead when you intentionally want the raw interaction surface.
 
 Typed slash/autocomplete input now keeps real user-entered option data. `interaction.data.options` uses `CommandInteractionOption`, which preserves nested options plus `value` and `focused` for autocomplete flows.
 
@@ -1052,19 +1053,13 @@ Typed slash/autocomplete input now keeps real user-entered option data. `interac
 When the `interactions` feature is enabled, `AppFramework` provides a small high-level routing layer on top of `TypedInteractionHandler`. It routes slash/user/message commands by command name, components by `custom_id`, and modal submissions by `custom_id`.
 
 ```rust
-use discordrs::{AppFramework, InteractionResponse, RouteKey};
+use discordrs::request::{InteractionMessage, InteractionResponse};
+use discordrs::{AppFramework, RouteKey};
 
 let app = AppFramework::builder()
-    .command("hello", |_ctx| async move {
-        InteractionResponse::ChannelMessage(serde_json::json!({
-            "content": "Hello from AppFramework"
-        }))
-    })
+    .command("hello", |_ctx| async move { InteractionResponse::reply("Hello from AppFramework") })
     .component("ticket:close", |_ctx| async move {
-        InteractionResponse::ChannelMessage(serde_json::json!({
-            "content": "Ticket closed",
-            "flags": 64
-        }))
+        InteractionResponse::reply(InteractionMessage::from("Ticket closed").ephemeral(true))
     })
     .cooldown(RouteKey::Command("hello".to_string()), std::time::Duration::from_secs(5))
     .build();
@@ -1943,7 +1938,7 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 - `list_joined_private_archived_threads(...)`
 - `get_active_guild_threads(...)`
 - `SlashCommandBuilder`, `UserCommandBuilder`, `MessageCommandBuilder`
-- `MessageBuilder`, `InteractionResponseBuilder`
+- `MessageBuilder` (`InteractionResponseBuilder` is deprecated; use the `request::InteractionResponse` constructors)
 - `send_message(...)`
 - `respond_to_interaction(...)`
 - `respond_with_message(...)`

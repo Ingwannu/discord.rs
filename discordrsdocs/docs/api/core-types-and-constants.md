@@ -256,7 +256,7 @@ Also changed:
 - A malformed interaction is a `DiscordError::Json` from `decode_interaction` and a `DiscordError::Model` from `parse_interaction`; messages name the field (`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). A repeated key the decoder reads is an error (keys it does not read are skipped unchecked; see the Parsers API), and `data` must be a JSON object. The interaction `type` must be a JSON number (the `Value` parser accepted `"2"`).
 - The typed interactions endpoint decodes the request body directly and still answers a PING it cannot fully decode with PONG.
 - Fields that stay JSON text are application-defined or heterogeneous by design (`ApplicationIdentityProfile::metadata`, audit log change values, the template snapshot, unknown dynamic profile fields, unknown integration owners) or undocumented (`Sku::manifest_labels`, `Sku::features`). `Box<RawValue>` keeps the text as received with one allocation instead of a tree; decode it with `serde_json::from_str(raw.get())` or the typed accessors. It cannot pass through serde's buffered containers (`#[serde(flatten)]`, `#[serde(untagged)]`), so do not wrap these models in one.
-- `InteractionCallbackResponse::data` and `CreateMessage::{components, embeds}` stay `Value` until the request models of step 5 replace those outgoing bodies.
+- `CreateMessage::{components, embeds}` and the 2.x `InteractionCallbackResponse::data` stay `Value` until the phase 5 integration retires those types; new code sends the typed request models in `discordrs::request` (`InteractionResponse` for interaction callbacks, the message bodies, `Modal`).
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 
@@ -275,7 +275,7 @@ Also changed:
 - `MessageSelectOption`, `MessageSelectDefaultValue` (in 3.0 the `SelectDefaultValue` enum), `UnfurledMediaItem`, and `MessageMediaGalleryItem` — typed pieces of received components.
 - `ResolvedData` — interaction `resolved` data as six lookup maps keyed by ID (typed since 3.0: `UserId`, `RoleId`, `ChannelId`, `MessageId`, `AttachmentId`; `users`, `members`, `roles`, `channels`, `messages`, `attachments`), with by-ID accessors (`user(id)`, `member(id)`, `role(id)`, `channel(id)`, `message(id)`, `attachment(id)`) and `is_empty()`.
 - `MessageInteractionMetadata` — typed `Message::interaction_metadata` (triggering interaction id/type, user, authorizing integration owners, original response message id, target user/message, interacted message id, and nested `triggering_interaction_metadata` for modals). Prefer it over the deprecated `MessageInteraction`.
-- `InteractionReplyData` and `AutocompleteChoice` in `discordrs::response` — the payload types behind the `2.2.0` `InteractionResponder` methods; `InteractionReplyData` converts from `&str`, `String`, `MessageBuilder`, and `CreateMessage`.
+- `InteractionReplyData` and `AutocompleteChoice` in `discordrs::response` — the payload types behind the `2.2.0` `InteractionResponder` methods. In 3.0 both are deprecated aliases: `InteractionReplyData` of `request::InteractionMessage` (the responder takes the request type of each endpoint) and `AutocompleteChoice` of `ApplicationCommandOptionChoice`.
 - `CollectorEndReason` and `CollectorStopHandle` in `discordrs::collector`; `RateLimitInfo` and `RestClientBuilder` in the HTTP layer; `AudioPlayerState`, `AudioPlayerEvent`, `TrackEndReason`, and `NoSubscriberBehavior` in `discordrs::voice::player`.
 
 ## New in 2.1

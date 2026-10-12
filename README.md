@@ -273,10 +273,8 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 
 ```rust
 use axum::Router;
-use discordrs::{
-    create_container, InteractionContext, InteractionHandler, InteractionResponse, RawInteraction,
-    try_interactions_endpoint,
-};
+use discordrs::request::{EndpointReply, InteractionMessage, InteractionResponse, TextDisplay};
+use discordrs::{InteractionContext, InteractionHandler, RawInteraction, try_interactions_endpoint};
 
 #[derive(Clone)]
 struct Handler;
@@ -284,19 +282,17 @@ struct Handler;
 impl InteractionHandler for Handler {
     async fn handle(
         &self,
-        ctx: InteractionContext,
+        _ctx: InteractionContext,
         interaction: RawInteraction,
-    ) -> InteractionResponse {
+    ) -> EndpointReply {
         match interaction {
             RawInteraction::Command { name, .. } if name.as_deref() == Some("hello") => {
-                let data = serde_json::json!({
-                    "components": [create_container("Hello", "World", vec![], None).build()],
-                    "flags": 1 << 15,
-                });
-                let _ = ctx;
-                InteractionResponse::ChannelMessage(data)
+                // Answered inline: a Components V2 reply, encoded once.
+                let message = InteractionMessage::new()
+                    .components_v2(vec![TextDisplay::new("## Hello\nWorld").into()]);
+                InteractionResponse::reply(message).into()
             }
-            _ => InteractionResponse::Raw(serde_json::json!({ "type": 5 })),
+            _ => InteractionResponse::defer(false).into(),
         }
     }
 }

@@ -19,7 +19,7 @@ Each handler receives an owned `AppContext` containing the parsed `InteractionCo
 
 ```rust
 use discordrs::prelude::*;
-use discordrs::{AppContext, AppFramework, InteractionResponse};
+use discordrs::{AppContext, AppFramework};
 
 let app = AppFramework::builder()
     .command("export", move |ctx: AppContext| {
@@ -29,39 +29,36 @@ let app = AppFramework::builder()
                 let file_url = run_export().await;
                 let _ = ctx.edit_reply(&rest, format!("Export ready: {file_url}")).await;
             });
-            InteractionResponse::DeferredMessage
+            InteractionResponse::defer(false)
         }
     })
     .build();
 ```
 
-Send the initial response either inline (the return value) or over REST (`ctx.reply(...)`), not both. A route that responds over REST should return `InteractionResponse::Accepted`: the endpoint then answers Discord with `202` and no body, as Discord specifies. If a route responded over REST but returned another response anyway, the endpoint still answers `202`, discards that response, and logs a warning. `AppContext`'s `Debug` output shows `[redacted]` instead of the interaction token.
+Send the initial response either inline (the return value) or over REST (`ctx.reply(...)`), not both. A route returns anything that converts into an `EndpointReply`: an `InteractionResponse` (answered inline with `200`), or `EndpointReply::Accepted`. A route that responds over REST should return `EndpointReply::Accepted`: the endpoint then answers Discord with `202` and no body, as Discord specifies. If a route responded over REST but returned another response anyway, the endpoint still answers `202`, discards that response, and logs a warning. `AppContext`'s `Debug` output shows `[redacted]` instead of the interaction token.
 
 ## Guards and Cooldowns
 
-Use `guard(...)` for shared authorization or tenancy checks. A guard returns `Ok(())` to continue or `Err(response)` to answer with that response instead of running the route.
+Use `guard(...)` for shared authorization or tenancy checks. A guard returns `Ok(())` to continue or `Err(reply)` (an `EndpointReply`) to answer with that reply instead of running the route.
 
 Use `cooldown(route, duration)` for per-route, per-user throttling. Cooldowns use the Discord user from the typed interaction context when one is available.
 
 ```rust
-use discordrs::{AppContext, AppFramework, InteractionResponse, RouteKey};
+use discordrs::request::{InteractionMessage, InteractionResponse};
+use discordrs::{AppContext, AppFramework, RouteKey};
 
 let app = AppFramework::builder()
     .guard(|ctx: &AppContext| {
         if ctx.user_id().is_some() {
             Ok(())
         } else {
-            Err(InteractionResponse::ChannelMessage(serde_json::json!({
-                "content": "Unknown user.",
-                "flags": 64
-            })))
+            Err(InteractionResponse::reply(
+                InteractionMessage::from("Unknown user.").ephemeral(true),
+            )
+            .into())
         }
     })
-    .command("ping", |_ctx| async move {
-        InteractionResponse::ChannelMessage(serde_json::json!({
-            "content": "pong"
-        }))
-    })
+    .command("ping", |_ctx| async move { InteractionResponse::reply("pong") })
     .cooldown(RouteKey::Command("ping".to_string()), std::time::Duration::from_secs(3))
     .build();
 ```

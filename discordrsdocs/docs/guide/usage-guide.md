@@ -126,22 +126,18 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 ## 4.5 Route HTTP interactions
 
 ```rust
-use discordrs::{AppFramework, InteractionResponse};
+use discordrs::request::{InteractionMessage, InteractionResponse};
+use discordrs::AppFramework;
 
 let app = AppFramework::builder()
-    .command("hello", |_ctx| async move {
-        InteractionResponse::ChannelMessage(serde_json::json!({
-            "content": "Hello from discord.rs"
-        }))
-    })
+    .command("hello", |_ctx| async move { InteractionResponse::reply("Hello from discord.rs") })
     .component("ticket:close", |_ctx| async move {
-        InteractionResponse::ChannelMessage(serde_json::json!({
-            "content": "Ticket closed",
-            "flags": 64
-        }))
+        InteractionResponse::reply(InteractionMessage::from("Ticket closed").ephemeral(true))
     })
     .build();
 ```
+
+Routes return an `InteractionResponse` (answered inline) or `EndpointReply::Accepted` (the route responded over REST).
 
 Pass the framework to `try_typed_interactions_endpoint(...)` when you want route-based slash command, component, and modal handling.
 

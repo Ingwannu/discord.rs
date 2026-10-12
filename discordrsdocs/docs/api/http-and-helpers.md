@@ -105,7 +105,7 @@ command.edit_reply(&rest, "done!").await?;
 let followup = command.follow_up(&rest, "extra detail").await?;
 ```
 
-The full surface: `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `edit_follow_up`, `delete_follow_up`, `show_modal(ModalBuilder)`, plus `defer_update`/`update_message` on component and modal-submit interactions and `respond_autocomplete(Vec<AutocompleteChoice>)` on autocomplete interactions. `InteractionContextData::create_response(&rest, &InteractionCallbackResponse)` sends any other callback type (for example `LAUNCH_ACTIVITY`) through the same state.
+The full surface: `reply`, `reply_ephemeral`, `reply_with_result`, `reply_with_files`, `defer`, `defer_ephemeral`, `edit_reply`, `edit_reply_with_files`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `follow_up_with_files`, `edit_follow_up`, `delete_follow_up`, `show_modal` (a `Modal` or `ModalBuilder`), plus `defer_update`/`update_message` on component and modal-submit interactions and `respond_autocomplete(Vec<ApplicationCommandOptionChoice>)` on autocomplete interactions. `InteractionContextData::create_response(&rest, &InteractionResponse)` sends any other callback (for example `InteractionResponse::LaunchActivity` or a `Raw` callback) through the same state.
 
 Every async trait method returns a `Send` future, also through a generic `R: InteractionResponder`, so a responder call can be moved into `tokio::spawn`:
 
@@ -120,11 +120,20 @@ where
 }
 ```
 
-### Reply data
+### Request bodies (3.0)
 
-`InteractionReplyData` converts from `&str`, `String`, and `MessageBuilder`, and carries every field that interaction responses accept: `content`, `embeds`, `components`, `flags`, `allowed_mentions`, and `poll` (3.0; 2.2.0 dropped `poll`).
+Each method takes the request type of the endpoint it calls; all of them convert from `&str` and `String`:
 
-A `CreateMessage` converts with `InteractionReplyData::try_from(message)?` (3.0; it was an infallible `From` in 2.2.0). The conversion fails when the message sets a field that only channel messages accept (`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`), because Discord's interaction bodies have no such fields and silently dropping them would change the message. The helpers that take a `CreateMessage` fail the same way before sending anything.
+| Method | Body | Notes |
+|---|---|---|
+| `reply`, `reply_ephemeral`, `reply_with_result`, `reply_with_files` | `request::InteractionMessage` | the `data` of callback type 4: content, embeds, components, flags (`ephemeral(true)`), allowed_mentions, attachments, poll, tts |
+| `update_message` | `request::UpdateMessage` | callback type 7, patch semantics: an omitted field keeps its value, `clear_content()` sends `content: null` |
+| `follow_up`, `follow_up_ephemeral`, `follow_up_with_files` | `request::CreateFollowup` | `POST /webhooks/{app}/{token}` |
+| `edit_reply`, `edit_follow_up`, `edit_reply_with_files` | `request::EditInteractionResponse` | patch semantics, `attachments` lists every attachment the message keeps |
+
+The REST client's default `allowed_mentions` (`RestClientBuilder::default_allowed_mentions`) fills every one of these bodies that leaves `allowed_mentions` unset; an explicit value (or an explicit `null` on a patch) wins. A deferral, modal, or autocomplete result gets nothing. The callback is encoded once, before the response slot is claimed, so a body that cannot be encoded fails without touching the state.
+
+A `request::CreateMessage` converts with `InteractionMessage::try_from(message)?` (likewise `CreateFollowup`, `UpdateMessage`, `EditInteractionResponse`). The conversion fails when the message sets a field that only channel messages accept (`message_reference`, `sticker_ids`, `nonce`, `shared_client_theme`), because Discord's interaction bodies have no such fields and silently dropping them would change the message. The helpers that take a `CreateMessage` fail the same way before sending anything. The 2.x `InteractionReplyData` is a deprecated alias of `InteractionMessage`.
 
 ### Shared response state
 
@@ -253,16 +262,13 @@ let forwarded = rest
 `create_interaction_response_with_result(...)` sends the interaction callback with `with_response=true` and returns the typed `InteractionCallbackResult` resource — mirroring discord.js's `withResponse: true` — so the created message (or activity instance) is available immediately:
 
 ```rust
-use discordrs::{InteractionCallbackResponse, InteractionResponseType};
+use discordrs::request::InteractionResponse;
 
 let result = rest
     .create_interaction_response_with_result(
         interaction_id,
         interaction_token,
-        &InteractionCallbackResponse {
-            kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data: Some(serde_json::json!({ "content": "Done" })),
-        },
+        &InteractionResponse::reply("Done"),
     )
     .await?;
 
@@ -271,7 +277,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 }
 ```
 
-`create_interaction_response_typed(...)` remains the fire-and-forget variant.
+`create_interaction_response(...)` is the fire-and-forget variant and `create_interaction_response_with_files(...)` uploads files with the callback; all three take the same `request::InteractionResponse` the HTTP endpoint returns. They are stateless: prefer the `InteractionResponder` methods for a parsed interaction. The 2.x `create_interaction_response_typed(...)` (an `InteractionCallbackResponse` with JSON `data`) stays until the 3.0 REST names are consolidated. The follow-up and `@original` endpoints take `request::CreateFollowup` / `request::EditInteractionResponse`.
 
 ## Application Resource Helpers
 
@@ -979,8 +985,10 @@ For Components V2 and interaction response workflows, use:
 
 ```rust
 let c = create_container("Notice", "Done", vec![], None);
-respond_with_container(http, &ctx.id, &ctx.token, c, true).await?;
+respond_with_container(http, ctx.id, &ctx.token, c, true).await?;
 ```
+
+`followup_with_container` and `defer_and_followup_container` return the created `Message` (3.0; they returned the raw JSON in 2.x).
 
 ## OAuth2 Backend Helpers
 

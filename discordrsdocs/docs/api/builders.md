@@ -9,7 +9,7 @@ The builders module gives a fluent API for message bodies, Components V2 layouts
 - `container.rs`: `ContainerBuilder`, `TextDisplayBuilder`, `SeparatorBuilder`, and the `create_container` helper
 - `media.rs`: `SectionBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder`
 - `embed.rs`: `EmbedBuilder` (builds a `request::Embed`)
-- `modal.rs`: text input, radio, checkbox, file upload, labels
+- `modal.rs`: modal, labels, text input, radio, checkbox, file upload (build the `request` modal models)
 
 | Builder | `build()` / `try_build()` returns |
 | --- | --- |
@@ -22,6 +22,9 @@ The builders module gives a fluent API for message bodies, Components V2 layouts
 | `SectionBuilder<SectionAccessory>` | `request::Section` |
 | `TextDisplayBuilder`, `SeparatorBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder` | the model of the same name (`FileComponent` for files) |
 | `EmbedBuilder` | `request::Embed` |
+| `ModalBuilder` | `request::Modal` (inputs wrapped in Labels) |
+| `TextInputBuilder` / `LabelBuilder` | `request::Label` (`TextInputBuilder` builds the Label around its text input) |
+| `RadioGroupBuilder`, `CheckboxGroupBuilder`, `CheckboxBuilder`, `FileUploadBuilder` | `RadioGroup`, `CheckboxGroup`, `Checkbox`, `FileUpload` |
 
 ## Common Pattern
 
@@ -148,9 +151,11 @@ let container = create_container(
 ## Modal Helper
 
 ```rust
-use discordrs::{ModalBuilder, RadioGroupBuilder, SelectOption};
+use discordrs::{CheckboxBuilder, ModalBuilder, RadioGroupBuilder, SelectOption, TextInputBuilder};
 
 let modal = ModalBuilder::new("preferences_modal", "Preferences")
+    // Every input goes into a Label; a text input uses its builder's label text.
+    .add_text_input(TextInputBuilder::short("nick", "Nickname").description("Shown to others"))
     .add_radio_group(
         "Theme",
         Some("Pick one"),
@@ -158,12 +163,28 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
             .add_option(SelectOption::new("Light", "light"))
             .add_option(SelectOption::new("Dark", "dark"))
             .required(true),
-    );
+    )
+    .add_text_display("You can change these later.")
+    .add_checkbox("Newsletter", None, CheckboxBuilder::new("news"))
+    .try_build()?; // -> request::Modal
 ```
+
+Since 3.0 the modal builders hold the typed request models in `discordrs::request` and `build()` returns them instead of JSON: `ModalBuilder::build()` is a `Modal`, `TextInputBuilder::build()` the `Label` around the text input (Discord moved the input's label to the Label component), `LabelBuilder::build()` a `Label`, and `RadioGroupBuilder` / `CheckboxGroupBuilder` / `CheckboxBuilder` / `FileUploadBuilder` their `RadioGroup` / `CheckboxGroup` / `Checkbox` / `FileUpload`. `show_modal` and `InteractionResponse::modal` take a `Modal` or a `ModalBuilder`.
+
+The modal model is exactly what Discord accepts:
+
+| Type | Holds |
+|---|---|
+| `Modal` | `custom_id` (1-100), `title` (1-45), 1-5 `ModalComponent`s |
+| `ModalComponent` | `Label`, `TextDisplay`, `Raw(RawComponent)`, and `LegacyTextInputRow` (see below) |
+| `Label` | `label` (1-45), optional `description` (up to 100), one `LabelComponent` |
+| `LabelComponent` | `TextInput`, `StringSelect`, `UserSelect`, `RoleSelect`, `MentionableSelect`, `ChannelSelect`, `FileUpload`, `RadioGroup`, `CheckboxGroup`, `Checkbox`, `Raw` |
+
+Modal inputs cannot go into a message row (a compile error), and message-only components (buttons, sections, containers) have no place in a modal. A text input in an action row is the layout Discord deprecated; it is only produced by the deprecated `ModalBuilder::add_text_input_row` / `LegacyTextInputRow::new`, and it is the only place a text input carries its own `label`. `ModalBuilder::add_component` takes any `ModalComponent` (a `RawComponent::from_json(..)` for a component type this version does not model); the 2.x `add_component(Value)` and `add_action_row(ActionRowBuilder)` are gone.
 
 Modal-only components follow Discord's rules: `RadioGroupBuilder`, `CheckboxGroupBuilder`, and `CheckboxBuilder` have no `disabled` setter (a disabled component in a modal is an error), and a checkbox cannot be required, so `CheckboxBuilder` has no `required` either; for a box the user must tick, use a one-option `CheckboxGroupBuilder` with `required(true)`. `CheckboxBuilder::default_checked(bool)` sets the initial state (sent as `default`; the deprecated `checked(bool)` does the same).
 
-Since 3.0 these three builders also have `validate()` / `try_build()` like the others, checking Discord's documented limits: `custom_id` 1-100 characters, radio groups 2-10 options, checkbox groups 1-10 options, option label/value/description at most 100 characters, checkbox group `min_values` 0-10 (0 only with `required(false)`), `max_values` 1-10, and `min_values` not above `max_values`. `build()` stays unchecked, and `LabelBuilder` / `ModalBuilder` do not re-check a component they wrap, so call `validate()` (or use `try_build()`) before handing one to them.
+`Modal::validate()` (and `ModalBuilder::validate()` / `try_build()`) checks the whole modal against Discord's documented limits: the modal's `custom_id`, `title`, and 1-5 components; label text and description; text input `custom_id`, placeholder (100), value (4000), `min_length` 0-4000, `max_length` 1-4000; file upload `min_values` 0-10 (0 only with `required(false)`), `max_values` 1-10, and at most 10 `file_types`; radio groups 2-10 options, checkbox groups 1-10 options, option label/value/description at most 100 characters and no emoji (the group options have none); checkbox group `min_values` 0-10 (0 only with `required(false)`) and `max_values` 1-10; a select's own limits plus the modal rules (no `disabled`; `min_values: 0` only with `required: false`); text display content 1-4000; and no `custom_id` or non-zero component `id` used twice. Raw components are sent as written and not inspected. The single-component builders' `validate()` check that component alone; `build()` stays unchecked.
 
 ## Runtime Validation (2.2.0)
 

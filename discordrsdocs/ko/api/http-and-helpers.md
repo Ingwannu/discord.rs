@@ -64,7 +64,7 @@ command.edit_reply(&rest, "완료!").await?;
 let followup = command.follow_up(&rest, "추가 안내").await?;
 ```
 
-전체 메서드: `reply`, `reply_ephemeral`, `reply_with_result`, `defer`, `defer_ephemeral`, `edit_reply`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `edit_follow_up`, `delete_follow_up`, `show_modal(ModalBuilder)`, 그리고 컴포넌트/모달 제출 인터랙션의 `defer_update`/`update_message`와 자동완성 인터랙션의 `respond_autocomplete(Vec<AutocompleteChoice>)`. 전용 메서드가 없는 콜백 타입(예: `LAUNCH_ACTIVITY`)은 `InteractionContextData::create_response(&rest, &InteractionCallbackResponse)`로 같은 상태를 거쳐 보냅니다.
+전체 메서드: `reply`, `reply_ephemeral`, `reply_with_result`, `reply_with_files`, `defer`, `defer_ephemeral`, `edit_reply`, `edit_reply_with_files`, `fetch_reply`, `delete_reply`, `follow_up`, `follow_up_ephemeral`, `follow_up_with_files`, `edit_follow_up`, `delete_follow_up`, `show_modal`(`Modal` 또는 `ModalBuilder`), 그리고 컴포넌트/모달 제출 인터랙션의 `defer_update`/`update_message`와 자동완성 인터랙션의 `respond_autocomplete(Vec<ApplicationCommandOptionChoice>)`. 그 밖의 콜백(예: `InteractionResponse::LaunchActivity`나 `Raw` 콜백)은 `InteractionContextData::create_response(&rest, &InteractionResponse)`로 같은 상태를 거쳐 보냅니다.
 
 트레잇의 모든 async 메서드는 제네릭 `R: InteractionResponder`를 통해 호출해도 `Send` future를 반환하므로 `tokio::spawn`에 넘길 수 있습니다.
 
@@ -79,11 +79,20 @@ where
 }
 ```
 
-### 응답 데이터
+### 요청 본문 (3.0)
 
-`InteractionReplyData`는 `&str`, `String`, `MessageBuilder`에서 변환되며, 인터랙션 응답이 받는 모든 필드(`content`, `embeds`, `components`, `flags`, `allowed_mentions`, `poll`)를 옮깁니다(3.0. 2.2.0은 `poll`을 버렸습니다).
+각 메서드는 호출하는 엔드포인트의 요청 타입을 받으며, 모두 `&str`와 `String`에서 변환됩니다.
 
-`CreateMessage`는 `InteractionReplyData::try_from(message)?`로 변환합니다(3.0. 2.2.0에서는 실패하지 않는 `From`이었습니다). 채널 메시지에만 있는 필드(`message_reference`, `sticker_ids`, `nonce`, `enforce_nonce`)가 설정되어 있으면 변환이 실패합니다. Discord 인터랙션 본문에는 해당 필드가 없어서, 조용히 버리면 메시지 의미가 바뀌기 때문입니다. `CreateMessage`를 받는 헬퍼도 요청을 보내기 전에 같은 이유로 실패합니다.
+| 메서드 | 본문 | 비고 |
+|---|---|---|
+| `reply`, `reply_ephemeral`, `reply_with_result`, `reply_with_files` | `request::InteractionMessage` | 콜백 타입 4의 `data`: content, embeds, components, flags(`ephemeral(true)`), allowed_mentions, attachments, poll, tts |
+| `update_message` | `request::UpdateMessage` | 콜백 타입 7, 패치 의미: 생략한 필드는 유지, `clear_content()`는 `content: null` |
+| `follow_up`, `follow_up_ephemeral`, `follow_up_with_files` | `request::CreateFollowup` | `POST /webhooks/{app}/{token}` |
+| `edit_reply`, `edit_follow_up`, `edit_reply_with_files` | `request::EditInteractionResponse` | 패치 의미, `attachments`는 메시지에 남길 첨부 전체 |
+
+REST 클라이언트의 기본 `allowed_mentions`(`RestClientBuilder::default_allowed_mentions`)는 이 본문들 중 `allowed_mentions`를 비워 둔 것에 채워집니다. 명시한 값(패치의 명시적 `null` 포함)이 우선하고, defer·모달·자동완성 결과에는 넣지 않습니다. 콜백은 응답 슬롯을 선점하기 전에 한 번 인코딩하므로, 인코딩할 수 없는 본문은 상태를 건드리지 않고 실패합니다.
+
+`request::CreateMessage`는 `InteractionMessage::try_from(message)?`로 변환합니다(`CreateFollowup`, `UpdateMessage`, `EditInteractionResponse`도 같음). 채널 메시지에만 있는 필드(`message_reference`, `sticker_ids`, `nonce`, `shared_client_theme`)가 설정되어 있으면 변환이 실패합니다. Discord 인터랙션 본문에는 해당 필드가 없어서, 조용히 버리면 메시지 의미가 바뀌기 때문입니다. `CreateMessage`를 받는 헬퍼도 요청을 보내기 전에 같은 이유로 실패합니다. 2.x의 `InteractionReplyData`는 `InteractionMessage`의 deprecated 별칭입니다.
 
 ### 공유 응답 상태
 
@@ -211,16 +220,13 @@ let forwarded = rest
 `create_interaction_response_with_result(...)`는 `with_response=true`로 인터랙션 콜백을 보내고 타입드 `InteractionCallbackResult` 리소스를 반환합니다. discord.js의 `withResponse: true`에 해당하며, 생성된 메시지를 즉시 확인할 수 있습니다.
 
 ```rust
-use discordrs::{InteractionCallbackResponse, InteractionResponseType};
+use discordrs::request::InteractionResponse;
 
 let result = rest
     .create_interaction_response_with_result(
         interaction_id,
         interaction_token,
-        &InteractionCallbackResponse {
-            kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-            data: Some(serde_json::json!({ "content": "완료" })),
-        },
+        &InteractionResponse::reply("완료"),
     )
     .await?;
 
@@ -229,7 +235,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 }
 ```
 
-콜백 리소스가 필요 없으면 기존 `create_interaction_response_typed(...)`를 그대로 사용합니다.
+콜백 리소스가 필요 없으면 `create_interaction_response(...)`를, 파일을 함께 올리려면 `create_interaction_response_with_files(...)`를 씁니다. 셋 모두 HTTP 엔드포인트가 돌려주는 것과 같은 `request::InteractionResponse`를 받습니다. 상태 비공유 호출이므로 파싱된 인터랙션에는 `InteractionResponder` 메서드를 권장합니다. 2.x의 `create_interaction_response_typed(...)`(JSON `data`를 담은 `InteractionCallbackResponse`)는 3.0 REST 이름 정리 때까지 남습니다. follow-up과 `@original` 엔드포인트는 `request::CreateFollowup` / `request::EditInteractionResponse`를 받습니다.
 
 ## OAuth2 토큰 폐기
 

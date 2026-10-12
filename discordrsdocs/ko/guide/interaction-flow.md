@@ -18,7 +18,11 @@ match raw {
 }
 ```
 
-## 3. 헬퍼로 응답
+## 3. 응답
+
+타입드 엔드포인트에서는 핸들러가 응답을 반환하거나(`InteractionResponse::reply(..)`, `defer(..)`, `modal(..)`, `update(..)`를 `EndpointReply`로 변환), 인터랙션의 응답 메서드(`reply`, `defer`, `show_modal`, `update_message`, `follow_up`, `edit_reply`)로 REST 응답을 보내고 `EndpointReply::Accepted`를 반환합니다. [인터랙션 엔드포인트](../api/interactions-endpoint.md) 참고.
+
+ID와 토큰만 받는 헬퍼는 raw 핸들러용으로 남아 있습니다(상태 비공유).
 
 - `respond_with_container(...)`: Slash Command
 - `respond_component_with_container(...)`: 버튼/셀렉트

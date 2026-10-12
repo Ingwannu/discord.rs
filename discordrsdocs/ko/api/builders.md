@@ -9,7 +9,7 @@
 - `container.rs`: `ContainerBuilder`, `TextDisplayBuilder`, `SeparatorBuilder`, `create_container` 헬퍼
 - `media.rs`: `SectionBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder`
 - `embed.rs`: `EmbedBuilder`(`request::Embed` 생성)
-- `modal.rs`: 텍스트 입력, 라디오, 체크박스, 파일 업로드, 레이블
+- `modal.rs`: 모달, Label, 텍스트 입력, 라디오, 체크박스, 파일 업로드(`request` 모달 모델을 만듦)
 
 | 빌더 | `build()` / `try_build()` 반환 타입 |
 | --- | --- |
@@ -22,6 +22,9 @@
 | `SectionBuilder<SectionAccessory>` | `request::Section` |
 | `TextDisplayBuilder`, `SeparatorBuilder`, `ThumbnailBuilder`, `MediaGalleryBuilder`, `FileBuilder` | 같은 이름의 모델(파일은 `FileComponent`) |
 | `EmbedBuilder` | `request::Embed` |
+| `ModalBuilder` | `request::Modal`(입력은 Label로 감쌈) |
+| `TextInputBuilder` / `LabelBuilder` | `request::Label`(`TextInputBuilder`는 텍스트 입력을 감싼 Label을 만듦) |
+| `RadioGroupBuilder`, `CheckboxGroupBuilder`, `CheckboxBuilder`, `FileUploadBuilder` | `RadioGroup`, `CheckboxGroup`, `Checkbox`, `FileUpload` |
 
 ## 예시
 
@@ -110,11 +113,41 @@ Discord는 섹션의 accessory를 요구하고, `SectionBuilder`는 이를 타�
 
 `IS_COMPONENTS_V2`를 설정하지 않는 수정은 메시지의 원래 모드를 유지하므로 두 모드가 공유하는 규칙만 검사합니다. 한도는 `builders/limits.rs`의 이름 있는 상수이고 각자 문서 출처를 적었습니다.
 
-## 모달 전용 컴포넌트
+## 모달 (3.0)
+
+```rust
+use discordrs::{CheckboxBuilder, ModalBuilder, RadioGroupBuilder, SelectOption, TextInputBuilder};
+
+let modal = ModalBuilder::new("preferences_modal", "Preferences")
+    // 모든 입력은 Label 안에 들어갑니다. 텍스트 입력은 빌더의 label 문구를 씁니다.
+    .add_text_input(TextInputBuilder::short("nick", "Nickname").description("Shown to others"))
+    .add_radio_group(
+        "Theme",
+        Some("Pick one"),
+        RadioGroupBuilder::new("theme")
+            .add_option(SelectOption::new("Light", "light"))
+            .add_option(SelectOption::new("Dark", "dark"))
+            .required(true),
+    )
+    .add_text_display("You can change these later.")
+    .add_checkbox("Newsletter", None, CheckboxBuilder::new("news"))
+    .try_build()?; // -> request::Modal
+```
+
+3.0부터 모달 빌더는 `discordrs::request`의 타입 요청 모델을 들고 있고 `build()`는 JSON 대신 그 모델을 돌려줍니다. `ModalBuilder::build()`는 `Modal`, `TextInputBuilder::build()`는 텍스트 입력을 감싼 `Label`(Discord가 입력의 label을 Label 컴포넌트로 옮겼습니다), `LabelBuilder::build()`는 `Label`, `RadioGroupBuilder` / `CheckboxGroupBuilder` / `CheckboxBuilder` / `FileUploadBuilder`는 각각 `RadioGroup` / `CheckboxGroup` / `Checkbox` / `FileUpload`입니다. `show_modal`과 `InteractionResponse::modal`은 `Modal`과 `ModalBuilder`를 모두 받습니다.
+
+| 타입 | 담는 것 |
+|---|---|
+| `Modal` | `custom_id`(1-100), `title`(1-45), `ModalComponent` 1-5개 |
+| `ModalComponent` | `Label`, `TextDisplay`, `Raw(RawComponent)`, `LegacyTextInputRow`(아래 참고) |
+| `Label` | `label`(1-45), 선택 `description`(100자 이하), `LabelComponent` 하나 |
+| `LabelComponent` | `TextInput`, `StringSelect`, `UserSelect`, `RoleSelect`, `MentionableSelect`, `ChannelSelect`, `FileUpload`, `RadioGroup`, `CheckboxGroup`, `Checkbox`, `Raw` |
+
+모달 입력은 메시지 행에 넣을 수 없고(컴파일 오류), 메시지 전용 컴포넌트(버튼, 섹션, 컨테이너)는 모달에 들어갈 자리가 없습니다. Action Row 안의 텍스트 입력은 Discord가 deprecated로 바꾼 형태이며, deprecated `ModalBuilder::add_text_input_row` / `LegacyTextInputRow::new`로만 만들어지고 텍스트 입력이 자기 `label`을 갖는 유일한 경우입니다. `ModalBuilder::add_component`는 `ModalComponent`를 받습니다(아직 모델에 없는 컴포넌트는 `RawComponent::from_json(..)`). 2.x의 `add_component(Value)`와 `add_action_row(ActionRowBuilder)`는 없어졌습니다.
 
 `RadioGroupBuilder`, `CheckboxGroupBuilder`, `CheckboxBuilder`에는 `disabled` setter가 없습니다(모달에 비활성 컴포넌트가 있으면 Discord가 오류를 냅니다). 체크박스는 필수로 만들 수 없어 `CheckboxBuilder`에는 `required`도 없습니다. 반드시 체크해야 하는 항목은 옵션 하나짜리 `CheckboxGroupBuilder`에 `required(true)`를 씁니다. `CheckboxBuilder::default_checked(bool)`가 초기 상태를 정합니다(`default`로 전송, deprecated `checked(bool)`도 같은 동작).
 
-3.0부터 이 세 빌더에도 다른 빌더처럼 `validate()` / `try_build()`가 있어 Discord 문서의 한도를 검사합니다: `custom_id` 1-100자, 라디오 그룹 옵션 2-10개, 체크박스 그룹 옵션 1-10개, 옵션 label/value/description 100자 이하, 체크박스 그룹 `min_values` 0-10(0은 `required(false)`일 때만), `max_values` 1-10, `min_values` ≤ `max_values`. `build()`는 검사하지 않고, `LabelBuilder`와 `ModalBuilder`는 감싼 컴포넌트를 다시 검사하지 않으므로 넘기기 전에 `validate()`를 호출하세요(또는 `try_build()` 사용).
+`Modal::validate()`(와 `ModalBuilder::validate()` / `try_build()`)는 모달 전체를 Discord 문서의 한도로 검사합니다: 모달 `custom_id`·`title`·컴포넌트 1-5개, label 문구와 설명, 텍스트 입력 `custom_id`·placeholder(100)·value(4000)·`min_length` 0-4000·`max_length` 1-4000, 파일 업로드 `min_values` 0-10(0은 `required(false)`일 때만)·`max_values` 1-10·`file_types` 10개 이하, 라디오 그룹 옵션 2-10개, 체크박스 그룹 옵션 1-10개, 옵션 label/value/description 100자 이하와 emoji 없음(그룹 옵션에는 emoji가 없습니다), 체크박스 그룹 `min_values` 0-10(0은 `required(false)`일 때만)·`max_values` 1-10, 선택 메뉴 자체 한도와 모달 규칙(`disabled` 금지, `min_values: 0`은 `required: false`일 때만), 텍스트 표시 1-4000자, `custom_id`와 0이 아닌 컴포넌트 `id`의 중복 금지. Raw 컴포넌트는 그대로 보내고 검사하지 않습니다. 개별 컴포넌트 빌더의 `validate()`는 그 컴포넌트만 검사하고, `build()`는 검사하지 않습니다.
 
 ## 파일 형식 필터 (3.0)
 
