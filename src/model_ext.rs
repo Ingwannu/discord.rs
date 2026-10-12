@@ -45,6 +45,7 @@ use crate::model::{
     Message, MessageReference, MfaLevel, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role,
     RoleId, User, UserId,
 };
+use crate::request::{ModifyChannel, StartThreadFromMessage};
 
 /// Discord CDN base used by the synchronous URL helpers.
 const CDN_BASE: &str = "https://cdn.discordapp.com";
@@ -74,10 +75,6 @@ fn content_body(content: &str) -> CreateMessage {
 /// Builds the JSON body for `POST .../messages/{id}/threads`. The crate has
 /// no typed request struct for this route (`create_thread_from_message`
 /// takes `&Value`), so the body is assembled here in one audited place.
-fn start_thread_body(name: &str) -> serde_json::Value {
-    serde_json::json!({ "name": name })
-}
-
 /// Builds the ban request body, mapping `None` to "delete nothing".
 fn ban_body(delete_message_seconds: Option<u64>) -> CreateGuildBan {
     CreateGuildBan {
@@ -211,8 +208,12 @@ impl Message {
         http: &RestClient,
         name: impl AsRef<str>,
     ) -> Result<Channel, DiscordError> {
-        http.create_thread_from_message(self.channel_id, self.id, &start_thread_body(name.as_ref()))
-            .await
+        http.create_thread_from_message(
+            self.channel_id,
+            self.id,
+            &StartThreadFromMessage::new(name.as_ref()),
+        )
+        .await
     }
 
     /// Returns the `https://discord.com/channels/...` jump link for this
@@ -395,7 +396,7 @@ impl Guild {
         http: &RestClient,
         body: &CreateGuildChannel,
     ) -> Result<Channel, DiscordError> {
-        http.create_guild_channel_from_request(self.id, body).await
+        http.create_guild_channel(self.id, body).await
     }
 
     /// Fetches a single member of this guild.
@@ -520,14 +521,13 @@ impl Channel {
         http.create_message(self.id, body).await
     }
 
-    /// Edits this channel with any serializable modify-channel body (the
-    /// crate has no typed struct for `PATCH /channels/{id}`) and returns the
-    /// updated channel.
-    pub async fn edit<B>(&self, http: &RestClient, body: &B) -> Result<Channel, DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        http.update_channel_typed(self.id, body).await
+    /// Edits this channel (Modify Channel) and returns the updated channel.
+    pub async fn edit(
+        &self,
+        http: &RestClient,
+        body: &ModifyChannel,
+    ) -> Result<Channel, DiscordError> {
+        http.update_channel(self.id, body).await
     }
 
     /// Deletes this channel (or closes it, for DMs) and returns the deleted
@@ -542,7 +542,7 @@ impl Channel {
         http: &RestClient,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
-        http.create_channel_invite_typed(self.id, body).await
+        http.create_channel_invite(self.id, body).await
     }
 
     /// Returns the `<#id>` mention for this channel.
@@ -608,7 +608,7 @@ impl Role {
 impl User {
     /// Opens (or reuses) the DM channel with this user.
     pub async fn create_dm(&self, http: &RestClient) -> Result<Channel, DiscordError> {
-        http.create_dm_channel_typed(&CreateDmChannel {
+        http.create_dm_channel(&CreateDmChannel {
             recipient_id: self.id,
         })
         .await
@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn start_thread_body_contains_only_name() {
         assert_eq!(
-            start_thread_body("bugs"),
+            serde_json::to_value(StartThreadFromMessage::new("bugs")).unwrap(),
             serde_json::json!({ "name": "bugs" })
         );
     }

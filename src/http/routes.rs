@@ -260,33 +260,34 @@ route_manifest! {
 
     // --- Channels ---------------------------------------------------------
     GetChannel: GET "/channels/{channel.id}" bot, query [], body () => Channel, api [get_channel];
-    ModifyChannel: PATCH "/channels/{channel.id}" bot, query [], body Value => Channel, api [update_channel, update_channel_typed];
+    ModifyChannel: PATCH "/channels/{channel.id}" bot, query [], body crate::request::ModifyChannel => Channel, api [update_channel], was [update_channel_typed => update_channel];
     DeleteChannel: DELETE "/channels/{channel.id}" bot, query [], body () => Channel, api [delete_channel];
-    EditChannelPermissions: PUT "/channels/{channel.id}/permissions/{overwrite.id}" bot, query [], body EditChannelPermission => (), api [edit_channel_permissions, edit_channel_permissions_typed];
+    EditChannelPermissions: PUT "/channels/{channel.id}/permissions/{overwrite.id}" bot, query [], body EditChannelPermission => (), api [edit_channel_permissions], was [edit_channel_permissions_typed => edit_channel_permissions];
     DeleteChannelPermission: DELETE "/channels/{channel.id}/permissions/{overwrite.id}" bot, query [], body () => (), api [delete_channel_permission];
     GetChannelInvites: GET "/channels/{channel.id}/invites" bot, query [], body () => Vec<Invite>, api [get_channel_invites];
-    CreateChannelInvite: POST "/channels/{channel.id}/invites" bot, query [], body CreateChannelInvite => Invite, api [create_channel_invite, create_channel_invite_typed, create_channel_invite_with_target_users_file];
+    CreateChannelInvite: POST "/channels/{channel.id}/invites" bot, query [], body CreateChannelInvite => Invite, api [create_channel_invite, create_channel_invite_with_target_users_file], was [create_channel_invite_typed => create_channel_invite];
     FollowAnnouncementChannel: POST "/channels/{channel.id}/followers" bot, query [], body ChannelId => FollowedChannel, api [follow_announcement_channel];
     TriggerTypingIndicator: POST "/channels/{channel.id}/typing" bot, query [], body () => (), api [trigger_typing_indicator];
     GroupDmAddRecipient: PUT "/channels/{channel.id}/recipients/{user.id}" bot, query [], body AddGroupDmRecipient => (), api [add_group_dm_recipient];
     GroupDmRemoveRecipient: DELETE "/channels/{channel.id}/recipients/{user.id}" bot, query [], body () => (), api [remove_group_dm_recipient];
     GetGuildChannels: GET "/guilds/{guild.id}/channels" bot, query [], body () => Vec<Channel>, api [get_guild_channels];
-    CreateGuildChannel: POST "/guilds/{guild.id}/channels" bot, query [], body CreateGuildChannel => Channel, api [create_guild_channel, create_guild_channel_typed, create_guild_channel_from_request];
+    CreateGuildChannel: POST "/guilds/{guild.id}/channels" bot, query [], body CreateGuildChannel => Channel, api [create_guild_channel], was [create_guild_channel_typed => create_guild_channel, create_guild_channel_from_request => create_guild_channel];
     ModifyGuildChannelPositions: PATCH "/guilds/{guild.id}/channels" bot, query [], body [ModifyGuildChannelPosition] => (), api [modify_guild_channel_positions];
-    CreateDm: POST "/users/@me/channels" bot, query [], body CreateDmChannel => Channel, api [create_dm_channel_typed];
-    CreateGroupDm: POST "/users/@me/channels" bot, query [], body CreateGroupDmChannel => Channel, api [create_group_dm_channel_typed];
+    CreateDm: POST "/users/@me/channels" bot, query [], body CreateDmChannel => Channel, api [create_dm_channel], was [create_dm_channel_typed => create_dm_channel];
+    CreateGroupDm: POST "/users/@me/channels" bot, query [], body CreateGroupDmChannel => Channel, api [create_group_dm_channel], was [create_group_dm_channel_typed => create_group_dm_channel];
     SetVoiceChannelStatus: PUT "/channels/{channel.id}/voice-status" bot, query [], body SetVoiceChannelStatus => (), api [set_voice_channel_status];
 
     // --- Threads ----------------------------------------------------------
-    StartThreadFromMessage: POST "/channels/{channel.id}/messages/{message.id}/threads" bot, query [], body Value => Channel, api [create_thread_from_message];
-    StartThreadWithoutMessage: POST "/channels/{channel.id}/threads" bot, query [], body Value => Channel, api [create_thread];
+    StartThreadFromMessage: POST "/channels/{channel.id}/messages/{message.id}/threads" bot, query [], body crate::request::StartThreadFromMessage => Channel, api [create_thread_from_message];
+    StartThreadWithoutMessage: POST "/channels/{channel.id}/threads" bot, query [], body crate::request::StartThreadWithoutMessage => Channel, api [create_thread];
+    StartThreadInForumOrMediaChannel: POST "/channels/{channel.id}/threads" bot, query [], body crate::request::StartForumThread => Channel, api [create_forum_thread, create_forum_thread_with_files];
     JoinThread: PUT "/channels/{channel.id}/thread-members/@me" bot, query [], body () => (), api [join_thread];
     AddThreadMember: PUT "/channels/{channel.id}/thread-members/{user.id}" bot, query [], body () => (), api [add_thread_member];
     LeaveThread: DELETE "/channels/{channel.id}/thread-members/@me" bot, query [], body () => (), api [leave_thread];
     RemoveThreadMember: DELETE "/channels/{channel.id}/thread-members/{user.id}" bot, query [], body () => (), api [remove_thread_member];
     GetThreadMember: GET "/channels/{channel.id}/thread-members/{user.id}" bot, query [with_member], body () => ThreadMember, api [get_thread_member];
     ListThreadMembers: GET "/channels/{channel.id}/thread-members" bot, query [with_member, after, limit], body () => Vec<ThreadMember>, api [list_thread_members, get_thread_members];
-    ListPublicArchivedThreads: GET "/channels/{channel.id}/threads/archived/public" bot, query [before, limit], body () => ThreadListResponse, api [list_public_archived_threads, get_public_archived_threads];
+    ListPublicArchivedThreads: GET "/channels/{channel.id}/threads/archived/public" bot, query [before, limit], body () => ThreadListResponse, api [list_public_archived_threads], was [get_public_archived_threads => list_public_archived_threads];
     ListPrivateArchivedThreads: GET "/channels/{channel.id}/threads/archived/private" bot, query [before, limit], body () => ThreadListResponse, api [list_private_archived_threads];
     ListJoinedPrivateArchivedThreads: GET "/channels/{channel.id}/users/@me/threads/archived/private" bot, query [before, limit], body () => ThreadListResponse, api [list_joined_private_archived_threads];
     ListActiveGuildThreads: GET "/guilds/{guild.id}/threads/active" bot, query [], body () => ThreadListResponse, api [get_active_guild_threads];
@@ -593,8 +594,20 @@ mod tests {
                 ids
             })
             .collect::<Vec<_>>();
-        // Create DM and Create Group DM are separate operations on one path.
-        assert_eq!(shared, [vec!["CreateDm", "CreateGroupDm"]]);
+        // Separate operations Discord documents on one path: Create DM and
+        // Create Group DM, and the two Start Thread variants.
+        let mut shared = shared;
+        shared.sort_unstable();
+        assert_eq!(
+            shared,
+            [
+                vec!["CreateDm", "CreateGroupDm"],
+                vec![
+                    "StartThreadInForumOrMediaChannel",
+                    "StartThreadWithoutMessage"
+                ],
+            ]
+        );
     }
 
     #[test]

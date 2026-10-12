@@ -1,4 +1,7 @@
-use serde_json::Value;
+//! Thread endpoints: starting threads, thread members, and archived and
+//! active thread lists.
+
+use std::borrow::Cow;
 
 use crate::error::DiscordError;
 use crate::model::{
@@ -6,17 +9,20 @@ use crate::model::{
     ThreadListResponse, ThreadMember, ThreadMemberQuery, UserId,
 };
 
+use crate::request::{StartForumThread, StartThreadFromMessage, StartThreadWithoutMessage};
+
 use super::{
-    archived_threads_query, bool_query, joined_archived_threads_query, json_body,
-    thread_member_query, RestClient, RouteId, NO_BODY,
+    archived_threads_query, bool_query, joined_archived_threads_query, json_body, multipart_body,
+    thread_member_query, FileAttachment, RestClient, RouteId, NO_BODY,
 };
 
 impl RestClient {
+    /// Starts a thread from an existing message.
     pub async fn create_thread_from_message(
         &self,
         channel_id: ChannelId,
         message_id: MessageId,
-        body: &Value,
+        body: &StartThreadFromMessage,
     ) -> Result<Channel, DiscordError> {
         self.send(
             RouteId::StartThreadFromMessage,
@@ -26,10 +32,13 @@ impl RestClient {
         .await
     }
 
+    /// Starts a thread that is not attached to a message (text and
+    /// announcement channels). Forum and media channels use
+    /// [`Self::create_forum_thread`].
     pub async fn create_thread(
         &self,
         channel_id: ChannelId,
-        body: &Value,
+        body: &StartThreadWithoutMessage,
     ) -> Result<Channel, DiscordError> {
         self.send(
             RouteId::StartThreadWithoutMessage,
@@ -37,6 +46,61 @@ impl RestClient {
             json_body(body),
         )
         .await
+    }
+
+    /// Starts a thread in a forum or media channel with its first message.
+    /// The client's default `allowed_mentions` applies to the message when it
+    /// sets none, as for every message the client sends.
+    pub async fn create_forum_thread(
+        &self,
+        channel_id: ChannelId,
+        body: &StartForumThread,
+    ) -> Result<Channel, DiscordError> {
+        let body = self.forum_thread_with_default_allowed_mentions(body);
+        self.send(
+            RouteId::StartThreadInForumOrMediaChannel,
+            &format!("/channels/{}/threads", channel_id),
+            json_body(body.as_ref()),
+        )
+        .await
+    }
+
+    /// [`Self::create_forum_thread`] with file uploads (`files[n]`); describe
+    /// them in `body.message.attachments`.
+    pub async fn create_forum_thread_with_files(
+        &self,
+        channel_id: ChannelId,
+        body: &StartForumThread,
+        files: &[FileAttachment],
+    ) -> Result<Channel, DiscordError> {
+        let body = self.forum_thread_with_default_allowed_mentions(body);
+        self.send(
+            RouteId::StartThreadInForumOrMediaChannel,
+            &format!("/channels/{}/threads", channel_id),
+            multipart_body(body.as_ref(), files),
+        )
+        .await
+    }
+
+    /// Fills the first message's `allowed_mentions` from the client default
+    /// when it sets none. A forum thread is created rarely, so this clones
+    /// the body instead of adding a serialization view like the message
+    /// request types have.
+    fn forum_thread_with_default_allowed_mentions<'a>(
+        &self,
+        body: &'a StartForumThread,
+    ) -> Cow<'a, StartForumThread> {
+        match (
+            self.default_allowed_mentions(),
+            &body.message.allowed_mentions,
+        ) {
+            (Some(default), None) => {
+                let mut body = body.clone();
+                body.message.allowed_mentions = Some(default.clone());
+                Cow::Owned(body)
+            }
+            _ => Cow::Borrowed(body),
+        }
     }
 
     pub async fn join_thread(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
@@ -124,27 +188,6 @@ impl RestClient {
             NO_BODY,
         )
         .await
-    }
-
-    /// Fetches public archived threads as raw JSON.
-    #[deprecated(
-        since = "2.0.1",
-        note = "Use list_public_archived_threads for a typed ThreadListResponse"
-    )]
-    pub async fn get_public_archived_threads(
-        &self,
-        channel_id: ChannelId,
-        limit: Option<u64>,
-    ) -> Result<serde_json::Value, DiscordError> {
-        let path = match limit {
-            Some(l) => format!(
-                "/channels/{}/threads/archived/public?limit={}",
-                channel_id, l
-            ),
-            None => format!("/channels/{}/threads/archived/public", channel_id),
-        };
-        self.send(RouteId::ListPublicArchivedThreads, &path, NO_BODY)
-            .await
     }
 
     pub async fn list_public_archived_threads(

@@ -27,17 +27,17 @@ use crate::bitfield::Permissions;
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
-    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, ApplicationCommandPermission,
-    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, AuditLogQuery, BeginGuildPruneRequest,
-    BulkGuildBanRequest, ChannelPinsQuery, CommandPermissionsId, CreateChannelInvite,
-    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateLobby,
-    CreateMessage, CreateStageInstance, CreateTestEntitlement, CreateWebhook,
-    CurrentUserGuildsQuery, EditApplicationCommandPermissions, EditChannelPermission,
-    EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildBansQuery, GuildMembersQuery,
-    GuildWidgetImageStyle, InteractionCallbackResponse, JoinedArchivedThreadsQuery,
-    LinkLobbyChannel, LobbyMember, LobbyMemberUpdate, ModifyCurrentApplication,
-    ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState, ModifyGuild,
-    ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
+    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, AllowedMentions,
+    ApplicationCommandPermission, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
+    AuditLogQuery, BeginGuildPruneRequest, BulkGuildBanRequest, ChannelPinsQuery,
+    CommandPermissionsId, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
+    CreateGuildSticker, CreateLobby, CreateMessage, CreateStageInstance, CreateTestEntitlement,
+    CreateWebhook, CurrentUserGuildsQuery, EditApplicationCommandPermissions,
+    EditChannelPermission, EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildBansQuery,
+    GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
+    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
+    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
+    ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
     ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId,
@@ -45,6 +45,7 @@ use crate::model::{
     SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
     WebhookMessageQuery, WelcomeScreenChannel,
 };
+use crate::request::{ModifyChannel, StartThreadFromMessage, StartThreadWithoutMessage};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde_json::json;
@@ -3590,12 +3591,16 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
         .edit_channel_permissions(
             test_id(100),
             OverwriteTarget::Role(test_id(200)),
-            &json!({ "type": 0, "allow": "8" }),
+            &EditChannelPermission {
+                kind: OverwriteType::ROLE,
+                allow: Some(Permissions::from_bits(8)),
+                deny: None,
+            },
         )
         .await
         .unwrap();
     client
-        .edit_channel_permissions_typed(
+        .edit_channel_permissions(
             test_id(100),
             OverwriteTarget::Member(test_id(201)),
             &EditChannelPermission {
@@ -3615,7 +3620,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
             .create_thread_from_message(
                 test_id(100),
                 test_id(5),
-                &json!({ "name": "from-message" }),
+                &StartThreadFromMessage::new("from-message"),
             )
             .await
             .unwrap()
@@ -3625,7 +3630,7 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
     );
     assert_eq!(
         client
-            .create_thread(test_id(100), &json!({ "name": "standalone" }))
+            .create_thread(test_id(100), &StartThreadWithoutMessage::new("standalone"))
             .await
             .unwrap()
             .id
@@ -3674,12 +3679,19 @@ async fn channel_thread_permission_and_archive_wrappers_hit_expected_paths() {
             .get(),
         900
     );
-    assert!(!client
-        .get_public_archived_threads(test_id(100), Some(2))
-        .await
-        .unwrap()["has_more"]
-        .as_bool()
-        .unwrap());
+    assert!(
+        !client
+            .list_public_archived_threads(
+                test_id(100),
+                &ArchivedThreadsQuery {
+                    before: None,
+                    limit: Some(2),
+                },
+            )
+            .await
+            .unwrap()
+            .has_more
+    );
     assert!(
         !client
             .list_public_archived_threads(
@@ -4003,7 +4015,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
     );
     assert_eq!(
         client
-            .create_channel_invite_typed(
+            .create_channel_invite(
                 test_id(100),
                 &CreateChannelInvite {
                     max_age: Some(600),
@@ -4030,7 +4042,7 @@ async fn channel_resource_gap_wrappers_hit_current_routes() {
         .await
         .unwrap();
     client
-        .edit_channel_permissions_typed(
+        .edit_channel_permissions(
             test_id(100),
             OverwriteTarget::Role(test_id(300)),
             &EditChannelPermission {
@@ -5607,7 +5619,7 @@ async fn client_message_and_channel_wrappers_hit_local_server() {
     assert_eq!(deleted_channel.id.get(), 100);
 
     let renamed = client
-        .update_channel_typed(test_id(100), &json!({ "name": "renamed" }))
+        .update_channel(test_id(100), &ModifyChannel::new().name("renamed"))
         .await
         .expect("update channel");
     assert_eq!(renamed.name.as_deref(), Some("renamed"));
@@ -5925,7 +5937,13 @@ async fn client_guild_and_command_wrappers_hit_local_server() {
     assert_eq!(channels.len(), 1);
 
     let created_channel = client
-        .create_guild_channel(test_id(200), &json!({ "name": "new" }))
+        .create_guild_channel(
+            test_id(200),
+            &CreateGuildChannel {
+                name: "new".to_string(),
+                ..CreateGuildChannel::default()
+            },
+        )
         .await
         .expect("create guild channel");
     assert_eq!(created_channel.id.get(), 202);
@@ -6288,7 +6306,7 @@ async fn client_typed_guild_request_bodies_hit_local_server() {
     assert_eq!(guild.name, "renamed");
 
     let channel = client
-        .create_guild_channel_from_request(
+        .create_guild_channel(
             test_id(200),
             &CreateGuildChannel {
                 name: "rules".to_string(),
@@ -6788,7 +6806,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(executed["id"], json!("901"));
 
     let dm = client
-        .create_dm_channel_typed(&crate::model::CreateDmChannel {
+        .create_dm_channel(&crate::model::CreateDmChannel {
             recipient_id: test_id(42),
         })
         .await
@@ -6796,7 +6814,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(dm.id.get(), 500);
 
     let group_dm = client
-        .create_group_dm_channel_typed(&crate::model::CreateGroupDmChannel {
+        .create_group_dm_channel(&crate::model::CreateGroupDmChannel {
             access_tokens: vec!["oauth-gdm-one".to_string(), "oauth-gdm-two".to_string()],
             nicks: HashMap::from([(test_id(43), "friend".to_string())]),
         })
@@ -8444,7 +8462,7 @@ async fn overwrite_edits_reject_a_body_type_that_contradicts_the_target() {
     let client = RestClient::new_with_base_url("overwrite-token", 123, "http://127.0.0.1:9");
     let role_body = EditChannelPermission::for_target(OverwriteTarget::Role(test_id(300)));
     let error = client
-        .edit_channel_permissions_typed(
+        .edit_channel_permissions(
             test_id(100),
             OverwriteTarget::Member(test_id(300)),
             &role_body,
@@ -8590,4 +8608,82 @@ async fn raw_json_bytes_are_sent_as_given() {
     assert_eq!(requests[0].method, "PATCH");
     assert_eq!(requests[0].body, r#"{"b":1,"a":2}"#);
     assert_eq!(requests[0].header("content-type"), Some("application/json"));
+}
+
+#[tokio::test]
+async fn forum_threads_send_the_first_message_with_default_mentions() {
+    use crate::request::{ForumThreadMessage, StartForumThread};
+
+    let (base_url, captured, server) = spawn_test_server(vec![
+        PlannedResponse::json(
+            StatusCode::CREATED,
+            channel_payload("910", 11, Some("post")),
+        ),
+        PlannedResponse::json(
+            StatusCode::CREATED,
+            channel_payload("911", 11, Some("post")),
+        ),
+        PlannedResponse::json(
+            StatusCode::CREATED,
+            channel_payload("912", 11, Some("post")),
+        ),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("forum-token", 1, base_url)
+        .with_default_allowed_mentions(AllowedMentions {
+            parse: vec!["users".to_string()],
+            ..AllowedMentions::default()
+        });
+    let body = StartForumThread::new("post", ForumThreadMessage::new().content("hello"))
+        .applied_tags(vec![test_id(5)]);
+    let explicit = StartForumThread::new(
+        "post",
+        ForumThreadMessage::new()
+            .content("quiet")
+            .allowed_mentions(AllowedMentions::default()),
+    );
+
+    client
+        .create_forum_thread(test_id(700), &body)
+        .await
+        .unwrap();
+    client
+        .create_forum_thread(test_id(700), &explicit)
+        .await
+        .unwrap();
+    client
+        .create_forum_thread_with_files(test_id(700), &body, &[sample_file("a.txt", "a")])
+        .await
+        .unwrap();
+    server.await.unwrap();
+
+    let requests = captured.lock().unwrap();
+    assert_request_basics(
+        &requests[0],
+        "POST",
+        "/channels/700/threads",
+        Some("Bot forum-token"),
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[0].body).unwrap(),
+        json!({
+            "name": "post",
+            "message": { "content": "hello", "allowed_mentions": { "parse": ["users"] } },
+            "applied_tags": ["5"]
+        })
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&requests[1].body).unwrap()["message"]
+            ["allowed_mentions"],
+        json!({})
+    );
+    assert_multipart_request(
+        &requests[2],
+        "POST",
+        "/channels/700/threads",
+        Some("Bot forum-token"),
+    );
+    assert!(requests[2]
+        .body
+        .contains(r#""allowed_mentions":{"parse":["users"]}"#));
 }

@@ -256,14 +256,6 @@ pub(crate) fn message_json_body<T: serde::Serialize + ?Sized>(
     })
 }
 
-/// [`json_body`] for an optional body.
-pub(crate) fn optional_json_body<T: serde::Serialize + ?Sized>(body: Option<&T>) -> EncodedBody {
-    match body {
-        Some(body) => json_body(body),
-        None => NO_BODY,
-    }
-}
-
 /// Encodes a `multipart/form-data` body: `payload_json` plus `files[n]`.
 pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
     body: &T,

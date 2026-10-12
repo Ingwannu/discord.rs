@@ -1,7 +1,5 @@
 //! Invite endpoints, including channel invites and invite target users.
 
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     ChannelId, CreateChannelInvite, GuildId, Invite, InviteTargetUserIds,
@@ -9,9 +7,7 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-use super::body::{
-    named_file_multipart_body, optional_json_body, payload_named_file_multipart_body,
-};
+use super::body::{named_file_multipart_body, payload_named_file_multipart_body};
 use super::paths::{invite_query, validate_token_path_segment};
 use super::{json_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
@@ -192,15 +188,17 @@ impl RestClient {
         .await
     }
 
+    /// Creates an invite to a channel. `CreateChannelInvite::default()`
+    /// sends `{}`, Discord's defaults (24 hours, unlimited uses).
     pub async fn create_channel_invite(
         &self,
         channel_id: ChannelId,
-        body: Option<&Value>,
+        body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
         self.send(
             RouteId::CreateChannelInvite,
             &format!("/channels/{}/invites", channel_id),
-            optional_json_body(body),
+            json_body(body),
         )
         .await
     }
@@ -217,17 +215,13 @@ impl RestClient {
         .await
     }
 
+    #[deprecated(since = "3.0.0", note = "renamed to `create_channel_invite`")]
     pub async fn create_channel_invite_typed(
         &self,
         channel_id: ChannelId,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
-        self.send(
-            RouteId::CreateChannelInvite,
-            &format!("/channels/{}/invites", channel_id),
-            json_body(body),
-        )
-        .await
+        self.create_channel_invite(channel_id, body).await
     }
 
     pub async fn create_channel_invite_with_target_users_file(
