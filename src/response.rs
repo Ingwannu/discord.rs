@@ -666,7 +666,7 @@ impl InteractionContextData {
         data: impl Into<InteractionMessage>,
     ) -> Result<InteractionCallbackResult, DiscordError> {
         let response = InteractionResponse::ChannelMessage(data.into());
-        let body = http.encode_interaction_callback(&response)?;
+        let body = http.prepare_interaction_callback(&response, &[])?;
         let claim = self.response_state.begin(AckKind::Replied)?;
         let result = http
             .post_interaction_callback_with_result(self.id, &self.token, body)
@@ -909,29 +909,32 @@ impl InteractionContextData {
         .await
     }
 
-    /// Encodes the callback, claims the initial-response slot, posts the
-    /// callback, and settles the slot from the outcome (see
+    /// Prepares the callback body, claims the initial-response slot, posts
+    /// the callback, and settles the slot from the outcome (see
     /// [`CallbackOutcome`]). `PONG` never acknowledges an interaction, so it
     /// is posted without touching the slot.
     ///
-    /// Encoding comes first so a body that cannot be encoded fails without
-    /// claiming anything, and every error after the claim comes from the
-    /// transport.
+    /// Preparing comes first: encoding and the local file checks (empty
+    /// name, invalid content type) fail without claiming anything, so every
+    /// error after the claim comes from sending. A local error after the
+    /// claim would otherwise be classified as a possibly delivered response
+    /// (`Uncertain`), and the HTTP endpoint would then discard the handler's
+    /// inline fallback and answer 202.
     async fn send_initial_response(
         &self,
         http: &RestClient,
         response: &InteractionResponse,
         files: &[FileAttachment],
     ) -> Result<(), DiscordError> {
-        let body = http.encode_interaction_callback(response)?;
+        let body = http.prepare_interaction_callback(response, files)?;
         let Some(kind) = AckKind::for_callback_type(response.kind()) else {
             return http
-                .post_interaction_callback(self.id, &self.token, body, files)
+                .post_interaction_callback(self.id, &self.token, body)
                 .await;
         };
         let claim = self.response_state.begin(kind)?;
         let result = http
-            .post_interaction_callback(self.id, &self.token, body, files)
+            .post_interaction_callback(self.id, &self.token, body)
             .await;
         claim.settle(CallbackOutcome::of(&result));
         result
@@ -1894,6 +1897,52 @@ pub(crate) mod tests {
             data: crate::model::CommandInteractionData::default(),
         };
         assert_eq!(entry_point.responder_context().token, "bad/token");
+    }
+
+    /// Regression (astra review): an invalid file content type failed while
+    /// the transport assembled the form, after the slot was claimed, and the
+    /// error read as a possibly delivered response (`Uncertain`). It now
+    /// fails before the claim: nothing is sent, the slot stays free, and the
+    /// interaction can still be answered.
+    #[tokio::test]
+    async fn invalid_file_content_type_fails_before_the_slot_is_claimed() {
+        let mut server = mock::spawn(vec![mock::Reply::Now(204, "")]).await;
+        let http = mock_client(&server, Duration::from_secs(10));
+        let context = sample_context();
+        let files = [FileAttachment::new("a.txt", b"a".to_vec()).with_content_type("not a mime")];
+
+        let error = context
+            .reply_with_files(&http, "with a file", &files)
+            .await
+            .unwrap_err();
+        assert_model_error(&error, "invalid content type");
+        assert_eq!(
+            context.response_phase(),
+            InteractionResponsePhase::Unacknowledged
+        );
+        assert!(!server.has_pending_request(), "nothing may be sent");
+
+        // The same holds for the stateless REST method and an empty file
+        // name.
+        let error = http
+            .create_interaction_response_with_files(
+                context.id,
+                &context.token,
+                &InteractionResponse::reply("x"),
+                &[FileAttachment::new(" ", b"a".to_vec())],
+            )
+            .await
+            .unwrap_err();
+        assert_model_error(&error, "filename");
+        assert!(!server.has_pending_request());
+
+        // The slot is still free for the real response.
+        context.defer(&http).await.unwrap();
+        assert!(context.is_deferred());
+        assert_eq!(
+            server.next_request().await,
+            "POST /interactions/1/token/callback"
+        );
     }
 
     // --- state machine ------------------------------------------------------

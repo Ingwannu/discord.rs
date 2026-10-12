@@ -31,8 +31,8 @@ impl RestClient {
         interaction_token: &str,
         response: &InteractionResponse,
     ) -> Result<(), DiscordError> {
-        let body = self.encode_interaction_callback(response)?;
-        self.post_interaction_callback(interaction_id, interaction_token, body, &[])
+        let body = self.prepare_interaction_callback(response, &[])?;
+        self.post_interaction_callback(interaction_id, interaction_token, body)
             .await
     }
 
@@ -45,7 +45,7 @@ impl RestClient {
         interaction_token: &str,
         response: &InteractionResponse,
     ) -> Result<InteractionCallbackResult, DiscordError> {
-        let body = self.encode_interaction_callback(response)?;
+        let body = self.prepare_interaction_callback(response, &[])?;
         self.post_interaction_callback_with_result(interaction_id, interaction_token, body)
             .await
     }
@@ -60,8 +60,8 @@ impl RestClient {
         response: &InteractionResponse,
         files: &[FileAttachment],
     ) -> Result<(), DiscordError> {
-        let body = self.encode_interaction_callback(response)?;
-        self.post_interaction_callback(interaction_id, interaction_token, body, files)
+        let body = self.prepare_interaction_callback(response, files)?;
+        self.post_interaction_callback(interaction_id, interaction_token, body)
             .await
     }
 
@@ -85,46 +85,57 @@ impl RestClient {
         .await
     }
 
-    /// Encodes a callback once, filling the client's default
-    /// `allowed_mentions` into message callbacks that leave it unset.
-    pub(crate) fn encode_interaction_callback(
+    /// Builds the transport body of a callback: the callback encoded once
+    /// (with the client's default `allowed_mentions` filled into message
+    /// callbacks that leave it unset), as JSON, or as the `payload_json` part
+    /// of a multipart body when there are files.
+    ///
+    /// Everything that can fail before a request leaves the process fails
+    /// here: encoding, an empty file name, and an invalid file content type.
+    /// The responder prepares the body before it claims the initial-response
+    /// slot, so such an error never claims it. The transport parses content
+    /// types only when it assembles each attempt's form, where a failure
+    /// would look like a failed send (and leave the slot uncertain), so they
+    /// are parsed here first with the same parser.
+    pub(crate) fn prepare_interaction_callback(
         &self,
         response: &InteractionResponse,
-    ) -> Result<Vec<u8>, DiscordError> {
-        encode_interaction_response(response, self.default_allowed_mentions())
+        files: &[FileAttachment],
+    ) -> Result<PreparedCallback, DiscordError> {
+        let bytes = encode_interaction_response(response, self.default_allowed_mentions())?;
+        if files.is_empty() {
+            return Ok(PreparedCallback(RequestBody::json(bytes)));
+        }
+        check_content_types(files)?;
+        RequestBody::multipart(bytes, files)?
+            .map(PreparedCallback)
+            .ok_or_else(|| DiscordError::model("multipart callback body was not built"))
     }
 
-    /// Posts an already encoded callback body: as JSON, or as the
-    /// `payload_json` part of a multipart request when there are files.
+    /// Posts a prepared callback body.
     pub(crate) async fn post_interaction_callback(
         &self,
         interaction_id: InteractionId,
         interaction_token: &str,
-        body: Vec<u8>,
-        files: &[FileAttachment],
+        body: PreparedCallback,
     ) -> Result<(), DiscordError> {
         let path = interaction_callback_path(interaction_id, interaction_token)?;
-        let body = if files.is_empty() {
-            Ok(Some(RequestBody::json(body)))
-        } else {
-            RequestBody::multipart(body, files)
-        };
-        self.send_unit(RouteId::CreateInteractionResponse, &path, body)
+        self.send_unit(RouteId::CreateInteractionResponse, &path, Ok(Some(body.0)))
             .await
     }
 
-    /// Posts an already encoded callback body with `with_response=true`.
+    /// Posts a prepared callback body with `with_response=true`.
     pub(crate) async fn post_interaction_callback_with_result(
         &self,
         interaction_id: InteractionId,
         interaction_token: &str,
-        body: Vec<u8>,
+        body: PreparedCallback,
     ) -> Result<InteractionCallbackResult, DiscordError> {
         let path = interaction_callback_path(interaction_id, interaction_token)?;
         self.send(
             RouteId::CreateInteractionResponse,
             &format!("{path}?with_response=true"),
-            Ok(Some(RequestBody::json(body))),
+            Ok(Some(body.0)),
         )
         .await
     }
@@ -416,4 +427,27 @@ impl RestClient {
             }
         }
     }
+}
+
+/// A callback body that encoded and passed every local check
+/// ([`RestClient::prepare_interaction_callback`]), ready for the transport.
+pub(crate) struct PreparedCallback(RequestBody);
+
+/// Parses every file's content type with the parser the transport uses when
+/// it assembles the multipart form (reqwest's `Part::mime_str`), so an
+/// invalid one is a local [`DiscordError::Model`] before anything is sent.
+fn check_content_types(files: &[FileAttachment]) -> Result<(), DiscordError> {
+    for file in files {
+        if let Some(content_type) = &file.content_type {
+            reqwest::multipart::Part::bytes(Vec::new())
+                .mime_str(content_type)
+                .map_err(|error| {
+                    DiscordError::model(format!(
+                        "file {:?} has an invalid content type {content_type:?}: {error}",
+                        file.filename
+                    ))
+                })?;
+        }
+    }
+    Ok(())
 }

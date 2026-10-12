@@ -463,6 +463,11 @@ fn body_json(body: &[u8]) -> Result<&str, String> {
 /// delivery outcome to wait for: the state moves straight to acknowledged. A
 /// follow-up sent by a retained clone in the moment before Discord reads the
 /// body can still be rejected by Discord.
+///
+/// The response is encoded before the slot is claimed, as on the REST path:
+/// a response that cannot be encoded answers 500 and claims nothing, so the
+/// state never records an initial response Discord did not get. When REST
+/// owns the response, the encoded bytes are dropped unsent.
 fn typed_endpoint_answer(
     state: &InteractionResponseState,
     interaction_id: InteractionId,
@@ -471,6 +476,10 @@ fn typed_endpoint_answer(
     let EndpointReply::Inline(response) = reply else {
         return EndpointAnswer::Accepted;
     };
+    let answer = EndpointAnswer::encode(&response);
+    if !matches!(answer, EndpointAnswer::Inline(_)) {
+        return answer;
+    }
     let inline_owns = match AckKind::for_callback_type(response.kind()) {
         Some(kind) => state.commit_inline(kind),
         // `PONG` is not an initial response: it cannot compete for the
@@ -478,7 +487,7 @@ fn typed_endpoint_answer(
         None => state.phase() == InteractionResponsePhase::Unacknowledged,
     };
     if inline_owns {
-        return EndpointAnswer::encode(&response);
+        return answer;
     }
     warn!(
         interaction_id = %interaction_id,
@@ -1564,6 +1573,63 @@ mod tests {
         assert_eq!(response.status(), StatusCode::ACCEPTED);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert!(body.is_empty());
+    }
+
+    /// Tries to reply over REST with a file whose content type is invalid,
+    /// then falls back to an inline reply.
+    #[derive(Clone)]
+    struct LocalRestFailureHandler {
+        http: RestClient,
+    }
+
+    impl TypedInteractionHandler for LocalRestFailureHandler {
+        async fn handle_typed(
+            &self,
+            ctx: InteractionContextData,
+            _interaction: Interaction,
+        ) -> EndpointReply {
+            let files = [crate::http::FileAttachment::new("a.txt", b"a".to_vec())
+                .with_content_type("not a mime")];
+            let error = ctx
+                .reply_with_files(&self.http, "with a file", &files)
+                .await
+                .expect_err("invalid content type");
+            assert!(
+                error.to_string().contains("invalid content type"),
+                "{error}"
+            );
+            InteractionResponse::reply("fallback").into()
+        }
+    }
+
+    /// Regression (astra review): a REST reply that failed locally used to
+    /// leave the slot uncertain, so the endpoint discarded the inline
+    /// fallback and answered 202, and the interaction failed. Nothing is
+    /// sent, the slot stays free, and the fallback is answered with 200.
+    #[tokio::test]
+    async fn local_rest_failure_leaves_the_inline_fallback_in_charge() {
+        let mut server = crate::response::tests::mock::spawn(Vec::new()).await;
+        let http = RestClient::builder("bot-token", Some(test_id(200)))
+            .api_base(server.base_url.clone())
+            .build()
+            .unwrap();
+        let body = command_body("token");
+        let response = handle_typed_interactions_request(
+            State(InteractionsState {
+                verifying_key: test_signing_key().verifying_key(),
+                handler: LocalRestFailureHandler { http },
+            }),
+            signed_headers_for_body(&body),
+            Bytes::from(body),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(response).await,
+            json!({ "type": 4, "data": { "content": "fallback" } })
+        );
+        assert!(!server.has_pending_request(), "nothing may reach Discord");
     }
 
     #[derive(Clone)]
