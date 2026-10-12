@@ -405,10 +405,14 @@ impl LabelBuilder {
         }
     }
 
-    /// A label around a text input. The builder's own label text is
-    /// replaced by `label`.
+    /// A label around a text input. `label` replaces the input builder's
+    /// label text; everything else the builder set (its description, the
+    /// input itself) is kept. A later [`Self::description`] replaces the
+    /// description.
     pub fn with_text_input(label: &str, input: TextInputBuilder) -> Self {
-        Self::with(label, input.input)
+        let mut inner = input.build();
+        label.clone_into(&mut inner.label);
+        Self { inner }
     }
 
     /// A label around a select menu.
@@ -712,6 +716,15 @@ mod tests {
             .description("d")
             .try_build()
             .expect("valid label");
+        // Regression (astra review): the input builder's description was
+        // dropped.
+        let kept = LabelBuilder::with_text_input(
+            "Outer",
+            TextInputBuilder::short("t", "Inner").description("from the input"),
+        )
+        .build();
+        assert_eq!(kept.label, "Outer");
+        assert_eq!(kept.description.as_deref(), Some("from the input"));
         assert_eq!(
             to_json(label),
             json!({
