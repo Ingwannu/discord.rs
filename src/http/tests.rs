@@ -62,6 +62,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
+mod goldens;
+
 #[derive(serde::Serialize)]
 struct InvalidJsonBody {
     map: HashMap<Vec<u8>, String>,

@@ -1,0 +1,1864 @@
+### GetCurrentApplication · get_current_application
+GET /applications/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditCurrentApplication · edit_current_application
+PATCH /applications/@me
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"description":"golden","role_connections_verification_url":null}
+
+### GetApplicationActivityInstance · get_application_activity_instance
+GET /applications/555/activity-instances/i-1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetApplicationRoleConnectionMetadataRecords · get_application_role_connection_metadata_records
+GET /applications/555/role-connections/metadata
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### UpdateApplicationRoleConnectionMetadataRecords · update_application_role_connection_metadata_records
+PUT /applications/555/role-connections/metadata
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"type":2,"key":"level","name":"Level","description":"At least"}]
+
+### GetCurrentBotApplicationInformation · get_current_bot_application_information
+GET /oauth2/applications/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetApplicationIdentityProfile · get_application_identity_profile
+GET /applications/555/users/42/identities/player%20one/profile
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### UpdateApplicationIdentityProfile · update_application_identity_profile
+PATCH /applications/555/users/42/identities/player-1/profile
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"username":"golden"}
+
+### GetApplicationIdentitiesByUserId · get_user_application_identities
+GET /users/42/application-identities/555
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetApplicationIdentitiesByExternalId · get_application_identities_by_external_id
+GET /applications/555/application-identities/steam/p%2F1?provider_id=prov
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteApplicationIdentity · delete_application_identity
+POST /users/42/application-identities/555/steam/p-1/delete
+authorization: Bot golden-token
+content-type: application/json
+body:
+{}
+
+### GetGlobalApplicationCommands · get_global_commands
+GET /applications/555/commands
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGlobalApplicationCommand · create_global_command
+POST /applications/555/commands
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"type":1,"name":"ping","description":"pong","options":[]}
+
+### BulkOverwriteGlobalApplicationCommands · bulk_overwrite_global_commands
+PUT /applications/555/commands
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"type":1,"name":"ping","description":"pong","options":[]}]
+
+### GetGlobalApplicationCommand · get_global_command
+GET /applications/555/commands/401
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditGlobalApplicationCommand · edit_global_command
+PATCH /applications/555/commands/401
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"description":"edited","default_member_permissions":null}
+
+### DeleteGlobalApplicationCommand · delete_global_command
+DELETE /applications/555/commands/401
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildApplicationCommands · get_guild_commands
+GET /applications/555/guilds/200/commands
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildApplicationCommand · create_guild_command
+POST /applications/555/guilds/200/commands
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"type":1,"name":"ping","description":"pong","options":[]}
+
+### BulkOverwriteGuildApplicationCommands · bulk_overwrite_guild_commands
+PUT /applications/555/guilds/200/commands
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"type":1,"name":"ping","description":"pong","options":[]}]
+
+### GetGuildApplicationCommand · get_guild_command
+GET /applications/555/guilds/200/commands/402
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditGuildApplicationCommand · edit_guild_command
+PATCH /applications/555/guilds/200/commands/402
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","default_member_permissions":"8"}
+
+### DeleteGuildApplicationCommand · delete_guild_command
+DELETE /applications/555/guilds/200/commands/402
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildApplicationCommandPermissions · get_guild_application_command_permissions
+GET /applications/555/guilds/200/commands/permissions
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetApplicationCommandPermissions · get_application_command_permissions
+GET /applications/555/guilds/200/commands/401/permissions
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditApplicationCommandPermissions · edit_application_command_permissions
+PUT /applications/555/guilds/200/commands/401/permissions
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+{"permissions":[{"id":"300","type":1,"permission":true}]}
+
+### BatchEditApplicationCommandPermissions · batch_edit_application_command_permissions
+PUT /applications/555/guilds/200/commands/permissions
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+[{"id":"401","application_id":"555","guild_id":"200","permissions":[{"id":"300","type":1,"permission":true}]}]
+
+### CreateInteractionResponse · create_interaction_response_typed
+POST /interactions/778/golden-interaction-token/callback
+authorization: -
+content-type: application/json
+body:
+{"type":4,"data":{"content":"golden"}}
+
+### CreateInteractionResponse · create_interaction_response_with_files
+POST /interactions/778/golden-interaction-token/callback
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"type":4,"data":{"content":"golden"}}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### CreateInteractionResponse · create_interaction_response_with_result
+POST /interactions/778/golden-interaction-token/callback?with_response=true
+authorization: -
+content-type: application/json
+body:
+{"type":4,"data":{"content":"golden"}}
+
+### GetOriginalInteractionResponse · get_original_interaction_response
+GET /webhooks/555/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body: -
+
+### EditOriginalInteractionResponse · edit_original_interaction_response
+PATCH /webhooks/555/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### DeleteOriginalInteractionResponse · delete_original_interaction_response
+DELETE /webhooks/555/golden-interaction-token/messages/@original
+authorization: -
+content-type: application/json
+body: -
+
+### CreateFollowupMessage · create_followup_message
+POST /webhooks/555/golden-interaction-token
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### CreateFollowupMessage · create_followup_message_with_files
+POST /webhooks/555/golden-interaction-token
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"golden"}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditFollowupMessage · edit_followup_message
+PATCH /webhooks/555/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body:
+{"content":"golden"}
+
+### DeleteFollowupMessage · delete_followup_message
+DELETE /webhooks/555/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body: -
+
+### GetGuildAuditLog · get_guild_audit_log
+GET /guilds/200/audit-logs?user_id=42&action_type=20&before=950&limit=25
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListAutoModerationRulesForGuild · get_auto_moderation_rules
+GET /guilds/200/auto-moderation/rules
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetAutoModerationRule · get_auto_moderation_rule
+GET /guilds/200/auto-moderation/rules/7
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateAutoModerationRule · create_auto_moderation_rule
+POST /guilds/200/auto-moderation/rules
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"no spam","event_type":1,"trigger_type":1,"actions":[{"type":1}],"enabled":true,"exempt_roles":["9"]}
+
+### ModifyAutoModerationRule · modify_auto_moderation_rule
+PATCH /guilds/200/auto-moderation/rules/7
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"enabled":false}
+
+### DeleteAutoModerationRule · delete_auto_moderation_rule
+DELETE /guilds/200/auto-moderation/rules/7
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannel · get_channel
+GET /channels/100
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyChannel · update_channel
+PATCH /channels/100
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","topic":null,"rate_limit_per_user":5,"archived":false}
+
+### DeleteChannel · delete_channel
+DELETE /channels/100
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditChannelPermissions · edit_channel_permissions
+PUT /channels/100/permissions/9
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"type":0,"allow":"1024"}
+
+### DeleteChannelPermission · delete_channel_permission
+DELETE /channels/100/permissions/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannelInvites · get_channel_invites
+GET /channels/100/invites
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateChannelInvite · create_channel_invite
+POST /channels/100/invites
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"max_age":3600,"unique":true}
+
+### CreateChannelInvite · create_channel_invite_with_target_users_file
+POST /channels/100/invites
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{}
+--BOUNDARY
+Content-Disposition: form-data; name="target_users_file"; filename="users.csv"
+Content-Type: text/plain
+
+42
+43
+
+--BOUNDARY--
+
+### FollowAnnouncementChannel · follow_announcement_channel
+POST /channels/100/followers
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"webhook_channel_id":"101"}
+
+### TriggerTypingIndicator · trigger_typing_indicator
+POST /channels/100/typing
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GroupDmAddRecipient · add_group_dm_recipient
+PUT /channels/100/recipients/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"access_token":"oauth","nick":"friend"}
+
+### GroupDmRemoveRecipient · remove_group_dm_recipient
+DELETE /channels/100/recipients/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildChannels · get_guild_channels
+GET /guilds/200/channels
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildChannel · create_guild_channel
+POST /guilds/200/channels
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","type":0,"parent_id":null}
+
+### ModifyGuildChannelPositions · modify_guild_channel_positions
+PATCH /guilds/200/channels
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"id":"100","position":1,"parent_id":null}]
+
+### CreateDm · create_dm_channel
+POST /users/@me/channels
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"recipient_id":"42"}
+
+### CreateGroupDm · create_group_dm_channel
+POST /users/@me/channels
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"access_tokens":["oauth"],"nicks":{"42":"friend"}}
+
+### SetVoiceChannelStatus · set_voice_channel_status
+PUT /channels/300/voice-status
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"status":"golden"}
+
+### StartThreadFromMessage · create_thread_from_message
+POST /channels/100/messages/1/threads
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"thread","auto_archive_duration":60}
+
+### StartThreadWithoutMessage · create_thread
+POST /channels/100/threads
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"private","type":12,"invitable":false}
+
+### StartThreadInForumOrMediaChannel · create_forum_thread
+POST /channels/700/threads
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"post","message":{"content":"first"},"applied_tags":["5"]}
+
+### StartThreadInForumOrMediaChannel · create_forum_thread_with_files
+POST /channels/700/threads
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"name":"post","message":{"content":"first","attachments":[{"id":0,"filename":"golden.txt"}]}}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### JoinThread · join_thread
+PUT /channels/900/thread-members/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### AddThreadMember · add_thread_member
+PUT /channels/900/thread-members/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### LeaveThread · leave_thread
+DELETE /channels/900/thread-members/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### RemoveThreadMember · remove_thread_member
+DELETE /channels/900/thread-members/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetThreadMember · get_thread_member
+GET /channels/900/thread-members/42?with_member=true
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListThreadMembers · list_thread_members
+GET /channels/900/thread-members?with_member=true&after=41&limit=50
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListThreadMembers · get_thread_members
+GET /channels/900/thread-members
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListPublicArchivedThreads · list_public_archived_threads
+GET /channels/100/threads/archived/public?before=2026-01-01T00%3A00%3A00Z&limit=2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListPrivateArchivedThreads · list_private_archived_threads
+GET /channels/100/threads/archived/private
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListJoinedPrivateArchivedThreads · list_joined_private_archived_threads
+GET /channels/100/users/@me/threads/archived/private?before=800&limit=3
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListActiveGuildThreads · get_active_guild_threads
+GET /guilds/200/threads/active
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannelMessages · get_channel_messages
+GET /channels/100/messages?limit=10
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannelMessages · get_channel_messages_paginated
+GET /channels/100/messages?limit=5&before=9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannelMessage · get_message
+GET /channels/100/messages/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateMessage · create_message
+POST /channels/100/messages
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"content":"hello <@42>","nonce":"golden-nonce","enforce_nonce":true,"message_reference":{"type":0,"message_id":"1"}}
+
+### CreateMessage · create_message_with_files
+POST /channels/100/messages
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"content":"with a file","attachments":[{"id":0,"filename":"golden.txt"}]}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### CreateMessage · forward_message
+POST /channels/100/messages
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"message_reference":{"type":1,"message_id":"1","channel_id":"101"}}
+
+### CreateMessage · send_message_json
+POST /channels/100/messages
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"content":"untyped"}
+
+### CrosspostMessage · crosspost_message
+POST /channels/100/messages/1/crosspost
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EditMessage · edit_message
+PATCH /channels/100/messages/1
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"content":"edited","embeds":[]}
+
+### EditMessage · edit_message_with_files
+PATCH /channels/100/messages/1
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"attachments":[{"id":"77"},{"id":0,"filename":"golden.txt"}]}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditMessage · edit_message_json
+PATCH /channels/100/messages/1
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"content":"untyped"}
+
+### DeleteMessage · delete_message
+DELETE /channels/100/messages/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### BulkDeleteMessages · bulk_delete_messages
+POST /channels/100/messages/bulk-delete
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"messages":["1","2"]}
+
+### SearchGuildMessages · search_guild_messages
+GET /guilds/200/messages/search?limit=25&content=hello+world&author_id=42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateReaction · add_reaction
+PUT /channels/100/messages/1/reactions/%F0%9F%91%8D/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteOwnReaction · remove_reaction
+DELETE /channels/100/messages/1/reactions/golden:123/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteUserReaction · remove_user_reaction
+DELETE /channels/100/messages/1/reactions/%F0%9F%91%8D/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetReactions · get_reactions
+GET /channels/100/messages/1/reactions/%F0%9F%91%8D?limit=10&after=41
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetReactions · get_reactions_with_query
+GET /channels/100/messages/1/reactions/golden:123?type=1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteAllReactions · remove_all_reactions
+DELETE /channels/100/messages/1/reactions
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteAllReactionsForEmoji · remove_all_reactions_for_emoji
+DELETE /channels/100/messages/1/reactions/%F0%9F%91%8D
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetChannelPins · get_channel_pins
+GET /channels/100/messages/pins?before=2026-01-01T00%3A00%3A00Z&limit=10
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### PinMessage · pin_message
+PUT /channels/100/messages/pins/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### UnpinMessage · unpin_message
+DELETE /channels/100/messages/pins/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetPinnedMessagesDeprecated · get_pinned_messages
+GET /channels/100/pins
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### PinMessageDeprecated · pin_message_legacy
+PUT /channels/100/pins/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### UnpinMessageDeprecated · unpin_message_legacy
+DELETE /channels/100/pins/1
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetAnswerVoters · get_poll_answer_voters
+GET /channels/100/polls/1/answers/2?after=41&limit=25
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### EndPoll · end_poll
+POST /channels/100/polls/1/expire
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListGuildEmojis · get_guild_emojis
+GET /guilds/200/emojis
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildEmoji · get_guild_emoji
+GET /guilds/200/emojis/3
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildEmoji · create_guild_emoji
+POST /guilds/200/emojis
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","image":"data:image/png;base64,AAAA","roles":["9"]}
+
+### ModifyGuildEmoji · modify_guild_emoji
+PATCH /guilds/200/emojis/3
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","roles":null}
+
+### DeleteGuildEmoji · delete_guild_emoji
+DELETE /guilds/200/emojis/3
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListApplicationEmojis · get_application_emojis
+GET /applications/555/emojis
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetApplicationEmoji · get_application_emoji
+GET /applications/555/emojis/4
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateApplicationEmoji · create_application_emoji
+POST /applications/555/emojis
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","image":"data:image/png;base64,AAAA"}
+
+### ModifyApplicationEmoji · modify_application_emoji
+PATCH /applications/555/emojis/4
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed"}
+
+### DeleteApplicationEmoji · delete_application_emoji
+DELETE /applications/555/emojis/4
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListSkus · get_skus
+GET /applications/555/skus
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListSkuSubscriptions · get_sku_subscriptions
+GET /skus/900/subscriptions?after=949&limit=10&user_id=42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetSkuSubscription · get_sku_subscription
+GET /skus/900/subscriptions/950
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListEntitlements · get_entitlements
+GET /applications/555/entitlements?user_id=42&sku_ids=900%2C901&exclude_ended=true
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetEntitlement · get_entitlement
+GET /applications/555/entitlements/901
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ConsumeEntitlement · consume_entitlement
+POST /applications/555/entitlements/901/consume
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateTestEntitlement · create_test_entitlement
+POST /applications/555/entitlements
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"sku_id":"900","owner_id":"42","owner_type":2}
+
+### DeleteTestEntitlement · delete_test_entitlement
+DELETE /applications/555/entitlements/902
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGateway · get_gateway
+GET /gateway
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGatewayBot · get_gateway_bot
+GET /gateway/bot
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuild · get_guild
+GET /guilds/200
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuild · get_guild_with_query
+GET /guilds/200?with_counts=true
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildPreview · get_guild_preview
+GET /guilds/200/preview
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuild · modify_guild
+PATCH /guilds/200
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","afk_channel_id":null}
+
+### ModifyGuildIncidentActions · modify_guild_incident_actions
+PUT /guilds/200/incident-actions
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"invites_disabled_until":"2026-05-01T12:00:00.000000+00:00","dms_disabled_until":null}
+
+### CreateGuild · create_guild
+POST /guilds
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden"}
+
+### CreateGuildFromTemplate · create_guild_from_template
+POST /guilds/templates/tmpl
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden"}
+
+### DeleteGuild · delete_guild
+DELETE /guilds/200
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildMfaLevel · modify_guild_mfa_level
+POST /guilds/200/mfa
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"level":1}
+
+### GetGuildIntegrations · get_guild_integrations
+GET /guilds/200/integrations
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteGuildIntegration · delete_guild_integration
+DELETE /guilds/200/integrations/33
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildPruneCount · get_guild_prune_count
+GET /guilds/200/prune?days=7&include_roles=9%2C10
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### BeginGuildPrune · begin_guild_prune
+POST /guilds/200/prune
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"days":7,"compute_prune_count":false,"include_roles":["9"]}
+
+### GetGuildVoiceRegions · get_guild_voice_regions
+GET /guilds/200/regions
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildInvites · get_guild_invites
+GET /guilds/200/invites
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildVanityUrl · get_guild_vanity_url
+GET /guilds/200/vanity-url
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildWidgetSettings · get_guild_widget_settings
+GET /guilds/200/widget
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildWidget · modify_guild_widget_settings
+PATCH /guilds/200/widget
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"enabled":true,"channel_id":null}
+
+### GetGuildWidget · get_guild_widget
+GET /guilds/200/widget.json
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildWidgetImage · get_guild_widget_image
+GET /guilds/200/widget.png?style=banner2
+authorization: -
+content-type: application/json
+body: -
+
+### GetGuildWelcomeScreen · get_guild_welcome_screen
+GET /guilds/200/welcome-screen
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildWelcomeScreen · modify_guild_welcome_screen
+PATCH /guilds/200/welcome-screen
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"enabled":true,"description":null}
+
+### GetGuildOnboarding · get_guild_onboarding
+GET /guilds/200/onboarding
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildOnboarding · modify_guild_onboarding
+PUT /guilds/200/onboarding
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"default_channel_ids":["100"],"enabled":true}
+
+### GetGuildTemplate · get_guild_template_by_code
+GET /guilds/templates/tmpl
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildTemplates · get_guild_templates
+GET /guilds/200/templates
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildTemplate · create_guild_template
+POST /guilds/200/templates
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","description":"a template"}
+
+### SyncGuildTemplate · sync_guild_template
+PUT /guilds/200/templates/tmpl
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildTemplate · modify_guild_template
+PATCH /guilds/200/templates/tmpl
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"description":null}
+
+### DeleteGuildTemplate · delete_guild_template
+DELETE /guilds/200/templates/tmpl
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildMember · get_member
+GET /guilds/200/members/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListGuildMembers · get_guild_members
+GET /guilds/200/members?limit=2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListGuildMembers · get_guild_members_with_query
+GET /guilds/200/members?limit=100&after=41
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### SearchGuildMembers · search_guild_members
+GET /guilds/200/members/search?query=gold+en&limit=5
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### SearchGuildMembers · search_guild_members_with_query
+GET /guilds/200/members/search?query=a%26b
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### AddGuildMember · add_guild_member
+PUT /guilds/200/members/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"access_token":"oauth","nick":"golden"}
+
+### ModifyGuildMember · modify_guild_member
+PATCH /guilds/200/members/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"nick":null,"communication_disabled_until":"2026-05-01T00:00:00Z"}
+
+### ModifyCurrentMember · modify_current_member
+PATCH /guilds/200/members/@me
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"nick":"bot"}
+
+### ModifyCurrentUserNick · modify_current_member_nick
+PATCH /guilds/200/members/@me/nick
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"nick":null}
+
+### AddGuildMemberRole · add_guild_member_role
+PUT /guilds/200/members/42/roles/9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### RemoveGuildMemberRole · remove_guild_member_role
+DELETE /guilds/200/members/42/roles/9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### RemoveGuildMember · remove_guild_member
+DELETE /guilds/200/members/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildBans · get_guild_bans
+GET /guilds/200/bans?limit=2&before=9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildBans · get_guild_bans_with_query
+GET /guilds/200/bans?limit=10&after=3
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildBan · get_guild_ban
+GET /guilds/200/bans/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildBan · create_guild_ban
+PUT /guilds/200/bans/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"delete_message_seconds":60}
+
+### RemoveGuildBan · remove_guild_ban
+DELETE /guilds/200/bans/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### BulkGuildBan · bulk_guild_ban
+POST /guilds/200/bulk-ban
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"user_ids":["42","43"],"delete_message_seconds":0}
+
+### GetGuildRoles · list_roles
+GET /guilds/200/roles
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildRole · get_guild_role
+GET /guilds/200/roles/9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildRoleMemberCounts · get_guild_role_member_counts
+GET /guilds/200/roles/member-counts
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildRole · create_guild_role
+POST /guilds/200/roles
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","permissions":"8"}
+
+### ModifyGuildRolePositions · modify_guild_role_positions
+PATCH /guilds/200/roles
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"id":"9"}]
+
+### ModifyGuildRole · modify_guild_role
+PATCH /guilds/200/roles/9
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","icon":null}
+
+### DeleteGuildRole · delete_role
+DELETE /guilds/200/roles/9
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetInvite · get_invite
+GET /invites/golden
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetInvite · get_invite_with_options
+GET /invites/golden?with_counts=true&with_expiration=false&guild_scheduled_event_id=5
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteInvite · delete_invite
+DELETE /invites/golden
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetTargetUsers · get_invite_target_users
+GET /invites/golden/target-users
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetTargetUsers · get_invite_target_users_csv
+GET /invites/golden/target-users
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### UpdateTargetUsers · update_invite_target_users
+PUT /invites/golden/target-users
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="target_users_file"; filename="users.csv"
+Content-Type: text/plain
+
+42
+
+--BOUNDARY--
+
+### GetTargetUsersJobStatus · get_invite_target_users_job_status
+GET /invites/golden/target-users/job-status
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### AddTargetUser · add_invite_target_user
+PUT /invites/golden/target-users/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### RemoveTargetUser · remove_invite_target_user
+DELETE /invites/golden/target-users/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### BulkAddTargetUsers · bulk_add_invite_target_users
+POST /invites/golden/target-users/bulk-add
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"user_ids":["42","43"]}
+
+### BulkDeleteTargetUsers · bulk_delete_invite_target_users
+POST /invites/golden/target-users/bulk-delete
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"user_ids":["42"]}
+
+### CreateLobby · create_lobby
+POST /lobbies
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"metadata":{"topic":"golden"},"idle_timeout_seconds":300}
+
+### CreateOrJoinLobby · get_or_create_lobby
+PUT /lobbies
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+{"secret":"lobby-secret"}
+
+### GetLobby · get_lobby
+GET /lobbies/600
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyLobby · modify_lobby
+PATCH /lobbies/600
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"idle_timeout_seconds":60}
+
+### DeleteLobby · delete_lobby
+DELETE /lobbies/600
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### AddLobbyMember · add_lobby_member
+PUT /lobbies/600/members/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"metadata":{"topic":"golden"},"flags":1}
+
+### BulkUpdateLobbyMembers · bulk_update_lobby_members
+POST /lobbies/600/members/bulk
+authorization: Bot golden-token
+content-type: application/json
+body:
+[{"id":"42","remove_member":true}]
+
+### RemoveLobbyMember · remove_lobby_member
+DELETE /lobbies/600/members/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### LeaveLobby · leave_lobby
+DELETE /lobbies/600/members/@me
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### LinkChannelToLobby · link_lobby_channel
+PATCH /lobbies/600/channel-linking
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+{"channel_id":"100"}
+
+### CreateLobbyChannelInviteForSelf · create_lobby_channel_invite_for_self
+POST /lobbies/600/members/@me/invites
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### CreateLobbyChannelInviteForUser · create_lobby_channel_invite_for_user
+POST /lobbies/600/members/42/invites
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### SendLobbyMessage · send_lobby_message
+POST /lobbies/600/messages
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+{"content":"hello lobby"}
+
+### GetLobbyMessages · get_lobby_messages
+GET /lobbies/600/messages?limit=20
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### UpdateLobbyMessageModerationMetadata · update_lobby_message_moderation_metadata
+PUT /lobbies/600/messages/1/moderation-metadata
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"topic":"golden"}
+
+### ListScheduledEventsForGuild · get_guild_scheduled_events
+GET /guilds/200/scheduled-events
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListScheduledEventsForGuild · get_guild_scheduled_events_with_query
+GET /guilds/200/scheduled-events?with_user_count=true
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildScheduledEvent · create_guild_scheduled_event
+POST /guilds/200/scheduled-events
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"entity_metadata":{"location":"Stage"},"name":"golden night","privacy_level":2,"scheduled_start_time":"2026-05-01T18:00:00Z","scheduled_end_time":"2026-05-01T20:00:00Z","entity_type":3}
+
+### GetGuildScheduledEvent · get_guild_scheduled_event
+GET /guilds/200/scheduled-events/2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyGuildScheduledEvent · modify_guild_scheduled_event
+PATCH /guilds/200/scheduled-events/2
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"description":null,"status":4}
+
+### DeleteGuildScheduledEvent · delete_guild_scheduled_event
+DELETE /guilds/200/scheduled-events/2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildScheduledEventUsers · get_guild_scheduled_event_users
+GET /guilds/200/scheduled-events/2/users?limit=50
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildScheduledEventUsers · get_guild_scheduled_event_users_with_query
+GET /guilds/200/scheduled-events/2/users?limit=10&with_member=true&after=41
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetSticker · get_sticker
+GET /stickers/10
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListStickerPacks · list_sticker_packs
+GET /sticker-packs
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetStickerPack · get_sticker_pack
+GET /sticker-packs/11
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListGuildStickers · get_guild_stickers
+GET /guilds/200/stickers
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildSticker · get_guild_sticker
+GET /guilds/200/stickers/12
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildSticker · create_guild_sticker
+POST /guilds/200/stickers
+authorization: Bot golden-token
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="name"
+
+golden
+--BOUNDARY
+Content-Disposition: form-data; name="description"
+
+a sticker
+--BOUNDARY
+Content-Disposition: form-data; name="tags"
+
+star
+--BOUNDARY
+Content-Disposition: form-data; name="file"; filename="sticker.png"
+Content-Type: image/png
+
+png
+--BOUNDARY--
+
+### ModifyGuildSticker · modify_guild_sticker
+PATCH /guilds/200/stickers/12
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","description":null}
+
+### DeleteGuildSticker · delete_guild_sticker
+DELETE /guilds/200/stickers/12
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### SendSoundboardSound · send_soundboard_sound
+POST /channels/300/send-soundboard-sound
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"sound_id":"1","source_guild_id":"201"}
+
+### ListDefaultSoundboardSounds · list_default_soundboard_sounds
+GET /soundboard-default-sounds
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListGuildSoundboardSounds · list_guild_soundboard_sounds
+GET /guilds/200/soundboard-sounds
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildSoundboardSound · get_guild_soundboard_sound
+GET /guilds/200/soundboard-sounds/2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateGuildSoundboardSound · create_guild_soundboard_sound
+POST /guilds/200/soundboard-sounds
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"quack","sound":"data:audio/ogg;base64,AAAA","volume":0.5}
+
+### ModifyGuildSoundboardSound · modify_guild_soundboard_sound
+PATCH /guilds/200/soundboard-sounds/2
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"honk","emoji_id":null}
+
+### DeleteGuildSoundboardSound · delete_guild_soundboard_sound
+DELETE /guilds/200/soundboard-sounds/2
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### CreateStageInstance · create_stage_instance
+POST /stage-instances
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"channel_id":"400","topic":"town hall"}
+
+### GetStageInstance · get_stage_instance
+GET /stage-instances/400
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyStageInstance · modify_stage_instance
+PATCH /stage-instances/400
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"privacy_level":2}
+
+### DeleteStageInstance · delete_stage_instance
+DELETE /stage-instances/400
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ListVoiceRegions · get_voice_regions
+GET /voice/regions
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetCurrentUserVoiceState · get_current_user_voice_state
+GET /guilds/200/voice-states/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetUserVoiceState · get_user_voice_state
+GET /guilds/200/voice-states/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyCurrentUserVoiceState · modify_current_user_voice_state
+PATCH /guilds/200/voice-states/@me
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"suppress":false,"request_to_speak_timestamp":null}
+
+### ModifyUserVoiceState · modify_user_voice_state
+PATCH /guilds/200/voice-states/42
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"channel_id":"400","suppress":true}
+
+### GetCurrentUser · get_current_user
+GET /users/@me
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetUser · get_user
+GET /users/42
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### ModifyCurrentUser · modify_current_user
+PATCH /users/@me
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"username":"golden"}
+
+### GetCurrentUserGuilds · get_current_user_guilds
+GET /users/@me/guilds
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetCurrentUserGuilds · get_current_user_guilds_with_query
+GET /users/@me/guilds?after=200&limit=1&with_counts=true
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetCurrentUserGuildMember · get_current_user_guild_member
+GET /users/@me/guilds/200/member
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### LeaveGuild · leave_guild
+DELETE /users/@me/guilds/200
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetCurrentUserConnections · get_current_user_connections
+GET /users/@me/connections
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### GetCurrentUserApplicationRoleConnection · get_current_user_application_role_connection
+GET /users/@me/applications/555/role-connection
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### UpdateCurrentUserApplicationRoleConnection · update_current_user_application_role_connection
+PUT /users/@me/applications/555/role-connection
+authorization: Bearer golden-bearer
+content-type: application/json
+body:
+{"platform_name":"Golden"}
+
+### DeleteCurrentUserApplicationRoleConnection · delete_current_user_application_role_connection
+DELETE /users/@me/applications/555/role-connection
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### GetCurrentAuthorizationInformation · get_current_authorization_information
+GET /oauth2/@me
+authorization: Bearer golden-bearer
+content-type: application/json
+body: -
+
+### CreateWebhook · create_webhook
+POST /channels/100/webhooks
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"golden","avatar":null}
+
+### GetChannelWebhooks · get_channel_webhooks
+GET /channels/100/webhooks
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetGuildWebhooks · get_guild_webhooks
+GET /guilds/200/webhooks
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetWebhook · get_webhook
+GET /webhooks/700
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### GetWebhookWithToken · get_webhook_with_token
+GET /webhooks/700/golden-webhook-token
+authorization: -
+content-type: application/json
+body: -
+
+### ModifyWebhook · modify_webhook
+PATCH /webhooks/700
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"renamed","channel_id":"101"}
+
+### ModifyWebhookWithToken · modify_webhook_with_token
+PATCH /webhooks/700/golden-webhook-token
+authorization: -
+content-type: application/json
+body:
+{"name":"public","avatar":null}
+
+### DeleteWebhook · delete_webhook
+DELETE /webhooks/700
+authorization: Bot golden-token
+content-type: application/json
+body: -
+
+### DeleteWebhookWithToken · delete_webhook_with_token
+DELETE /webhooks/700/golden-webhook-token
+authorization: -
+content-type: application/json
+body: -
+
+### ExecuteWebhook · execute_webhook
+POST /webhooks/700/golden-webhook-token?wait=true
+authorization: -
+content-type: application/json
+body:
+{"content":"from a webhook","username":"Golden","flags":4}
+
+### ExecuteWebhook · execute_webhook_with_query
+POST /webhooks/700/golden-webhook-token?wait=false&thread_id=901&with_components=true
+authorization: -
+content-type: application/json
+body:
+{"content":"into a thread"}
+
+### ExecuteWebhook · execute_webhook_with_files
+POST /webhooks/700/golden-webhook-token?wait=true
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"attachments":[{"id":0,"filename":"golden.txt"}]}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### ExecuteSlackCompatibleWebhook · execute_slack_compatible_webhook
+POST /webhooks/700/golden-webhook-token/slack?wait=true
+authorization: -
+content-type: application/json
+body:
+{"text":"deploy"}
+
+### ExecuteGitHubCompatibleWebhook · execute_github_compatible_webhook
+POST /webhooks/700/golden-webhook-token/github
+authorization: -
+content-type: application/json
+body:
+{"action":"opened"}
+
+### GetWebhookMessage · get_webhook_message
+GET /webhooks/700/golden-webhook-token/messages/900
+authorization: -
+content-type: application/json
+body: -
+
+### GetWebhookMessage · get_webhook_message_with_query
+GET /webhooks/700/golden-webhook-token/messages/900?thread_id=901
+authorization: -
+content-type: application/json
+body: -
+
+### EditWebhookMessage · edit_webhook_message
+PATCH /webhooks/700/golden-webhook-token/messages/900
+authorization: -
+content-type: application/json
+body:
+{"content":"edited"}
+
+### EditWebhookMessage · edit_webhook_message_with_query
+PATCH /webhooks/700/golden-webhook-token/messages/900?thread_id=901&with_components=true
+authorization: -
+content-type: application/json
+body:
+{"content":null}
+
+### EditWebhookMessage · edit_webhook_message_with_files
+PATCH /webhooks/700/golden-webhook-token/messages/900
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{"attachments":[{"id":0,"filename":"golden.txt"}]}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### EditWebhookMessage · edit_webhook_message_with_files_and_query
+PATCH /webhooks/700/golden-webhook-token/messages/@original?thread_id=901
+authorization: -
+content-type: multipart/form-data; boundary=BOUNDARY
+body:
+--BOUNDARY
+Content-Disposition: form-data; name="payload_json"
+
+{}
+--BOUNDARY
+Content-Disposition: form-data; name="files[0]"; filename="golden.txt"
+Content-Type: text/plain
+
+golden file
+--BOUNDARY--
+
+### DeleteWebhookMessage · delete_webhook_message
+DELETE /webhooks/700/golden-webhook-token/messages/900
+authorization: -
+content-type: application/json
+body: -
+
+### DeleteWebhookMessage · delete_webhook_message_with_query
+DELETE /webhooks/700/golden-webhook-token/messages/900?thread_id=901
+authorization: -
+content-type: application/json
+body: -
+
+### OAuth2TokenExchange · exchange_code
+POST /oauth2/token
+authorization: -
+content-type: application/x-www-form-urlencoded
+body:
+grant_type=authorization_code&code=code-1&redirect_uri=https%3A%2F%2Fexample.com%2Fcb&client_id=golden-client&client_secret=golden-secret
+
+### OAuth2TokenExchange · refresh_token
+POST /oauth2/token
+authorization: -
+content-type: application/x-www-form-urlencoded
+body:
+grant_type=refresh_token&refresh_token=refresh-1&client_id=golden-client&client_secret=golden-secret
+
+### OAuth2TokenRevocation · revoke_token
+POST /oauth2/token/revoke
+authorization: -
+content-type: application/x-www-form-urlencoded
+body:
+token=access-1&client_id=golden-client&token_type_hint=access_token&client_secret=golden-secret
+

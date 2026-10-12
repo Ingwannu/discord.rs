@@ -63,7 +63,7 @@ impl OAuth2Client {
     }
 
     #[cfg(test)]
-    fn new_with_base_url(
+    pub(crate) fn new_with_base_url(
         client_id: impl Into<String>,
         client_secret: Option<String>,
         api_base: impl Into<String>,
