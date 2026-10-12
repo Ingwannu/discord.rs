@@ -700,6 +700,34 @@ mod tests {
     }
 
     #[test]
+    fn text_input_builder_checks_its_label_description_and_label_builder_wraps_inputs() {
+        expect_model_error(
+            TextInputBuilder::short("t", "T")
+                .description(&"d".repeat(101))
+                .try_build(),
+            "text input description must be at most 100 characters, got 101",
+        );
+        // `with_text_input` keeps the input and replaces its label text.
+        let label = LabelBuilder::with_text_input("Outer", TextInputBuilder::short("t", "Inner"))
+            .description("d")
+            .try_build()
+            .expect("valid label");
+        assert_eq!(
+            to_json(label),
+            json!({
+                "type": 18,
+                "label": "Outer",
+                "description": "d",
+                "component": {"type": 4, "custom_id": "t", "style": 1},
+            })
+        );
+        expect_model_error(
+            LabelBuilder::with_checkbox("", CheckboxBuilder::new("c")).try_build(),
+            "label text must be 1-45 characters, got 0",
+        );
+    }
+
+    #[test]
     fn radio_group_builder_serializes_added_options_and_flags() {
         let payload = RadioGroupBuilder::new("radio")
             .add_option(SelectOption::new("One", "1"))

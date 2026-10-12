@@ -1221,7 +1221,7 @@ impl AutocompleteInteraction {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::model::{
         test_id, AllowedMentions, ChatInputCommandInteraction, ComponentInteraction,
         InteractionContextData, InteractionResponseType, InteractionType, ModalSubmitInteraction,
@@ -1298,7 +1298,9 @@ mod tests {
     /// Scripted stand-in for Discord's HTTP API: serves one scripted reply
     /// per request (each on its own connection) and reports every request as
     /// it arrives, so tests can see exactly when the client sent something.
-    mod mock {
+    /// Shared with the helpers tests (`crate::helpers`), which drive the
+    /// same response paths through their id-and-token wrappers.
+    pub(crate) mod mock {
         use std::collections::VecDeque;
         use std::sync::{Arc, Mutex};
 
@@ -1307,7 +1309,7 @@ mod tests {
         use tokio::sync::{mpsc, oneshot};
         use tokio::task::JoinHandle;
 
-        pub(super) enum Reply {
+        pub(crate) enum Reply {
             /// Respond at once with this status and JSON body.
             Now(u16, &'static str),
             /// Respond once the test releases the reply.
@@ -1318,25 +1320,25 @@ mod tests {
             Silent,
         }
 
-        pub(super) struct Server {
-            pub(super) base_url: String,
-            pub(super) arrivals: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
+        pub(crate) struct Server {
+            pub(crate) base_url: String,
+            pub(crate) arrivals: mpsc::UnboundedReceiver<(String, Vec<u8>)>,
             accept_task: JoinHandle<()>,
         }
 
         impl Server {
             /// Waits for the next request and returns `"METHOD /path"`.
-            pub(super) async fn next_request(&mut self) -> String {
+            pub(crate) async fn next_request(&mut self) -> String {
                 self.next_request_with_body().await.0
             }
 
             /// Waits for the next request and returns `"METHOD /path"` and
             /// its body bytes.
-            pub(super) async fn next_request_with_body(&mut self) -> (String, Vec<u8>) {
+            pub(crate) async fn next_request_with_body(&mut self) -> (String, Vec<u8>) {
                 self.arrivals.recv().await.expect("mock server running")
             }
 
-            pub(super) fn has_pending_request(&mut self) -> bool {
+            pub(crate) fn has_pending_request(&mut self) -> bool {
                 !self.arrivals.is_empty()
             }
         }
@@ -1347,7 +1349,7 @@ mod tests {
             }
         }
 
-        pub(super) async fn spawn(script: Vec<Reply>) -> Server {
+        pub(crate) async fn spawn(script: Vec<Reply>) -> Server {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base_url = format!("http://{}", listener.local_addr().unwrap());
             let script = Arc::new(Mutex::new(VecDeque::from(script)));
@@ -1554,12 +1556,18 @@ mod tests {
         let message = InteractionMessage::from(
             MessageBuilder::new()
                 .content("built")
-                .components_v2(ComponentsV2Message::new())
+                .components_v2(
+                    ComponentsV2Message::new()
+                        .add_text_display(crate::builders::TextDisplayBuilder::new("one")),
+                )
                 .ephemeral(true),
         );
         let data = wire(&InteractionResponse::reply(message))["data"].take();
         assert_eq!(data["content"], json!("built"));
-        assert_eq!(data["components"], json!([]));
+        assert_eq!(
+            data["components"],
+            json!([{ "type": 10, "content": "one" }])
+        );
         assert_eq!(
             data["flags"],
             json!(MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6))
@@ -1824,6 +1832,68 @@ mod tests {
             .unwrap_err();
         assert_model_error(&error, "already acknowledged");
         assert!(!server.has_pending_request());
+    }
+
+    /// The `_with_files` responder methods, through the trait on a variant:
+    /// the reply claims the slot, the follow-up and the `@original` edit go
+    /// out as multipart once it is acknowledged, and the edit confirms the
+    /// original response.
+    #[tokio::test]
+    async fn responder_file_methods_send_multipart_through_the_trait() {
+        let mut server = mock::spawn(vec![
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(200, MESSAGE_JSON),
+            mock::Reply::Now(200, MESSAGE_JSON),
+        ])
+        .await;
+        let http = mock_client(&server, Duration::from_secs(10));
+        let component = ComponentInteraction {
+            context: sample_context(),
+            ..ComponentInteraction::fixture()
+        };
+        let files = [FileAttachment::new("a.txt", b"a".to_vec())];
+
+        component
+            .reply_with_files(&http, "with a file", &files)
+            .await
+            .unwrap();
+        component
+            .follow_up_with_files(&http, "another", &files)
+            .await
+            .unwrap();
+        component
+            .edit_reply_with_files(&http, "edited", &files)
+            .await
+            .unwrap();
+        assert!(component.is_replied());
+
+        for expected in [
+            "POST /interactions/1/token/callback",
+            "POST /webhooks/2/token",
+            "PATCH /webhooks/2/token/messages/@original",
+        ] {
+            let (line, body) = server.next_request_with_body().await;
+            assert_eq!(line, expected);
+            let body = String::from_utf8_lossy(&body);
+            assert!(body.contains("name=\"payload_json\""), "{body}");
+            assert!(body.contains("filename=\"a.txt\""), "{body}");
+        }
+
+        // Every responding variant reaches the same shared context.
+        let modal = ModalSubmitInteraction {
+            context: offline_context(),
+            submission: crate::parsers::V2ModalSubmission {
+                custom_id: "m".to_string(),
+                components: Vec::new(),
+            },
+            resolved: None,
+        };
+        assert_eq!(modal.responder_context().token, "bad/token");
+        let entry_point = crate::model::PrimaryEntryPointInteraction {
+            context: offline_context(),
+            data: crate::model::CommandInteractionData::default(),
+        };
+        assert_eq!(entry_point.responder_context().token, "bad/token");
     }
 
     // --- state machine ------------------------------------------------------

@@ -527,3 +527,123 @@ fn legacy_action_row_checks_its_label() {
     let row = LegacyTextInputRow::new("", TextInput::short("old"));
     assert!(modal_error(&Modal::new("m", "T").component(row)).contains("text input label"));
 }
+
+#[test]
+fn response_conversions_and_validation_dispatch() {
+    let response: InteractionResponse = Modal::new("m", "T").component(text_label()).into();
+    assert_eq!(response.kind(), InteractionResponseType::MODAL);
+    response.validate().expect("valid modal");
+    // A modal response is checked through `Modal::validate`.
+    assert!(InteractionResponse::from(Modal::new("m", "T"))
+        .validate()
+        .is_err());
+    // Messages are checked by their own type; other callbacks have nothing
+    // to check.
+    InteractionResponse::reply("x".repeat(5000))
+        .validate()
+        .expect("not checked here");
+    InteractionResponse::DeferredUpdateMessage
+        .validate()
+        .expect("nothing to check");
+
+    let raw = RawInteractionResponse::new(InteractionResponseType::LAUNCH_ACTIVITY)
+        .data_json(r#"{"a":1}"#)
+        .expect("valid JSON");
+    let debug = format!("{raw:?}");
+    assert!(debug.contains("RawInteractionResponse"), "{debug}");
+    assert!(debug.contains(r#"{\"a\":1}"#), "{debug}");
+    let response: InteractionResponse = raw.into();
+    assert_eq!(wire(&response), r#"{"type":12,"data":{"a":1}}"#);
+}
+
+#[test]
+fn every_select_kind_gets_the_modal_rules() {
+    let modal =
+        |component: LabelComponent| Modal::new("m", "T").component(Label::new("L", component));
+    let mut role = RoleSelect::new("role");
+    let mut mentionable = MentionableSelect::new("ping");
+    let mut channel = ChannelSelect::new("where");
+    for select in [
+        LabelComponent::from(role.clone()),
+        mentionable.clone().into(),
+        channel.clone().into(),
+    ] {
+        modal(select).validate().expect("valid select");
+    }
+    role.disabled = Some(false);
+    mentionable.disabled = Some(true);
+    channel.min_values = Some(0);
+    assert!(modal(role.into()).validate().is_err());
+    assert!(modal(mentionable.into()).validate().is_err());
+    let error = modal(channel.into())
+        .validate()
+        .expect_err("required zero minimum");
+    assert!(
+        error.to_string().contains("min_values must be at least 1"),
+        "{error}"
+    );
+
+    // A message row's select moves into a label unchanged.
+    let mut string = StringSelect::new("s");
+    string.options = vec![SelectOption::new("A", "a")];
+    for (select, golden_type) in [
+        (discordrs::request::SelectMenu::from(string), 3),
+        (UserSelect::new("u").into(), 5),
+        (RoleSelect::new("r").into(), 6),
+        (MentionableSelect::new("m").into(), 7),
+        (ChannelSelect::new("c").into(), 8),
+    ] {
+        let label = Label::new("L", LabelComponent::from(select));
+        let json: serde_json::Value = serde_json::from_str(&wire(&label)).expect("JSON");
+        assert_eq!(json["component"]["type"], golden_type);
+    }
+}
+
+#[test]
+fn errors_name_the_failing_component_kind_and_labels_validate_alone() {
+    let error = Label::new("", TextInput::short("a"))
+        .validate()
+        .expect_err("empty label text");
+    assert!(
+        error.to_string().contains("label text must be 1-45"),
+        "{error}"
+    );
+    Label::new("L", Checkbox::new("c"))
+        .validate()
+        .expect("valid label");
+
+    assert!(
+        modal_error(&Modal::new("m", "T").component(TextDisplay::new("")))
+            .starts_with("modal components[0] (text display): ")
+    );
+    #[expect(deprecated, reason = "covers the deprecated layout")]
+    let row = LegacyTextInputRow::new("L", TextInput::short("x").max_length(0));
+    assert!(modal_error(&Modal::new("m", "T").component(row))
+        .starts_with("modal components[0] (action row): text input max_length"));
+}
+
+#[test]
+fn modal_inputs_carry_their_component_id() {
+    let id = ComponentId::new(9);
+    let cases: Vec<(LabelComponent, &str)> = vec![
+        (
+            FileUpload::new("f").id(id).into(),
+            r#"{"type":19,"id":9,"custom_id":"f"}"#,
+        ),
+        (
+            RadioGroup::new("r").id(id).into(),
+            r#"{"type":21,"id":9,"custom_id":"r","options":[]}"#,
+        ),
+        (
+            CheckboxGroup::new("g").id(id).into(),
+            r#"{"type":22,"id":9,"custom_id":"g","options":[]}"#,
+        ),
+        (
+            Checkbox::new("c").id(id).into(),
+            r#"{"type":23,"id":9,"custom_id":"c"}"#,
+        ),
+    ];
+    for (component, golden) in cases {
+        assert_eq!(wire(&component), golden);
+    }
+}

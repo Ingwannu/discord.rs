@@ -947,4 +947,106 @@ mod tests {
             assert_model_error_contains(error, "message_reference");
         }
     }
+
+    /// The id-and-token helpers send typed callbacks and return the created
+    /// message; the deprecated context helpers reach the same endpoints.
+    #[tokio::test]
+    async fn container_and_context_helpers_reach_discord() {
+        use crate::response::tests::mock;
+
+        const MESSAGE: &str = r#"{"id":"30","channel_id":"40","content":"ok"}"#;
+        let mut server = mock::spawn(vec![
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(200, MESSAGE),
+            mock::Reply::Now(204, ""),
+            mock::Reply::Now(200, MESSAGE),
+            mock::Reply::Now(200, MESSAGE),
+            mock::Reply::Now(200, MESSAGE),
+            mock::Reply::Now(200, MESSAGE),
+            mock::Reply::Now(204, ""),
+        ])
+        .await;
+        let http = DiscordHttpClient::builder("bot-token", Some(test_id(123)))
+            .api_base(server.base_url.clone())
+            .build()
+            .unwrap();
+
+        respond_with_components_v2(
+            &http,
+            test_id(111),
+            "tok",
+            sample_components_message(),
+            true,
+        )
+        .await
+        .unwrap();
+        update_component_with_container(&http, test_id(111), "tok", sample_container())
+            .await
+            .unwrap();
+        respond_with_modal(&http, test_id(111), "tok", sample_modal())
+            .await
+            .unwrap();
+        let followup = followup_with_container(&http, "tok", sample_container(), true)
+            .await
+            .unwrap();
+        assert_eq!(followup.id, test_id(30));
+        let deferred =
+            defer_and_followup_container(&http, test_id(111), "tok", sample_container(), false)
+                .await
+                .unwrap();
+        assert_eq!(deferred.id, test_id(30));
+
+        let context = acknowledged(sample_context("123", "tok"));
+        super::get_original_response(&http, &context).await.unwrap();
+        super::edit_followup_response(&http, &context, test_id(30), sample_message())
+            .await
+            .unwrap();
+        edit_original_response(&http, &context, sample_message())
+            .await
+            .unwrap();
+        super::delete_followup_response(&http, &context, test_id(30))
+            .await
+            .unwrap();
+
+        let mut bodies = Vec::new();
+        for expected in [
+            "POST /interactions/111/tok/callback",
+            "POST /interactions/111/tok/callback",
+            "POST /interactions/111/tok/callback",
+            "POST /webhooks/123/tok",
+            "POST /interactions/111/tok/callback",
+            "POST /webhooks/123/tok",
+            "GET /webhooks/123/tok/messages/@original",
+            "PATCH /webhooks/123/tok/messages/30",
+            "PATCH /webhooks/123/tok/messages/@original",
+            "DELETE /webhooks/123/tok/messages/30",
+        ] {
+            let (line, body) = server.next_request_with_body().await;
+            assert_eq!(line, expected);
+            bodies.push(body);
+        }
+        let json =
+            |index: usize| -> serde_json::Value { serde_json::from_slice(&bodies[index]).unwrap() };
+        let reply = json(0);
+        assert_eq!(reply["type"], json!(4));
+        assert_eq!(
+            reply["data"]["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6))
+        );
+        let update = json(1);
+        assert_eq!(update["type"], json!(7));
+        assert_eq!(
+            update["data"]["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2)
+        );
+        assert_eq!(json(2)["type"], json!(9));
+        assert_eq!(
+            json(3)["flags"],
+            json!(MESSAGE_FLAG_IS_COMPONENTS_V2 | (1 << 6))
+        );
+        assert_eq!(json(4), json!({ "type": 5, "data": { "flags": 0 } }));
+        assert_eq!(json(7)["content"], json!("hello"));
+    }
 }
