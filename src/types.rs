@@ -48,7 +48,7 @@ impl Emoji {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MediaGalleryItem`.
 pub struct MediaGalleryItem {
     pub media: MediaInfo,
@@ -58,7 +58,7 @@ pub struct MediaGalleryItem {
     pub spoiler: Option<bool>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `MediaInfo`.
 pub struct MediaInfo {
     pub url: String,
@@ -87,7 +87,7 @@ impl MediaGalleryItem {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `SelectOption`.
 pub struct SelectOption {
     pub label: String,

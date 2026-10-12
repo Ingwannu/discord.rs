@@ -4,7 +4,7 @@
 mod components;
 mod container;
 mod embed;
-mod limits;
+pub(crate) mod limits;
 mod media;
 mod message;
 mod modal;
