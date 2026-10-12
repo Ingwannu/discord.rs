@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use super::body::{decode_json_body, header_string, parse_body_bytes, parse_body_value};
+use super::body::{decode_json_body, header_string, json_body, parse_body_bytes, parse_body_value};
 use super::client_config::default_http_client;
 use super::paths::RequestRoute;
 use super::paths::{
@@ -21,6 +21,7 @@ use super::paths::{
 use super::rate_limit::RateLimitState;
 use super::{
     discord_api_error, discord_rate_limit_error, sleep_for_retry_after, FileAttachment, RestClient,
+    RouteId,
 };
 use crate::bitfield::Permissions;
 use crate::command::CommandDefinition;
@@ -57,7 +58,12 @@ struct InvalidJsonBody {
 }
 
 fn route(method: Method, path: &str) -> RequestRoute {
-    RequestRoute::new(&method, path)
+    RequestRoute::new(&method, path, None)
+}
+
+/// The `RequestRoute` an endpoint sending manifest route `id` produces.
+fn routed(id: RouteId, path: &str) -> RequestRoute {
+    RequestRoute::new(&id.method(), path, Some(id))
 }
 
 #[derive(Debug)]
@@ -881,30 +887,24 @@ fn request_route_major_scope_combines_major_names_ids_and_tokens() {
 }
 
 #[test]
-fn request_route_recognizes_only_channel_message_creates() {
-    use super::paths::RouteOperation;
-
-    let op = |method: Method, path: &str| route(method, path).operation;
+fn only_the_create_message_route_replays_with_a_nonce() {
+    let replaying = RouteId::ALL
+        .iter()
+        .copied()
+        .filter(|id| id.replays_with_nonce())
+        .collect::<Vec<_>>();
+    assert_eq!(replaying, [RouteId::CreateMessage]);
+    assert_eq!(RouteId::CreateMessage.method(), Method::POST);
     assert_eq!(
-        op(Method::POST, "/channels/123/messages"),
-        RouteOperation::CreateChannelMessage
+        RouteId::CreateMessage.template(),
+        "/channels/{channel.id}/messages"
     );
+    // The route identity comes from the endpoint, never from the path: a
+    // raw request to the same path carries none.
+    assert_eq!(route(Method::POST, "/channels/123/messages").id, None);
     assert_eq!(
-        op(Method::POST, "/channels/123/messages?x=1"),
-        RouteOperation::CreateChannelMessage
-    );
-    assert_eq!(
-        op(Method::PATCH, "/channels/123/messages"),
-        RouteOperation::Other
-    );
-    assert_eq!(
-        op(Method::POST, "/channels/123/messages/9/crosspost"),
-        RouteOperation::Other
-    );
-    assert_eq!(op(Method::POST, "/webhooks/1/tok"), RouteOperation::Other);
-    assert_eq!(
-        op(Method::POST, "/webhooks/1/tok/messages"),
-        RouteOperation::Other
+        routed(RouteId::CreateMessage, "/channels/123/messages").id,
+        Some(RouteId::CreateMessage)
     );
 }
 
@@ -1177,12 +1177,20 @@ async fn typed_shims_decode_text_empty_and_no_content_success_bodies_like_before
         "{error}"
     );
     let no_content: Option<DecodeProbe> = client
-        .request_optional_typed_no_content(Method::PUT, "/guilds/1/members/2", Some(&json!({})))
+        .send_optional(
+            RouteId::AddGuildMember,
+            "/guilds/1/members/2",
+            json_body(&json!({})),
+        )
         .await
         .unwrap();
     assert_eq!(no_content, None);
     let created: Option<DecodeProbe> = client
-        .request_optional_typed_no_content(Method::PUT, "/guilds/1/members/2", Some(&json!({})))
+        .send_optional(
+            RouteId::AddGuildMember,
+            "/guilds/1/members/2",
+            json_body(&json!({})),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -7248,6 +7256,9 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
     let policy = |method: Method, path: &str, body: Option<&RequestBody>, opt_in: bool| {
         ReplayPolicy::for_request(&method, &route(method.clone(), path), body, opt_in)
     };
+    let routed_policy = |id: RouteId, path: &str, body: Option<&RequestBody>, opt_in: bool| {
+        ReplayPolicy::for_request(&id.method(), &routed(id, path), body, opt_in)
+    };
     for method in [
         Method::GET,
         Method::HEAD,
@@ -7266,33 +7277,48 @@ fn replay_policy_follows_method_operation_and_nonce_enforcement() {
     let message_create = "/channels/1/messages";
 
     assert_eq!(
-        policy(Method::POST, message_create, Some(&plain), false),
+        routed_policy(RouteId::CreateMessage, message_create, Some(&plain), false),
         ReplayPolicy::Never
     );
     assert_eq!(
-        policy(Method::POST, message_create, Some(&enforced), false),
+        routed_policy(
+            RouteId::CreateMessage,
+            message_create,
+            Some(&enforced),
+            false
+        ),
         ReplayPolicy::WithinNonceWindow
     );
     // Only the channel message create route implements nonce deduplication.
     assert_eq!(
-        policy(Method::POST, "/webhooks/1/tok", Some(&enforced), false),
-        ReplayPolicy::Never
-    );
-    assert_eq!(
-        policy(Method::PATCH, message_create, Some(&enforced), false),
-        ReplayPolicy::Never
-    );
-    assert_eq!(
-        policy(
-            Method::POST,
-            "/channels/1/messages/2/threads",
+        routed_policy(
+            RouteId::ExecuteWebhook,
+            "/webhooks/1/tok",
             Some(&enforced),
             false
         ),
         ReplayPolicy::Never
     );
     assert_eq!(
-        policy(Method::POST, message_create, Some(&plain), true),
+        routed_policy(RouteId::EditMessage, message_create, Some(&enforced), false),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        routed_policy(
+            RouteId::StartThreadFromMessage,
+            "/channels/1/messages/2/threads",
+            Some(&enforced),
+            false
+        ),
+        ReplayPolicy::Never
+    );
+    // A raw request is opaque to the client: same path and body, no replay.
+    assert_eq!(
+        policy(Method::POST, message_create, Some(&enforced), false),
+        ReplayPolicy::Never
+    );
+    assert_eq!(
+        routed_policy(RouteId::CreateMessage, message_create, Some(&plain), true),
         ReplayPolicy::Always,
         "the explicit opt-in replays every method"
     );

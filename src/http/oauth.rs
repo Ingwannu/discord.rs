@@ -1,8 +1,5 @@
-use reqwest::Method;
-use serde_json::Value;
-
 use super::paths::{configured_application_id, current_user_guilds_query};
-use super::{validate_authorization_token, RequestAuthorization, RestClient};
+use super::{json_body, validate_authorization_token, RestClient, RouteId, NO_BODY};
 use crate::error::DiscordError;
 use crate::model::{
     Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, GuildId,
@@ -12,7 +9,7 @@ use crate::model::{
 
 impl RestClient {
     pub async fn get_current_user(&self) -> Result<User, DiscordError> {
-        self.request_typed(Method::GET, "/users/@me", Option::<&Value>::None)
+        self.send(RouteId::GetCurrentUser, "/users/@me", NO_BODY)
             .await
     }
 
@@ -21,17 +18,13 @@ impl RestClient {
         &self,
         body: &ModifyCurrentUser,
     ) -> Result<User, DiscordError> {
-        self.request_typed(Method::PATCH, "/users/@me", Some(body))
+        self.send(RouteId::ModifyCurrentUser, "/users/@me", json_body(body))
             .await
     }
 
     pub async fn get_user(&self, user_id: UserId) -> Result<User, DiscordError> {
-        self.request_typed(
-            Method::GET,
-            &format!("/users/{}", user_id),
-            Option::<&Value>::None,
-        )
-        .await
+        self.send(RouteId::GetUser, &format!("/users/{}", user_id), NO_BODY)
+            .await
     }
 
     pub async fn get_current_user_guilds(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
@@ -44,10 +37,10 @@ impl RestClient {
         query: &CurrentUserGuildsQuery,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
         let query = current_user_guilds_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetCurrentUserGuilds,
             &format!("/users/@me/guilds{query}"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -64,10 +57,10 @@ impl RestClient {
         query: &CurrentUserGuildsQuery,
     ) -> Result<Vec<CurrentUserGuild>, DiscordError> {
         let query = current_user_guilds_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetCurrentUserGuilds,
             &format!("/users/@me/guilds{query}"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -79,20 +72,20 @@ impl RestClient {
         guild_id: GuildId,
     ) -> Result<Member, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::GET,
+        self.send_bearer(
+            RouteId::GetCurrentUserGuildMember,
+            bearer_token,
             &format!("/users/@me/guilds/{}/member", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn leave_guild(&self, guild_id: GuildId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::LeaveGuild,
             &format!("/users/@me/guilds/{}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -103,11 +96,11 @@ impl RestClient {
         bearer_token: &str,
     ) -> Result<Vec<UserConnection>, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::GET,
+        self.send_bearer(
+            RouteId::GetCurrentUserConnections,
+            bearer_token,
             "/users/@me/connections",
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -119,11 +112,11 @@ impl RestClient {
     ) -> Result<UserApplicationRoleConnection, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::GET,
+        self.send_bearer(
+            RouteId::GetCurrentUserApplicationRoleConnection,
+            bearer_token,
             &format!("/users/@me/applications/{application_id}/role-connection"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -136,11 +129,11 @@ impl RestClient {
     ) -> Result<UserApplicationRoleConnection, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::PUT,
+        self.send_bearer(
+            RouteId::UpdateCurrentUserApplicationRoleConnection,
+            bearer_token,
             &format!("/users/@me/applications/{application_id}/role-connection"),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -153,11 +146,11 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_with_headers_authorized(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::DELETE,
+        self.send_bearer_unit(
+            RouteId::DeleteCurrentUserApplicationRoleConnection,
+            bearer_token,
             &format!("/users/@me/applications/{application_id}/role-connection"),
-            None,
+            NO_BODY,
         )
         .await
         .map(|_| ())
@@ -167,10 +160,10 @@ impl RestClient {
     pub async fn get_current_bot_application_information(
         &self,
     ) -> Result<Application, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetCurrentBotApplicationInformation,
             "/oauth2/applications/@me",
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -181,11 +174,11 @@ impl RestClient {
         bearer_token: &str,
     ) -> Result<AuthorizationInformation, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::GET,
+        self.send_bearer(
+            RouteId::GetCurrentAuthorizationInformation,
+            bearer_token,
             "/oauth2/@me",
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

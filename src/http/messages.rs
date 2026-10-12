@@ -1,4 +1,3 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -9,7 +8,7 @@ use crate::model::{
 };
 
 use super::paths::query_string;
-use super::{FileAttachment, RestClient};
+use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn create_message(
@@ -18,10 +17,10 @@ impl RestClient {
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            Some(body.as_ref()),
+            json_body(body.as_ref()),
         )
         .await
     }
@@ -52,11 +51,10 @@ impl RestClient {
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
-        self.request_typed_multipart(
-            Method::POST,
+        self.send(
+            RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            body.as_ref(),
-            files,
+            multipart_body(body.as_ref(), files),
         )
         .await
     }
@@ -68,10 +66,10 @@ impl RestClient {
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::EditMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            Some(body.as_ref()),
+            json_body(body.as_ref()),
         )
         .await
     }
@@ -84,11 +82,10 @@ impl RestClient {
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let body = self.message_with_default_allowed_mentions(body);
-        self.request_typed_multipart(
-            Method::PATCH,
+        self.send(
+            RouteId::EditMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            body.as_ref(),
-            files,
+            multipart_body(body.as_ref(), files),
         )
         .await
     }
@@ -98,10 +95,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<Message, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetChannelMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -115,8 +112,7 @@ impl RestClient {
             Some(limit) => format!("/channels/{}/messages?limit={}", channel_id, limit),
             None => format!("/channels/{}/messages", channel_id),
         };
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetChannelMessages, &path, NO_BODY).await
     }
 
     pub async fn search_guild_messages(
@@ -125,10 +121,10 @@ impl RestClient {
         query: &SearchGuildMessagesQuery,
     ) -> Result<SearchGuildMessagesResponse, DiscordError> {
         let query = search_guild_messages_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::SearchGuildMessages,
             &format!("/guilds/{}/messages/search{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -139,10 +135,10 @@ impl RestClient {
         message_ids: Vec<MessageId>,
     ) -> Result<(), DiscordError> {
         let body = serde_json::json!({ "messages": message_ids });
-        self.request_no_content(
-            Method::POST,
+        self.send_unit(
+            RouteId::BulkDeleteMessages,
             &format!("/channels/{}/messages/bulk-delete", channel_id),
-            Some(&body),
+            json_body(&body),
         )
         .await
     }
@@ -157,7 +153,7 @@ impl RestClient {
             "/channels/{}/messages/{}/reactions/{}/@me",
             channel_id, message_id, emoji
         );
-        self.request_no_content(Method::PUT, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::CreateReaction, &path, NO_BODY)
             .await
     }
 
@@ -171,7 +167,7 @@ impl RestClient {
             "/channels/{}/messages/{}/reactions/{}/@me",
             channel_id, message_id, emoji
         );
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::DeleteOwnReaction, &path, NO_BODY)
             .await
     }
 
@@ -181,10 +177,10 @@ impl RestClient {
         message_id: MessageId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        self.request(
-            Method::PATCH,
+        self.send(
+            RouteId::EditMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -194,10 +190,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteMessage,
             &format!("/channels/{}/messages/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -207,10 +203,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<Message, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CrosspostMessage,
             &format!("/channels/{}/messages/{}/crosspost", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -241,8 +237,7 @@ impl RestClient {
         } else {
             format!("/channels/{}/messages?{}", channel_id, params.join("&"))
         };
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetChannelMessages, &path, NO_BODY).await
     }
 
     /// Users who reacted with `emoji` (normal reactions; see
@@ -292,8 +287,7 @@ impl RestClient {
             "/channels/{}/messages/{}/reactions/{}{}",
             channel_id, message_id, emoji, query
         );
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetReactions, &path, NO_BODY).await
     }
 
     pub async fn get_channel_pins(
@@ -302,10 +296,10 @@ impl RestClient {
         query: &ChannelPinsQuery,
     ) -> Result<ChannelPins, DiscordError> {
         let query = channel_pins_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetChannelPins,
             &format!("/channels/{}/messages/pins{query}", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -321,7 +315,7 @@ impl RestClient {
             "/channels/{}/messages/{}/reactions/{}/{}",
             channel_id, message_id, emoji, user_id
         );
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::DeleteUserReaction, &path, NO_BODY)
             .await
     }
 
@@ -330,10 +324,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteAllReactions,
             &format!("/channels/{}/messages/{}/reactions", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -344,13 +338,13 @@ impl RestClient {
         message_id: MessageId,
         emoji: &str,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteAllReactionsForEmoji,
             &format!(
                 "/channels/{}/messages/{}/reactions/{}",
                 channel_id, message_id, emoji
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -360,10 +354,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::CreateMessage,
             &format!("/channels/{}/messages", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -373,10 +367,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::PinMessage,
             &format!("/channels/{}/messages/pins/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -386,10 +380,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::UnpinMessage,
             &format!("/channels/{}/messages/pins/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -398,10 +392,10 @@ impl RestClient {
         &self,
         channel_id: ChannelId,
     ) -> Result<Vec<Message>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetPinnedMessagesDeprecated,
             &format!("/channels/{}/pins", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -412,10 +406,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::PinMessageDeprecated,
             &format!("/channels/{}/pins/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -426,10 +420,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::UnpinMessageDeprecated,
             &format!("/channels/{}/pins/{}", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

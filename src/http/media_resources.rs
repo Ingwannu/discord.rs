@@ -1,4 +1,3 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -7,20 +6,23 @@ use crate::model::{
     SoundboardSoundList, Sticker, StickerId, StickerPack, StickerPackId, StickerPackList,
 };
 
-use super::{decode_response, serialize_body, FileAttachment, RequestBody, RestClient};
+use super::{
+    decode_response, json_body, serialize_body, FileAttachment, RequestBody, RestClient, RouteId,
+    NO_BODY,
+};
 
 impl RestClient {
     pub async fn get_sticker(&self, sticker_id: StickerId) -> Result<Sticker, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetSticker,
             &format!("/stickers/{}", sticker_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn list_sticker_packs(&self) -> Result<StickerPackList, DiscordError> {
-        self.request_typed(Method::GET, "/sticker-packs", Option::<&Value>::None)
+        self.send(RouteId::ListStickerPacks, "/sticker-packs", NO_BODY)
             .await
     }
 
@@ -28,10 +30,10 @@ impl RestClient {
         &self,
         pack_id: StickerPackId,
     ) -> Result<StickerPack, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetStickerPack,
             &format!("/sticker-packs/{}", pack_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -40,10 +42,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<Sticker>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListGuildStickers,
             &format!("/guilds/{}/stickers", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -53,10 +55,10 @@ impl RestClient {
         guild_id: GuildId,
         sticker_id: StickerId,
     ) -> Result<Sticker, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildSticker,
             &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -69,13 +71,13 @@ impl RestClient {
     ) -> Result<Sticker, DiscordError> {
         let path = format!("/guilds/{}/stickers", guild_id);
         decode_response(
-            self.request_with_headers(
-                Method::POST,
+            self.send_response(
+                RouteId::CreateGuildSticker,
                 &path,
-                Some(RequestBody::StickerMultipart {
+                Ok(Some(RequestBody::StickerMultipart {
                     payload_json: body.clone(),
                     file,
-                }),
+                })),
             )
             .await,
         )
@@ -92,13 +94,13 @@ impl RestClient {
     {
         let path = format!("/guilds/{}/stickers", guild_id);
         decode_response(
-            self.request_with_headers(
-                Method::POST,
+            self.send_response(
+                RouteId::CreateGuildSticker,
                 &path,
-                Some(RequestBody::StickerMultipart {
+                Ok(Some(RequestBody::StickerMultipart {
                     payload_json: serialize_body(body)?,
                     file,
-                }),
+                })),
             )
             .await,
         )
@@ -119,10 +121,10 @@ impl RestClient {
         sticker_id: StickerId,
         body: &Value,
     ) -> Result<Sticker, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildSticker,
             &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -136,10 +138,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildSticker,
             &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -159,10 +161,10 @@ impl RestClient {
         guild_id: GuildId,
         sticker_id: StickerId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildSticker,
             &format!("/guilds/{}/stickers/{}", guild_id, sticker_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -172,10 +174,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: &Value,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::POST,
+        self.send_unit(
+            RouteId::SendSoundboardSound,
             &format!("/channels/{}/send-soundboard-sound", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -183,10 +185,10 @@ impl RestClient {
     pub async fn list_default_soundboard_sounds(
         &self,
     ) -> Result<Vec<SoundboardSound>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListDefaultSoundboardSounds,
             "/soundboard-default-sounds",
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -195,10 +197,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<SoundboardSoundList, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListGuildSoundboardSounds,
             &format!("/guilds/{}/soundboard-sounds", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -208,10 +210,10 @@ impl RestClient {
         guild_id: GuildId,
         sound_id: SoundboardSoundId,
     ) -> Result<SoundboardSound, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildSoundboardSound,
             &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -221,10 +223,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildSoundboardSound,
             &format!("/guilds/{}/soundboard-sounds", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -235,10 +237,10 @@ impl RestClient {
         sound_id: SoundboardSoundId,
         body: &Value,
     ) -> Result<SoundboardSound, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildSoundboardSound,
             &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -248,10 +250,10 @@ impl RestClient {
         guild_id: GuildId,
         sound_id: SoundboardSoundId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildSoundboardSound,
             &format!("/guilds/{}/soundboard-sounds/{}", guild_id, sound_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

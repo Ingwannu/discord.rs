@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel, Lobby,
@@ -11,7 +8,7 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-use super::{validate_authorization_token, RequestAuthorization, RestClient};
+use super::{json_body, validate_authorization_token, RestClient, RouteId, NO_BODY};
 
 /// Upper bound of `limit` on Get Lobby Messages, which accepts 1-200
 /// (Discord docs: Lobby › Get Lobby Messages).
@@ -20,16 +17,16 @@ const MAX_LOBBY_MESSAGES_LIMIT: u8 = 200;
 impl RestClient {
     /// Creates a Discord lobby owned by the configured application.
     pub async fn create_lobby(&self, body: &CreateLobby) -> Result<Lobby, DiscordError> {
-        self.request_typed(Method::POST, "/lobbies", Some(body))
+        self.send(RouteId::CreateLobby, "/lobbies", json_body(body))
             .await
     }
 
     /// Returns one lobby by ID.
     pub async fn get_lobby(&self, lobby_id: LobbyId) -> Result<Lobby, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetLobby,
             &format!("/lobbies/{}", lobby_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -40,16 +37,20 @@ impl RestClient {
         lobby_id: LobbyId,
         body: &ModifyLobby,
     ) -> Result<Lobby, DiscordError> {
-        self.request_typed(Method::PATCH, &format!("/lobbies/{}", lobby_id), Some(body))
-            .await
+        self.send(
+            RouteId::ModifyLobby,
+            &format!("/lobbies/{}", lobby_id),
+            json_body(body),
+        )
+        .await
     }
 
     /// Deletes one lobby.
     pub async fn delete_lobby(&self, lobby_id: LobbyId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteLobby,
             &format!("/lobbies/{}", lobby_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -61,10 +62,10 @@ impl RestClient {
         user_id: UserId,
         body: &AddLobbyMember,
     ) -> Result<LobbyMember, DiscordError> {
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::AddLobbyMember,
             &format!("/lobbies/{}/members/{}", lobby_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -75,10 +76,10 @@ impl RestClient {
         lobby_id: LobbyId,
         body: &[LobbyMemberUpdate],
     ) -> Result<Vec<LobbyMember>, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::BulkUpdateLobbyMembers,
             &format!("/lobbies/{}/members/bulk", lobby_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -89,10 +90,10 @@ impl RestClient {
         lobby_id: LobbyId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveLobbyMember,
             &format!("/lobbies/{}/members/{}", lobby_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -104,11 +105,11 @@ impl RestClient {
         lobby_id: LobbyId,
     ) -> Result<(), DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_with_headers_authorized(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::DELETE,
+        self.send_bearer_unit(
+            RouteId::LeaveLobby,
+            bearer_token,
             &format!("/lobbies/{}/members/@me", lobby_id),
-            None,
+            NO_BODY,
         )
         .await
         .map(|_| ())
@@ -122,11 +123,11 @@ impl RestClient {
         body: &LinkLobbyChannel,
     ) -> Result<Lobby, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::PATCH,
+        self.send_bearer(
+            RouteId::LinkChannelToLobby,
+            bearer_token,
             &format!("/lobbies/{}/channel-linking", lobby_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -138,13 +139,13 @@ impl RestClient {
         message_id: MessageId,
         metadata: &HashMap<String, String>,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::UpdateLobbyMessageModerationMetadata,
             &format!(
                 "/lobbies/{}/messages/{}/moderation-metadata",
                 lobby_id, message_id
             ),
-            Some(metadata),
+            json_body(metadata),
         )
         .await
     }
@@ -158,11 +159,11 @@ impl RestClient {
         body: &GetOrCreateLobby,
     ) -> Result<Lobby, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::PUT,
+        self.send_bearer(
+            RouteId::CreateOrJoinLobby,
+            bearer_token,
             "/lobbies",
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -176,11 +177,11 @@ impl RestClient {
         body: &CreateLobbyMessage,
     ) -> Result<LobbyMessage, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::POST,
+        self.send_bearer(
+            RouteId::SendLobbyMessage,
+            bearer_token,
             &format!("/lobbies/{}/messages", lobby_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -204,11 +205,11 @@ impl RestClient {
             }
             None => String::new(),
         };
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::GET,
+        self.send_bearer(
+            RouteId::GetLobbyMessages,
+            bearer_token,
             &format!("/lobbies/{}/messages{query}", lobby_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -221,11 +222,11 @@ impl RestClient {
         lobby_id: LobbyId,
     ) -> Result<LobbyInvite, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::POST,
+        self.send_bearer(
+            RouteId::CreateLobbyChannelInviteForSelf,
+            bearer_token,
             &format!("/lobbies/{}/members/@me/invites", lobby_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -237,10 +238,10 @@ impl RestClient {
         lobby_id: LobbyId,
         user_id: UserId,
     ) -> Result<LobbyInvite, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateLobbyChannelInviteForUser,
             &format!("/lobbies/{}/members/{}/invites", lobby_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

@@ -1,21 +1,17 @@
 //! Gateway discovery endpoints.
 
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{Gateway, GatewayBot};
 
-use super::RestClient;
+use super::{RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_gateway_bot(&self) -> Result<GatewayBot, DiscordError> {
-        self.request_typed(Method::GET, "/gateway/bot", Option::<&Value>::None)
+        self.send(RouteId::GetGatewayBot, "/gateway/bot", NO_BODY)
             .await
     }
 
     pub async fn get_gateway(&self) -> Result<Gateway, DiscordError> {
-        self.request_typed(Method::GET, "/gateway", Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetGateway, "/gateway", NO_BODY).await
     }
 }

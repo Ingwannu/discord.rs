@@ -1,7 +1,6 @@
 //! Guild endpoints: fetch/modify a guild, guild preview, incident actions, and
 //! the deprecated guild-creation/ownership routes.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -11,7 +10,7 @@ use crate::model::{
 };
 
 use super::paths::{self, get_guild_query};
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_guild(&self, guild_id: GuildId) -> Result<Guild, DiscordError> {
@@ -25,10 +24,10 @@ impl RestClient {
         query: &GetGuildQuery,
     ) -> Result<Guild, DiscordError> {
         let query = get_guild_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuild,
             &format!("/guilds/{}{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -49,8 +48,12 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(Method::PATCH, &format!("/guilds/{}", guild_id), Some(body))
-            .await
+        self.send(
+            RouteId::ModifyGuild,
+            &format!("/guilds/{}", guild_id),
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn modify_guild(
@@ -65,10 +68,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildPreview,
             &format!("/guilds/{}/preview", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -77,10 +80,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<GuildPreview, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildPreview,
             &format!("/guilds/{}/preview", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -90,10 +93,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &ModifyGuildIncidentActions,
     ) -> Result<GuildIncidentsData, DiscordError> {
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::ModifyGuildIncidentActions,
             &format!("/guilds/{}/incident-actions", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -111,7 +114,7 @@ impl RestClient {
         &self,
         body: &crate::model::CreateGuild,
     ) -> Result<Guild, DiscordError> {
-        self.request_typed(Method::POST, "/guilds", Some(body))
+        self.send(RouteId::CreateGuild, "/guilds", json_body(body))
             .await
     }
 
@@ -123,10 +126,10 @@ impl RestClient {
         note = "Discord removed guild creation and bot guild ownership on 2025-07-15; this route is no longer documented or usable by bots"
     )]
     pub async fn delete_guild(&self, guild_id: GuildId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuild,
             &format!("/guilds/{}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -145,10 +148,10 @@ impl RestClient {
     ) -> Result<Guild, DiscordError> {
         let template_code = template_code.trim();
         paths::validate_template_code(template_code)?;
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildFromTemplate,
             &format!("/guilds/templates/{template_code}"),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -165,10 +168,10 @@ impl RestClient {
         guild_id: GuildId,
         level: crate::model::MfaLevel,
     ) -> Result<crate::model::GuildMfaLevel, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::ModifyGuildMfaLevel,
             &format!("/guilds/{}/mfa", guild_id),
-            Some(&crate::model::GuildMfaLevel::new(level)),
+            json_body(&crate::model::GuildMfaLevel::new(level)),
         )
         .await
     }

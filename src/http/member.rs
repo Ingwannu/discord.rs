@@ -1,6 +1,5 @@
 //! Guild member endpoints: list, search, add, modify, remove, and member roles.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -9,7 +8,7 @@ use crate::model::{
 };
 
 use super::paths::{guild_members_query, search_guild_members_query};
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_guild_members(
@@ -33,10 +32,10 @@ impl RestClient {
         query: &GuildMembersQuery,
     ) -> Result<Vec<Member>, DiscordError> {
         let query = guild_members_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListGuildMembers,
             &format!("/guilds/{}/members{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -51,10 +50,10 @@ impl RestClient {
         user_id: UserId,
         body: &AddGuildMember,
     ) -> Result<Option<Member>, DiscordError> {
-        self.request_optional_typed_no_content(
-            Method::PUT,
+        self.send_optional(
+            RouteId::AddGuildMember,
             &format!("/guilds/{}/members/{}", guild_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -64,10 +63,10 @@ impl RestClient {
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveGuildMember,
             &format!("/guilds/{}/members/{}", guild_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -78,10 +77,10 @@ impl RestClient {
         user_id: UserId,
         role_id: RoleId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::AddGuildMemberRole,
             &format!("/guilds/{}/members/{}/roles/{}", guild_id, user_id, role_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -92,10 +91,10 @@ impl RestClient {
         user_id: UserId,
         role_id: RoleId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveGuildMemberRole,
             &format!("/guilds/{}/members/{}/roles/{}", guild_id, user_id, role_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -105,10 +104,10 @@ impl RestClient {
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<Member, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildMember,
             &format!("/guilds/{}/members/{}", guild_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -132,10 +131,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_no_content(
-            Method::PATCH,
+        self.send_unit(
+            RouteId::ModifyGuildMember,
             &format!("/guilds/{}/members/{}", guild_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -146,10 +145,10 @@ impl RestClient {
         nick: Option<&str>,
     ) -> Result<(), DiscordError> {
         let body = serde_json::json!({ "nick": nick });
-        self.request_no_content(
-            Method::PATCH,
+        self.send_unit(
+            RouteId::ModifyCurrentUserNick,
             &format!("/guilds/{}/members/@me/nick", guild_id),
-            Some(&body),
+            json_body(&body),
         )
         .await
     }
@@ -162,10 +161,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyCurrentMember,
             &format!("/guilds/{}/members/@me", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -193,7 +192,6 @@ impl RestClient {
     ) -> Result<Vec<Member>, DiscordError> {
         let query = search_guild_members_query(query);
         let path = format!("/guilds/{}/members/search{}", guild_id, query);
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::SearchGuildMembers, &path, NO_BODY).await
     }
 }

@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DiscordError;
+use crate::http::RouteId;
 use crate::model::ApplicationIntegrationType;
 use crate::types::invalid_data_error;
 
@@ -165,7 +166,11 @@ impl OAuth2Client {
         }
         let response = self
             .client
-            .post(format!("{}/oauth2/token/revoke", self.api_base()))
+            .post(format!(
+                "{}{}",
+                self.api_base(),
+                RouteId::OAuth2TokenRevocation.template()
+            ))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(encode_owned_form_pairs(&form))
             .send()
@@ -185,7 +190,11 @@ impl OAuth2Client {
     ) -> Result<OAuth2TokenResponse, DiscordError> {
         let response = self
             .client
-            .post(format!("{}/oauth2/token", self.api_base()))
+            .post(format!(
+                "{}{}",
+                self.api_base(),
+                RouteId::OAuth2TokenExchange.template()
+            ))
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(encode_owned_form_pairs(form))
             .send()

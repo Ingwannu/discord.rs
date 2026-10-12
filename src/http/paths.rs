@@ -10,6 +10,8 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
+use super::RouteId;
+
 /// The client's application ID as a path parameter. An unset ID becomes an
 /// error here instead of a `/applications/0/...` request.
 pub(crate) fn configured_application_id(
@@ -609,22 +611,13 @@ pub(crate) fn redact_path_tokens(path: &str) -> String {
     redacted
 }
 
-/// What a request does, for policies that depend on the operation rather
-/// than on the HTTP method alone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RouteOperation {
-    /// `POST /channels/{channel.id}/messages`: the one route whose
-    /// `nonce` + `enforce_nonce` contract makes a replay safe.
-    CreateChannelMessage,
-    Other,
-}
-
 /// Rate-limit and retry identity of one REST request, derived once from the
 /// method and path.
 ///
 /// Execution decisions (bucket scoping, replay safety) read these fields
-/// directly instead of re-parsing a display string. Phase 8's API drift
-/// report is meant to consume the same metadata. The route token itself is
+/// directly instead of re-parsing a display string. `id` is the manifest
+/// route (`http/routes.rs`) the endpoint named, which the replay policy and
+/// the drift report share; raw requests have none. The route token itself is
 /// deliberately not stored; see [`route_token`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RequestRoute {
@@ -634,11 +627,12 @@ pub(crate) struct RequestRoute {
     /// Major-parameter scope (for example `channels/123`,
     /// `webhooks/1/:token-…`) that Discord's bucket hash excludes.
     pub(crate) major_scope: String,
-    pub(crate) operation: RouteOperation,
+    /// The manifest route, or `None` for a raw request.
+    pub(crate) id: Option<RouteId>,
 }
 
 impl RequestRoute {
-    pub(crate) fn new(method: &Method, path: &str) -> Self {
+    pub(crate) fn new(method: &Method, path: &str, id: Option<RouteId>) -> Self {
         let segments = path
             .split('?')
             .next()
@@ -682,19 +676,10 @@ impl RequestRoute {
             .collect::<Vec<_>>()
             .join("/");
 
-        let operation = match (method, segments.as_slice()) {
-            (&Method::POST, ["channels", channel_id, "messages"])
-                if channel_id.chars().all(|ch| ch.is_ascii_digit()) =>
-            {
-                RouteOperation::CreateChannelMessage
-            }
-            _ => RouteOperation::Other,
-        };
-
         Self {
             key: format!("{method}:{}", normalized.join("/")),
             major_scope,
-            operation,
+            id,
         }
     }
 }
@@ -702,5 +687,5 @@ impl RequestRoute {
 /// Builds the rate-limit route key; see [`RequestRoute::key`].
 #[cfg(test)]
 pub(crate) fn rate_limit_route_key(method: &Method, path: &str) -> String {
-    RequestRoute::new(method, path).key
+    RequestRoute::new(method, path, None).key
 }

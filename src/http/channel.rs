@@ -1,7 +1,6 @@
 //! Channel endpoints: channel CRUD, guild channel lists and positions, DM and
 //! group DM channels, typing, permission overwrites, and announcement follows.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -11,23 +10,23 @@ use crate::model::{
     ModifyGuildChannelPosition, OverwriteTarget, UserId,
 };
 
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_channel(&self, channel_id: ChannelId) -> Result<Channel, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetChannel,
             &format!("/channels/{}", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn delete_channel(&self, channel_id: ChannelId) -> Result<Channel, DiscordError> {
-        self.request_typed(
-            Method::DELETE,
+        self.send(
+            RouteId::DeleteChannel,
             &format!("/channels/{}", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -48,10 +47,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyChannel,
             &format!("/channels/{}", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -60,10 +59,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<Channel>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildChannels,
             &format!("/guilds/{}/channels", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -84,10 +83,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildChannel,
             &format!("/guilds/{}/channels", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -109,10 +108,10 @@ impl RestClient {
         guild_id: GuildId,
         positions: &[ModifyGuildChannelPosition],
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PATCH,
+        self.send_unit(
+            RouteId::ModifyGuildChannelPositions,
             &format!("/guilds/{}/channels", guild_id),
-            Some(positions),
+            json_body(positions),
         )
         .await
     }
@@ -121,7 +120,7 @@ impl RestClient {
         &self,
         body: &CreateDmChannel,
     ) -> Result<Channel, DiscordError> {
-        self.request_typed(Method::POST, "/users/@me/channels", Some(body))
+        self.send(RouteId::CreateDm, "/users/@me/channels", json_body(body))
             .await
     }
 
@@ -129,8 +128,12 @@ impl RestClient {
         &self,
         body: &CreateGroupDmChannel,
     ) -> Result<Channel, DiscordError> {
-        self.request_typed(Method::POST, "/users/@me/channels", Some(body))
-            .await
+        self.send(
+            RouteId::CreateGroupDm,
+            "/users/@me/channels",
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn add_group_dm_recipient(
@@ -139,10 +142,10 @@ impl RestClient {
         user_id: UserId,
         body: &AddGroupDmRecipient,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::GroupDmAddRecipient,
             &format!("/channels/{}/recipients/{}", channel_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -152,10 +155,10 @@ impl RestClient {
         channel_id: ChannelId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::GroupDmRemoveRecipient,
             &format!("/channels/{}/recipients/{}", channel_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -164,10 +167,10 @@ impl RestClient {
         &self,
         channel_id: ChannelId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::POST,
+        self.send_unit(
+            RouteId::TriggerTypingIndicator,
             &format!("/channels/{}/typing", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -181,10 +184,10 @@ impl RestClient {
         target: OverwriteTarget,
         body: &Value,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::EditChannelPermissions,
             &format!("/channels/{}/permissions/{}", channel_id, target.id()),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -208,10 +211,10 @@ impl RestClient {
                 target.kind().get()
             )));
         }
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::EditChannelPermissions,
             &format!("/channels/{}/permissions/{}", channel_id, target.id()),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -222,10 +225,10 @@ impl RestClient {
         channel_id: ChannelId,
         target: OverwriteTarget,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteChannelPermission,
             &format!("/channels/{}/permissions/{}", channel_id, target.id()),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -235,10 +238,10 @@ impl RestClient {
         channel_id: ChannelId,
         webhook_channel_id: ChannelId,
     ) -> Result<FollowedChannel, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::FollowAnnouncementChannel,
             &format!("/channels/{}/followers", channel_id),
-            Some(&serde_json::json!({ "webhook_channel_id": webhook_channel_id })),
+            json_body(&serde_json::json!({ "webhook_channel_id": webhook_channel_id })),
         )
         .await
     }

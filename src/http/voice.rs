@@ -1,7 +1,6 @@
 //! Voice endpoints: voice channel status, stage instances, voice regions, and
 //! voice states.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -10,7 +9,7 @@ use crate::model::{
     ModifyUserVoiceState, SetVoiceChannelStatus, StageInstance, UserId, VoiceRegion, VoiceState,
 };
 
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn set_voice_channel_status(
@@ -18,10 +17,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: &SetVoiceChannelStatus,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::SetVoiceChannelStatus,
             &format!("/channels/{}/voice-status", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -37,8 +36,12 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(Method::POST, "/stage-instances", Some(body))
-            .await
+        self.send(
+            RouteId::CreateStageInstance,
+            "/stage-instances",
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn create_stage_instance_from_request(
@@ -52,10 +55,10 @@ impl RestClient {
         &self,
         channel_id: ChannelId,
     ) -> Result<StageInstance, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetStageInstance,
             &format!("/stage-instances/{}", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -76,10 +79,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyStageInstance,
             &format!("/stage-instances/{}", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -93,21 +96,21 @@ impl RestClient {
     }
 
     pub async fn delete_stage_instance(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteStageInstance,
             &format!("/stage-instances/{}", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn get_voice_regions(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
-        self.request_typed(Method::GET, "/voice/regions", Option::<&Value>::None)
+        self.send(RouteId::ListVoiceRegions, "/voice/regions", NO_BODY)
             .await
     }
 
     pub async fn get_voice_regions_typed(&self) -> Result<Vec<VoiceRegion>, DiscordError> {
-        self.request_typed(Method::GET, "/voice/regions", Option::<&Value>::None)
+        self.send(RouteId::ListVoiceRegions, "/voice/regions", NO_BODY)
             .await
     }
 
@@ -115,10 +118,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<VoiceRegion>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildVoiceRegions,
             &format!("/guilds/{}/regions", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -127,10 +130,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<VoiceState, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetCurrentUserVoiceState,
             &format!("/guilds/{}/voice-states/@me", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -140,10 +143,10 @@ impl RestClient {
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<VoiceState, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetUserVoiceState,
             &format!("/guilds/{}/voice-states/{}", guild_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -156,10 +159,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_no_content(
-            Method::PATCH,
+        self.send_unit(
+            RouteId::ModifyCurrentUserVoiceState,
             &format!("/guilds/{}/voice-states/@me", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -181,10 +184,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_no_content(
-            Method::PATCH,
+        self.send_unit(
+            RouteId::ModifyUserVoiceState,
             &format!("/guilds/{}/voice-states/{}", guild_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }

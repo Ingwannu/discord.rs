@@ -1,20 +1,19 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{AutoModerationRule, AutoModerationRuleId, GuildId};
 
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_auto_moderation_rules(
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListAutoModerationRulesForGuild,
             &format!("/guilds/{}/auto-moderation/rules", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -23,10 +22,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<AutoModerationRule>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListAutoModerationRulesForGuild,
             &format!("/guilds/{}/auto-moderation/rules", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -36,10 +35,10 @@ impl RestClient {
         guild_id: GuildId,
         rule_id: AutoModerationRuleId,
     ) -> Result<AutoModerationRule, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -49,10 +48,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::CreateAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -65,10 +64,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -79,10 +78,10 @@ impl RestClient {
         rule_id: AutoModerationRuleId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -96,10 +95,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -109,10 +108,10 @@ impl RestClient {
         guild_id: GuildId,
         rule_id: AutoModerationRuleId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteAutoModerationRule,
             &format!("/guilds/{}/auto-moderation/rules/{}", guild_id, rule_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

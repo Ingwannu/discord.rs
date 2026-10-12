@@ -1,6 +1,5 @@
 //! Invite endpoints, including channel invites and invite target users.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -10,19 +9,21 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-use super::body::{named_file_multipart_body, payload_named_file_multipart_body};
+use super::body::{
+    named_file_multipart_body, optional_json_body, payload_named_file_multipart_body,
+};
 use super::paths::{invite_query, validate_token_path_segment};
-use super::{decode_response, FileAttachment, RequestAuthorization, RestClient};
+use super::{decode_response, json_body, FileAttachment, RestClient, RouteId, NO_BODY};
 
 /// Discord's per-request cap for invite target-user bulk add/delete.
 const MAX_INVITE_TARGET_USERS: usize = 1000;
 
 impl RestClient {
     pub async fn get_guild_invites(&self, guild_id: GuildId) -> Result<Vec<Invite>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildInvites,
             &format!("/guilds/{}/invites", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -30,12 +31,8 @@ impl RestClient {
     pub async fn get_invite(&self, code: &str) -> Result<Invite, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_typed(
-            Method::GET,
-            &format!("/invites/{code}"),
-            Option::<&Value>::None,
-        )
-        .await
+        self.send(RouteId::GetInvite, &format!("/invites/{code}"), NO_BODY)
+            .await
     }
 
     pub async fn get_invite_with_options(
@@ -47,13 +44,13 @@ impl RestClient {
     ) -> Result<Invite, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetInvite,
             &format!(
                 "/invites/{code}{}",
                 invite_query(with_counts, with_expiration, guild_scheduled_event_id)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -61,20 +58,15 @@ impl RestClient {
     pub async fn delete_invite(&self, code: &str) -> Result<Invite, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_typed(
-            Method::DELETE,
-            &format!("/invites/{code}"),
-            Option::<&Value>::None,
-        )
-        .await
+        self.send(RouteId::DeleteInvite, &format!("/invites/{code}"), NO_BODY)
+            .await
     }
 
     pub async fn get_invite_target_users(&self, code: &str) -> Result<Vec<u8>, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_bytes_with_authorization(
-            RequestAuthorization::Auto,
-            Method::GET,
+        self.send_bytes(
+            RouteId::GetTargetUsers,
             &format!("/invites/{code}/target-users"),
         )
         .await
@@ -92,13 +84,13 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_with_headers(
-            Method::PUT,
+        self.send_response(
+            RouteId::UpdateTargetUsers,
             &format!("/invites/{code}/target-users"),
-            Some(named_file_multipart_body(
+            Ok(Some(named_file_multipart_body(
                 "target_users_file",
                 target_users_file,
-            )),
+            ))),
         )
         .await?;
         Ok(())
@@ -114,10 +106,10 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::AddTargetUser,
             &format!("/invites/{code}/target-users/{}", user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -130,10 +122,10 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveTargetUser,
             &format!("/invites/{code}/target-users/{}", user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -145,7 +137,7 @@ impl RestClient {
         code: &str,
         user_ids: &[UserId],
     ) -> Result<(), DiscordError> {
-        self.bulk_invite_target_users(code, "bulk-add", user_ids)
+        self.bulk_invite_target_users(RouteId::BulkAddTargetUsers, code, "bulk-add", user_ids)
             .await
     }
 
@@ -155,12 +147,18 @@ impl RestClient {
         code: &str,
         user_ids: &[UserId],
     ) -> Result<(), DiscordError> {
-        self.bulk_invite_target_users(code, "bulk-delete", user_ids)
-            .await
+        self.bulk_invite_target_users(
+            RouteId::BulkDeleteTargetUsers,
+            code,
+            "bulk-delete",
+            user_ids,
+        )
+        .await
     }
 
     async fn bulk_invite_target_users(
         &self,
+        route: RouteId,
         code: &str,
         action: &str,
         user_ids: &[UserId],
@@ -176,10 +174,10 @@ impl RestClient {
         let body = InviteTargetUserIds {
             user_ids: user_ids.to_vec(),
         };
-        self.request_no_content(
-            Method::POST,
+        self.send_unit(
+            route,
             &format!("/invites/{code}/target-users/{action}"),
-            Some(&body),
+            json_body(&body),
         )
         .await
     }
@@ -190,10 +188,10 @@ impl RestClient {
     ) -> Result<InviteTargetUsersJobStatus, DiscordError> {
         let code = code.trim();
         validate_token_path_segment("invite_code", code, false)?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetTargetUsersJobStatus,
             &format!("/invites/{code}/target-users/job-status"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -203,10 +201,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: Option<&Value>,
     ) -> Result<Invite, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateChannelInvite,
             &format!("/channels/{}/invites", channel_id),
-            body,
+            optional_json_body(body),
         )
         .await
     }
@@ -215,10 +213,10 @@ impl RestClient {
         &self,
         channel_id: ChannelId,
     ) -> Result<Vec<Invite>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetChannelInvites,
             &format!("/channels/{}/invites", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -228,10 +226,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: &CreateChannelInvite,
     ) -> Result<Invite, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateChannelInvite,
             &format!("/channels/{}/invites", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -243,14 +241,11 @@ impl RestClient {
         target_users_file: &FileAttachment,
     ) -> Result<Invite, DiscordError> {
         decode_response(
-            self.request_with_headers(
-                Method::POST,
+            self.send_response(
+                RouteId::CreateChannelInvite,
                 &format!("/channels/{}/invites", channel_id),
-                Some(payload_named_file_multipart_body(
-                    body,
-                    "target_users_file",
-                    target_users_file,
-                )?),
+                payload_named_file_multipart_body(body, "target_users_file", target_users_file)
+                    .map(Some),
             )
             .await,
         )

@@ -1,6 +1,5 @@
 //! Guild ban endpoints. Auto-moderation rules live in `auto_moderation.rs`.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -9,7 +8,7 @@ use crate::model::{
 };
 
 use super::paths::guild_bans_query;
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_guild_bans(
@@ -35,10 +34,10 @@ impl RestClient {
         query: &GuildBansQuery,
     ) -> Result<Vec<Ban>, DiscordError> {
         let query = guild_bans_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildBans,
             &format!("/guilds/{}/bans{}", guild_id, query),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -48,10 +47,10 @@ impl RestClient {
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<Ban, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildBan,
             &format!("/guilds/{}/bans/{}", guild_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -74,10 +73,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::CreateGuildBan,
             &format!("/guilds/{}/bans/{}", guild_id, user_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -87,10 +86,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &BulkGuildBanRequest,
     ) -> Result<BulkGuildBanResponse, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::BulkGuildBan,
             &format!("/guilds/{}/bulk-ban", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -100,10 +99,10 @@ impl RestClient {
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveGuildBan,
             &format!("/guilds/{}/bans/{}", guild_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

@@ -1,11 +1,10 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::model::{EmojiId, GuildId};
 use crate::types::Emoji;
 
-use super::{configured_application_id, RestClient};
+use super::{configured_application_id, json_body, RestClient, RouteId, NO_BODY};
 
 #[derive(Debug, serde::Deserialize)]
 struct EmojiListResponse {
@@ -18,10 +17,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<serde_json::Value>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListGuildEmojis,
             &format!("/guilds/{}/emojis", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -30,10 +29,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<Emoji>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListGuildEmojis,
             &format!("/guilds/{}/emojis", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -43,10 +42,10 @@ impl RestClient {
         guild_id: GuildId,
         emoji_id: EmojiId,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildEmoji,
             &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -56,10 +55,10 @@ impl RestClient {
         guild_id: GuildId,
         emoji_id: EmojiId,
     ) -> Result<Emoji, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildEmoji,
             &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -69,10 +68,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildEmoji,
             &format!("/guilds/{}/emojis", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -85,10 +84,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildEmoji,
             &format!("/guilds/{}/emojis", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -99,10 +98,10 @@ impl RestClient {
         emoji_id: EmojiId,
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildEmoji,
             &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -116,10 +115,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildEmoji,
             &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -129,21 +128,21 @@ impl RestClient {
         guild_id: GuildId,
         emoji_id: EmojiId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildEmoji,
             &format!("/guilds/{}/emojis/{}", guild_id, emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn get_application_emojis(&self) -> Result<Vec<serde_json::Value>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        let response = self
-            .request(
-                Method::GET,
+        let response: Value = self
+            .send(
+                RouteId::ListApplicationEmojis,
                 &format!("/applications/{application_id}/emojis"),
-                Option::<&Value>::None,
+                NO_BODY,
             )
             .await?;
         Ok(response
@@ -156,10 +155,10 @@ impl RestClient {
     pub async fn get_application_emojis_typed(&self) -> Result<Vec<Emoji>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
         let response: EmojiListResponse = self
-            .request_typed(
-                Method::GET,
+            .send(
+                RouteId::ListApplicationEmojis,
                 &format!("/applications/{application_id}/emojis"),
-                Option::<&Value>::None,
+                NO_BODY,
             )
             .await?;
         Ok(response.items)
@@ -170,10 +169,10 @@ impl RestClient {
         emoji_id: EmojiId,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationEmoji,
             &format!("/applications/{application_id}/emojis/{}", emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -183,10 +182,10 @@ impl RestClient {
         emoji_id: EmojiId,
     ) -> Result<Emoji, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationEmoji,
             &format!("/applications/{application_id}/emojis/{}", emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -196,10 +195,10 @@ impl RestClient {
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::CreateApplicationEmoji,
             &format!("/applications/{application_id}/emojis"),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -209,10 +208,10 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateApplicationEmoji,
             &format!("/applications/{application_id}/emojis"),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -223,10 +222,10 @@ impl RestClient {
         body: &Value,
     ) -> Result<serde_json::Value, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyApplicationEmoji,
             &format!("/applications/{application_id}/emojis/{}", emoji_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -240,20 +239,20 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyApplicationEmoji,
             &format!("/applications/{application_id}/emojis/{}", emoji_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
 
     pub async fn delete_application_emoji(&self, emoji_id: EmojiId) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteApplicationEmoji,
             &format!("/applications/{application_id}/emojis/{}", emoji_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

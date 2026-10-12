@@ -1,13 +1,10 @@
 //! Guild audit log endpoints.
 
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{AuditLog, AuditLogActionType, AuditLogEntryId, AuditLogQuery, GuildId, UserId};
 
 use super::paths::audit_log_query;
-use super::RestClient;
+use super::{RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     /// Fetches a guild audit log as raw JSON.
@@ -30,10 +27,10 @@ impl RestClient {
             after: None,
             limit,
         });
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildAuditLog,
             &format!("/guilds/{}/audit-logs{}", guild_id, query),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -44,10 +41,10 @@ impl RestClient {
         query: &AuditLogQuery,
     ) -> Result<AuditLog, DiscordError> {
         let query = audit_log_query(query);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildAuditLog,
             &format!("/guilds/{}/audit-logs{}", guild_id, query),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

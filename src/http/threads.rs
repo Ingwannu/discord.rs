@@ -1,4 +1,3 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -8,8 +7,8 @@ use crate::model::{
 };
 
 use super::{
-    archived_threads_query, bool_query, joined_archived_threads_query, thread_member_query,
-    RestClient,
+    archived_threads_query, bool_query, joined_archived_threads_query, json_body,
+    thread_member_query, RestClient, RouteId, NO_BODY,
 };
 
 impl RestClient {
@@ -19,10 +18,10 @@ impl RestClient {
         message_id: MessageId,
         body: &Value,
     ) -> Result<Channel, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::StartThreadFromMessage,
             &format!("/channels/{}/messages/{}/threads", channel_id, message_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -32,19 +31,19 @@ impl RestClient {
         channel_id: ChannelId,
         body: &Value,
     ) -> Result<Channel, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::StartThreadWithoutMessage,
             &format!("/channels/{}/threads", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
 
     pub async fn join_thread(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::JoinThread,
             &format!("/channels/{}/thread-members/@me", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -54,19 +53,19 @@ impl RestClient {
         channel_id: ChannelId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::PUT,
+        self.send_unit(
+            RouteId::AddThreadMember,
             &format!("/channels/{}/thread-members/{}", channel_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn leave_thread(&self, channel_id: ChannelId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::LeaveThread,
             &format!("/channels/{}/thread-members/@me", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -76,10 +75,10 @@ impl RestClient {
         channel_id: ChannelId,
         user_id: UserId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::RemoveThreadMember,
             &format!("/channels/{}/thread-members/{}", channel_id, user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -91,13 +90,13 @@ impl RestClient {
         with_member: Option<bool>,
     ) -> Result<ThreadMember, DiscordError> {
         let query = bool_query("with_member", with_member);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetThreadMember,
             &format!(
                 "/channels/{}/thread-members/{}{}",
                 channel_id, user_id, query
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -115,14 +114,14 @@ impl RestClient {
         channel_id: ChannelId,
         query: &ThreadMemberQuery,
     ) -> Result<Vec<ThreadMember>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListThreadMembers,
             &format!(
                 "/channels/{}/thread-members{}",
                 channel_id,
                 thread_member_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -144,7 +143,7 @@ impl RestClient {
             ),
             None => format!("/channels/{}/threads/archived/public", channel_id),
         };
-        self.request(Method::GET, &path, Option::<&Value>::None)
+        self.send(RouteId::ListPublicArchivedThreads, &path, NO_BODY)
             .await
     }
 
@@ -153,14 +152,14 @@ impl RestClient {
         channel_id: ChannelId,
         query: &ArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListPublicArchivedThreads,
             &format!(
                 "/channels/{}/threads/archived/public{}",
                 channel_id,
                 archived_threads_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -170,14 +169,14 @@ impl RestClient {
         channel_id: ChannelId,
         query: &ArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListPrivateArchivedThreads,
             &format!(
                 "/channels/{}/threads/archived/private{}",
                 channel_id,
                 archived_threads_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -187,14 +186,14 @@ impl RestClient {
         channel_id: ChannelId,
         query: &JoinedArchivedThreadsQuery,
     ) -> Result<ThreadListResponse, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListJoinedPrivateArchivedThreads,
             &format!(
                 "/channels/{}/users/@me/threads/archived/private{}",
                 channel_id,
                 joined_archived_threads_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -203,10 +202,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<ThreadListResponse, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListActiveGuildThreads,
             &format!("/guilds/{}/threads/active", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

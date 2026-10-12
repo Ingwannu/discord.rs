@@ -1,7 +1,6 @@
 //! Auxiliary guild endpoints: integrations, prune, vanity URL, widget, welcome
 //! screen, onboarding, and templates.
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -13,17 +12,17 @@ use crate::model::{
 };
 
 use super::paths::{guild_prune_query, validate_token_path_segment};
-use super::{RequestAuthorization, RestClient};
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_guild_integrations(
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<Integration>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildIntegrations,
             &format!("/guilds/{}/integrations", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -33,10 +32,10 @@ impl RestClient {
         guild_id: GuildId,
         integration_id: IntegrationId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildIntegration,
             &format!("/guilds/{}/integrations/{}", guild_id, integration_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -48,10 +47,10 @@ impl RestClient {
         include_roles: &[RoleId],
     ) -> Result<serde_json::Value, DiscordError> {
         let query = guild_prune_query(days, None, include_roles);
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildPruneCount,
             &format!("/guilds/{}/prune{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -63,10 +62,10 @@ impl RestClient {
         include_roles: &[RoleId],
     ) -> Result<GuildPruneCount, DiscordError> {
         let query = guild_prune_query(days, None, include_roles);
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildPruneCount,
             &format!("/guilds/{}/prune{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -79,10 +78,10 @@ impl RestClient {
         include_roles: &[RoleId],
     ) -> Result<serde_json::Value, DiscordError> {
         let query = guild_prune_query(days, compute_prune_count, include_roles);
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::BeginGuildPrune,
             &format!("/guilds/{}/prune{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -95,10 +94,10 @@ impl RestClient {
         include_roles: &[RoleId],
     ) -> Result<GuildPruneResult, DiscordError> {
         let query = guild_prune_query(days, compute_prune_count, include_roles);
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::BeginGuildPrune,
             &format!("/guilds/{}/prune{query}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -111,10 +110,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::BeginGuildPrune,
             &format!("/guilds/{}/prune", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -128,10 +127,10 @@ impl RestClient {
     }
 
     pub async fn get_guild_vanity_url(&self, guild_id: GuildId) -> Result<VanityUrl, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildVanityUrl,
             &format!("/guilds/{}/vanity-url", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -140,10 +139,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<GuildWidgetSettings, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildWidgetSettings,
             &format!("/guilds/{}/widget", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -165,10 +164,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildWidget,
             &format!("/guilds/{}/widget", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -186,10 +185,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<serde_json::Value, DiscordError> {
-        self.request(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildWidget,
             &format!("/guilds/{}/widget.json", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -198,10 +197,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<GuildWidget, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildWidget,
             &format!("/guilds/{}/widget.json", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -218,9 +217,8 @@ impl RestClient {
         let query = style
             .map(|style| format!("?style={}", style.as_str()))
             .unwrap_or_default();
-        self.request_bytes_with_authorization(
-            RequestAuthorization::None,
-            Method::GET,
+        self.send_bytes(
+            RouteId::GetGuildWidgetImage,
             &format!("/guilds/{}/widget.png{query}", guild_id),
         )
         .await
@@ -230,10 +228,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<WelcomeScreen, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildWelcomeScreen,
             &format!("/guilds/{}/welcome-screen", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -254,10 +252,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildWelcomeScreen,
             &format!("/guilds/{}/welcome-screen", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -274,10 +272,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<GuildOnboarding, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildOnboarding,
             &format!("/guilds/{}/onboarding", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -298,10 +296,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::ModifyGuildOnboarding,
             &format!("/guilds/{}/onboarding", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -318,10 +316,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<GuildTemplate>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildTemplates,
             &format!("/guilds/{}/templates", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -332,10 +330,10 @@ impl RestClient {
         template_code: &str,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildTemplate,
             &format!("/guilds/templates/{template_code}"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -345,10 +343,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<GuildTemplate, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildTemplate,
             &format!("/guilds/{}/templates", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -359,10 +357,10 @@ impl RestClient {
         template_code: &str,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::SyncGuildTemplate,
             &format!("/guilds/{}/templates/{template_code}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -374,10 +372,10 @@ impl RestClient {
         body: &Value,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildTemplate,
             &format!("/guilds/{}/templates/{template_code}", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -388,10 +386,10 @@ impl RestClient {
         template_code: &str,
     ) -> Result<GuildTemplate, DiscordError> {
         validate_token_path_segment("template_code", template_code, false)?;
-        self.request_typed(
-            Method::DELETE,
+        self.send(
+            RouteId::DeleteGuildTemplate,
             &format!("/guilds/{}/templates/{template_code}", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

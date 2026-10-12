@@ -3,14 +3,11 @@
 # Every entry must carry a `reason` (15+ characters). An entry without a
 # recorded reason silences drift forever, which turns the report into noise.
 #
+# The crate's routes come from the route manifest (src/http/routes.rs), the
+# same table the REST transport executes; `--self-check` (CI, every PR) checks
+# that every endpoint method is listed there and sends its row's route.
+#
 # Tables:
-#   [[helper_route]]      documented route the crate sends through a path helper
-#                         (so no `Method::X, "/literal"` pair exists). Needs
-#                         `evidence` (substrings that must exist in non-test
-#                         src/, whitespace-insensitive) and usually `functions`
-#                         (RestClient fns that send Method::X with that
-#                         helper-built path; checked in both directions by
-#                         `--self-check`, which CI runs on every PR).
 #   [[ignored_route]]     documented route deliberately not wrapped.
 #   [[crate_only_route]]  crate route that is not a `<Route>` tag in the docs.
 #   [[non_dispatch_event]] receive-event row that is a Gateway opcode, not a
@@ -28,216 +25,25 @@ docs_route_root = "developers"
 docs_route_exclude = ["developers/change-log.mdx", "developers/change-log/"]
 docs_events_page = "developers/events/gateway-events.mdx"
 docs_events_section = "Receive Events"
-# `**` also covers the per-domain modules phase 5 plans under src/http/.
+route_manifest = "src/http/routes.rs"
+# Sources whose functions are bound to the manifest rows (and scanned for
+# endpoint methods missing from the manifest).
 rest_sources = ["src/http.rs", "src/http/**/*.rs", "src/oauth2.rs"]
 rest_sources_exclude = ["src/http/**/tests.rs", "src/http/**/tests/*"]
 event_sources = ["src/event/decode.rs"]
 event_name_pattern = '"([A-Z][A-Z0-9_]+)"\s*(?:=>|\|)'
-# Floors well below today's counts (docs 234 routes / 82 events, crate 221
-# literals / 79 events). Falling under one means the extractor no longer
-# understands the docs or the source layout, which must fail loudly instead
-# of reporting everything as missing (or nothing as missing).
+non_endpoint_functions = [
+    # The raw escape hatch: any method and path the caller chooses.
+    "request", "request_multipart", "request_typed", "request_typed_multipart",
+]
+# Floors well below today's counts (docs 234 routes / 82 events, crate 240
+# distinct manifest routes / 79 events). Falling under one means the extractor
+# no longer understands the docs or the manifest, which must fail loudly
+# instead of reporting everything as missing (or nothing as missing).
 min_docs_routes = 150
 min_crate_routes = 150
 min_docs_events = 50
 min_crate_events = 50
-
-# --- Global application commands --------------------------------------------
-# `global_commands_path` reads the configured application id and fails before
-# any request when it is unset, so the path is never a literal.
-
-[[helper_route]]
-method = "GET"
-path = "/applications/{application.id}/commands"
-functions = ["get_global_commands"]
-evidence = ['"/applications/{application_id}/commands"']
-reason = "Built by global_commands_path(), which validates the configured application id first."
-
-[[helper_route]]
-method = "POST"
-path = "/applications/{application.id}/commands"
-functions = ["create_global_command"]
-evidence = ['"/applications/{application_id}/commands"']
-reason = "Built by global_commands_path(), which validates the configured application id first."
-
-[[helper_route]]
-method = "PUT"
-path = "/applications/{application.id}/commands"
-functions = ["bulk_overwrite_global_commands_typed"]
-evidence = ['"/applications/{application_id}/commands"']
-reason = "Built by global_commands_path(), which validates the configured application id first."
-
-[[helper_route]]
-method = "GET"
-path = "/applications/{application.id}/commands/{command.id}"
-functions = ["get_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
-reason = "global_commands_path() plus '/{command_id}' appended at the call site."
-
-[[helper_route]]
-method = "PATCH"
-path = "/applications/{application.id}/commands/{command.id}"
-functions = ["edit_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
-reason = "global_commands_path() plus '/{command_id}' appended at the call site."
-
-[[helper_route]]
-method = "DELETE"
-path = "/applications/{application.id}/commands/{command.id}"
-functions = ["delete_global_command"]
-evidence = ['"/applications/{application_id}/commands"', 'format!("{}/{}", path, command_id)']
-reason = "global_commands_path() plus '/{command_id}' appended at the call site."
-
-# --- Interaction callbacks ----------------------------------------------------
-
-[[helper_route]]
-method = "POST"
-path = "/interactions/{interaction.id}/{interaction.token}/callback"
-functions = [
-    "create_interaction_response_typed",
-    "create_interaction_response_with_files",
-    "create_interaction_response_json",
-    "create_interaction_response_with_result",
-]
-evidence = ['"/interactions/{interaction_id}/{interaction_token}/callback"']
-reason = "Built by interaction_callback_path(), which validates the id and the token path segment; with_result appends ?with_response=true."
-
-# --- Webhook execution and interaction follow-ups ----------------------------
-# Webhook and follow-up routes share templates (/webhooks/{id}/{token}...);
-# the token is validated as a single safe path segment before it is placed
-# in the path, so the helpers own the format strings.
-
-[[helper_route]]
-method = "POST"
-path = "/webhooks/{webhook.id}/{webhook.token}"
-functions = [
-    "execute_webhook",
-    "execute_webhook_with_query",
-    "execute_webhook_with_files",
-    "create_followup_message_json_with_application_id",
-    "create_followup_message_with_application_id",
-    "create_followup_message_with_application_id_and_files",
-]
-evidence = [
-    '"/webhooks/{webhook_id}/{token}{suffix}{}"',
-    '"/webhooks/{application_id}/{interaction_token}"',
-]
-reason = "Execute Webhook via execute_webhook_path[_with_query](suffix None); Create Followup Message via followup_webhook_path(.., None)."
-
-[[helper_route]]
-method = "POST"
-path = "/webhooks/{webhook.id}/{webhook.token}/slack"
-functions = ["execute_slack_compatible_webhook"]
-evidence = ['"/webhooks/{webhook_id}/{token}{suffix}{}"', 'Some("/slack")']
-reason = "execute_webhook_path_with_query(.., Some(\"/slack\")) inserts the suffix before the query string."
-
-[[helper_route]]
-method = "POST"
-path = "/webhooks/{webhook.id}/{webhook.token}/github"
-functions = ["execute_github_compatible_webhook"]
-evidence = ['"/webhooks/{webhook_id}/{token}{suffix}{}"', 'Some("/github")']
-reason = "execute_webhook_path_with_query(.., Some(\"/github\")) inserts the suffix before the query string."
-
-[[helper_route]]
-method = "GET"
-path = "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}"
-functions = ["get_webhook_message", "get_webhook_message_with_query"]
-evidence = ['"/webhooks/{webhook_id}/{token}/messages/{message_id}{}"']
-reason = "Built by webhook_message_path[_with_query](); also serves Get Followup Message (same template)."
-
-[[helper_route]]
-method = "PATCH"
-path = "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}"
-functions = [
-    "edit_webhook_message",
-    "edit_webhook_message_with_query",
-    "edit_webhook_message_with_files",
-    "edit_webhook_message_with_files_and_query",
-    "edit_followup_message_with_application_id",
-    "edit_followup_message_with_application_id_and_files",
-]
-evidence = [
-    '"/webhooks/{webhook_id}/{token}/messages/{message_id}{}"',
-    '"/webhooks/{application_id}/{interaction_token}/messages/{message_id}"',
-]
-reason = "Edit Webhook Message via webhook_message_path*(); Edit Followup Message via followup_webhook_path(.., Some(id))."
-
-[[helper_route]]
-method = "DELETE"
-path = "/webhooks/{webhook.id}/{webhook.token}/messages/{message.id}"
-functions = [
-    "delete_webhook_message",
-    "delete_webhook_message_with_query",
-    "delete_followup_message_with_application_id",
-]
-evidence = [
-    '"/webhooks/{webhook_id}/{token}/messages/{message_id}{}"',
-    '"/webhooks/{application_id}/{interaction_token}/messages/{message_id}"',
-]
-reason = "Delete Webhook Message via webhook_message_path*(); Delete Followup Message via followup_webhook_path(.., Some(id))."
-
-[[helper_route]]
-method = "GET"
-path = "/webhooks/{application.id}/{interaction.token}/messages/@original"
-functions = ["get_original_interaction_response_with_application_id"]
-evidence = ['"/webhooks/{application_id}/{interaction_token}/messages/{message_id}"', 'Some("@original")']
-reason = "followup_webhook_path(.., Some(\"@original\")); the docs list @original as a literal segment."
-
-[[helper_route]]
-method = "PATCH"
-path = "/webhooks/{application.id}/{interaction.token}/messages/@original"
-functions = [
-    "edit_original_interaction_response_with_application_id",
-    "edit_original_interaction_response_with_application_id_and_files",
-]
-evidence = ['"/webhooks/{application_id}/{interaction_token}/messages/{message_id}"', 'Some("@original")']
-reason = "followup_webhook_path(.., Some(\"@original\")); the docs list @original as a literal segment."
-
-[[helper_route]]
-method = "DELETE"
-path = "/webhooks/{application.id}/{interaction.token}/messages/@original"
-functions = ["delete_original_interaction_response_with_application_id"]
-evidence = ['"/webhooks/{application_id}/{interaction_token}/messages/{message_id}"', 'Some("@original")']
-reason = "followup_webhook_path(.., Some(\"@original\")); the docs list @original as a literal segment."
-
-# --- Application Identity Profile --------------------------------------------
-
-[[helper_route]]
-method = "GET"
-path = "/applications/{application.id}/users/{user.id}/identities/{provider_issued_user_id}/profile"
-functions = ["get_application_identity_profile"]
-evidence = ['"/applications/{application_id}/users/{user_id}/identities/{external_id}/profile"']
-reason = "Built by RestClient::identity_profile_path(), which percent-encodes the caller-supplied external id as one segment."
-
-[[helper_route]]
-method = "PATCH"
-path = "/applications/{application.id}/users/{user.id}/identities/{provider_issued_user_id}/profile"
-functions = ["update_application_identity_profile"]
-evidence = ['"/applications/{application_id}/users/{user_id}/identities/{external_id}/profile"']
-reason = "Built by RestClient::identity_profile_path(), which percent-encodes the caller-supplied external id as one segment."
-
-# --- Invite target users ------------------------------------------------------
-# bulk_invite_target_users() sends POST /invites/{code}/target-users/{action}
-# with action = "bulk-add" | "bulk-delete"; the literal scanner sees only the
-# generic template.
-
-[[helper_route]]
-method = "POST"
-path = "/invites/{invite.code}/target-users/bulk-add"
-evidence = ['"/invites/{code}/target-users/{action}"', 'self.bulk_invite_target_users(code, "bulk-add"']
-reason = "bulk_add_invite_target_users() passes action \"bulk-add\" into the shared bulk_invite_target_users() template."
-
-[[helper_route]]
-method = "POST"
-path = "/invites/{invite.code}/target-users/bulk-delete"
-evidence = ['"/invites/{code}/target-users/{action}"', 'self.bulk_invite_target_users(code, "bulk-delete"']
-reason = "bulk_delete_invite_target_users() passes action \"bulk-delete\" into the shared bulk_invite_target_users() template."
-
-[[crate_only_route]]
-method = "POST"
-path = "/invites/{invite.code}/target-users/{action}"
-evidence = ['"/invites/{code}/target-users/{action}"']
-reason = "Generic template behind the bulk-add / bulk-delete helper routes above, not a route of its own."
 
 # --- Removed guild-ownership routes (deprecated in 3.0) -----------------------
 # Discord removed guild creation by applications on 2025-07-15 and transferred

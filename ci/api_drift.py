@@ -4,8 +4,8 @@
 Compares two things:
 
 * REST routes: every ``<Route method="X">path</Route>`` in
-  ``discord/discord-api-docs`` against the ``Method::X`` + path literal pairs
-  in the crate's REST sources (plus allowlisted helper-built routes).
+  ``discord/discord-api-docs`` against the rows of the crate's route manifest
+  (``src/http/routes.rs``), the table the REST transport itself executes.
 * Gateway dispatch events: the "Receive Events" table and headings of the
   docs' gateway events page against the event-name match arms in the crate's
   event decoder.
@@ -41,6 +41,30 @@ not be mistaken for "no drift".
   docs/design/3.0-types-events-requests.md 4절은 5단계에서 `RequestRoute`를 확장해 실행과 drift
   리포트가 같은 출처를 쓰게 한다. 그 기술자가 생기면 크레이트 쪽 소스 스캔(`scan_crate`)만 그
   덤프로 바꾸고, 문서 추출·비교·allowlist·워크플로·이슈 처리는 그대로 둔다.
+
+[Decision Log] 라우트 목록 전환 (3.0 5단계 B, 2026-10-12)
+- 목적과 의도: 런타임과 drift 리포트가 같은 라우트 메타데이터를 쓰고, 메서드 이름을 지우거나
+  바꿔도 라우트가 조용히 빠지지 않게 한다.
+- 기존 구현 및 제약 조건: 위 방식은 `Method::X, "/literal"` 쌍을 소스에서 긁고, 헬퍼가 만든
+  경로 20개를 allowlist `helper_route`에 evidence·functions와 함께 손으로 적었다. 같은
+  경로의 두 작업(Create DM / Create Group DM, Execute Webhook / Create Followup Message)을
+  구분하지 못했다.
+- 검토한 주요 대안: (1) 소스 스캔 유지, (2) 테스트가 덤프한 JSON을 커밋, (3) `src/http/routes.rs`의
+  `route_manifest!` 행을 이 스크립트가 텍스트로 읽기.
+- 선택한 방식: (3). 행마다 RouteId, 메서드, 문서 표기 경로, 인증, 쿼리, 요청·응답 타입, 메서드
+  목록, 3.0에서 지운 이름(`was`)을 한 줄에 적는다. 엔드포인트는 `RouteId`를 transport에 넘기고
+  transport는 메서드와 인증을 행에서 가져온다. 이 스크립트는 행을 읽고(`parse_manifest_text`),
+  `--self-check`에서 양방향으로 묶는다(`manifest_binding`): 목록의 메서드가 있고 그 라우트를
+  실제로 보내는지(본문의 `RouteId::X` 또는 `self.` 호출), 클라이언트의 엔드포인트 메서드가 모두
+  목록에 있는지, `was` 이름이 없어졌거나 deprecated 전달 메서드로만 남았는지, 엔드포인트 파일이
+  HTTP 메서드를 직접 쓰지 않는지.
+- 다른 대안 대신 이 방식을 선택한 이유: (1)은 헬퍼 경로를 계속 손으로 관리해야 하고 작업을
+  구분하지 못한다. (2)는 코드와 덤프 사이에 재생성 단계가 끼어 낡을 수 있고 cron 잡이 여전히
+  컴파일 없이 돌아야 한다. (3)은 컴파일 없이 읽히고, 행 하나가 실행과 리포트 둘 다에 쓰인다.
+  Rust 쪽은 `cfg(test)`에서 행의 타입이 실제로 있는지 컴파일러가 검사한다.
+- 장점, 단점 및 영향: `helper_route` 표와 리터럴 스캐너가 없어졌다. 행은 한 줄이어야 하고
+  이해하지 못한 줄은 오류다(조용히 빠지지 않음). 문서 추출·비교·allowlist의 나머지 표·
+  워크플로·이슈 처리는 그대로다.
 """
 
 from __future__ import annotations
@@ -103,22 +127,6 @@ def normalize_template(path: str) -> str:
     path = path.split("?", 1)[0].split("#", 1)[0]
     path = _PLACEHOLDER.sub("{}", path)
     return _tidy_slashes(path)
-
-
-def normalize_crate_path(literal: str) -> str:
-    """Normalizes a Rust format-string path literal.
-
-    ``format!("/guilds/{}/members{query}")`` appends a pre-encoded query
-    string directly after the last segment, so placeholders glued to the end
-    of the final segment are query suffixes, not path parameters.
-    """
-
-    path = literal.split("?", 1)[0]
-    path = _PLACEHOLDER.sub("{}", path)
-    segments = path.split("/")
-    if segments:
-        segments[-1] = re.sub(r"(?<=.)(?:\{\})+$", "", segments[-1])
-    return _tidy_slashes("/".join(segments))
 
 
 def _tidy_slashes(path: str) -> str:
@@ -445,177 +453,156 @@ def strip_test_code(source: str) -> tuple[str, str]:
 
 
 @dataclass
-class CrateRoute:
+class ManifestRoute:
+    """One row of the crate's route manifest (``src/http/routes.rs``)."""
+
+    id: str
     method: str
-    path: str
-    literal: str
+    template: str
+    path: str  # normalized like the docs: ``{}`` per parameter
+    auth: str
+    query: list[str]
+    body: str
+    response: str
+    client: str
+    api: list[str]
+    was: list[tuple[str, str]]
     file: str
     line: int
-    function: str
+
+
+MANIFEST_MACRO = "route_manifest!"
+# One row per line; see the module documentation of src/http/routes.rs.
+_MANIFEST_ROW = re.compile(
+    r"^\s*(?P<id>[A-Za-z_][A-Za-z0-9_]*):\s+(?P<method>GET|POST|PUT|PATCH|DELETE)\s+"
+    r'"(?P<template>[^"]+)"\s+(?P<auth>[a-z]+),\s+'
+    r"query\s+\[(?P<query>[^\]]*)\],\s+"
+    r"body\s+(?P<body>.+?)\s+=>\s+(?P<response>.+?),\s+"
+    r"(?P<client>api|oauth2)\s+\[(?P<api>[^\]]*)\]"
+    r"(?:,\s+was\s+\[(?P<was>[^\]]*)\])?;\s*$"
+)
+MANIFEST_AUTH = ("bot", "bearer", "token", "none", "client")
+CLIENT_TYPES = {"api": "RestClient", "oauth2": "OAuth2Client"}
+
+
+def _names(text: str) -> list[str]:
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def parse_manifest_text(text: str, file: str) -> tuple[list[ManifestRoute], list[str]]:
+    """Reads the rows of the ``route_manifest! { ... }`` invocation.
+
+    Every non-blank, non-comment line inside the invocation must be a row: a
+    line the pattern does not understand is an error, never a silently
+    skipped route.
+    """
+
+    masked = mask_rust(text, blank_strings=False)
+    errors: list[str] = []
+    invocation = None
+    for match in re.finditer(r"(?<![A-Za-z0-9_])route_manifest!\s*\{", masked):
+        if masked[: match.start()].rstrip().endswith("macro_rules!"):
+            continue
+        invocation = match
+    if invocation is None:
+        return [], [f"{file}: no `{MANIFEST_MACRO} {{ ... }}` invocation found"]
+    open_index = invocation.end() - 1
+    close_index = _matching_close(mask_rust(text), open_index)
+    starts = _line_starts(text)
+    first_line = _line_of(starts, open_index) + 1
+    last_line = _line_of(starts, close_index)
+    lines = masked.split("\n")
+    rows: list[ManifestRoute] = []
+    for number in range(first_line, last_line):
+        line = lines[number - 1]
+        if not line.strip():
+            continue
+        match = _MANIFEST_ROW.match(line)
+        if not match:
+            errors.append(f"{file}:{number}: not a manifest row: `{line.strip()[:120]}`")
+            continue
+        if match["auth"] not in MANIFEST_AUTH:
+            errors.append(f"{file}:{number}: unknown auth `{match['auth']}`")
+        was = []
+        for item in _names(match["was"] or ""):
+            old, arrow, new = item.partition("=>")
+            if not arrow or not old.strip() or not new.strip():
+                errors.append(f"{file}:{number}: `was` entries are `old => new`, got `{item}`")
+                continue
+            was.append((old.strip(), new.strip()))
+        rows.append(
+            ManifestRoute(
+                id=match["id"],
+                method=match["method"],
+                template=match["template"],
+                path=normalize_template(match["template"]),
+                auth=match["auth"],
+                query=_names(match["query"]),
+                body=match["body"].strip(),
+                response=match["response"].strip(),
+                client=match["client"],
+                api=_names(match["api"]),
+                was=was,
+                file=file,
+                line=number,
+            )
+        )
+    return rows, errors
 
 
 @dataclass
-class UnresolvedCall:
-    method: str
-    expression: str
+class FunctionInfo:
+    name: str
+    owner: str  # the `impl` block's type, or "" for free functions
     file: str
     line: int
-    function: str
+    body: str  # comments, string contents, and test code blanked
+    endpoint: bool  # `pub` or `pub(crate)` `async fn` inside `impl`
+    deprecated: bool
 
 
-_METHOD_TOKEN = re.compile(r"\bMethod::(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b")
-_BUILDER_CALL = re.compile(r"\.(get|post|put|patch|delete)\(\s*&?\s*format!\(\s*\"")
-_FN_NAME = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
-_PATH_VARIABLE = re.compile(r"&?\s*([a-z_][a-z0-9_]*)(?:\s*\.\s*as_str\(\s*\))?")
+_FN_ITEM = re.compile(
+    r"(?P<attrs>(?:#\[[^\]]*\]\s*)*)(?P<vis>pub(?:\([a-z]+\))?\s+)?(?P<async>async\s+)?fn\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
+)
+_IMPL_BLOCK = re.compile(r"\bimpl(?:<[^>{]*>)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^>{]*>)?\s*\{")
 
 
-def _enclosing_function(masked: str, offset: int) -> tuple[str, int]:
-    name, start = "?", 0
-    for match in _FN_NAME.finditer(masked, 0, offset):
-        name, start = match.group(1), match.start()
-    return name, start
-
-
-_FORMAT_OPEN = re.compile(r"format!\(\s*$")
-_EXPRESSION_START = re.compile(r"^[\s&]*$")
-
-
-def _path_literals(original: str, masked: str, start: int, end: int) -> list[str]:
-    """Route-shaped literals that *are* the path in ``masked[start:end]``.
-
-    Only a ``format!`` string or a bare literal at the start of the expression
-    counts. Other literals are arguments to something else - for example
-    ``execute_webhook_path_with_query(.., Some("/slack"))`` - and treating
-    them as paths would invent routes such as ``POST /slack``.
-    """
-
-    found = []
-    position = start
-    while True:
-        quote = masked.find('"', position, end)
-        if quote == -1:
-            return found
-        close = masked.find('"', quote + 1, end + 1)
-        if close == -1:
-            return found
-        before = masked[max(start, quote - 40) : quote]
-        literal = original[quote + 1 : close]
-        if literal.startswith("/") and (
-            _FORMAT_OPEN.search(before) or _EXPRESSION_START.match(masked[start:quote])
-        ):
-            found.append(literal)
-        position = close + 1
-
-
-def _expression_end(masked: str, start: int, stop_chars: str) -> int:
-    """End of the expression starting at ``start``: first depth-0 stop char."""
-
-    position, depth = start, 0
-    while position < len(masked):
-        char = masked[position]
-        if char in _OPENERS:
-            depth += 1
-        elif char in _CLOSERS:
-            if depth == 0:
-                return position
-            depth -= 1
-        elif char in stop_chars and depth == 0:
-            return position
-        position += 1
-    return position
-
-
-def _local_binding_literals(original: str, masked: str, ident: str, function_start: int,
-                            offset: int) -> list[str]:
-    """Path literals assigned to ``let [mut] ident = ..`` earlier in the same function.
-
-    One hop only: ``let path = format!("/guilds/{}/members/search{}", ..)``
-    resolves, ``let path = webhook_message_path(..)?`` does not, because
-    following helper functions would turn this scanner into a Rust evaluator.
-    Helper-built paths go into the allowlist instead, with evidence.
-    """
-
-    binding = None
-    pattern = re.compile(rf"\blet\s+(?:mut\s+)?{re.escape(ident)}\b\s*(?::[^=;]*)?=(?!=)")
-    for match in pattern.finditer(masked, function_start, offset):
-        binding = match
-    if binding is None:
-        return []
-    end = _expression_end(masked, binding.end(), ";")
-    return _path_literals(original, masked, binding.end(), end)
-
-
-def extract_crate_routes_from_text(
-    source: str, file: str
-) -> tuple[list[CrateRoute], list[UnresolvedCall]]:
-    """Finds REST call sites in one Rust source file.
-
-    Recognized shapes:
-
-    * ``self.request*(Method::X, "/literal", ..)`` and
-      ``self.request*(Method::X, &format!("/literal/{}", ..), ..)``
-    * reqwest builder calls ``.post(format!("{}/literal", base))`` as used by
-      the OAuth2 client, where ``{}`` is the API base URL.
-
-    ``Method::X`` followed by a non-literal path (``&path``, or a format string
-    that starts with a helper-built prefix) is returned as unresolved; those
-    routes must be listed in the allowlist's ``helper_route`` table.
-    """
+def extract_functions_from_text(source: str, file: str) -> list[FunctionInfo]:
+    """Functions with bodies in one Rust file, test code excluded."""
 
     original, masked = strip_test_code(source)
     starts = _line_starts(original)
-    routes: list[CrateRoute] = []
-    unresolved: list[UnresolvedCall] = []
-
-    for match in _METHOD_TOKEN.finditer(masked):
-        method = match.group(1)
-        position = match.end()
-        while position < len(masked) and masked[position].isspace():
-            position += 1
-        if position >= len(masked) or masked[position] != ",":
-            continue  # `Method::GET | Method::HEAD`, `== Method::POST`, ...
-        position += 1
-        while position < len(masked) and masked[position].isspace():
-            position += 1
-        if position >= len(masked) or masked[position] == "[":
-            continue  # route-pattern match arms such as `(&Method::POST, [..])`
-        if method not in HTTP_METHODS:
-            continue
-        arg_start = position
-        arg_end = _expression_end(masked, arg_start, ",")
-        line = _line_of(starts, match.start())
-        function, function_start = _enclosing_function(masked, match.start())
-        literals = _path_literals(original, masked, arg_start, arg_end)
-        expression = " ".join(original[arg_start:arg_end].split())
-        if not literals and (variable := _PATH_VARIABLE.fullmatch(expression)):
-            literals = _local_binding_literals(
-                original, masked, variable.group(1), function_start, match.start()
-            )
-        if not literals:
-            unresolved.append(UnresolvedCall(method, expression, file, line, function))
-        # A `match` binding can hold several literals (with and without a
-        # query string); each distinct normalized path is one route.
-        for path in dict.fromkeys(normalize_crate_path(item) for item in literals):
-            routes.append(CrateRoute(method, path, literals[0], file, line, function))
-
-    for match in _BUILDER_CALL.finditer(masked):
-        quote = match.end() - 1
-        close = masked.find('"', quote + 1)
-        literal = original[quote + 1 : close]
-        if not literal.startswith("{}/"):
-            continue
-        literal = literal[2:]
-        routes.append(
-            CrateRoute(
-                match.group(1).upper(),
-                normalize_crate_path(literal),
-                literal,
-                file,
-                _line_of(starts, match.start()),
-                _enclosing_function(masked, match.start())[0],
+    impls = []
+    for match in _IMPL_BLOCK.finditer(masked):
+        impls.append((match.end() - 1, _matching_close(masked, match.end() - 1), match.group(1)))
+    functions = []
+    for match in _FN_ITEM.finditer(masked):
+        brace = masked.find("{", match.end())
+        semicolon = masked.find(";", match.end())
+        if brace == -1 or (semicolon != -1 and semicolon < brace):
+            continue  # trait method declaration without a body
+        end = _matching_close(masked, brace)
+        owner = ""
+        for impl_start, impl_end, name in impls:
+            if impl_start < match.start() < impl_end:
+                owner = name
+        attrs = masked[match.start("attrs") : match.end("attrs")]
+        functions.append(
+            FunctionInfo(
+                name=match["name"],
+                owner=owner,
+                file=file,
+                line=_line_of(starts, match.start("name")),
+                body=masked[brace : end + 1],
+                endpoint=bool(owner and match["vis"] and match["async"]),
+                deprecated="#[deprecated" in attrs,
             )
         )
-    return routes, unresolved
+    return functions
+
+
+_DIRECT_METHOD = re.compile(r"\bMethod::(GET|POST|PUT|PATCH|DELETE)\b")
 
 
 def code_text(source: str) -> str:
@@ -662,15 +649,23 @@ def _evidence_corpus(repo: Path, settings: dict) -> str:
 # Allowlist
 # ---------------------------------------------------------------------------
 
-ROUTE_TABLES = ("helper_route", "ignored_route", "crate_only_route")
+ROUTE_TABLES = ("ignored_route", "crate_only_route")
 EVENT_TABLES = ("non_dispatch_event", "ignored_event", "crate_only_event")
 DEFAULT_SETTINGS = {
     "docs_route_root": "developers",
     "docs_route_exclude": ["developers/change-log.mdx", "developers/change-log/"],
     "docs_events_page": "developers/events/gateway-events.mdx",
     "docs_events_section": "Receive Events",
+    "route_manifest": "src/http/routes.rs",
     "rest_sources": ["src/http.rs", "src/http/**/*.rs", "src/oauth2.rs"],
     "rest_sources_exclude": ["src/http/**/tests.rs", "src/http/**/tests/*"],
+    # Files that may name an HTTP method directly: the transport core (raw
+    # requests, replay policy) and the manifest itself. Anywhere else a
+    # `Method::X` means an endpoint bypassing the manifest.
+    "direct_method_files": ["src/http.rs", "src/http/routes.rs", "src/http/paths.rs"],
+    # Public `async fn`s of the clients that are not endpoints of one route
+    # (the raw escape hatch).
+    "non_endpoint_functions": [],
     "event_sources": ["src/event/decode.rs"],
     "event_name_pattern": r'"([A-Z][A-Z0-9_]+)"\s*(?:=>|\|)',
     "evidence_sources": ["src/**/*.rs"],
@@ -733,13 +728,14 @@ def parse_allowlist(data: dict) -> Allowlist:
             evidence = raw.get("evidence", [])
             if isinstance(evidence, str):
                 evidence = [evidence]
-            if table == "helper_route" and not evidence:
-                errors.append(f"{where}: helper routes need `evidence` (source substrings)")
             functions = raw.get("functions", [])
             if isinstance(functions, str):
                 functions = [functions]
-            if functions and table != "helper_route":
-                errors.append(f"{where}: `functions` is only meaningful for helper routes")
+            if functions:
+                errors.append(
+                    f"{where}: `functions` belonged to the removed helper_route table; "
+                    "list endpoint methods in the route manifest instead"
+                )
             if table in ROUTE_TABLES:
                 method = str(raw.get("method", "")).upper()
                 path = str(raw.get("path", ""))
@@ -783,22 +779,37 @@ def parse_allowlist(data: dict) -> Allowlist:
 
 @dataclass
 class CrateScan:
-    routes: dict[tuple[str, str], list[CrateRoute]]
-    unresolved: list[UnresolvedCall]
+    routes: dict[tuple[str, str], list[ManifestRoute]]
+    manifest: list[ManifestRoute]
+    manifest_errors: list[str]
+    functions: list[FunctionInfo]
+    direct_methods: list[str]
     events: dict[str, tuple[str, int]]
     evidence_corpus: str
 
 
 def scan_crate(repo: Path, allowlist: Allowlist) -> CrateScan:
     settings = allowlist.settings
-    routes: dict[tuple[str, str], list[CrateRoute]] = {}
-    unresolved: list[UnresolvedCall] = []
+    manifest_path = repo / settings["route_manifest"]
+    if not manifest_path.is_file():
+        raise ConfigError(f"route manifest not found: {manifest_path}")
+    manifest, manifest_errors = parse_manifest_text(
+        manifest_path.read_text(encoding="utf-8"), settings["route_manifest"]
+    )
+    routes: dict[tuple[str, str], list[ManifestRoute]] = {}
+    for row in manifest:
+        routes.setdefault(route_key(row.method, row.path), []).append(row)
+    functions: list[FunctionInfo] = []
+    direct_methods: list[str] = []
     for path in _expand_sources(repo, settings["rest_sources"], settings["rest_sources_exclude"]):
         relative = path.relative_to(repo).as_posix()
-        found, missing = extract_crate_routes_from_text(path.read_text(encoding="utf-8"), relative)
-        for route in found:
-            routes.setdefault(route_key(route.method, route.path), []).append(route)
-        unresolved.extend(missing)
+        source = path.read_text(encoding="utf-8")
+        functions += extract_functions_from_text(source, relative)
+        if relative not in settings["direct_method_files"]:
+            original, masked = strip_test_code(source)
+            starts = _line_starts(original)
+            for match in _DIRECT_METHOD.finditer(masked):
+                direct_methods.append(f"{relative}:{_line_of(starts, match.start())}: Method::{match.group(1)}")
     events: dict[str, tuple[str, int]] = {}
     for path in _expand_sources(repo, settings["event_sources"], []):
         relative = path.relative_to(repo).as_posix()
@@ -807,7 +818,10 @@ def scan_crate(repo: Path, allowlist: Allowlist) -> CrateScan:
         )
         for name, line in names.items():
             events.setdefault(name, (relative, line))
-    return CrateScan(routes, unresolved, events, _evidence_corpus(repo, settings))
+    return CrateScan(
+        routes, manifest, manifest_errors, functions, direct_methods, events,
+        _evidence_corpus(repo, settings),
+    )
 
 
 def missing_evidence(allowlist: Allowlist, corpus: str) -> list[str]:
@@ -823,52 +837,102 @@ def missing_evidence(allowlist: Allowlist, corpus: str) -> list[str]:
     return problems
 
 
-def unmapped_call_sites(allowlist: Allowlist, scan: CrateScan) -> list[str]:
-    """Binds helper routes to the call sites that send them, in both directions.
+def manifest_binding(allowlist: Allowlist, scan: CrateScan) -> list[str]:
+    """Binds the manifest rows to the code that sends them, in both directions.
 
-    Every listed function must still send the route's method with a
-    helper-built path, and every helper-built call site must be claimed by
-    some entry. Without the second direction a new helper-built route would
-    silently show up as "missing" in the weekly report instead of failing the
-    PR that added it.
+    - every row's methods exist and actually send that row's route: the body
+      names `RouteId::<Id>`, or calls (`self.f(`) a method of the same client
+      that does;
+    - every endpoint method of a client (`pub`/`pub(crate)` `async fn` in an
+      `impl RestClient` / `impl OAuth2Client` block) is listed by some row,
+      so a new endpoint cannot bypass the manifest;
+    - a `was` name (removed in 3.0) is gone, or survives only as a
+      `#[deprecated]` forwarding method, and its replacement is listed in the
+      same row;
+    - no endpoint file names an HTTP method directly.
+
+    Without the second direction a new route would show up as "missing" in
+    the weekly report instead of failing the PR that added it; without the
+    first, a renamed method would leave a row that nothing sends.
     """
 
-    notes = []
-    sites = {(call.method, call.function) for call in scan.unresolved}
-    claimed = set()
-    for entry in allowlist.entries.get("helper_route", []):
-        method = entry.key[0]  # type: ignore[index]
-        for function in entry.functions:
-            claimed.add((method, function))
-            if (method, function) not in sites:
+    notes = list(scan.manifest_errors)
+    seen: dict[str, ManifestRoute] = {}
+    for row in scan.manifest:
+        if row.id in seen:
+            notes.append(f"route manifest: `{row.id}` is listed twice ({row.file}:{seen[row.id].line} and :{row.line})")
+        seen[row.id] = row
+
+    by_owner: dict[tuple[str, str], FunctionInfo] = {}
+    for function in scan.functions:
+        if function.owner:
+            by_owner.setdefault((function.owner, function.name), function)
+    calls = re.compile(r"\b(?:self|Self)\s*(?:\.|::)\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:::<[^>]*>)?\s*\(")
+    cache: dict[tuple[str, str], set[str]] = {}
+
+    def routes_sent(owner: str, name: str, stack: frozenset = frozenset()) -> set[str]:
+        key = (owner, name)
+        if key in cache:
+            return cache[key]
+        function = by_owner.get(key)
+        if function is None or key in stack:
+            return set()
+        sent = set(re.findall(r"\bRouteId::([A-Za-z_][A-Za-z0-9_]*)", function.body))
+        for callee in calls.findall(function.body):
+            sent |= routes_sent(owner, callee, stack | {key})
+        cache[key] = sent
+        return sent
+
+    listed: set[tuple[str, str]] = set()
+    for row in scan.manifest:
+        owner = CLIENT_TYPES[row.client]
+        if not row.api:
+            notes.append(f"route manifest: `{row.id}` lists no methods ({row.file}:{row.line})")
+        for name in row.api:
+            listed.add((owner, name))
+            if (owner, name) not in by_owner:
+                notes.append(f"route manifest: `{row.id}` lists `{owner}::{name}`, which does not exist")
+            elif row.id not in routes_sent(owner, name):
                 notes.append(
-                    f"[[helper_route]] {format_route(entry.key)}: `fn {function}` no longer sends "
-                    f"Method::{method} with a helper-built path (renamed, removed, or now a literal?)"
+                    f"route manifest: `{owner}::{name}` is listed under `{row.id}` but never sends "
+                    f"`RouteId::{row.id}` (directly or through a `self.` call)"
                 )
-    for call in scan.unresolved:
-        if (call.method, call.function) not in claimed:
+        for old, new in row.was:
+            listed.add((owner, old))
+            if new not in row.api:
+                notes.append(f"route manifest: `{row.id}` maps `{old}` to `{new}`, which the row does not list")
+            function = by_owner.get((owner, old))
+            if function is not None and not function.deprecated:
+                notes.append(
+                    f"route manifest: `{owner}::{old}` is recorded as removed (`was`) under `{row.id}` "
+                    f"but still exists without #[deprecated] ({function.file}:{function.line})"
+                )
+    exempt = set(allowlist.settings["non_endpoint_functions"])
+    for function in scan.functions:
+        if (
+            function.endpoint
+            and function.owner in CLIENT_TYPES.values()
+            and (function.owner, function.name) not in listed
+            and function.name not in exempt
+        ):
             notes.append(
-                f"unmapped helper-built call: Method::{call.method} in `fn {call.function}` "
-                f"({call.file}:{call.line}) passes `{call.expression}`; add the function to the "
-                "matching [[helper_route]] entry (or a new one) in ci/api-drift-allowlist.toml"
+                f"endpoint `{function.owner}::{function.name}` ({function.file}:{function.line}) is not "
+                f"in the route manifest; add it to its row in {allowlist.settings['route_manifest']}"
             )
+    for site in scan.direct_methods:
+        notes.append(f"{site}: endpoints name their route with `RouteId`, not an HTTP method")
     return notes
 
 
 def crate_maintenance(allowlist: Allowlist, scan: CrateScan) -> list[str]:
-    """Allowlist problems that only depend on this repository."""
+    """Allowlist and manifest problems that only depend on this repository."""
 
     notes = missing_evidence(allowlist, scan.evidence_corpus)
-    notes += unmapped_call_sites(allowlist, scan)
-    literal = set(scan.routes)
-    for key in sorted(allowlist.keys("helper_route") & literal):
-        notes.append(
-            f"[[helper_route]] {format_route(key)}: now found as a path literal; the entry is redundant"
-        )
-    helper = allowlist.keys("helper_route")
-    for key in sorted(allowlist.keys("ignored_route") & (literal | helper)):
+    notes += manifest_binding(allowlist, scan)
+    covered = set(scan.routes)
+    for key in sorted(allowlist.keys("ignored_route") & covered):
         notes.append(f"[[ignored_route]] {format_route(key)}: the crate implements it now")
-    for key in sorted(allowlist.keys("crate_only_route") - literal - helper):
+    for key in sorted(allowlist.keys("crate_only_route") - covered):
         notes.append(f"[[crate_only_route]] {format_route(key)}: no longer found in the crate")
     events = set(scan.events)
     for name in sorted(allowlist.keys("crate_only_event") - events):
@@ -884,8 +948,8 @@ def sanity_errors(allowlist: Allowlist, scan: CrateScan, docs: dict | None = Non
     errors = []
     if len(scan.routes) < settings["min_crate_routes"]:
         errors.append(
-            f"only {len(scan.routes)} crate route literals found (floor {settings['min_crate_routes']}); "
-            "the REST call shape probably changed - update ci/api_drift.py"
+            f"only {len(scan.routes)} distinct routes in the route manifest (floor {settings['min_crate_routes']}); "
+            "the manifest row shape probably changed - update ci/api_drift.py"
         )
     if len(scan.events) < settings["min_crate_events"]:
         errors.append(
@@ -955,11 +1019,9 @@ class Report:
 def compare(docs_routes: dict, doc_events: dict, scan: CrateScan, allowlist: Allowlist,
             docs_commit: str = "unknown", crate_commit: str = "unknown") -> Report:
     documented = set(docs_routes)
-    literal = set(scan.routes)
-    helper = allowlist.keys("helper_route")
     ignored = allowlist.keys("ignored_route")
     crate_only = allowlist.keys("crate_only_route")
-    covered = literal | helper
+    covered = set(scan.routes)
 
     missing_routes = sorted(documented - covered - ignored)
     extra_routes = sorted(covered - documented - crate_only)
@@ -1049,19 +1111,19 @@ def render_markdown(report: Report, max_chars: int = DEFAULT_MAX_CHARS) -> str:
     section(
         "Documented REST routes missing from the crate",
         missing_lines,
-        "Add a `RestClient` method, or an allowlist entry with a reason if the route is built by a helper "
-        "or intentionally unsupported.",
+        "Add a `RestClient` method and its row in the route manifest (`src/http/routes.rs`), or an "
+        "`ignored_route` allowlist entry with a reason if the route is intentionally unsupported.",
     )
 
     extra_lines = []
     for key in report.extra_routes:
-        sites = report.crate.routes.get(key)
-        where = f"`{sites[0].file}:{sites[0].line}` (`{sites[0].function}`)" if sites else "allowlist `helper_route`"
+        rows = report.crate.routes[key]
+        where = ", ".join(f"`{row.id}` (`{row.file}:{row.line}`)" for row in rows)
         extra_lines.append(f"- `{format_route(key)}` - {where}")
     section(
         "Crate REST routes not in the docs",
         extra_lines,
-        "Discord removed or renamed the route, or the path literal is not a real route. "
+        "Discord removed or renamed the route, or the manifest row is wrong. "
         "Deprecate the method, or allowlist it under `crate_only_route` with a reason.",
     )
 
@@ -1093,10 +1155,9 @@ def render_markdown(report: Report, max_chars: int = DEFAULT_MAX_CHARS) -> str:
         f"- Docs routes: `<Route>` tags under `{report.allowlist.settings['docs_route_root']}/` "
         f"excluding {', '.join('`' + item + '`' for item in report.allowlist.settings['docs_route_exclude'])}; "
         "markdown links and backslashes stripped, `{params}` normalized to `{}`.",
-        f"- Crate routes: {len(report.crate.routes)} distinct method + path literals from "
-        f"{', '.join('`' + item + '`' for item in report.allowlist.settings['rest_sources'])}, "
-        f"plus {len(report.allowlist.keys('helper_route'))} allowlisted helper-built routes "
-        f"({len(report.crate.unresolved)} call sites pass a helper-built path).",
+        f"- Crate routes: {len(report.crate.routes)} distinct method + path pairs from "
+        f"{len(report.crate.manifest)} rows of the route manifest "
+        f"`{report.allowlist.settings['route_manifest']}` (the same rows the transport executes).",
         f"- Ignored documented routes: {len(report.allowlist.keys('ignored_route'))}; "
         f"allowlisted crate-only routes: {len(report.allowlist.keys('crate_only_route'))}.",
         f"- Docs routes whose heading says deprecated: {len(deprecated)}"
@@ -1135,8 +1196,8 @@ def render_json(report: Report) -> str:
             "fingerprint": report.fingerprint,
             "counts": {
                 "docs_routes": len(report.docs_routes),
-                "crate_literal_routes": len(report.crate.routes),
-                "helper_routes": len(report.allowlist.keys("helper_route")),
+                "crate_routes": len(report.crate.routes),
+                "manifest_rows": len(report.crate.manifest),
                 "docs_events": len(report.doc_events),
                 "crate_events": len(report.crate.events),
             },
@@ -1197,13 +1258,13 @@ def run(argv: list[str] | None = None) -> int:
             # crate exactly, or the weekly report stops being trustworthy.
             errors = sanity_errors(allowlist, scan) + crate_maintenance(allowlist, scan)
             print(
-                f"crate: {len(scan.routes)} route literals, {len(allowlist.keys('helper_route'))} helper routes "
-                f"covering {len(scan.unresolved)} helper-built call sites, {len(scan.events)} decoded events"
+                f"crate: {len(scan.manifest)} manifest rows ({len(scan.routes)} distinct routes), "
+                f"{len(scan.events)} decoded events"
             )
             for error in errors:
                 print(f"error: {error}", file=sys.stderr)
             if not errors:
-                print("allowlist matches the crate")
+                print("allowlist and route manifest match the crate")
             return EXIT_BROKEN if errors else EXIT_OK
 
         if args.docs is None:

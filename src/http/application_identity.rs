@@ -4,8 +4,6 @@
 //! target user who authorized the app with the `application_identities.write`
 //! OAuth2 scope.
 
-use reqwest::Method;
-use serde_json::Value;
 use url::form_urlencoded;
 
 use crate::error::DiscordError;
@@ -15,7 +13,7 @@ use crate::model::{
 };
 
 use super::paths::external_path_segment;
-use super::{configured_application_id, RestClient};
+use super::{configured_application_id, json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     /// Writes game stats to the user's Application Identity
@@ -34,8 +32,12 @@ impl RestClient {
     ) -> Result<Option<ApplicationIdentityProfile>, DiscordError> {
         body.validate()?;
         let path = self.identity_profile_path(user_id, provider_issued_user_id)?;
-        self.request_optional_typed_no_content(Method::PATCH, &path, Some(body))
-            .await
+        self.send_optional(
+            RouteId::UpdateApplicationIdentityProfile,
+            &path,
+            json_body(body),
+        )
+        .await
     }
 
     /// Reads the profile stored on the user's matching Application Identity.
@@ -45,7 +47,7 @@ impl RestClient {
         provider_issued_user_id: &str,
     ) -> Result<ApplicationIdentityProfile, DiscordError> {
         let path = self.identity_profile_path(user_id, provider_issued_user_id)?;
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+        self.send(RouteId::GetApplicationIdentityProfile, &path, NO_BODY)
             .await
     }
 
@@ -56,10 +58,10 @@ impl RestClient {
         user_id: UserId,
     ) -> Result<ApplicationIdentities, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationIdentitiesByUserId,
             &format!("/users/{}/application-identities/{application_id}", user_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -84,13 +86,9 @@ impl RestClient {
                 format!("?{}", serializer.finish())
             })
             .unwrap_or_default();
-        self.request_typed(
-            Method::GET,
-            &format!(
+        self.send(RouteId::GetApplicationIdentitiesByExternalId, &format!(
                 "/applications/{application_id}/application-identities/{provider_type}/{external_id}{query}"
-            ),
-            Option::<&Value>::None,
-        )
+            ), NO_BODY)
         .await
     }
 
@@ -111,14 +109,10 @@ impl RestClient {
         let body = ApplicationIdentityProviderId {
             provider_id: provider_id.map(str::to_string),
         };
-        self.request_no_content(
-            Method::POST,
-            &format!(
+        self.send_unit(RouteId::DeleteApplicationIdentity, &format!(
                 "/users/{}/application-identities/{application_id}/{provider_type}/{external_id}/delete",
                 user_id
-            ),
-            Some(&body),
-        )
+            ), json_body(&body))
         .await
     }
 

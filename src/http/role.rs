@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -10,7 +9,7 @@ use crate::model::{
     CreateGuildRole, GuildId, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleId,
 };
 
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn create_role(&self, guild_id: GuildId, body: &Value) -> Result<Role, DiscordError> {
@@ -25,10 +24,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildRole,
             &format!("/guilds/{}/roles", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -51,10 +50,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildRole,
             &format!("/guilds/{}/roles/{}", guild_id, role_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -64,19 +63,19 @@ impl RestClient {
         guild_id: GuildId,
         role_id: RoleId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildRole,
             &format!("/guilds/{}/roles/{}", guild_id, role_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn list_roles(&self, guild_id: GuildId) -> Result<Vec<Role>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildRoles,
             &format!("/guilds/{}/roles", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -86,10 +85,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<Vec<Role>, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildRolePositions,
             &format!("/guilds/{}/roles", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -99,10 +98,10 @@ impl RestClient {
         guild_id: GuildId,
         positions: &[ModifyGuildRolePosition],
     ) -> Result<Vec<Role>, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildRolePositions,
             &format!("/guilds/{}/roles", guild_id),
-            Some(positions),
+            json_body(positions),
         )
         .await
     }
@@ -129,10 +128,10 @@ impl RestClient {
         guild_id: GuildId,
         role_id: RoleId,
     ) -> Result<Role, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildRole,
             &format!("/guilds/{}/roles/{}", guild_id, role_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -142,10 +141,10 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<HashMap<RoleId, u64>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildRoleMemberCounts,
             &format!("/guilds/{}/roles/member-counts", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

@@ -169,13 +169,15 @@ Rules for new code:
 
 - **REST: thin shims around one transport core.** `RestClient::execute` (`src/http.rs`) is the
   only request loop (route gate, rate limits, replay policy, token scrubbing) and is not generic,
-  so it is compiled once. The typed helpers (`request_typed`, `request_no_content`,
-  `request_optional_typed_no_content`, `request_typed_with_authorization`, the multipart variants)
-  are generic shims: encode the body into a `Result` before the single await, pass the awaited
-  `Result` to `decode_response` after it, and use no `?`. New endpoints call these helpers, or
-  build a `RequestBody` and call `request_with_headers` plus `decode_response`; they do not add
-  another generic `async fn` around the loop. A shim costs about 160 LLVM IR lines per
-  `(response, body)` type pair, down from about 275. For a crate that calls 150 endpoints this
+  so it is compiled once. Endpoints encode their body into an `EncodedBody` (`json_body`,
+  `multipart_body`, or `NO_BODY`) and call a shim with their manifest `RouteId`: `send` (decode
+  into `T`), `send_optional` (`None` for 204), `send_unit`, `send_bytes`, `send_response` (custom
+  decoding), and `send_bearer` / `send_bearer_unit` for routes authorized with a caller's OAuth2
+  token. The shims are generic over the response type only, run no `?`, and hand the awaited
+  `Result` to `decode_response`. New endpoints add a row to `src/http/routes.rs` and call these
+  shims; they do not add another generic `async fn` around the loop. A shim cost about 160 LLVM
+  IR lines per `(response, body)` type pair, down from about 275, before body encoding moved to
+  the call site. For a crate that calls 150 endpoints this
   was 2.6% less IR and a 2.6% smaller stripped release binary; its debug compile time did not
   change measurably.
 - **One deserializer for models (phase 4 B follow-up).** Each model's `Deserialize` impl is
@@ -337,12 +339,12 @@ What it compares:
 
 - **REST routes**: every `<Route method="X">path</Route>` under `developers/` (except
   `developers/change-log.mdx`, which also quotes routes that were later removed), with markdown
-  links and backslashes stripped and `{params}` normalized to `{}`, against the
-  `Method::X` + path pairs in `src/http.rs`, `src/http/**/*.rs` (not `tests.rs`), and
-  `src/oauth2.rs`. The scanner reads `"/literal"` and `format!("/literal/{}", ..)` arguments,
-  one-hop `let path = format!(..)` bindings in the same function, and reqwest
-  `.post(format!("{}/oauth2/..", base))` calls. `#[cfg(test)]` code, comments, and literals passed
-  to other functions (for example `Some("/slack")`) never count.
+  links and backslashes stripped and `{params}` normalized to `{}`, against the rows of the route
+  manifest in `src/http/routes.rs`. Each row is one Discord operation with a stable `RouteId`:
+  method, path template in the docs' spelling, authorization, query parameters, request and
+  response types, and the client methods that send it. The REST transport executes the same rows
+  (endpoints pass their `RouteId`; the method and the `Authorization` header come from the row),
+  so the report and the runtime cannot disagree about which routes exist.
 - **Gateway dispatch events**: the first table and the level-4 headings of the "Receive Events"
   section of `developers/events/gateway-events.mdx` (`Guild Members Chunk` →
   `GUILD_MEMBERS_CHUNK`), against the `"EVENT_NAME" =>` arms in `src/event/decode.rs`.
@@ -365,31 +367,51 @@ extraction is broken (bad allowlist, missing docs page, or counts below the sani
 allowlist settings). Code 2 fails the weekly run on purpose: a parser that silently found zero
 routes would otherwise report "no drift".
 
+### Route manifest
+
+One row per line in `src/http/routes.rs`:
+
+```text
+GetGuild: GET "/guilds/{guild.id}" bot, query [with_counts], body () => Guild, api [get_guild, get_guild_with_query];
+```
+
+`auth` is `bot`, `bearer` (caller-supplied OAuth2 token), `token` (webhook or interaction token in
+the path, no header), `none` (public route), or `client` (OAuth2 client credentials,
+`OAuth2Client`). `api [..]` lists `RestClient` methods and `oauth2 [..]` lists `OAuth2Client`
+methods. An optional `was [old => new, ..]` records 3.0 renames; the REST migration table is built
+from it. A line inside the table that is not a row is an error, never a skipped route.
+
+Under `cfg(test)` the rows also compile into a check that every request and response type exists,
+and a `MANIFEST` table the route goldens use.
+
 ### Allowlist
 
-Routes that are not a literal at the call site, and documented mismatches, live in
-`ci/api-drift-allowlist.toml`. Every entry needs a `reason` (15+ characters); entries without one
-are rejected, because a reasonless allowlist silently turns drift detection off.
+Documented mismatches live in `ci/api-drift-allowlist.toml`. Every entry needs a `reason` (15+
+characters); entries without one are rejected, because a reasonless allowlist silently turns drift
+detection off.
 
 | Table | Use | Extra checks |
 | --- | --- | --- |
-| `helper_route` | documented route built by a path helper (`global_commands_path`, `webhook_message_path`, `followup_webhook_path`, `interaction_callback_path`, `identity_profile_path`, ...) | `evidence` substrings must exist in non-test `src/`; each name in `functions` must still send that method with a helper-built path |
 | `ignored_route` | documented route deliberately not wrapped | reported once Discord drops it or the crate implements it |
 | `crate_only_route` | crate route that is not a `<Route>` tag (OAuth2 token URLs) | reported once Discord documents it or the crate drops it |
 | `non_dispatch_event` | receive-event row that is an opcode (`HELLO`, `RECONNECT`, `INVALID_SESSION`) | optional `evidence` |
 | `ignored_event` / `crate_only_event` | event-name mismatches kept on purpose | same staleness checks as routes |
 
 The `drift-tooling` CI job runs the unit tests and `--self-check` on every PR. `--self-check`
-fails when the allowlist no longer describes `src/`, with a message naming the entry to edit:
+fails when the allowlist or the manifest no longer describes `src/`, with a message naming what to
+edit:
 
-- *evidence `...` no longer appears in src/*: a path helper changed its format string or was
-  renamed; update `evidence`.
-- *`fn x` no longer sends Method::Y with a helper-built path*: the wrapper was renamed (for
-  example a `_typed` suffix removed) or now uses a literal; update `functions`, or delete the
-  entry if the route is now a literal.
-- *unmapped helper-built call*: a new wrapper passes a helper-built path; add its function to the
-  matching `helper_route` (or a new entry), so the weekly report does not list the route as
-  missing.
+- *`Id` lists `RestClient::x`, which does not exist*: a method was renamed or removed; update the
+  row's `api` list (and add a `was` entry if it is a 3.0 rename).
+- *`RestClient::x` is listed under `Id` but never sends `RouteId::Id`*: the method sends another
+  route, or delegates to a method that does; fix the row or the call.
+- *endpoint `RestClient::x` is not in the route manifest*: a new `pub async fn` on a client; add
+  it to its row (or a new row), so the weekly report does not list the route as missing.
+- *`x` is recorded as removed (`was`) but still exists without #[deprecated]*: delete the old
+  method or deprecate it as a forwarding shim.
+- *`Method::X`: endpoints name their route with `RouteId`*: an endpoint file builds a request
+  with an HTTP method instead of a manifest route.
+- *evidence `...` no longer appears in src/*: an event-table entry's evidence moved; update it.
 
 ### Weekly issue
 

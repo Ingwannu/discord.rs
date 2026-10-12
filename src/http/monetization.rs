@@ -1,21 +1,21 @@
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     CreateTestEntitlement, Entitlement, EntitlementId, EntitlementQuery, Sku, SkuId, Subscription,
     SubscriptionId, SubscriptionQuery,
 };
 
-use super::{configured_application_id, entitlement_query, subscription_query, RestClient};
+use super::{
+    configured_application_id, entitlement_query, json_body, subscription_query, RestClient,
+    RouteId, NO_BODY,
+};
 
 impl RestClient {
     pub async fn get_skus(&self) -> Result<Vec<Sku>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListSkus,
             &format!("/applications/{application_id}/skus"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -25,14 +25,14 @@ impl RestClient {
         sku_id: SkuId,
         query: &SubscriptionQuery,
     ) -> Result<Vec<Subscription>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListSkuSubscriptions,
             &format!(
                 "/skus/{}/subscriptions{}",
                 sku_id,
                 subscription_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -42,10 +42,10 @@ impl RestClient {
         sku_id: SkuId,
         subscription_id: SubscriptionId,
     ) -> Result<Subscription, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetSkuSubscription,
             &format!("/skus/{}/subscriptions/{}", sku_id, subscription_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -55,13 +55,13 @@ impl RestClient {
         query: &EntitlementQuery,
     ) -> Result<Vec<Entitlement>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListEntitlements,
             &format!(
                 "/applications/{application_id}/entitlements{}",
                 entitlement_query(query)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -71,13 +71,13 @@ impl RestClient {
         entitlement_id: EntitlementId,
     ) -> Result<Entitlement, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetEntitlement,
             &format!(
                 "/applications/{application_id}/entitlements/{}",
                 entitlement_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -87,13 +87,13 @@ impl RestClient {
         entitlement_id: EntitlementId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_no_content(
-            Method::POST,
+        self.send_unit(
+            RouteId::ConsumeEntitlement,
             &format!(
                 "/applications/{application_id}/entitlements/{}/consume",
                 entitlement_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -103,10 +103,10 @@ impl RestClient {
         body: &CreateTestEntitlement,
     ) -> Result<Entitlement, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateTestEntitlement,
             &format!("/applications/{application_id}/entitlements"),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -116,13 +116,13 @@ impl RestClient {
         entitlement_id: EntitlementId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteTestEntitlement,
             &format!(
                 "/applications/{application_id}/entitlements/{}",
                 entitlement_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

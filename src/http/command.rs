@@ -1,6 +1,5 @@
 //! Application command endpoints (global and guild) and command permissions.
 
-use reqwest::Method;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -12,7 +11,7 @@ use crate::model::{
 };
 
 use super::paths::{configured_application_id, global_commands_path};
-use super::{validate_authorization_token, RequestAuthorization, RestClient};
+use super::{json_body, validate_authorization_token, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn bulk_overwrite_global_commands_typed(
@@ -20,7 +19,12 @@ impl RestClient {
         commands: &[CommandDefinition],
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(Method::PUT, &path, Some(commands)).await
+        self.send(
+            RouteId::BulkOverwriteGlobalApplicationCommands,
+            &path,
+            json_body(commands),
+        )
+        .await
     }
 
     pub async fn create_global_command(
@@ -28,12 +32,17 @@ impl RestClient {
         command: &CommandDefinition,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(Method::POST, &path, Some(command)).await
+        self.send(
+            RouteId::CreateGlobalApplicationCommand,
+            &path,
+            json_body(command),
+        )
+        .await
     }
 
     pub async fn get_global_commands(&self) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+        self.send(RouteId::GetGlobalApplicationCommands, &path, NO_BODY)
             .await
     }
 
@@ -43,13 +52,13 @@ impl RestClient {
         commands: &[CommandDefinition],
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::BulkOverwriteGuildApplicationCommands,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
                 guild_id
             ),
-            Some(commands),
+            json_body(commands),
         )
         .await
     }
@@ -59,10 +68,10 @@ impl RestClient {
         command_id: CommandId,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGlobalApplicationCommand,
             &format!("{}/{}", path, command_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -73,20 +82,20 @@ impl RestClient {
         body: &Value,
     ) -> Result<ApplicationCommand, DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::EditGlobalApplicationCommand,
             &format!("{}/{}", path, command_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
 
     pub async fn delete_global_command(&self, command_id: CommandId) -> Result<(), DiscordError> {
         let path = global_commands_path(self.application_id())?;
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGlobalApplicationCommand,
             &format!("{}/{}", path, command_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -96,13 +105,13 @@ impl RestClient {
         guild_id: GuildId,
     ) -> Result<Vec<ApplicationCommand>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildApplicationCommands,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
                 guild_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -113,13 +122,13 @@ impl RestClient {
         command: &CommandDefinition,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildApplicationCommand,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands",
                 guild_id
             ),
-            Some(command),
+            json_body(command),
         )
         .await
     }
@@ -130,13 +139,13 @@ impl RestClient {
         command_id: CommandId,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildApplicationCommand,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
                 guild_id, command_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -148,13 +157,13 @@ impl RestClient {
         body: &Value,
     ) -> Result<ApplicationCommand, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::EditGuildApplicationCommand,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
                 guild_id, command_id
             ),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -165,13 +174,13 @@ impl RestClient {
         command_id: CommandId,
     ) -> Result<(), DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildApplicationCommand,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}",
                 guild_id, command_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -182,13 +191,13 @@ impl RestClient {
         guild_id: GuildId,
     ) -> Result<Vec<GuildApplicationCommandPermissions>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildApplicationCommandPermissions,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/permissions",
                 guild_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -200,13 +209,13 @@ impl RestClient {
         command_id: CommandId,
     ) -> Result<GuildApplicationCommandPermissions, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationCommandPermissions,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}/permissions",
                 guild_id, command_id
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -227,14 +236,14 @@ impl RestClient {
     {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::PUT,
+        self.send_bearer(
+            RouteId::BatchEditApplicationCommandPermissions,
+            bearer_token,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/permissions",
                 guild_id
             ),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -253,14 +262,14 @@ impl RestClient {
     ) -> Result<GuildApplicationCommandPermissions, DiscordError> {
         let bearer_token = validate_authorization_token("bearer_token", bearer_token)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed_with_authorization(
-            RequestAuthorization::Bearer(bearer_token),
-            Method::PUT,
+        self.send_bearer(
+            RouteId::EditApplicationCommandPermissions,
+            bearer_token,
             &format!(
                 "/applications/{application_id}/guilds/{}/commands/{}/permissions",
                 guild_id, command_id
             ),
-            Some(body),
+            json_body(body),
         )
         .await
     }

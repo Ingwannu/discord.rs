@@ -1,4 +1,3 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use crate::error::DiscordError;
@@ -7,17 +6,17 @@ use crate::model::{
     GuildScheduledEventsQuery, ScheduledEventId,
 };
 
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_guild_scheduled_events(
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<GuildScheduledEvent>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::ListScheduledEventsForGuild,
             &format!("/guilds/{}/scheduled-events", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -33,7 +32,7 @@ impl RestClient {
         if let Some(with_user_count) = query.with_user_count {
             path.push_str(&format!("?with_user_count={with_user_count}"));
         }
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+        self.send(RouteId::ListScheduledEventsForGuild, &path, NO_BODY)
             .await
     }
 
@@ -42,10 +41,10 @@ impl RestClient {
         guild_id: GuildId,
         body: &Value,
     ) -> Result<GuildScheduledEvent, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -58,10 +57,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events", guild_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -71,10 +70,10 @@ impl RestClient {
         guild_id: GuildId,
         event_id: ScheduledEventId,
     ) -> Result<GuildScheduledEvent, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -85,10 +84,10 @@ impl RestClient {
         event_id: ScheduledEventId,
         body: &Value,
     ) -> Result<GuildScheduledEvent, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -102,10 +101,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -115,10 +114,10 @@ impl RestClient {
         guild_id: GuildId,
         event_id: ScheduledEventId,
     ) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteGuildScheduledEvent,
             &format!("/guilds/{}/scheduled-events/{}", guild_id, event_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -166,7 +165,7 @@ impl RestClient {
             path.push('?');
             path.push_str(&parameters.join("&"));
         }
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
+        self.send(RouteId::GetGuildScheduledEventUsers, &path, NO_BODY)
             .await
     }
 }

@@ -1,11 +1,10 @@
-use reqwest::Method;
 use serde_json::Value;
 
 use super::paths::{
     execute_webhook_path, execute_webhook_path_with_query, validate_token_path_segment,
     webhook_message_path, webhook_message_path_with_query,
 };
-use super::{FileAttachment, RestClient};
+use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 use crate::error::DiscordError;
 use crate::model::{
     ChannelId, CreateMessage, CreateWebhook, GuildId, Message, ModifyWebhook,
@@ -29,10 +28,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::CreateWebhook,
             &format!("/channels/{}/webhooks", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -50,10 +49,10 @@ impl RestClient {
         channel_id: ChannelId,
         body: &Value,
     ) -> Result<Value, DiscordError> {
-        self.request(
-            Method::POST,
+        self.send(
+            RouteId::CreateWebhook,
             &format!("/channels/{}/webhooks", channel_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -69,10 +68,10 @@ impl RestClient {
         &self,
         channel_id: ChannelId,
     ) -> Result<Vec<Webhook>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetChannelWebhooks,
             &format!("/channels/{}/webhooks", channel_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -82,10 +81,10 @@ impl RestClient {
         channel_id: ChannelId,
     ) -> Result<Vec<Value>, DiscordError> {
         let response = self
-            .request(
-                Method::GET,
+            .send(
+                RouteId::GetChannelWebhooks,
                 &format!("/channels/{}/webhooks", channel_id),
-                Option::<&Value>::None,
+                NO_BODY,
             )
             .await?;
         match response {
@@ -102,7 +101,8 @@ impl RestClient {
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path(webhook_id, token)?;
         let body = self.json_with_default_allowed_mentions(body);
-        self.request(Method::POST, &path, Some(body.as_ref())).await
+        self.send(RouteId::ExecuteWebhook, &path, json_body(body.as_ref()))
+            .await
     }
 
     pub async fn execute_webhook_with_query(
@@ -113,7 +113,8 @@ impl RestClient {
         body: &Value,
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path_with_query(webhook_id, token, query, None)?;
-        self.request(Method::POST, &path, Some(body)).await
+        self.send(RouteId::ExecuteWebhook, &path, json_body(body))
+            .await
     }
 
     pub async fn execute_slack_compatible_webhook(
@@ -124,7 +125,12 @@ impl RestClient {
         body: &Value,
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path_with_query(webhook_id, token, query, Some("/slack"))?;
-        self.request(Method::POST, &path, Some(body)).await
+        self.send(
+            RouteId::ExecuteSlackCompatibleWebhook,
+            &path,
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn execute_github_compatible_webhook(
@@ -135,7 +141,12 @@ impl RestClient {
         body: &Value,
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path_with_query(webhook_id, token, query, Some("/github"))?;
-        self.request(Method::POST, &path, Some(body)).await
+        self.send(
+            RouteId::ExecuteGitHubCompatibleWebhook,
+            &path,
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn execute_webhook_with_files(
@@ -146,7 +157,7 @@ impl RestClient {
         files: &[FileAttachment],
     ) -> Result<Value, DiscordError> {
         let path = execute_webhook_path(webhook_id, token)?;
-        self.request_multipart(Method::POST, &path, body, files)
+        self.send(RouteId::ExecuteWebhook, &path, multipart_body(body, files))
             .await
     }
 
@@ -157,8 +168,7 @@ impl RestClient {
         message_id: &str,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetWebhookMessage, &path, NO_BODY).await
     }
 
     pub async fn get_webhook_message_with_query(
@@ -169,8 +179,7 @@ impl RestClient {
         query: &WebhookMessageQuery,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, false)?;
-        self.request_typed(Method::GET, &path, Option::<&Value>::None)
-            .await
+        self.send(RouteId::GetWebhookMessage, &path, NO_BODY).await
     }
 
     pub async fn edit_webhook_message(
@@ -181,7 +190,8 @@ impl RestClient {
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
-        self.request_typed(Method::PATCH, &path, Some(body)).await
+        self.send(RouteId::EditWebhookMessage, &path, json_body(body))
+            .await
     }
 
     pub async fn edit_webhook_message_with_query(
@@ -193,7 +203,8 @@ impl RestClient {
         body: &CreateMessage,
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
-        self.request_typed(Method::PATCH, &path, Some(body)).await
+        self.send(RouteId::EditWebhookMessage, &path, json_body(body))
+            .await
     }
 
     pub async fn edit_webhook_message_with_files(
@@ -205,8 +216,12 @@ impl RestClient {
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
-        self.request_typed_multipart(Method::PATCH, &path, body, files)
-            .await
+        self.send(
+            RouteId::EditWebhookMessage,
+            &path,
+            multipart_body(body, files),
+        )
+        .await
     }
 
     pub async fn edit_webhook_message_with_files_and_query(
@@ -219,8 +234,12 @@ impl RestClient {
         files: &[FileAttachment],
     ) -> Result<Message, DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, true)?;
-        self.request_typed_multipart(Method::PATCH, &path, body, files)
-            .await
+        self.send(
+            RouteId::EditWebhookMessage,
+            &path,
+            multipart_body(body, files),
+        )
+        .await
     }
 
     pub async fn delete_webhook_message(
@@ -230,7 +249,7 @@ impl RestClient {
         message_id: &str,
     ) -> Result<(), DiscordError> {
         let path = webhook_message_path(webhook_id, token, message_id)?;
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::DeleteWebhookMessage, &path, NO_BODY)
             .await
     }
 
@@ -242,7 +261,7 @@ impl RestClient {
         query: &WebhookMessageQuery,
     ) -> Result<(), DiscordError> {
         let path = webhook_message_path_with_query(webhook_id, token, message_id, query, false)?;
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::DeleteWebhookMessage, &path, NO_BODY)
             .await
     }
 
@@ -250,19 +269,19 @@ impl RestClient {
         &self,
         guild_id: GuildId,
     ) -> Result<Vec<Webhook>, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetGuildWebhooks,
             &format!("/guilds/{}/webhooks", guild_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
 
     pub async fn get_webhook(&self, webhook_id: WebhookId) -> Result<Webhook, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetWebhook,
             &format!("/webhooks/{}", webhook_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -273,10 +292,10 @@ impl RestClient {
         token: &str,
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetWebhookWithToken,
             &format!("/webhooks/{}/{}", webhook_id, token),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -286,10 +305,10 @@ impl RestClient {
         webhook_id: WebhookId,
         body: &Value,
     ) -> Result<Webhook, DiscordError> {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyWebhook,
             &format!("/webhooks/{}", webhook_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -302,10 +321,10 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(
-            Method::PATCH,
+        self.send(
+            RouteId::ModifyWebhook,
             &format!("/webhooks/{}", webhook_id),
-            Some(body),
+            json_body(body),
         )
         .await
     }
@@ -319,10 +338,10 @@ impl RestClient {
     }
 
     pub async fn delete_webhook(&self, webhook_id: WebhookId) -> Result<(), DiscordError> {
-        self.request_no_content(
-            Method::DELETE,
+        self.send_unit(
+            RouteId::DeleteWebhook,
             &format!("/webhooks/{}", webhook_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -335,7 +354,8 @@ impl RestClient {
     ) -> Result<Webhook, DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
         let path = format!("/webhooks/{}/{}", webhook_id, token);
-        self.request_typed(Method::PATCH, &path, Some(body)).await
+        self.send(RouteId::ModifyWebhookWithToken, &path, json_body(body))
+            .await
     }
 
     pub async fn modify_webhook_with_token_typed<B>(
@@ -349,7 +369,8 @@ impl RestClient {
     {
         validate_token_path_segment("webhook_token", token, false)?;
         let path = format!("/webhooks/{}/{}", webhook_id, token);
-        self.request_typed(Method::PATCH, &path, Some(body)).await
+        self.send(RouteId::ModifyWebhookWithToken, &path, json_body(body))
+            .await
     }
 
     pub async fn modify_webhook_with_token_from_request(
@@ -369,7 +390,7 @@ impl RestClient {
     ) -> Result<(), DiscordError> {
         validate_token_path_segment("webhook_token", token, false)?;
         let path = format!("/webhooks/{}/{}", webhook_id, token);
-        self.request_no_content(Method::DELETE, &path, Option::<&Value>::None)
+        self.send_unit(RouteId::DeleteWebhookWithToken, &path, NO_BODY)
             .await
     }
 }

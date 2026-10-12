@@ -1,13 +1,10 @@
 //! Poll endpoints: answer voters and ending a poll.
 
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{ChannelId, Message, MessageId, PollAnswerId, PollAnswerVoters, UserId};
 
 use super::paths::poll_answer_voters_query;
-use super::RestClient;
+use super::{RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_poll_answer_voters(
@@ -18,15 +15,15 @@ impl RestClient {
         after: Option<UserId>,
         limit: Option<u64>,
     ) -> Result<PollAnswerVoters, DiscordError> {
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetAnswerVoters,
             &format!(
                 "/channels/{}/polls/{}/answers/{answer_id}{}",
                 channel_id,
                 message_id,
                 poll_answer_voters_query(after, limit)
             ),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -36,10 +33,10 @@ impl RestClient {
         channel_id: ChannelId,
         message_id: MessageId,
     ) -> Result<Message, DiscordError> {
-        self.request_typed(
-            Method::POST,
+        self.send(
+            RouteId::EndPoll,
             &format!("/channels/{}/polls/{}/expire", channel_id, message_id),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }

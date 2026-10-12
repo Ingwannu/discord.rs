@@ -1,20 +1,17 @@
 //! Current-application endpoints: application, activity instances, and role
 //! connection metadata.
 
-use reqwest::Method;
-use serde_json::Value;
-
 use crate::error::DiscordError;
 use crate::model::{
     ActivityInstance, Application, ApplicationRoleConnectionMetadata, ModifyCurrentApplication,
 };
 
 use super::paths::{configured_application_id, validate_token_path_segment};
-use super::RestClient;
+use super::{json_body, RestClient, RouteId, NO_BODY};
 
 impl RestClient {
     pub async fn get_current_application(&self) -> Result<Application, DiscordError> {
-        self.request_typed(Method::GET, "/applications/@me", Option::<&Value>::None)
+        self.send(RouteId::GetCurrentApplication, "/applications/@me", NO_BODY)
             .await
     }
 
@@ -22,8 +19,12 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        self.request_typed(Method::PATCH, "/applications/@me", Some(body))
-            .await
+        self.send(
+            RouteId::EditCurrentApplication,
+            "/applications/@me",
+            json_body(body),
+        )
+        .await
     }
 
     pub async fn edit_current_application_from_request(
@@ -39,10 +40,10 @@ impl RestClient {
     ) -> Result<ActivityInstance, DiscordError> {
         validate_token_path_segment("instance_id", instance_id, false)?;
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationActivityInstance,
             &format!("/applications/{application_id}/activity-instances/{instance_id}"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -51,10 +52,10 @@ impl RestClient {
         &self,
     ) -> Result<Vec<ApplicationRoleConnectionMetadata>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::GET,
+        self.send(
+            RouteId::GetApplicationRoleConnectionMetadataRecords,
             &format!("/applications/{application_id}/role-connections/metadata"),
-            Option::<&Value>::None,
+            NO_BODY,
         )
         .await
     }
@@ -64,10 +65,10 @@ impl RestClient {
         records: &[ApplicationRoleConnectionMetadata],
     ) -> Result<Vec<ApplicationRoleConnectionMetadata>, DiscordError> {
         let application_id = configured_application_id(self.application_id())?;
-        self.request_typed(
-            Method::PUT,
+        self.send(
+            RouteId::UpdateApplicationRoleConnectionMetadataRecords,
             &format!("/applications/{application_id}/role-connections/metadata"),
-            Some(records),
+            json_body(records),
         )
         .await
     }

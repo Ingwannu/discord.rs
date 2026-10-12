@@ -43,6 +43,7 @@ mod paths;
 mod poll;
 mod rate_limit;
 mod role;
+mod routes;
 mod scheduled_events;
 #[cfg(test)]
 mod tests;
@@ -59,20 +60,21 @@ use crate::types::invalid_data_error;
 pub use attachment::{FileAttachment, FileUpload};
 use body::{
     build_multipart_form, build_named_file_form, build_sticker_form, clone_json_body,
-    decode_json_body, json_body, multipart_body, parse_body_bytes, parse_body_value,
-    serialize_body, RequestBody,
+    decode_json_body, json_body, multipart_body, optional_json_body, parse_body_bytes,
+    parse_body_value, serialize_body, EncodedBody, RequestBody, NO_BODY,
 };
 pub use client_config::{RateLimitCallback, RateLimitInfo, RestClientBuilder};
 use paths::{
     archived_threads_query, bool_query, configured_application_id, entitlement_query,
     joined_archived_threads_query, request_uses_bot_authorization, route_token, scrub_token,
-    subscription_query, thread_member_query, RequestRoute, RouteOperation,
+    subscription_query, thread_member_query, RequestRoute,
 };
 use rate_limit::RateLimitState;
 
 pub(crate) use paths::redact_path_tokens;
 #[cfg(test)]
 use rate_limit::RATE_LIMIT_BUCKET_RETENTION;
+pub(crate) use routes::{RouteAuth, RouteId};
 
 const API_BASE: &str = "https://discord.com/api/v10";
 const DEFAULT_USER_AGENT: &str = concat!("DiscordBot (discordrs, ", env!("CARGO_PKG_VERSION"), ")");
@@ -80,11 +82,63 @@ const MAX_RATE_LIMIT_RETRIES: usize = 5;
 const MAX_SERVER_ERROR_RETRIES: usize = 3;
 const ROUTE_GATE_GC_THRESHOLD: usize = 512;
 
+/// The `Authorization` header a request is sent with.
 #[derive(Clone, Copy)]
 enum RequestAuthorization<'a> {
+    /// The bot token, unless the path is a tokenized webhook or interaction
+    /// route ([`request_uses_bot_authorization`]). Only raw requests, whose
+    /// route the client does not know, decide from the path.
     Auto,
+    Bot,
     Bearer(&'a str),
     None,
+}
+
+impl RequestAuthorization<'_> {
+    /// The header for a manifest route sent without a caller-supplied token.
+    /// A bearer route reached this way sends no header rather than the bot
+    /// token; the endpoint must use the bearer shims.
+    fn for_route(route: RouteId) -> Self {
+        match route.auth() {
+            RouteAuth::Bot => Self::Bot,
+            RouteAuth::Bearer | RouteAuth::Token | RouteAuth::None | RouteAuth::Client => {
+                Self::None
+            }
+        }
+    }
+}
+
+/// What [`RestClient::execute`] sends to: a manifest route, or a raw request
+/// whose method and authorization the caller chose.
+#[derive(Clone, Copy)]
+enum Target<'a> {
+    Route(RouteId),
+    BearerRoute(RouteId, &'a str),
+    Raw(&'a Method, RequestAuthorization<'a>),
+}
+
+impl<'a> Target<'a> {
+    fn route(self) -> Option<RouteId> {
+        match self {
+            Self::Route(route) | Self::BearerRoute(route, _) => Some(route),
+            Self::Raw(..) => None,
+        }
+    }
+
+    fn method(self) -> Method {
+        match self {
+            Self::Route(route) | Self::BearerRoute(route, _) => route.method(),
+            Self::Raw(method, _) => method.clone(),
+        }
+    }
+
+    fn authorization(self) -> RequestAuthorization<'a> {
+        match self {
+            Self::Route(route) => RequestAuthorization::for_route(route),
+            Self::BearerRoute(_, token) => RequestAuthorization::Bearer(token),
+            Self::Raw(_, authorization) => authorization,
+        }
+    }
 }
 
 /// Typed Discord REST client with shared per-route and global rate-limit
@@ -245,7 +299,7 @@ impl RestClient {
 
     // [Decision Log] Shim plus erased transport core
     // - Purpose: keep the per-type cost of the typed REST helpers minimal,
-    //   since every `(T, B)` pair an endpoint uses instantiates one, and stop
+    //   since every response type an endpoint uses instantiates one, and stop
     //   copying each response body into a `String` before parsing it.
     // - Before: each helper was a generic `async fn` that serialized with
     //   `?`, awaited three nested non-generic wrappers (`request_with_headers`
@@ -258,13 +312,18 @@ impl RestClient {
     //   (2) return hand-written `Future` types from non-async shims, which
     //   would turn the public `async fn request_typed` family into
     //   `fn -> impl Future`, a signature change; (3) box the core future.
-    // - Chosen: the generic shims do only generic work: encode the body into
-    //   a `Result<Option<RequestBody>, _>` before the single await, and hand
-    //   the awaited `Result` to `decode_response`. No `?` runs inside a shim,
-    //   so its state machine has one suspend point and no early returns.
-    //   `execute` is the only implementation of gating, rate limits, replay,
-    //   and token scrubbing, and it starts by returning a body-encoding error
-    //   before anything is sent, exactly as the shims used to.
+    // - Chosen: the generic shims do only generic work. The endpoint encodes
+    //   the body into an [`EncodedBody`] (`json_body`, `multipart_body`)
+    //   before the single await, and the shim hands the awaited `Result` to
+    //   `decode_response`. No `?` runs inside a shim, so its state machine has
+    //   one suspend point and no early returns. `execute` is the only
+    //   implementation of gating, rate limits, replay, and token scrubbing,
+    //   and it starts by returning a body-encoding error before anything is
+    //   sent. Since 3.0 phase 5 the shims take a [`RouteId`] from the route
+    //   manifest (`http/routes.rs`) instead of a `Method`: the method and the
+    //   authorization come from the manifest row, so a call site cannot pair a
+    //   route with the wrong method or token, and the shims are generic over
+    //   the response type only (body encoding moved to the call site).
     // - Why: (2) changes public signatures and (3) adds an allocation per
     //   request; this shape keeps every signature and behaviour. Measured
     //   (2026-10-11): a shim is about 160 IR lines with its drop glue, and a
@@ -275,8 +334,8 @@ impl RestClient {
     //   discordrsdocs/docs/guide/testing-and-coverage.md).
     // - Trade-offs: `execute` takes an already-failed body as an argument,
     //   which reads oddly but is what keeps the shims branch-free. New
-    //   endpoints must call these shims (or `execute`) rather than adding
-    //   another generic `async fn` that wraps the loop.
+    //   endpoints must add a manifest row and call these shims rather than
+    //   adding another generic `async fn` that wraps the loop.
 
     pub async fn request(
         &self,
@@ -285,7 +344,7 @@ impl RestClient {
         body: Option<&Value>,
     ) -> Result<Value, DiscordError> {
         let body = Ok(body.map(clone_json_body).map(RequestBody::Json));
-        self.execute(RequestAuthorization::Auto, method, path, body)
+        self.execute(Target::Raw(&method, RequestAuthorization::Auto), path, body)
             .await
             .map(RawResponse::into_value)
     }
@@ -300,21 +359,13 @@ impl RestClient {
     where
         B: serde::Serialize + ?Sized,
     {
-        let body = multipart_body(body, files).map(Some);
-        self.execute(RequestAuthorization::Auto, method, path, body)
-            .await
-            .map(RawResponse::into_value)
-    }
-
-    async fn request_bytes_with_authorization(
-        &self,
-        authorization: RequestAuthorization<'_>,
-        method: Method,
-        path: &str,
-    ) -> Result<Vec<u8>, DiscordError> {
-        self.execute(authorization, method, path, Ok(None))
-            .await
-            .map(|response| response.body)
+        self.execute(
+            Target::Raw(&method, RequestAuthorization::Auto),
+            path,
+            multipart_body(body, files),
+        )
+        .await
+        .map(RawResponse::into_value)
     }
 
     pub async fn request_typed<T, B>(
@@ -328,41 +379,12 @@ impl RestClient {
         B: serde::Serialize + ?Sized,
     {
         decode_response(
-            self.execute(RequestAuthorization::Auto, method, path, json_body(body))
-                .await,
-        )
-    }
-
-    async fn request_optional_typed_no_content<T, B>(
-        &self,
-        method: Method,
-        path: &str,
-        body: Option<&B>,
-    ) -> Result<Option<T>, DiscordError>
-    where
-        T: DeserializeOwned,
-        B: serde::Serialize + ?Sized,
-    {
-        decode_optional_response(
-            self.execute(RequestAuthorization::Auto, method, path, json_body(body))
-                .await,
-        )
-    }
-
-    async fn request_typed_with_authorization<T, B>(
-        &self,
-        authorization: RequestAuthorization<'_>,
-        method: Method,
-        path: &str,
-        body: Option<&B>,
-    ) -> Result<T, DiscordError>
-    where
-        T: DeserializeOwned,
-        B: serde::Serialize + ?Sized,
-    {
-        decode_response(
-            self.execute(authorization, method, path, json_body(body))
-                .await,
+            self.execute(
+                Target::Raw(&method, RequestAuthorization::Auto),
+                path,
+                optional_json_body(body),
+            )
+            .await,
         )
     }
 
@@ -377,63 +399,92 @@ impl RestClient {
         T: DeserializeOwned,
         B: serde::Serialize + ?Sized,
     {
-        let body = multipart_body(body, files).map(Some);
         decode_response(
-            self.execute(RequestAuthorization::Auto, method, path, body)
-                .await,
+            self.execute(
+                Target::Raw(&method, RequestAuthorization::Auto),
+                path,
+                multipart_body(body, files),
+            )
+            .await,
         )
     }
 
-    async fn request_no_content<B>(
+    /// Sends `route` and decodes the response into `T`.
+    async fn send<T: DeserializeOwned>(
         &self,
-        method: Method,
+        route: RouteId,
         path: &str,
-        body: Option<&B>,
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        self.execute(RequestAuthorization::Auto, method, path, json_body(body))
+        body: EncodedBody,
+    ) -> Result<T, DiscordError> {
+        decode_response(self.execute(Target::Route(route), path, body).await)
+    }
+
+    /// [`Self::send`] for routes that answer `204 No Content` in some cases:
+    /// `None` for 204, otherwise the decoded body.
+    async fn send_optional<T: DeserializeOwned>(
+        &self,
+        route: RouteId,
+        path: &str,
+        body: EncodedBody,
+    ) -> Result<Option<T>, DiscordError> {
+        decode_optional_response(self.execute(Target::Route(route), path, body).await)
+    }
+
+    /// Sends `route` and discards the response body.
+    async fn send_unit(
+        &self,
+        route: RouteId,
+        path: &str,
+        body: EncodedBody,
+    ) -> Result<(), DiscordError> {
+        self.execute(Target::Route(route), path, body)
             .await
             .map(RawResponse::discard)
     }
 
-    async fn request_multipart_no_content<B>(
-        &self,
-        method: Method,
-        path: &str,
-        body: &B,
-        files: &[FileAttachment],
-    ) -> Result<(), DiscordError>
-    where
-        B: serde::Serialize + ?Sized,
-    {
-        let body = multipart_body(body, files).map(Some);
-        self.execute(RequestAuthorization::Auto, method, path, body)
+    /// Sends `route` without a body and returns the raw response bytes.
+    async fn send_bytes(&self, route: RouteId, path: &str) -> Result<Vec<u8>, DiscordError> {
+        self.execute(Target::Route(route), path, NO_BODY)
             .await
-            .map(RawResponse::discard)
+            .map(|response| response.body)
     }
 
     /// For endpoints that build their own [`RequestBody`] (named-file and
     /// sticker multipart forms) and decode the response themselves.
-    async fn request_with_headers(
+    async fn send_response(
         &self,
-        method: Method,
+        route: RouteId,
         path: &str,
-        body: Option<RequestBody>,
+        body: EncodedBody,
     ) -> Result<RawResponse, DiscordError> {
-        self.execute(RequestAuthorization::Auto, method, path, Ok(body))
-            .await
+        self.execute(Target::Route(route), path, body).await
     }
 
-    async fn request_with_headers_authorized(
+    /// [`Self::send`] for a `bearer` route with the caller's access token.
+    async fn send_bearer<T: DeserializeOwned>(
         &self,
-        authorization: RequestAuthorization<'_>,
-        method: Method,
+        route: RouteId,
+        bearer_token: &str,
         path: &str,
-        body: Option<RequestBody>,
-    ) -> Result<RawResponse, DiscordError> {
-        self.execute(authorization, method, path, Ok(body)).await
+        body: EncodedBody,
+    ) -> Result<T, DiscordError> {
+        decode_response(
+            self.execute(Target::BearerRoute(route, bearer_token), path, body)
+                .await,
+        )
+    }
+
+    /// [`Self::send_unit`] for a `bearer` route with the caller's access token.
+    async fn send_bearer_unit(
+        &self,
+        route: RouteId,
+        bearer_token: &str,
+        path: &str,
+        body: EncodedBody,
+    ) -> Result<(), DiscordError> {
+        self.execute(Target::BearerRoute(route, bearer_token), path, body)
+            .await
+            .map(RawResponse::discard)
     }
 
     /// Single transport entry point: serializes same-bucket requests behind
@@ -447,13 +498,14 @@ impl RestClient {
     /// Decision Log above `request`.
     async fn execute(
         &self,
-        authorization: RequestAuthorization<'_>,
-        method: Method,
+        target: Target<'_>,
         path: &str,
-        body: Result<Option<RequestBody>, DiscordError>,
+        body: EncodedBody,
     ) -> Result<RawResponse, DiscordError> {
         let body = body?;
-        let route = RequestRoute::new(&method, path);
+        let method = target.method();
+        let authorization = target.authorization();
+        let route = RequestRoute::new(&method, path, target.route());
         let route_key = route.key.as_str();
         let token = route_token(path);
         let replay =
@@ -660,6 +712,10 @@ impl RestClient {
         }
 
         match authorization {
+            RequestAuthorization::Bot => {
+                request_builder =
+                    request_builder.header("Authorization", format!("Bot {}", self.token));
+            }
             RequestAuthorization::Auto if request_uses_bot_authorization(&normalized_path) => {
                 request_builder =
                     request_builder.header("Authorization", format!("Bot {}", self.token));
@@ -794,10 +850,12 @@ enum ReplayPolicy {
     /// DELETE whose first attempt succeeded surfaces Discord's 404, which is
     /// the accepted cost of retrying it.
     Always,
-    /// A channel message create carrying `nonce` + `enforce_nonce: true`.
-    /// Discord returns the original message for a repeated nonce, but only
-    /// within its deduplication window, so the replay is bounded by
-    /// [`NONCE_DEDUP_WINDOW`] measured from the first attempt.
+    /// A channel message create (the manifest's `CreateMessage` route)
+    /// carrying `nonce` + `enforce_nonce: true`. Discord returns the original
+    /// message for a repeated nonce, but only within its deduplication
+    /// window, so the replay is bounded by [`NONCE_DEDUP_WINDOW`] measured
+    /// from the first attempt. A raw request never qualifies, even with the
+    /// same path and body: the client does not interpret raw requests.
     WithinNonceWindow,
     /// POST and PATCH in general. Discord PATCH bodies usually set absolute
     /// values, but nothing guarantees that for every route.
@@ -818,7 +876,7 @@ impl ReplayPolicy {
             )
         {
             Self::Always
-        } else if route.operation == RouteOperation::CreateChannelMessage
+        } else if route.id.is_some_and(RouteId::replays_with_nonce)
             && body.is_some_and(RequestBody::enforces_nonce)
         {
             Self::WithinNonceWindow

@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -62,12 +63,6 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(api_drift.normalize_template("/guilds/[\\{guild.id\\}]/pins"), "/guilds/{}/pins")
         self.assertEqual(api_drift.normalize_template(" /a/\\{b\\_id\\}?x=1 "), "/a/{}")
         self.assertEqual(api_drift.normalize_template("/users/@me/"), "/users/@me")
-
-    def test_crate_path_drops_query_suffix_placeholders(self):
-        self.assertEqual(api_drift.normalize_crate_path("/guilds/{}{query}"), "/guilds/{}")
-        self.assertEqual(api_drift.normalize_crate_path("/guilds/{id}/members{query}"), "/guilds/{}/members")
-        self.assertEqual(api_drift.normalize_crate_path("/channels/{}/messages?limit={}"), "/channels/{}/messages")
-        self.assertEqual(api_drift.normalize_crate_path("/webhooks/{id}/{token}"), "/webhooks/{}/{}")
 
     def test_event_names_follow_the_docs_rule(self):
         self.assertEqual(api_drift.event_name_from_title("Guild Members Chunk"), "GUILD_MEMBERS_CHUNK")
@@ -150,39 +145,60 @@ class RustScanningTests(unittest.TestCase):
         self.assertIn("field: u8", original)
         self.assertEqual(original.count("\n"), source.count("\n"))
 
-    def test_fixture_routes_and_unresolved_calls(self):
-        routes, unresolved = api_drift.extract_crate_routes_from_text((CRATE / "src/http.rs").read_text(), "src/http.rs")
-        found = {(route.method, route.path) for route in routes}
+    def test_manifest_rows(self):
+        rows, errors = api_drift.parse_manifest_text((CRATE / "src/http/routes.rs").read_text(), "routes.rs")
+        self.assertEqual(errors, [])
         self.assertEqual(
-            found,
+            {(row.method, row.path) for row in rows},
             {
                 ("GET", "/guilds/{}/widget"),
                 ("PATCH", "/guilds/{}/widget"),
                 ("GET", "/channels/{}/messages/{}"),
                 ("GET", "/channels/{}/pins"),
                 ("GET", "/sparkles/{}"),
+                ("POST", "/webhooks/{}/{}"),
                 ("POST", "/legacy/thing"),
+                ("POST", "/oauth2/token"),
             },
         )
-        # The `match` binding yields two literals that normalize to one route.
-        self.assertEqual(sum(route.path == "/channels/{}/pins" for route in routes), 1)
-        functions = {route.function for route in routes}
-        self.assertIn("get_message", functions)
-        self.assertEqual(
-            [(call.method, call.function, call.expression) for call in unresolved],
-            [("POST", "execute_widget_webhook", "&path")],
+        pins = next(row for row in rows if row.id == "GetPinnedMessages")
+        self.assertEqual(pins.template, "/channels/{channel.id}/pins")
+        self.assertEqual(pins.query, ["limit"])
+        self.assertEqual(pins.api, ["get_pins", "get_pins_limited"])
+        self.assertEqual(pins.was, [("pins", "get_pins")])
+        self.assertEqual((pins.auth, pins.body, pins.response), ("bot", "()", "Value"))
+        oauth = next(row for row in rows if row.id == "OAuth2Token")
+        self.assertEqual((oauth.client, oauth.api), ("oauth2", ["exchange_code"]))
+
+    def test_manifest_rejects_lines_it_does_not_understand(self):
+        text = (
+            "route_manifest! {\n"
+            '    Good: GET "/a" bot, query [], body () => (), api [a];\n'
+            '    Bad: FETCH "/b" bot, query [], body () => (), api [b];\n'
+            '    Wrapped: GET "/c" bot,\n'
+            "}\n"
         )
+        rows, errors = api_drift.parse_manifest_text(text, "routes.rs")
+        self.assertEqual([row.id for row in rows], ["Good"])
+        self.assertEqual(len(errors), 2)
+        self.assertIn("routes.rs:3: not a manifest row", errors[0])
+        _, errors = api_drift.parse_manifest_text("fn main() {}", "routes.rs")
+        self.assertIn("no `route_manifest! { ... }` invocation", errors[0])
 
-    def test_helper_arguments_are_not_paths(self):
-        routes, _ = api_drift.extract_crate_routes_from_text((CRATE / "src/http.rs").read_text(), "src/http.rs")
-        paths = {route.path for route in routes}
-        for bogus in ("/slack", "/commented/out", "/also/commented", "/raw/string", "/test/only/route"):
-            self.assertNotIn(bogus, paths)
-
-    def test_reqwest_builder_calls_with_api_base(self):
-        routes, unresolved = api_drift.extract_crate_routes_from_text((CRATE / "src/oauth2.rs").read_text(), "src/oauth2.rs")
-        self.assertEqual({(route.method, route.path) for route in routes}, {("POST", "/oauth2/token")})
-        self.assertEqual(unresolved, [])
+    def test_functions_record_owner_visibility_and_deprecation(self):
+        functions = {
+            function.name: function
+            for function in api_drift.extract_functions_from_text((CRATE / "src/http.rs").read_text(), "src/http.rs")
+        }
+        self.assertTrue(functions["get_widget"].endpoint)
+        self.assertEqual(functions["get_widget"].owner, "RestClient")
+        self.assertFalse(functions["is_replay_safe"].endpoint)
+        self.assertFalse(functions["execute_webhook_path"].endpoint)
+        self.assertTrue(functions["pins"].deprecated)
+        self.assertNotIn("test_only_endpoint", functions)
+        # Comments and string literals do not count as route references.
+        self.assertNotIn("GetChannelMessage", functions["get_sparkle"].body)
+        self.assertNotIn("LegacyThing", functions["get_sparkle"].body)
 
     def test_decoder_event_names(self):
         names = api_drift.extract_event_names_from_text(
@@ -199,7 +215,7 @@ class RustScanningTests(unittest.TestCase):
 
     def test_scan_skips_excluded_test_file(self):
         scan = api_drift.scan_crate(CRATE, load_fixture_allowlist())
-        self.assertNotIn(("PUT", "/excluded/file"), scan.routes)
+        self.assertNotIn("harness_only", {function.name for function in scan.functions})
 
 
 class AllowlistTests(unittest.TestCase):
@@ -207,8 +223,8 @@ class AllowlistTests(unittest.TestCase):
         with self.assertRaisesRegex(api_drift.ConfigError, "reason"):
             api_drift.parse_allowlist({"ignored_route": [{"method": "GET", "path": "/x", "reason": "short"}]})
 
-    def test_helper_routes_need_evidence(self):
-        with self.assertRaisesRegex(api_drift.ConfigError, "evidence"):
+    def test_helper_route_table_is_gone(self):
+        with self.assertRaisesRegex(api_drift.ConfigError, "unknown allowlist tables"):
             api_drift.parse_allowlist(
                 {"helper_route": [{"method": "GET", "path": "/x", "reason": "a long enough reason"}]}
             )
@@ -235,7 +251,7 @@ class AllowlistTests(unittest.TestCase):
 
     def test_real_allowlist_parses(self):
         allowlist = api_drift.load_allowlist(CI_DIR / "api-drift-allowlist.toml")
-        self.assertGreater(len(allowlist.keys("helper_route")), 0)
+        self.assertGreater(len(allowlist.keys("crate_only_route")), 0)
 
 
 class CompareTests(unittest.TestCase):
@@ -243,6 +259,7 @@ class CompareTests(unittest.TestCase):
         report = fixture_report()
         self.assertEqual(report.missing_routes, [("DELETE", "/guilds/{}/widget")])
         self.assertEqual(report.extra_routes, [("POST", "/legacy/thing")])
+        self.assertNotIn(("GET", "/secret-widgets"), report.missing_routes)
         self.assertEqual(report.missing_events, ["SHINY_NEW_EVENT", "VOICE_CHANNEL_EFFECT_SEND"])
         self.assertEqual(report.extra_events, ["MESSAGE_UPDATE"])
         self.assertEqual(report.maintenance, [])
@@ -286,30 +303,32 @@ reason = "Fixture: undocumented but real."
     def test_stale_entries_are_reported(self):
         report = fixture_report(
             """
-[[helper_route]]
-method = "GET"
-path = "/sparkles/{id}"
-functions = ["renamed_function"]
-evidence = ["fn helper_that_was_deleted"]
-reason = "Fixture: helper entry that went stale."
-
 [[ignored_route]]
 method = "GET"
 path = "/never-documented"
 reason = "Fixture: ignored route Discord no longer documents."
 
+[[ignored_route]]
+method = "GET"
+path = "/sparkles/{id}"
+reason = "Fixture: ignored route the crate implements now."
+
 [[crate_only_route]]
 method = "GET"
 path = "/guilds/{id}/widget"
 reason = "Fixture: crate-only entry Discord now documents."
+
+[[crate_only_route]]
+method = "GET"
+path = "/gone"
+reason = "Fixture: crate-only entry the crate no longer sends."
 """
         )
         text = "\n".join(report.maintenance)
-        self.assertIn("evidence `fn helper_that_was_deleted`", text)
-        self.assertIn("`fn renamed_function` no longer sends Method::GET", text)
-        self.assertIn("now found as a path literal", text)
         self.assertIn("/never-documented: no longer documented", text)
+        self.assertIn("GET /sparkles/{}: the crate implements it now", text)
         self.assertIn("Discord documents it now", text)
+        self.assertIn("GET /gone: no longer found in the crate", text)
 
     def test_evidence_in_comments_does_not_count(self):
         allowlist = load_fixture_allowlist(
@@ -327,15 +346,74 @@ reason = "Fixture: evidence that exists only inside a comment."
             ['[[crate_only_route]] POST /legacy/thing: evidence `"/only/in/a/comment"` no longer appears in src/'],
         )
 
-    def test_unclaimed_helper_call_site_is_reported(self):
-        import tomllib
 
-        data = tomllib.loads(ALLOWLIST.read_text())
-        data["helper_route"][0]["functions"] = []
-        allowlist = api_drift.parse_allowlist(data)
-        scan = api_drift.scan_crate(CRATE, allowlist)
-        notes = api_drift.crate_maintenance(allowlist, scan)
-        self.assertTrue(any("unmapped helper-built call: Method::POST in `fn execute_widget_webhook`" in note for note in notes))
+def binding_notes(**edits: tuple[str, str]) -> list[str]:
+    """Manifest binding notes for a copy of the fixture crate with edits.
+
+    Each keyword names a fixture file (``http``, ``routes``, ``oauth2``) and
+    maps to an ``(old, new)`` replacement applied to it.
+    """
+
+    files = {"http": "src/http.rs", "routes": "src/http/routes.rs", "oauth2": "src/oauth2.rs"}
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "crate"
+        shutil.copytree(CRATE, root)
+        for key, (old, new) in edits.items():
+            path = root / files[key]
+            text = path.read_text()
+            if old not in text:
+                raise AssertionError(f"fixture edit does not apply: {old!r}")
+            path.write_text(text.replace(old, new))
+        allowlist = load_fixture_allowlist()
+        return api_drift.manifest_binding(allowlist, api_drift.scan_crate(root, allowlist))
+
+
+class ManifestBindingTests(unittest.TestCase):
+    def test_fixture_is_bound(self):
+        self.assertEqual(binding_notes(), [])
+
+    def test_listed_method_must_exist(self):
+        notes = binding_notes(routes=("api [get_sparkle]", "api [get_sparkle, get_sparkles]"))
+        self.assertEqual(notes, ["route manifest: `GetSparkle` lists `RestClient::get_sparkles`, which does not exist"])
+
+    def test_listed_method_must_send_its_route(self):
+        notes = binding_notes(http=("RouteId::GetSparkle", "RouteId::GetChannelMessage"))
+        self.assertIn(
+            "route manifest: `RestClient::get_sparkle` is listed under `GetSparkle` but never sends "
+            "`RouteId::GetSparkle` (directly or through a `self.` call)",
+            notes,
+        )
+
+    def test_unlisted_endpoint_is_reported(self):
+        notes = binding_notes(routes=("api [get_pins, get_pins_limited]", "api [get_pins]"))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("endpoint `RestClient::get_pins_limited` (src/http.rs:", notes[0])
+
+    def test_removed_name_must_be_gone_or_deprecated(self):
+        notes = binding_notes(http=('#[deprecated(note = "use get_pins")]\n', ""))
+        self.assertEqual(len(notes), 1)
+        self.assertIn("`RestClient::pins` is recorded as removed (`was`) under `GetPinnedMessages`", notes[0])
+        notes = binding_notes(routes=("was [pins => get_pins]", "was [pins => get_pin]"))
+        self.assertIn("route manifest: `GetPinnedMessages` maps `pins` to `get_pin`, which the row does not list", notes)
+
+    def test_direct_methods_outside_the_transport_are_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "crate"
+            shutil.copytree(CRATE, root)
+            (root / "src/http/extra.rs").write_text(
+                "impl RestClient {\n    fn sneaky(&self) { self.raw(Method::POST, \"/x\"); }\n}\n"
+            )
+            allowlist = load_fixture_allowlist()
+            notes = api_drift.manifest_binding(allowlist, api_drift.scan_crate(root, allowlist))
+        self.assertEqual(
+            notes, ["src/http/extra.rs:2: Method::POST: endpoints name their route with `RouteId`, not an HTTP method"]
+        )
+
+    def test_duplicate_ids_and_unparseable_rows_are_reported(self):
+        row = '    GetSparkle: GET "/sparkles/{sparkle.id}" bot, query [], body () => Value, api [get_sparkle];\n'
+        notes = binding_notes(routes=(row, row + row + "    Broken: GET\n"))
+        self.assertTrue(any("not a manifest row" in note for note in notes), notes)
+        self.assertTrue(any("`GetSparkle` is listed twice" in note for note in notes), notes)
 
 
 class RenderTests(unittest.TestCase):
@@ -345,7 +423,7 @@ class RenderTests(unittest.TestCase):
         self.assertTrue(text.startswith(api_drift.REPORT_MARKER))
         self.assertIn("**Drift found.**", text)
         self.assertIn("`DELETE /guilds/{}/widget` - Delete Widget (`developers/resources/widget.mdx:", text)
-        self.assertIn("`POST /legacy/thing` - `src/http.rs:", text)
+        self.assertIn("`POST /legacy/thing` - `LegacyThing` (`src/http/routes.rs:", text)
         self.assertIn("`SHINY_NEW_EVENT`", text)
         self.assertIn(f"<!-- api-drift-fingerprint: {report.fingerprint} -->", text)
 
@@ -384,7 +462,7 @@ class CliTests(unittest.TestCase):
     def test_self_check_passes_on_fixture(self):
         code, out, err = run_cli(*self.base, "--self-check")
         self.assertEqual(code, api_drift.EXIT_OK, err)
-        self.assertIn("allowlist matches the crate", out)
+        self.assertIn("allowlist and route manifest match the crate", out)
 
     def test_broken_extraction_exits_two(self):
         with tempfile.TemporaryDirectory() as tmp:

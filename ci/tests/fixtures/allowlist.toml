@@ -4,13 +4,7 @@ min_docs_routes = 1
 min_crate_routes = 1
 min_docs_events = 1
 min_crate_events = 1
-
-[[helper_route]]
-method = "POST"
-path = "/webhooks/{webhook.id}/{webhook.token}"
-functions = ["execute_widget_webhook"]
-evidence = ['"/webhooks/{id}/{token}{}"']
-reason = "Fixture: built by execute_webhook_path()."
+non_endpoint_functions = ["request"]
 
 [[ignored_route]]
 method = "GET"

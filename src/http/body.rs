@@ -57,24 +57,39 @@ pub(crate) fn serialize_body<T: serde::Serialize + ?Sized>(
     serde_json::to_value(body).map_err(Into::into)
 }
 
-/// Encodes an optional JSON request body for the transport. Returns the
-/// `Result` instead of using `?` so the typed shims in `http.rs` hand it to
-/// `RestClient::execute` without an early-return branch of their own.
-pub(crate) fn json_body<T: serde::Serialize + ?Sized>(
-    body: Option<&T>,
-) -> Result<Option<RequestBody>, DiscordError> {
-    body.map(serialize_body)
-        .transpose()
-        .map(|body| body.map(RequestBody::Json))
+/// A request body ready for the transport, or the error that encoding it
+/// produced. Endpoints build it before the single await and pass it to the
+/// shims in `http.rs`, which hand it to `RestClient::execute` without an
+/// early-return branch of their own; `execute` returns the error before
+/// anything is sent.
+pub(crate) type EncodedBody = Result<Option<RequestBody>, DiscordError>;
+
+/// A request without a body.
+pub(crate) const NO_BODY: EncodedBody = Ok(None);
+
+/// Encodes a JSON request body.
+pub(crate) fn json_body<T: serde::Serialize + ?Sized>(body: &T) -> EncodedBody {
+    serialize_body(body).map(|body| Some(RequestBody::Json(body)))
 }
 
+/// [`json_body`] for an optional body.
+pub(crate) fn optional_json_body<T: serde::Serialize + ?Sized>(body: Option<&T>) -> EncodedBody {
+    match body {
+        Some(body) => json_body(body),
+        None => NO_BODY,
+    }
+}
+
+/// Encodes a `multipart/form-data` body: `payload_json` plus `files[n]`.
 pub(crate) fn multipart_body<T: serde::Serialize + ?Sized>(
     body: &T,
     files: &[FileAttachment],
-) -> Result<RequestBody, DiscordError> {
-    Ok(RequestBody::Multipart {
-        payload_json: serialize_body(body)?,
-        files: files.to_vec(),
+) -> EncodedBody {
+    serialize_body(body).map(|payload_json| {
+        Some(RequestBody::Multipart {
+            payload_json,
+            files: files.to_vec(),
+        })
     })
 }
 
