@@ -1,6 +1,7 @@
 - [홈](#/ko/README)
 - 가이드
   - [빠른 시작](#/ko/guide/getting-started)
+  - [2.x에서 3.0으로 옮기기](#/ko/guide/migration-3.0)
   - [사용 가이드](#/ko/guide/usage-guide)
   - [아키텍처](#/ko/guide/architecture)
   - [인터랙션 흐름](#/ko/guide/interaction-flow)

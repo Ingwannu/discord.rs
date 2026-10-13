@@ -7,6 +7,7 @@
 ## 빠른 링크
 
 - [시작하기](#/ko/guide/getting-started)
+- [2.x에서 3.0으로 옮기기](#/ko/guide/migration-3.0): 2.0.2·2.2.0 봇을 위한 모든 깨지는 변경과 전후 코드
 - [아키텍처](#/ko/guide/architecture)
 - [사용 가이드](#/ko/guide/usage-guide)
 - [빌더 API](#/ko/api/builders)

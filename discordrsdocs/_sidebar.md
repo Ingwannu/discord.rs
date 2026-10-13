@@ -1,6 +1,7 @@
 - [Home](#/README)
 - Guides
   - [Getting Started](#/docs/guide/getting-started)
+  - [Migrating from 2.x to 3.0](#/docs/guide/migration-3.0)
   - [Usage Guide](#/docs/guide/usage-guide)
   - [Testing And Coverage](#/docs/guide/testing-and-coverage)
   - [Architecture](#/docs/guide/architecture)

@@ -114,6 +114,10 @@ async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordE
 }
 ```
 
+## Upgrading from 2.x to 3.0
+
+3.0 breaks the 2.x public types once, on purpose: typed IDs instead of `Snowflake`, open discriminants, a shared `Arc<Event>` envelope with patch-aware updates, typed request bodies for every REST route, and async traits without `async-trait`. The [migration guide](discordrsdocs/docs/guide/migration-3.0.md) ([한국어](discordrsdocs/ko/guide/migration-3.0.md)) walks through every change with before/after code for bots on 2.0.2 or 2.2.0, followed by a checklist. Its code is compiled in CI (`tests/migration_guide.rs`).
+
 ## API Cleanup
 
 Recent API cleanup tightened the public surface:
@@ -145,6 +149,7 @@ A navigation-focused docs website (similar to the discord.js docs browsing style
 - Korean URL: `http://discordrs.teamwicked.me/discordrsdocs/#/ko/README`
 - Entry: [`discordrsdocs/index.html`](discordrsdocs/index.html)
 - Testing guide: [`discordrsdocs/docs/guide/testing-and-coverage.md`](discordrsdocs/docs/guide/testing-and-coverage.md)
+- Migration guide (2.x → 3.0): [`discordrsdocs/docs/guide/migration-3.0.md`](discordrsdocs/docs/guide/migration-3.0.md)
 - Local preview:
   ```bash
   python3 -m http.server 8080 --directory discordrsdocs

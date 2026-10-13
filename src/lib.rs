@@ -3,6 +3,13 @@
 //! # Features
 //! - `gateway` - Gateway WebSocket client, BotClient, EventHandler
 //! - `interactions` - HTTP Interactions Endpoint with Ed25519 verification
+//!
+//! # Upgrading from 2.x
+//!
+//! 3.0 changes the 2.x public types (typed IDs, open discriminants, the
+//! `Arc<Event>` envelope, typed REST request bodies, traits without
+//! `async-trait`). The migration guide covers every change with before/after
+//! code: <https://github.com/Ingwannu/discord.rs/blob/main/discordrsdocs/docs/guide/migration-3.0.md>.
 
 // The code rules in Cargo.toml's `[lints]` table hold for library code
 // without exception; unit tests may unwrap, panic, cast, and discard, where

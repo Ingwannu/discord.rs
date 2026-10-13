@@ -329,6 +329,26 @@ git diff tests/ui/   # review: each case must still fail for the intended reason
 
 Review the regenerated `.stderr` files before committing. A snapshot that now shows a different error, such as a typo in the case file or a missing import, means the case no longer tests what its comment says.
 
+## Migration Guide Snippets
+
+The code of the [2.x → 3.0 migration guide](migration-3.0.md) (and its Korean copy) lives in `tests/migration_guide.rs`. Each "after" snippet is a region between `// snippet-start: NAME` and `// snippet-end` inside a module gated on the features it needs; the guide shows it after an HTML comment `<!-- snippet: NAME -->`. Snippets that need Discord (REST calls, a running client) are only compiled; the others are also called by a test next to them that asserts what the guide says. `guide_snippets_match_this_file` fails when a guide's block differs from its region, when a region is missing from either guide, or when a `rust` block has no marker. It also requires one region per module with every module-level `use` inside it, so each snippet compiles exactly as shown and test code cannot lend it an import. "Before" blocks show 2.x code, are marked `<!-- snippet: 2.x -->`, start with a `// 2.x` / `// 2.0.2` / `// 2.2.0` comment, and are not compiled.
+
+To change a snippet, edit the region, run `cargo fmt`, and paste the region (without the module's four-space indent) into both guides; the test names the first difference. The check reads the guides from `discordrsdocs/`, which the published package excludes, so it skips itself when that directory is missing.
+
+```bash
+cargo test --all-features --locked --test migration_guide
+```
+
+```text
+[Decision Log]
+- Purpose: every code block of the migration guide must compile against the current API and fail CI when it drifts, without making the guide unreadable.
+- Constraints: the snippets need different features (gateway, collectors, interactions, voice, sharding), and CI runs both default and all-features tests. The docs site (docsify) renders the guide; `discordrsdocs/` is excluded from the package. src/lib.rs is coordinator-owned.
+- Alternatives: (1) doctests through `#[doc = include_str!(..)]` under `cfg(doctest)` in src/lib.rs, with `ignore` / `no_run` fences; (2) copy the snippets into a test file by hand; (3) regions in a test file plus a test that compares them with the guides' blocks.
+- Choice: (3).
+- Why: (1) would need feature gates as hidden `# ` lines, which docsify shows verbatim, and `rust,ignore` info strings, which turn off syntax highlighting there; it also needs a library change. (2) drifts silently. With (3) the guide stays plain markdown, each snippet compiles under its own `cfg(feature)`, runnable snippets get real assertions, and both directions of drift fail.
+- Trade-offs: changing a snippet means editing the test file and both guides (the test points at the difference). Snippets cannot hide boilerplate, so each is a complete item with its `use` lines. 2.x blocks are not compiled: they would need a 2.x build.
+```
+
 ## Discord API Drift Report
 
 `ci/api_drift.py` compares the official
