@@ -1987,4 +1987,3 @@ authorization: -
 content-type: application/x-www-form-urlencoded
 body:
 token=access-1&client_id=golden-client&token_type_hint=access_token&client_secret=golden-secret
-

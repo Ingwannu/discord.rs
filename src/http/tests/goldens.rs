@@ -1942,8 +1942,11 @@ async fn every_route_matches_its_golden_request() {
     let mut problems = Vec::new();
     for case in &cases {
         let request = record(case).await;
+        // A blank line between cases, none after the last (`git diff --check`).
+        if !rendered.is_empty() {
+            rendered.push('\n');
+        }
         rendered.push_str(&render(case, request.as_ref()));
-        rendered.push('\n');
         let Some(request) = request else {
             problems.push(format!(
                 "{} · {}: nothing was sent",
