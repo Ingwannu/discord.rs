@@ -24,7 +24,7 @@ use tokio::time::{interval, sleep, timeout, Duration, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::error::DiscordError;
-use crate::event::Lenient;
+use crate::model::Lenient;
 use crate::model::{GuildId, UserId};
 use crate::types::invalid_data_error;
 use crate::voice::{

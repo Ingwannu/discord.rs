@@ -10,6 +10,10 @@
 //!   shape: every mutable field is a [`Patch`] / [`NullablePatch`], so an
 //!   omitted field keeps the cached value, `null` clears it, and `[]` replaces
 //!   it with an empty list.
+//! - Element-by-element decoding (`Lenient`, `LenientActivities`,
+//!   `LenientSeq`) keeps a GUILD_CREATE, GUILD_MEMBERS_CHUNK, or
+//!   PRESENCE_UPDATE when one member, presence, activity, or voice state in
+//!   it does not decode (decision log above `Skipped`).
 //!
 //! ```text
 //! [Decision Log]
@@ -45,19 +49,22 @@ use std::sync::Arc;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
+use tracing::{debug, warn};
 
 use crate::types::Emoji;
 
+use super::presence::push_activity;
 use super::{
-    ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention,
-    DefaultMessageNotificationLevel, DisplayNameStyles, Embed, ExplicitContentFilterLevel, Guild,
-    GuildId, GuildIncidentsData, GuildNsfwLevel, GuildScheduledEvent, Member, Message,
-    MessageActivity, MessageCall, MessageComponent, MessageId, MessageInteraction,
-    MessageInteractionMetadata, MessageReference, MessageSnapshot, MessageType, MfaLevel, Nullable,
-    NullablePatch, PartialApplication, Patch, Permissions, Poll, PremiumTier, Presence, Reaction,
-    ResolvedData, Role, RoleId, RoleSubscriptionData, SharedClientTheme, SoundboardSound,
-    StageInstance, Sticker, StickerItem, User, UserCollectibles, UserId, UserPremiumType,
-    UserPrimaryGuild, VerificationLevel, VoiceState, WebhookId,
+    Activity, ApplicationId, Attachment, AvatarDecorationData, Channel, ChannelId, ChannelMention,
+    ClientStatus, DefaultMessageNotificationLevel, DisplayNameStyles, Embed,
+    ExplicitContentFilterLevel, Guild, GuildId, GuildIncidentsData, GuildNsfwLevel,
+    GuildScheduledEvent, Member, Message, MessageActivity, MessageCall, MessageComponent,
+    MessageId, MessageInteraction, MessageInteractionMetadata, MessageReference, MessageSnapshot,
+    MessageType, MfaLevel, Nullable, NullablePatch, PartialApplication, Patch, Permissions, Poll,
+    PremiumTier, Presence, PresenceStatus, PresenceUser, Reaction, ResolvedData, Role, RoleId,
+    RoleSubscriptionData, SharedClientTheme, SoundboardSound, StageInstance, Sticker, StickerItem,
+    User, UserCollectibles, UserId, UserPremiumType, UserPrimaryGuild, VerificationLevel,
+    VoiceState, WebhookId,
 };
 
 /// A GUILD_CREATE payload, split into the units the cache stores.
@@ -78,6 +85,12 @@ use super::{
 /// [`roles`](Self::roles); the cache fills them back in when it returns the
 /// guild. Build one from a REST or hand-made [`Guild`] with
 /// `GuildCreate::from(guild)`.
+///
+/// A member, presence, presence activity, or voice state that does not
+/// decode (a shape this version does not know) is left out of its list and
+/// logged with `tracing::warn!`, instead of failing the whole dispatch and
+/// leaving the guild uncached. The guild's own fields, channels, threads,
+/// and roles must decode.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct GuildCreate {
@@ -151,9 +164,35 @@ impl GuildCreatePayload {
     /// Only serde_json text works here: the keys other than `members` and
     /// `presences` are collected as borrowed [`RawValue`]s and handed to
     /// [`Guild`]'s own decoder, so the field list is not duplicated.
+    ///
+    /// When that fails, the text is decoded a second time with every
+    /// member, presence (and each activity inside it), and voice state
+    /// decoded on its own: the ones that do not decode are dropped and
+    /// logged, and the rest of the guild is kept (decision log above
+    /// `Skipped`). The guild's own fields, channels, threads, and roles stay
+    /// strict.
     pub(crate) fn from_json_str(text: &str) -> Result<Self, serde_json::Error> {
+        let strict_error = match Self::decode_json_str(text, None) {
+            Ok(decoded) => return Ok(decoded),
+            Err(error) => error,
+        };
+        let mut skipped = Skipped::default();
+        let decoded = Self::decode_json_str(text, Some(&mut skipped))?;
+        warn!(
+            "GUILD_CREATE {} kept after dropping {skipped} that did not decode ({})",
+            decoded.id(),
+            redacted(&strict_error)
+        );
+        Ok(decoded)
+    }
+
+    /// One decoding pass; `lenient` collects what the lenient pass drops.
+    fn decode_json_str(
+        text: &str,
+        lenient: Option<&mut Skipped>,
+    ) -> Result<Self, serde_json::Error> {
         let mut deserializer = serde_json::Deserializer::from_str(text);
-        let decoded = deserializer.deserialize_map(GuildCreateVisitor)?;
+        let decoded = deserializer.deserialize_map(GuildCreateVisitor { lenient })?;
         deserializer.end()?;
         Ok(decoded)
     }
@@ -346,9 +385,13 @@ pub(crate) fn shared_presences<'de, D: Deserializer<'de>>(
 /// `presences` (about 55 today); sizes the borrowed key list once.
 const GUILD_CREATE_KEY_HINT: usize = 64;
 
-struct GuildCreateVisitor;
+struct GuildCreateVisitor<'s> {
+    /// `Some` on the lenient pass: members, presences, and voice states are
+    /// decoded one element at a time, and the dropped ones counted here.
+    lenient: Option<&'s mut Skipped>,
+}
 
-impl<'de> Visitor<'de> for GuildCreateVisitor {
+impl<'de> Visitor<'de> for GuildCreateVisitor<'_> {
     type Value = GuildCreatePayload;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -356,19 +399,31 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<GuildCreatePayload, A::Error> {
+        let mut lenient = self.lenient;
         let mut shared = SharedCollections::default();
+        let mut voice_states = None;
         let mut rest: Vec<(Cow<'de, str>, &'de RawValue)> =
             Vec::with_capacity(GUILD_CREATE_KEY_HINT);
         while let Some(BorrowedKey(key)) = map.next_key()? {
-            match key.as_ref() {
-                "members" => shared.members = map.next_value_seed(ArcSeq::new(None))?,
-                "presences" => {
+            match (key.as_ref(), lenient.as_deref_mut()) {
+                ("members", None) => shared.members = map.next_value_seed(ArcSeq::new(None))?,
+                ("members", Some(skipped)) => {
+                    shared.members = map.next_value_seed(LenientSeq::members(skipped))?;
+                }
+                ("presences", None) => {
                     shared.presences =
                         map.next_value_seed(ArcSeq::new(Some(normalize_presence)))?;
                 }
-                "roles" => shared.roles = map.next_value_seed(ArcSeq::new(None))?,
-                "channels" => shared.channels = map.next_value_seed(ArcSeq::new(None))?,
-                "threads" => shared.threads = map.next_value_seed(ArcSeq::new(None))?,
+                ("presences", Some(skipped)) => {
+                    shared.presences = map.next_value_seed(LenientSeq::presences(skipped))?;
+                }
+                // Strict voice states are read by `Guild`'s decoder below.
+                ("voice_states", Some(skipped)) => {
+                    voice_states = Some(map.next_value_seed(LenientSeq::voice_states(skipped))?);
+                }
+                ("roles", _) => shared.roles = map.next_value_seed(ArcSeq::new(None))?,
+                ("channels", _) => shared.channels = map.next_value_seed(ArcSeq::new(None))?,
+                ("threads", _) => shared.threads = map.next_value_seed(ArcSeq::new(None))?,
                 _ => rest.push((key, map.next_value()?)),
             }
         }
@@ -387,7 +442,10 @@ impl<'de> Visitor<'de> for GuildCreateVisitor {
             return Ok(GuildCreatePayload::Unavailable(UnavailableGuild { id }));
         }
         let rest = de::value::MapDeserializer::<_, serde_json::Error>::new(rest.into_iter());
-        let guild = Guild::deserialize(rest).map_err(de::Error::custom)?;
+        let mut guild = Guild::deserialize(rest).map_err(de::Error::custom)?;
+        if let Some(voice_states) = voice_states {
+            guild.voice_states = voice_states;
+        }
         Ok(GuildCreate::assemble(guild, shared).into())
     }
 }
@@ -458,6 +516,347 @@ impl<'de, T: Deserialize<'de>> Visitor<'de> for ArcSeq<T> {
             }
             items.push(Arc::new(item));
         }
+        Ok(items)
+    }
+}
+
+/// A field read leniently: absent, `null`, or not a valid `T` reads as
+/// `None` instead of failing the whole event, as the 2.x decoder did.
+///
+/// The value is skipped as a borrowed [`RawValue`] (no allocation) and then
+/// decoded on its own, so this only works for serde_json text input; the
+/// wire structs using it stay private for that reason.
+pub(crate) struct Lenient<T>(pub(crate) Option<T>);
+
+impl<T> Default for Lenient<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<'de, T: de::DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = <&'de RawValue>::deserialize(deserializer)?;
+        Ok(Self(serde_json::from_str(raw.get()).ok()))
+    }
+}
+
+impl<T> Lenient<Vec<T>> {
+    /// The list, or an empty one when the field was absent or invalid.
+    pub(crate) fn or_empty(self) -> Vec<T> {
+        self.0.unwrap_or_default()
+    }
+}
+
+// [Decision Log] Element-by-element decoding of user-controlled collections
+// - 목적과 의도: 원소 하나가 이 버전이 읽지 못하는 모양이어도 그 원소만 버리고 나머지를 지킨다.
+//   라이브 Discord에서 활동 하나(`buttons` 문자열)가 GUILD_CREATE 30개 중 11개를 통째로
+//   실패시켜 그 길드들이 캐시에 들어가지 못했고, PRESENCE_UPDATE는 `Lenient<Vec<Activity>>`라서
+//   같은 활동 하나가 그 presence의 활동 전체를 조용히 지웠다. Discord 문서도 PRESENCE_UPDATE에
+//   대해 "no fields are required, and the types of the fields are not validated"라고 적는다.
+// - 기존 구현 및 제약 조건: GUILD_CREATE는 serde_json 텍스트에서 members·presences를
+//   `ArcSeq`로 바로 `Arc`에 넣고(체크포인트 A), 나머지 키는 `Guild`의 derive 디코더가 읽는다.
+//   스트리밍 디코더는 원소 중간에서 실패하면 이어서 읽을 수 없다. 성능 게이트는 할당 수·바이트로
+//   GUILD_CREATE와 PRESENCE_UPDATE를 잰다(`ci/perf-gates.json`).
+// - 검토한 주요 대안: (1) 모델을 필드마다 관대하게(모든 필드에 직접 쓴 방문자), (2) 원소를 늘
+//   빌린 `RawValue`로 건너뛴 뒤 따로 디코딩, (3) 엄격한 빠른 경로를 먼저 돌리고 실패할 때만 같은
+//   텍스트를 원소 단위로 다시 디코딩, (4) 원소를 `Value`로 읽은 뒤 변환.
+// - 선택한 방식: 컬렉션 크기에 따라 나눈다. PRESENCE_UPDATE의 활동은 늘 원소 단위(2)로 읽는다
+//   (활동 몇 개, 수백 바이트). GUILD_CREATE와 GUILD_MEMBERS_CHUNK는 (3): 엄격한 경로가 실패하면
+//   members·presences(안의 활동까지)·voice_states를 원소 단위로 다시 읽고, 버린 원소 수와 엄격한
+//   오류(값은 가린) 한 줄을 `warn!`으로 남긴다. 원소마다의 이유는 `debug!`. 길드 필수 필드와
+//   channels·threads·roles는 엄격하게 둔다: 길드 구조라서 틀리면 모델 버그이고 조용히 빠지면 안 된다.
+//   문서에 적힌 모양 차이(활동 `buttons`)는 모델이 직접 받는다(`presence.rs`).
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 큰 손 디코더가 필요하고 문서에 없는 변화까지
+//   예측해야 한다. (2)를 GUILD_CREATE에 늘 쓰면 1,000명 길드에서 모든 멤버·presence를 두 번
+//   훑는다. (3)은 정상 경로 비용이 0이고(할당 게이트 그대로), 실패한 길드만 한 번 더 읽는다.
+//   (4)는 원소마다 문자열을 할당한다. `RawValue`는 빌린 값이라 원소를 건너뛸 때 할당이 없다.
+// - 장점, 단점 및 영향: 길드가 통째로 사라지는 대신 원소 몇 개가 빠지고 경고가 남는다(캐시에서
+//   그 멤버·presence만 없다). 실패한 GUILD_CREATE는 두 번 디코딩한다. 관대한 경로는 serde_json
+//   텍스트에서만 동작하므로 공개 모델의 `Deserialize`(`Value` 등 모든 입력)는 엄격한 그대로다.
+//   로그에는 페이로드 값을 남기지 않는다(`redacted`).
+
+/// What a lenient decode dropped, per kind of element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Skipped {
+    pub(crate) members: usize,
+    pub(crate) presences: usize,
+    pub(crate) activities: usize,
+    pub(crate) voice_states: usize,
+}
+
+impl fmt::Display for Skipped {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} members, {} presences, {} activities, {} voice states",
+            self.members, self.presences, self.activities, self.voice_states
+        )
+    }
+}
+
+/// `error`'s message with every quoted value elided, for logs.
+///
+/// serde quotes the offending value (`invalid type: string "Get Valorant
+/// Tracker", expected ...`), and in a presence or member that is user
+/// content: activity text, nicknames, URLs. The kind of mismatch, what was
+/// expected, and the position stay, which is what a bug report needs.
+pub(crate) fn redacted(error: &serde_json::Error) -> String {
+    let message = error.to_string();
+    let mut out = String::with_capacity(message.len());
+    let mut chars = message.chars();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '"' {
+            // serde writes the value with `{:?}`, so `\"` is an escape.
+            let mut escaped = false;
+            for c in chars.by_ref() {
+                match c {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => break,
+                    _ => {}
+                }
+            }
+            out.push_str("…\"");
+        }
+    }
+    out
+}
+
+/// Visits a JSON array in serde_json text and hands each element to the
+/// closure as borrowed text, so it can be decoded on its own: an element
+/// that fails no longer fails the array.
+struct EachElement<F>(F);
+
+impl<'de, F: FnMut(&'de RawValue)> DeserializeSeed<'de> for EachElement<F> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de, F: FnMut(&'de RawValue)> Visitor<'de> for EachElement<F> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an array")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(mut self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(element) = seq.next_element()? {
+            (self.0)(element);
+        }
+        Ok(())
+    }
+}
+
+/// Decodes one array element. A [`RawValue`] is exactly one value, so no
+/// end check is needed (see `Fields::patch` in `event/decode.rs`).
+fn element<T: de::DeserializeOwned>(raw: &RawValue) -> Result<T, serde_json::Error> {
+    T::deserialize(&mut serde_json::Deserializer::from_str(raw.get()))
+}
+
+/// A presence's `activities` read one activity at a time: an activity that
+/// does not decode is dropped and counted instead of failing the presence
+/// (2.x and the 3.0 PRESENCE_UPDATE decoder dropped every activity of the
+/// presence then). Absent, `null`, or not an array reads as `None`, as a
+/// [`Lenient`] field does. serde_json text only.
+#[derive(Default)]
+pub(crate) struct LenientActivities {
+    pub(crate) activities: Option<Vec<Activity>>,
+    pub(crate) skipped: usize,
+}
+
+impl<'de> Deserialize<'de> for LenientActivities {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Reads the elements from the enclosing deserializer instead of
+        // skipping the whole array as one `RawValue` first: a second
+        // deserializer over that text allocates its own stack for skipping
+        // nested objects, one allocation per PRESENCE_UPDATE.
+        struct ActivitiesVisitor;
+
+        impl<'de> Visitor<'de> for ActivitiesVisitor {
+            type Value = LenientActivities;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("presence activities")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut activities = Vec::new();
+                let mut skipped = 0;
+                while let Some(raw) = seq.next_element::<&'de RawValue>()? {
+                    match element(raw) {
+                        Ok(activity) => push_activity(&mut activities, activity),
+                        Err(error) => {
+                            skipped += 1;
+                            debug!(
+                                "dropped a presence activity that did not decode: {}",
+                                redacted(&error)
+                            );
+                        }
+                    }
+                }
+                Ok(LenientActivities {
+                    activities: Some(activities),
+                    skipped,
+                })
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                while map
+                    .next_entry::<de::IgnoredAny, de::IgnoredAny>()?
+                    .is_some()
+                {}
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+
+            fn visit_str<E: de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(LenientActivities::default())
+            }
+        }
+
+        deserializer.deserialize_any(ActivitiesVisitor)
+    }
+}
+
+/// A GUILD_CREATE or GUILD_MEMBERS_CHUNK presence read leniently, the way
+/// PRESENCE_UPDATE is: fields of the wrong type read as `None` and
+/// activities are decoded one at a time.
+#[derive(Deserialize)]
+struct PresenceElement {
+    #[serde(default)]
+    user_id: Lenient<UserId>,
+    #[serde(default)]
+    user: Lenient<PresenceUser>,
+    #[serde(default)]
+    status: Lenient<PresenceStatus>,
+    #[serde(default)]
+    activities: LenientActivities,
+    #[serde(default)]
+    client_status: Lenient<ClientStatus>,
+}
+
+fn member_element(raw: &RawValue, skipped: &mut Skipped) -> Option<Arc<Member>> {
+    match element(raw) {
+        Ok(member) => Some(Arc::new(member)),
+        Err(error) => {
+            skipped.members += 1;
+            debug!("dropped a member that did not decode: {}", redacted(&error));
+            None
+        }
+    }
+}
+
+/// A presence, or `None` (counted) when it is not an object or names no
+/// user: the cache keys presences by user.
+fn presence_element(raw: &RawValue, skipped: &mut Skipped) -> Option<Arc<Presence>> {
+    let element: PresenceElement = match element(raw) {
+        Ok(element) => element,
+        Err(error) => {
+            skipped.presences += 1;
+            debug!(
+                "dropped a presence that did not decode: {}",
+                redacted(&error)
+            );
+            return None;
+        }
+    };
+    skipped.activities += element.activities.skipped;
+    let mut presence = Presence {
+        user_id: element.user_id.0,
+        user: element.user.0,
+        status: element.status.0,
+        activities: element.activities.activities,
+        client_status: element.client_status.0,
+    };
+    normalize_presence(&mut presence);
+    if presence.user_id.is_none() {
+        skipped.presences += 1;
+        debug!("dropped a presence whose user id did not decode");
+        return None;
+    }
+    Some(Arc::new(presence))
+}
+
+fn voice_state_element(raw: &RawValue, skipped: &mut Skipped) -> Option<VoiceState> {
+    match element(raw) {
+        Ok(voice_state) => Some(voice_state),
+        Err(error) => {
+            skipped.voice_states += 1;
+            debug!(
+                "dropped a voice state that did not decode: {}",
+                redacted(&error)
+            );
+            None
+        }
+    }
+}
+
+/// One collection of a lenient pass: each element goes through `decode`,
+/// which returns `None` (and counts it in `skipped`) for one it drops.
+pub(crate) struct LenientSeq<'s, T> {
+    skipped: &'s mut Skipped,
+    decode: fn(&RawValue, &mut Skipped) -> Option<T>,
+}
+
+impl<'s> LenientSeq<'s, Arc<Member>> {
+    pub(crate) fn members(skipped: &'s mut Skipped) -> Self {
+        Self {
+            skipped,
+            decode: member_element,
+        }
+    }
+}
+
+impl<'s> LenientSeq<'s, Arc<Presence>> {
+    pub(crate) fn presences(skipped: &'s mut Skipped) -> Self {
+        Self {
+            skipped,
+            decode: presence_element,
+        }
+    }
+}
+
+impl<'s> LenientSeq<'s, VoiceState> {
+    fn voice_states(skipped: &'s mut Skipped) -> Self {
+        Self {
+            skipped,
+            decode: voice_state_element,
+        }
+    }
+}
+
+impl<'de, T> DeserializeSeed<'de> for LenientSeq<'_, T> {
+    type Value = Vec<T>;
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Vec<T>, D::Error> {
+        let Self { skipped, decode } = self;
+        let mut items = Vec::new();
+        EachElement(|raw: &RawValue| items.extend(decode(raw, skipped)))
+            .deserialize(deserializer)?;
         Ok(items)
     }
 }

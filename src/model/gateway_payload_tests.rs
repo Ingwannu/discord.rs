@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use super::*;
-use crate::model::{test_id, Embed};
+use crate::model::{test_id, Embed, PresenceStatus};
 
 fn guild_create_payload() -> serde_json::Value {
     json!({
@@ -191,6 +191,143 @@ fn guild_create_fast_path_accepts_escaped_keys_and_rejects_bad_payloads() {
     assert!(decode_available(r#"{"id":"10","name":"g","members":{}}"#).is_err());
     assert!(decode_available(r#"{"id":"10","name":"g"} trailing"#).is_err());
     assert!(decode_available("[]").is_err());
+}
+
+#[test]
+fn guild_create_reads_received_activity_buttons_on_the_fast_path() {
+    // The live failure: `buttons` as label strings failed the whole guild.
+    let mut payload = guild_create_payload();
+    payload["presences"][0]["activities"] = json!([
+        { "type": 0, "name": "VALORANT", "buttons": ["Get Valorant Tracker"] },
+        { "type": 0, "name": "Medal", "buttons": ["Follow on Medal", "Hosting"] }
+    ]);
+    let text = payload.to_string();
+    // Strict pass only: the lenient one is not needed for this shape.
+    let created = match GuildCreatePayload::decode_json_str(&text, None).unwrap() {
+        GuildCreatePayload::Available(guild) => guild,
+        other => panic!("unexpected {other:?}"),
+    };
+    let activities = created.presences[0].activities.as_ref().unwrap();
+    assert_eq!(
+        activities[0].buttons.as_deref().unwrap(),
+        ["Get Valorant Tracker"]
+    );
+    assert_eq!(
+        activities[1].buttons.as_deref().unwrap(),
+        ["Follow on Medal", "Hosting"]
+    );
+}
+
+#[test]
+fn guild_create_drops_only_the_elements_that_do_not_decode() {
+    let mut payload = guild_create_payload();
+    payload["members"] = json!([
+        { "user": { "id": "30", "username": "a" }, "roles": ["11"] },
+        // `roles` must be snowflakes.
+        { "user": { "id": "31", "username": "b" }, "roles": [{}] },
+        { "user": { "id": "32", "username": "c" }, "roles": [] }
+    ]);
+    payload["presences"] = json!([
+        {
+            "user": { "id": "30" },
+            "status": "online",
+            "activities": [
+                // `type` must be an integer: only this activity goes.
+                { "type": "playing", "name": "Broken" },
+                { "type": 4, "name": "Custom Status", "state": "kept" }
+            ]
+        },
+        // Not an object.
+        42,
+        // No user id the cache could key it by.
+        { "user": { "id": {} }, "status": "idle" },
+        // A field of the wrong type reads as absent, as in PRESENCE_UPDATE.
+        { "user": { "id": "32" }, "status": 7, "client_status": { "desktop": "dnd" } }
+    ]);
+    payload["voice_states"] = json!([
+        { "user_id": "30", "channel_id": "21", "session_id": "s" },
+        { "user_id": "31", "channel_id": "21", "session_id": 5 }
+    ]);
+    let text = payload.to_string();
+    assert!(GuildCreatePayload::decode_json_str(&text, None).is_err());
+
+    let mut skipped = Skipped::default();
+    let lenient = GuildCreatePayload::decode_json_str(&text, Some(&mut skipped)).unwrap();
+    assert_eq!(
+        skipped,
+        Skipped {
+            members: 1,
+            presences: 2,
+            activities: 1,
+            voice_states: 1,
+        }
+    );
+    let created = decode_available(&text).unwrap();
+    assert_eq!(lenient.id(), created.id());
+
+    let member_ids: Vec<_> = created
+        .members
+        .iter()
+        .map(|member| member.user.as_ref().unwrap().id)
+        .collect();
+    assert_eq!(member_ids, [test_id(30), test_id(32)]);
+
+    assert_eq!(created.presences.len(), 2);
+    let first = &created.presences[0];
+    assert_eq!(first.user_id, Some(test_id(30)));
+    assert_eq!(first.status, Some(PresenceStatus::ONLINE));
+    let activities = first.activities.as_ref().unwrap();
+    assert_eq!(activities.len(), 1);
+    assert_eq!(activities[0].state.as_deref(), Some("kept"));
+    let second = &created.presences[1];
+    assert_eq!(second.user_id, Some(test_id(32)));
+    assert_eq!(second.status, None);
+    assert_eq!(
+        second
+            .client_status
+            .as_ref()
+            .and_then(|status| status.desktop.clone()),
+        Some(PresenceStatus::DND)
+    );
+
+    // The kept voice state still gets the guild filled in.
+    assert_eq!(created.voice_states.len(), 1);
+    assert_eq!(created.voice_states[0].guild_id, Some(test_id(10)));
+    // Everything else is the strict decode's.
+    assert_eq!(created.guild.name, "guild");
+    assert_eq!(created.channels.len(), 2);
+    assert_eq!(created.roles.len(), 1);
+}
+
+#[test]
+fn guild_create_keeps_guild_structure_strict() {
+    // The guild's own fields, channels, and roles are not dropped
+    // element by element: a mistake there is a model bug to report.
+    for (field, value) in [
+        ("name", json!(5)),
+        ("channels", json!([{ "id": "20", "type": "text" }])),
+        ("roles", json!([{ "id": {} }])),
+        ("members", json!({})),
+    ] {
+        let mut payload = guild_create_payload();
+        payload[field] = value;
+        assert!(decode_available(&payload.to_string()).is_err(), "{field}");
+    }
+}
+
+#[test]
+fn redacted_errors_keep_the_reason_but_not_the_values() {
+    let error = serde_json::from_str::<Vec<u8>>(r#"["Get \"Valorant\" Tracker"]"#).unwrap_err();
+    assert!(error.to_string().contains("Valorant"));
+    let message = redacted(&error);
+    assert!(!message.contains("Valorant"), "{message}");
+    assert_eq!(
+        message,
+        "invalid type: string \"…\", expected u8 at line 1 column 27"
+    );
+
+    let missing = serde_json::from_str::<Member>(r#"{"roles":"x"}"#).unwrap_err();
+    assert!(redacted(&missing).starts_with("invalid type: string \"…\""));
 }
 
 fn cached_message() -> Message {

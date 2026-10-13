@@ -25,17 +25,18 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, DeserializeSeed};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use serde_json::Value;
+use tracing::warn;
 
-use crate::model::normalize_presence;
 use crate::model::{
-    marker, ApplicationCommandPermission, ApplicationId, ArcSeq, AuditLogEntry, BorrowedKey,
-    ChannelId, ClientStatus, CommandPermissionsId, GuildCreatePayload, GuildId, GuildUpdate, Id,
-    Member, MessageId, Nullable, NullablePatch, PartialUser, Patch, Presence, PresenceStatus,
-    ReactionType, Role, SoundboardSound, UserId,
+    marker, normalize_presence, redacted, ApplicationCommandPermission, ApplicationId, ArcSeq,
+    AuditLogEntry, BorrowedKey, ChannelId, ClientStatus, CommandPermissionsId, GuildCreatePayload,
+    GuildId, GuildUpdate, Id, Lenient, LenientActivities, LenientSeq, Member, MessageId, Nullable,
+    NullablePatch, PartialUser, Patch, Presence, PresenceStatus, ReactionType, Role, Skipped,
+    SoundboardSound, UserId,
 };
 use crate::types::Emoji;
 
@@ -98,7 +99,7 @@ dispatch_table! { data;
     "GUILD_INTEGRATIONS_UPDATE" => {
         EventKind::GuildIntegrationsUpdate(decode_guild_integrations_update_event(data)?)
     },
-    "GUILD_MEMBERS_CHUNK" => EventKind::GuildMembersChunk(Box::new(typed(data)?)),
+    "GUILD_MEMBERS_CHUNK" => EventKind::GuildMembersChunk(Box::new(decode_members_chunk(data)?)),
     "GUILD_MEMBER_ADD" => EventKind::MemberAdd(decode_member_event(data)?),
     "GUILD_MEMBER_REMOVE" => EventKind::MemberRemove(Box::new(typed(data)?)),
     "GUILD_MEMBER_UPDATE" => EventKind::MemberUpdate(Arc::new(typed(data)?)),
@@ -210,33 +211,6 @@ pub(crate) fn intern_dispatch_name(name: &str) -> Cow<'static, str> {
 
 fn typed<'a, T: Deserialize<'a>>(data: &'a str) -> Result<T, serde_json::Error> {
     serde_json::from_str(data)
-}
-
-/// A field read leniently: absent, `null`, or not a valid `T` reads as
-/// `None` instead of failing the whole event, as the 2.x decoder did.
-///
-/// The value is skipped as a borrowed [`RawValue`] (no allocation) and then
-/// decoded on its own, so this only works for serde_json text input; the
-/// wire structs using it stay private for that reason.
-pub(crate) struct Lenient<T>(pub(crate) Option<T>);
-
-impl<T> Default for Lenient<T> {
-    fn default() -> Self {
-        Self(None)
-    }
-}
-
-impl<'de, T: DeserializeOwned> Deserialize<'de> for Lenient<T> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = <&'de RawValue>::deserialize(deserializer)?;
-        Ok(Self(serde_json::from_str(raw.get()).ok()))
-    }
-}
-
-impl<T> Lenient<Vec<T>> {
-    fn or_empty(self) -> Vec<T> {
-        self.0.unwrap_or_default()
-    }
 }
 
 /// The top-level keys of a payload object, each with its value as borrowed
@@ -666,6 +640,65 @@ fn decode_reaction_event(data: &str) -> Result<ReactionEvent, EventDecodeError> 
     })
 }
 
+/// GUILD_MEMBERS_CHUNK with the derived decoder; when that fails, again
+/// with each member and presence decoded on its own, as GUILD_CREATE does
+/// (`GuildCreatePayload::from_json_str`): a member or presence this version
+/// cannot read is dropped and logged instead of failing the chunk, which
+/// would also fail the `fetch_members` call waiting for it.
+fn decode_members_chunk(data: &str) -> Result<GuildMembersChunkPayload, EventDecodeError> {
+    /// The chunk's fields, with the two collections kept as text for the
+    /// element-by-element pass.
+    #[derive(Deserialize)]
+    struct Wire<'a> {
+        guild_id: GuildId,
+        #[serde(borrow, default)]
+        members: Option<&'a RawValue>,
+        chunk_index: u64,
+        chunk_count: u64,
+        #[serde(default)]
+        not_found: Vec<UserId>,
+        #[serde(borrow, default)]
+        presences: Option<&'a RawValue>,
+        #[serde(default)]
+        nonce: Option<String>,
+    }
+
+    let strict_error = match typed(data) {
+        Ok(chunk) => return Ok(chunk),
+        Err(error) => error,
+    };
+    let wire: Wire<'_> = typed(data)?;
+    let mut skipped = Skipped::default();
+    let members = match wire.members {
+        Some(raw) => LenientSeq::members(&mut skipped)
+            .deserialize(&mut serde_json::Deserializer::from_str(raw.get()))?,
+        None => Vec::new(),
+    };
+    let presences = match wire.presences {
+        Some(raw) => Some(
+            LenientSeq::presences(&mut skipped)
+                .deserialize(&mut serde_json::Deserializer::from_str(raw.get()))?,
+        ),
+        None => None,
+    };
+    warn!(
+        "GUILD_MEMBERS_CHUNK {} ({}/{}) kept after dropping {skipped} that did not decode ({})",
+        wire.guild_id,
+        wire.chunk_index,
+        wire.chunk_count,
+        redacted(&strict_error)
+    );
+    Ok(GuildMembersChunkPayload {
+        guild_id: wire.guild_id,
+        members,
+        chunk_index: wire.chunk_index,
+        chunk_count: wire.chunk_count,
+        not_found: wire.not_found,
+        presences,
+        nonce: wire.nonce,
+    })
+}
+
 fn decode_presence_update_event(data: &str) -> Result<PresenceUpdateEvent, EventDecodeError> {
     #[derive(Deserialize)]
     struct Wire {
@@ -675,8 +708,10 @@ fn decode_presence_update_event(data: &str) -> Result<PresenceUpdateEvent, Event
         guild_id: Lenient<GuildId>,
         #[serde(default)]
         status: Lenient<String>,
+        /// One activity at a time: an activity this version cannot read
+        /// is dropped (logged at debug level) instead of the whole list.
         #[serde(default)]
-        activities: Lenient<Vec<Activity>>,
+        activities: LenientActivities,
         #[serde(default)]
         client_status: Lenient<ClientStatus>,
     }
@@ -688,7 +723,7 @@ fn decode_presence_update_event(data: &str) -> Result<PresenceUpdateEvent, Event
         status: wire.status.0.map(PresenceStatus::new),
         activities: wire
             .activities
-            .0
+            .activities
             .filter(|activities| !activities.is_empty()),
         client_status: wire.client_status.0,
     };

@@ -2163,3 +2163,174 @@ fn decode_event_types_command_permissions_and_scheduled_event_metadata() {
         other => panic!("unexpected event: {other:?}"),
     }
 }
+
+/// A PRESENCE_UPDATE shaped like the live ones: `buttons` are label
+/// strings (Discord docs: Activity Buttons, "when received over the
+/// gateway").
+fn presence_update_with_buttons(activities: Value) -> Value {
+    json!({
+        "user": { "id": "302050872383242240" },
+        "guild_id": "1159812345678901248",
+        "status": "online",
+        "client_status": { "desktop": "online" },
+        "activities": activities
+    })
+}
+
+#[test]
+fn presence_update_reads_received_button_labels() {
+    let event = decode_event(
+        "PRESENCE_UPDATE",
+        presence_update_with_buttons(json!([
+            { "type": 0, "name": "VALORANT", "buttons": ["Get Valorant Tracker"] },
+            { "type": 0, "name": "Medal", "buttons": ["Follow on Medal", "Hosting"] }
+        ])),
+    )
+    .unwrap();
+    let EventKind::PresenceUpdate(update) = event.kind() else {
+        panic!("unexpected event: {:?}", event.kind());
+    };
+    let activities = update.activities();
+    assert_eq!(activities.len(), 2);
+    assert_eq!(
+        activities[0].buttons.as_deref().unwrap(),
+        ["Get Valorant Tracker"]
+    );
+    assert_eq!(
+        activities[1].buttons.as_deref().unwrap(),
+        ["Follow on Medal", "Hosting"]
+    );
+    // The shared presence is stored by the cache: no decoder slack.
+    let stored = update.presence.activities.as_ref().unwrap();
+    assert_eq!(stored.capacity(), stored.len());
+}
+
+#[test]
+fn presence_update_drops_only_the_activity_that_does_not_decode() {
+    // 3.0.0 read `activities` as one lenient list: one activity Discord sent
+    // in a shape the model did not expect emptied the whole list.
+    let event = decode_event(
+        "PRESENCE_UPDATE",
+        presence_update_with_buttons(json!([
+            { "type": 4, "name": "Custom Status", "state": "raiding tonight" },
+            { "type": 0, "name": "Broken", "timestamps": { "start": "soon" } },
+            { "type": 0, "name": "Destiny 2", "buttons": [{ "label": "Join", "url": "https://example.com" }] }
+        ])),
+    )
+    .unwrap();
+    let EventKind::PresenceUpdate(update) = event.kind() else {
+        panic!("unexpected event: {:?}", event.kind());
+    };
+    let names: Vec<_> = update
+        .activities()
+        .iter()
+        .map(|activity| activity.name.as_str())
+        .collect();
+    assert_eq!(names, ["Custom Status", "Destiny 2"]);
+    assert_eq!(update.activities()[1].buttons.as_deref().unwrap(), ["Join"]);
+    assert_eq!(update.status(), Some(&PresenceStatus::ONLINE));
+
+    // Every activity dropped, or not a list at all: no activities.
+    for activities in [json!([{ "type": "x" }]), json!({ "type": 0 }), json!("x")] {
+        let event =
+            decode_event("PRESENCE_UPDATE", presence_update_with_buttons(activities)).unwrap();
+        let EventKind::PresenceUpdate(update) = event.kind() else {
+            panic!("unexpected event: {:?}", event.kind());
+        };
+        assert!(update.presence.activities.is_none());
+        assert_eq!(update.user_id(), Some(snowflake("302050872383242240")));
+    }
+}
+
+#[test]
+fn guild_create_with_a_malformed_presence_still_dispatches() {
+    let event = decode_event(
+        "GUILD_CREATE",
+        json!({
+            "id": "1",
+            "name": "guild",
+            "members": [{ "user": { "id": "2", "username": "a" }, "roles": [] }],
+            "presences": [
+                {
+                    "user": { "id": "2" },
+                    "status": "online",
+                    "activities": [
+                        { "type": 0, "name": "VALORANT", "buttons": ["Get Valorant Tracker"] }
+                    ]
+                },
+                { "user": { "id": "3" }, "status": "online", "activities": [{ "type": [] }] },
+                "not a presence"
+            ]
+        }),
+    )
+    .unwrap();
+    let EventKind::GuildCreate(payload) = event.kind() else {
+        panic!("unexpected event: {:?}", event.kind());
+    };
+    let guild = payload.available().unwrap();
+    assert_eq!(guild.members.len(), 1);
+    // The broken activity goes; its presence stays without it.
+    assert_eq!(guild.presences.len(), 2);
+    assert_eq!(
+        guild.presences[0].activities.as_ref().unwrap()[0]
+            .buttons
+            .as_deref()
+            .unwrap(),
+        ["Get Valorant Tracker"]
+    );
+    assert_eq!(guild.presences[1].user_id, Some(snowflake("3")));
+    assert_eq!(
+        guild.presences[1].activities.as_ref().map(Vec::len),
+        Some(0)
+    );
+}
+
+#[test]
+fn members_chunk_drops_only_the_elements_that_do_not_decode() {
+    let event = decode_event(
+        "GUILD_MEMBERS_CHUNK",
+        json!({
+            "guild_id": "1",
+            "members": [
+                { "user": { "id": "2", "username": "a" }, "roles": [] },
+                { "user": { "id": "3", "username": "b" }, "roles": "none" }
+            ],
+            "chunk_index": 1,
+            "chunk_count": 2,
+            "presences": [
+                {
+                    "user": { "id": "2" },
+                    "status": "idle",
+                    "activities": [
+                        { "type": 0, "name": "Medal", "buttons": ["Follow on Medal"] },
+                        { "type": 0 }
+                    ]
+                }
+            ],
+            "nonce": "n"
+        }),
+    )
+    .unwrap();
+    let EventKind::GuildMembersChunk(chunk) = event.kind() else {
+        panic!("unexpected event: {:?}", event.kind());
+    };
+    assert_eq!((chunk.chunk_index, chunk.chunk_count), (1, 2));
+    assert_eq!(chunk.members.len(), 1);
+    assert_eq!(chunk.nonce.as_deref(), Some("n"));
+    let presences = chunk.presences.as_ref().unwrap();
+    assert_eq!(presences[0].user_id, Some(snowflake("2")));
+    let activities = presences[0].activities.as_ref().unwrap();
+    assert_eq!(activities.len(), 1);
+    assert_eq!(
+        activities[0].buttons.as_deref().unwrap(),
+        ["Follow on Medal"]
+    );
+
+    // The chunk's own fields stay strict.
+    let missing_index = super::decode_event(
+        "GUILD_MEMBERS_CHUNK",
+        &json!({ "guild_id": "1", "members": [{ "roles": 5 }], "chunk_count": 1 }).to_string(),
+    )
+    .unwrap();
+    assert!(matches!(missing_index.kind(), EventKind::DecodeFailed(_)));
+}

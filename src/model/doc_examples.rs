@@ -357,6 +357,14 @@ fn documented_commands_rules_and_presences_round_trip() {
         payloads::ACTIVITY_WITH_RICH_PRESENCE,
     );
     assert_eq!(rich.kind, ActivityType::PLAYING);
+    // The wire key is `match`; 2.x read and wrote `match_secret`, which the
+    // one-way comparison in `round_trip` could not notice.
+    assert_eq!(
+        rich.secrets
+            .as_ref()
+            .and_then(|secrets| secrets.match_secret.as_deref()),
+        Some("4b2fdce12f639de8bfa7e3591b71a0d679d7c93f")
+    );
 }
 
 #[test]

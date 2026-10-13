@@ -1389,6 +1389,19 @@ open_discriminant! {
     }
 }
 
+open_discriminant! {
+    /// Activity `status_display_type`: which field the member list shows in
+    /// the user's status text (Discord docs: Status Display Types).
+    pub struct StatusDisplayType(u8) {
+        /// The activity name ("Listening to Spotify").
+        NAME = 0,
+        /// `state` ("Listening to Rick Astley").
+        STATE = 1,
+        /// `details` ("Listening to Never Gonna Give You Up").
+        DETAILS = 2,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1460,7 +1473,7 @@ mod tests {
             IntegrationExpireBehavior: u8, RecurrenceRuleFrequency: u8,
             RecurrenceRuleWeekday: u8, RecurrenceRuleMonth: u8,
             VoiceChannelEffectAnimationType: u8, TeamMembershipState: u8,
-            OnboardingPromptType: u8,
+            OnboardingPromptType: u8, StatusDisplayType: u8,
         }
     }
 

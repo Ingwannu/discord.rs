@@ -81,7 +81,10 @@ pub use gateway::{
     Gateway, GatewayBot, RequestChannelInfo, RequestGuildMembers, SessionStartLimit,
 };
 pub(crate) use gateway_payload::BorrowedKey;
-pub(crate) use gateway_payload::{normalize_presence, shared_members, shared_presences, ArcSeq};
+pub(crate) use gateway_payload::{
+    normalize_presence, redacted, shared_members, shared_presences, ArcSeq, Lenient,
+    LenientActivities, LenientSeq, Skipped,
+};
 pub use gateway_payload::{
     GuildCreate, GuildCreatePayload, GuildUpdate, MemberUpdate, MessageUpdate, PartialUser,
     UnavailableGuild,
@@ -133,7 +136,7 @@ pub use permissions::PermissionsBitField;
 use crate::bitfield::Permissions;
 pub use poll::{Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia, PollResults};
 pub use presence::{
-    Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
+    Activity, ActivityAssets, ActivityParty, ActivitySecrets, ActivityTimestamps, BotActivity,
     ClientStatus, Presence, PresenceStatus, PresenceUser, UpdatePresence,
 };
 pub use role::{Role, RoleColors, RoleTags};
@@ -172,9 +175,9 @@ pub use discriminant::{
     RecurrenceRuleFrequency, RecurrenceRuleMonth, RecurrenceRuleWeekday,
     RoleConnectionMetadataType, ScheduledEventEntityType, ScheduledEventPrivacyLevel,
     ScheduledEventStatus, SeparatorSpacing, SkuAccessType, SkuType, StageInstancePrivacyLevel,
-    StickerFormatType, StickerType, SubscriptionStatus, TeamMembershipState, TextInputStyle,
-    UserPremiumType, VerificationLevel, VideoQualityMode, VoiceChannelEffectAnimationType,
-    WebhookPayloadType, WebhookType,
+    StatusDisplayType, StickerFormatType, StickerType, SubscriptionStatus, TeamMembershipState,
+    TextInputStyle, UserPremiumType, VerificationLevel, VideoQualityMode,
+    VoiceChannelEffectAnimationType, WebhookPayloadType, WebhookType,
 };
 pub use id::{
     marker, ActivityLaunchId, ApplicationId, AttachmentId, AuditLogEntryId, AutoModerationRuleId,

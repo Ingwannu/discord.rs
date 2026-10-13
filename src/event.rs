@@ -104,7 +104,9 @@ pub struct GuildMembersChunkPayload {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub not_found: Vec<UserId>,
     /// Each with `user_id` set from its partial `user`; shared with the
-    /// cache and the external backend.
+    /// cache and the external backend. As in GUILD_CREATE, a member,
+    /// presence, or activity that does not decode is left out (and logged)
+    /// instead of failing the chunk.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -279,7 +281,9 @@ pub struct PresenceUpdateEvent {
     /// patch the cached user (see `CacheHandle::apply_partial_user`).
     pub user: Option<PartialUser>,
     /// `user_id` (from `user`), `status`, `activities` (`None` when Discord
-    /// sent none), and `client_status`.
+    /// sent none), and `client_status`. Discord does not validate the field
+    /// types of this event, so a field of the wrong type reads as `None`
+    /// and an activity that does not decode is left out of `activities`.
     pub presence: Arc<Presence>,
 }
 
@@ -936,8 +940,6 @@ pub fn decode_event(event_name: &str, data: &str) -> Result<Event, DiscordError>
 
 #[path = "event/decode.rs"]
 mod decode;
-#[cfg(feature = "voice")]
-pub(crate) use decode::Lenient;
 
 #[cfg(test)]
 #[path = "event/tests.rs"]
