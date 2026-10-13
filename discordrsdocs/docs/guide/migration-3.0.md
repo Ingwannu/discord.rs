@@ -146,6 +146,7 @@ fn raw_numbers() {
 | `kind: u8` fields, `channel.kind == 0` | `ChannelType::GUILD_TEXT`; `ChannelType::new(n)` / `kind.get()` for raw numbers |
 | closed `ChannelType::{Text, Dm, Voice, News, …}` (`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GUILD_ANNOUNCEMENT, …}`, including the thread types, with `is_thread()` / `is_voice_based()` / `is_text_based()` |
 | `ActivityType(0)`, `x.0`, `Default` | `ActivityType::PLAYING` / `ActivityType::new(0)`, `x.get()`, no `Default` (`Activity::new(kind, name)`) |
+| `UpdatePresence { activities: vec![Activity { .. }], .. }`, `ActivityButton { label, url }` | `activities: vec![BotActivity::new(kind, name)]` (only `name`, `type`, `state`, `url`, which is all Discord lets bots set); received `Activity::buttons` is `Option<Vec<String>>`, the labels Discord sends |
 | `constants::{component_type, button_style, separator_spacing, text_input_style}`, `command::{command_type, option_type}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle`, `CommandType`, `CommandOptionType` |
 | `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType` (`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
 | `MessageComponent::BUTTON` and the other `u8` constants | `ComponentType::BUTTON` |

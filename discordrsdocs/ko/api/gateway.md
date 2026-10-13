@@ -94,6 +94,7 @@ impl EventHandler for Handler {
 - **GUILD_UPDATE**는 `GuildUpdate`로 디코딩됩니다(체크포인트 C). 길드 필드는 `Patch<T>` / `NullablePatch<T>`(생략은 유지, `null`은 지움)이고 `roles: Patch<Vec<Arc<Role>>>`, `emojis`, `stickers`가 있습니다. 전체 `Guild`로 디코딩하면 GUILD_UPDATE에 없는 필드(GUILD_CREATE 전용 `member_count`·`joined_at`·`large` 포함)가 지워졌습니다. `guild_update` 훅은 `&GuildUpdate`를 받고, `update.apply_to(&mut guild)`로 병합하며, `GuildUpdate::from(guild)`는 REST `Guild`를 모든 필드를 바꾸는 갱신으로 만듭니다.
 - **GUILD_MEMBER_UPDATE**는 `MessageUpdate`와 같은 부분 멤버 `MemberUpdate`로 디코딩됩니다(체크포인트 C). `guild_id`, 완전한 `user`(`Arc<User>`, 캐시 사용자 저장소와 공유), 나머지 멤버 필드는 `Patch<T>` / `NullablePatch<T>`이며 `update.apply_to(&mut member)`로 병합합니다. 캐시는 가진 멤버에만 copy-on-write로 병합하고 사용자를 저장하며, 갖지 않은 멤버는 캐시하지 않습니다(생략된 필드를 모르므로. 2.x는 갱신을 멤버 전체로 저장했습니다). 외부 캐시 백엔드도 순서 보장 워커에서 같은 방식으로 병합합니다.
 - **PRESENCE_UPDATE**는 `PresenceUpdateEvent { guild_id, user: Option<PartialUser>, presence: Arc<Presence> }`로 디코딩됩니다(체크포인트 C). presence를 한 번만 만들어 캐시와 외부 캐시 백엔드가 같은 `Arc`를 저장하며, `user_id()`·`status()`·`activities()`·`client_status()`로 읽습니다. 부분 `user`(대개 `id`뿐)는 id 밖의 필드가 있을 때 캐시된 사용자에 패치로 적용됩니다.
+- **받은 presence와 활동.** 받은 `Activity`의 `buttons`는 `Option<Vec<String>>`입니다. 게이트웨이로는 버튼 라벨만 옵니다(Discord 문서 Activity Buttons: "When received over the gateway, the `buttons` field is an array of strings, which are the button labels. Bots cannot access a user's activity button URLs"). `{label, url}` 객체 모양도 라벨로 읽습니다. Discord는 presence의 필드 타입을 검증하지 않으므로 게이트웨이는 방어적으로 디코딩합니다. PRESENCE_UPDATE에서는 디코딩되지 않는 활동만 빠지고(나머지 활동은 남음) 타입이 틀린 필드는 `None`이 됩니다. GUILD_CREATE와 GUILD_MEMBERS_CHUNK에서는 디코딩되지 않는 멤버·presence·활동·음성 상태만 빠지고 길드·청크의 나머지는 유지되며, 디스패치마다 버린 개수를 담은 `warn!` 한 줄이 남습니다(길드 자체 필드, 채널, 스레드, 역할은 여전히 디코딩되어야 합니다). 예전에는 이런 원소 하나가 디스패치 전체를 실패시켜 길드가 캐시에 들어가지 못했습니다.
 - **MESSAGE_UPDATE**는 부분 메시지 `MessageUpdate`로 디코딩됩니다. 바뀔 수 있는 필드는 모두 `Patch<T>`(`Message`에서 `T`인 필드) 또는 `NullablePatch<T>`(`Option<T>`인 필드)입니다. 생략은 `Missing`(유지), `null`은 지움, `[]`는 빈 목록으로 교체이며, `author`는 필드별로 병합하는 `PartialUser`입니다. 가진 메시지에 `update.apply_to(&mut message)`로 적용합니다. 갱신만으로 완전한 메시지를 만들지 않습니다. 내장 캐시도 캐시된 작성자에 같은 방식으로 패치를 적용하므로(`CacheHandle::apply_partial_user`) 사용자 이름만 바뀐 갱신은 캐시된 아바타를 유지하고 `"avatar": null`은 아바타를 지웁니다.
 
 타입 훅은 이벤트가 저장한 방식 그대로 payload를 받으므로 훅 호출이 payload를 복사하지 않습니다.
@@ -154,7 +155,7 @@ async fn handle_event(&self, ctx: Context, event: Arc<Event>) {
 
 ## 초기 Presence와 디스패치 모드
 
-`ClientBuilder::presence(...)`는 IDENTIFY 안에 초기 presence를 담아 보내므로, READY 이후에 상태를 갱신하는 대신 원하는 상태로 바로 접속합니다. `ClientBuilder::event_dispatch(...)`는 핸들러 호출 스케줄링 방식을 선택합니다.
+`ClientBuilder::presence(...)`는 IDENTIFY 안에 초기 presence를 담아 보내므로, READY 이후에 상태를 갱신하는 대신 원하는 상태로 바로 접속합니다. 여기의 활동은 받은 `Activity`가 아니라 `BotActivity`입니다(`name`, `type`, `state`, `url`: Discord가 봇에게 허용하는 필드. `BotActivity::custom("텍스트")`는 사용자 지정 상태). `ClientBuilder::event_dispatch(...)`는 핸들러 호출 스케줄링 방식을 선택합니다.
 
 ```rust
 use discordrs::{EventDispatchMode, UpdatePresence};

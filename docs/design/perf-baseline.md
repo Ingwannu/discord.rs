@@ -484,3 +484,9 @@ IDENTIFY했다. 인터랙션에는 응답하지 않았고 메시지를 보내지
 검증하지 못한 것: 음성 연결(봇이 음성 채널에 들어가면 서버에 보이는 변화가 생겨 하지 않았다), 인터랙션
 응답 경로, 쓰기 REST, 특권 인텐트(GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT)가 있는 큰 길드의
 멤버·프레즌스 페이로드.
+
+특권 인텐트 재검증(2026-10-13, 같은 봇, 같은 30개 길드, 읽기 전용): GUILD_CREATE 30개 중 11개가
+`invalid type: string "…", expected struct ActivityButton`으로 디코딩에 실패해 캐시에 들어가지 못했다(활동 `buttons`는
+받을 때 라벨 문자열 배열이다). PRESENCE_UPDATE 249개는 실패로 보고되지 않았지만 같은 모양의 활동이 있는 presence는
+활동 목록 전체가 지워졌다. 원인, 수정, 다른 모양 차이 감사, 성능은 `3.0-types-events-requests.md`
+"실전 검증 후속: 받은 활동 모양과 원소 단위 디코딩"에 있다.

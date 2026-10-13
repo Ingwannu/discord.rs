@@ -144,6 +144,7 @@ fn raw_numbers() {
 | `kind: u8` 필드, `channel.kind == 0` | `ChannelType::GUILD_TEXT`. 원시 숫자는 `ChannelType::new(n)` / `kind.get()` |
 | 닫힌 `ChannelType::{Text, Dm, Voice, News, …}`(`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GUILD_ANNOUNCEMENT, …}`. 스레드 타입 포함, `is_thread()` / `is_voice_based()` / `is_text_based()` |
 | `ActivityType(0)`, `x.0`, `Default` | `ActivityType::PLAYING` / `ActivityType::new(0)`, `x.get()`, `Default` 없음(`Activity::new(kind, name)`) |
+| `UpdatePresence { activities: vec![Activity { .. }], .. }`, `ActivityButton { label, url }` | `activities: vec![BotActivity::new(kind, name)]`(Discord가 봇에게 허용하는 `name`, `type`, `state`, `url`만). 받은 `Activity::buttons`는 Discord가 보내는 라벨 `Option<Vec<String>>` |
 | `constants::{component_type, button_style, separator_spacing, text_input_style}`, `command::{command_type, option_type}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle`, `CommandType`, `CommandOptionType` |
 | `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType`(`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
 | `MessageComponent::BUTTON` 등 `u8` 상수 | `ComponentType::BUTTON` |
