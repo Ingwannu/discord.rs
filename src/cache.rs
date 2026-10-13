@@ -118,6 +118,26 @@ fn cloned_roles(roles: &[(GuildId, &Arc<Role>)]) -> Vec<Role> {
     roles.iter().map(|(_, role)| (***role).clone()).collect()
 }
 
+/// Replaces the cached roles of `guild_id` with `roles`, a complete list (a
+/// guild snapshot): roles it no longer has are removed with their LRU
+/// entries, other guilds' roles are untouched. The role store is the only
+/// copy of a guild's roles (`guild()` rebuilds `Guild::roles` from it), so
+/// keeping a deleted role here would bring it back.
+#[cfg(feature = "cache")]
+fn replace_guild_roles(store: &mut CacheStore, guild_id: GuildId, roles: &[Arc<Role>]) {
+    let stale: Vec<(GuildId, RoleId)> = store
+        .roles
+        .keys()
+        .filter(|(stored_guild_id, _)| *stored_guild_id == guild_id)
+        .copied()
+        .collect();
+    for key in &stale {
+        store.roles.remove(key);
+        store.role_order.remove(key);
+    }
+    insert_roles(store, guild_id, roles);
+}
+
 /// Stores a guild's roles (keyed by guild and role id).
 #[cfg(feature = "cache")]
 fn insert_roles(store: &mut CacheStore, guild_id: GuildId, roles: &[Arc<Role>]) {
@@ -343,7 +363,9 @@ impl CacheHandle {
         let guild_id = guild.id;
         store.guilds.insert(guild_id, guild);
         remember_key(&mut store.guild_order, guild_id);
-        insert_roles(&mut store, guild_id, &roles);
+        // A full snapshot: its roles replace the guild's (an empty list
+        // clears them).
+        replace_guild_roles(&mut store, guild_id, &roles);
         enforce_guild_limit(&mut store, &self.config);
         self.enforce_role_limit(&mut store);
     }
@@ -454,9 +476,21 @@ impl CacheHandle {
         let guild_id = guild.id();
         let now = Instant::now();
 
-        store.guilds.insert(guild_id, Arc::clone(&guild.guild));
+        // A guild that is already cached (available again after an outage,
+        // or a repeated GUILD_CREATE) gets its roles replaced. A new one has
+        // none cached (Discord sends no role events for a guild before its
+        // GUILD_CREATE), which spares a scan of the role store per guild
+        // while a shard's GUILD_CREATEs arrive.
+        let replacing = store
+            .guilds
+            .insert(guild_id, Arc::clone(&guild.guild))
+            .is_some();
         remember_key(&mut store.guild_order, guild_id);
-        insert_roles(&mut store, guild_id, &guild.roles);
+        if replacing {
+            replace_guild_roles(&mut store, guild_id, &guild.roles);
+        } else {
+            insert_roles(&mut store, guild_id, &guild.roles);
+        }
 
         for channel in guild.channels.iter().chain(guild.threads.iter()) {
             let channel_id = channel.id;
@@ -572,17 +606,7 @@ impl CacheHandle {
         remember_key(&mut store.guild_order, guild_id);
         // GUILD_UPDATE's lists are complete: they replace what is cached.
         if let Patch::Value(roles) = &update.roles {
-            let stale: Vec<(GuildId, RoleId)> = store
-                .roles
-                .keys()
-                .filter(|(stored_guild_id, _)| *stored_guild_id == guild_id)
-                .copied()
-                .collect();
-            for key in &stale {
-                store.roles.remove(key);
-                store.role_order.remove(key);
-            }
-            insert_roles(&mut store, guild_id, roles);
+            replace_guild_roles(&mut store, guild_id, roles);
             self.enforce_role_limit(&mut store);
         }
         if let Patch::Value(emojis) = &update.emojis {
@@ -4176,5 +4200,56 @@ mod sweep_interval_tests {
         // A long interval keeps the throttle closed, so the expired entry is
         // still physically present after the second upsert.
         assert!(expired_entry_survives_second_upsert(Duration::from_secs(3600)).await);
+    }
+
+    #[tokio::test]
+    async fn guild_snapshots_replace_that_guilds_roles_only() {
+        use crate::model::{Guild, Role};
+
+        fn guild(id: u64, roles: &[u64]) -> Guild {
+            Guild {
+                id: test_id(id),
+                name: "g".to_string(),
+                roles: roles
+                    .iter()
+                    .map(|role| Role {
+                        id: test_id(*role),
+                        name: format!("r{role}"),
+                        ..Role::fixture()
+                    })
+                    .collect(),
+                ..Guild::fixture()
+            }
+        }
+        async fn role_ids(cache: &CacheHandle, guild_id: u64) -> Vec<u64> {
+            let roles = cache.guild(test_id(guild_id)).await.unwrap().roles;
+            roles.iter().map(|role| role.id.get()).collect()
+        }
+        let cache = CacheHandle::new();
+        cache.upsert_guild(guild(8, &[21])).await;
+        cache.upsert_guild(guild(9, &[11, 12])).await;
+        assert_eq!(role_ids(&cache, 9).await, [11, 12]);
+
+        // A smaller snapshot drops the role it no longer has.
+        cache.upsert_guild(guild(9, &[12])).await;
+        assert_eq!(role_ids(&cache, 9).await, [12]);
+        assert!(cache.role(test_id(9), test_id(11)).await.is_none());
+
+        // An empty list clears; the other guild keeps its roles.
+        cache.upsert_guild(guild(9, &[])).await;
+        assert!(role_ids(&cache, 9).await.is_empty());
+        assert_eq!(role_ids(&cache, 8).await, [21]);
+
+        // A repeated GUILD_CREATE (the guild is cached) replaces too.
+        cache
+            .apply_guild_create(&crate::model::GuildCreate::from(guild(9, &[13, 14])))
+            .await;
+        cache
+            .apply_guild_create(&crate::model::GuildCreate::from(guild(9, &[14])))
+            .await;
+        assert_eq!(role_ids(&cache, 9).await, [14]);
+        assert!(cache.role(test_id(9), test_id(13)).await.is_none());
+        assert_eq!(role_ids(&cache, 8).await, [21]);
+        assert_eq!(cache.roles(test_id(8)).await.len(), 1);
     }
 }
