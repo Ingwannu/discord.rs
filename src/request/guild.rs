@@ -99,8 +99,9 @@ pub struct CreateGuild {
 /// `0`) so that channel `parent_id`, permission overwrites, and
 /// `afk_channel_id`/`system_channel_id` could point at them before Discord
 /// assigned real IDs. Those numbers are not snowflakes and mean nothing
-/// outside the request, so they get this type instead of [`GenericId`](super::GenericId)
-/// (docs/design/3.0-types-events-requests.md §1 exceptions). Serialized as a
+/// outside the request, so they get this type instead of
+/// [`GenericId`](crate::model::GenericId) (docs/design/3.0-types-events-requests.md
+/// §1 exceptions). Serialized as a
 /// JSON integer. Only used by the deprecated `RestClient::create_guild`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]

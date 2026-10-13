@@ -70,7 +70,8 @@ pub struct Entitlement {
 /// Who an entitlement is granted to: a guild or a user.
 ///
 /// Used where Discord takes an owner as `owner_id` plus `owner_type`
-/// ([`CreateTestEntitlement`]), so the ID always matches its type.
+/// ([`CreateTestEntitlement`](crate::request::CreateTestEntitlement)), so the
+/// ID always matches its type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntitlementOwner {
     /// `owner_type: 1`: a guild.

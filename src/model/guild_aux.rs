@@ -260,8 +260,8 @@ pub struct GuildOnboarding {
 
 /// A question of a guild's onboarding flow (Discord docs: Onboarding Prompt
 /// Structure). The same shape is read from [`GuildOnboarding`] and sent in
-/// [`ModifyGuildOnboarding`]. No `Default`: `id`, `type`, and `title` are
-/// required.
+/// [`ModifyGuildOnboarding`](crate::request::ModifyGuildOnboarding). No
+/// `Default`: `id`, `type`, and `title` are required.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OnboardingPrompt {
     /// ID of the prompt.
