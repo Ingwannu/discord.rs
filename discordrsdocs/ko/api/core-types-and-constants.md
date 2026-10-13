@@ -252,7 +252,7 @@ fn describe(channel: &Channel) -> &'static str {
 - 잘못된 인터랙션은 `decode_interaction`에서 `DiscordError::Json`, `parse_interaction`에서 `DiscordError::Model`입니다. 메시지에 필드 이름이 들어갑니다(`missing or invalid interaction.token`, `invalid interaction.data: missing field ...`). 디코더가 읽는 키가 반복되면 오류이고(읽지 않는 키는 검사 없이 건너뜀, 파서 API 참고), `data`는 JSON 객체여야 합니다. 인터랙션 `type`은 JSON 숫자여야 합니다(`Value` 파서는 `"2"`도 받았음).
 - 타입 인터랙션 엔드포인트는 요청 본문을 바로 디코딩하고, 완전히 디코딩하지 못한 PING에도 PONG으로 답합니다.
 - JSON 텍스트로 남는 필드는 애플리케이션이 정하거나 본래 이질적인 값(`ApplicationIdentityProfile::metadata`, 감사 로그 변경 값, 템플릿 스냅샷, 모르는 동적 프로필 필드, 모르는 통합 소유자)이거나 문서에 없는 값(`Sku::manifest_labels`, `Sku::features`)입니다. `Box<RawValue>`는 받은 텍스트를 트리 대신 할당 한 번으로 보관합니다. `serde_json::from_str(raw.get())`이나 타입 지정 접근자로 디코딩하세요. serde의 버퍼링 컨테이너(`#[serde(flatten)]`, `#[serde(untagged)]`)는 통과하지 못하므로 이 모델을 그 안에 넣지 마세요.
-- `CreateMessage::{components, embeds}`와 2.x `InteractionCallbackResponse::data`는 5단계 통합에서 그 타입이 정리될 때까지 `Value`로 둡니다. 새 코드는 `discordrs::request`의 타입 요청 모델(인터랙션 콜백은 `InteractionResponse`, 메시지 본문, `Modal`)을 보냅니다.
+- 나가는 본문에는 `Value`가 없습니다: 2.x `CreateMessage`(JSON `components`/`embeds`)와 `InteractionCallbackResponse`(JSON `data`)는 3.0에서 삭제했고 `discordrs::request`의 타입 요청 모델(메시지 본문, 인터랙션 콜백용 `InteractionResponse`, `Modal`)을 씁니다. `model`에 있던 REST 본문(`ModifyGuild`, `CreateGuildRole`, …)은 같은 이름으로 `discordrs::request`로 옮겼고 `model::X`는 4.0까지 deprecated 별칭입니다.
 
 ### `Patch<T>`, `Nullable<T>`, `NullablePatch<T>`
 

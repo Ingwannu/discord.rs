@@ -121,7 +121,7 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 - Use `RestClient::builder(token, application_id)` when the client needs configuration (API base/version, timeouts, user agent, proxy, custom reqwest client, a 429 `rate_limit_callback`, default allowed mentions); `RestClient::new(...)` keeps the zero-configuration path.
 - Use the `discordrs::model_ext` entity methods (`message.reply(...)`, `member.timeout(...)`, `guild.create_channel(...)`, `channel.send(...)`, `user.dm(...)`) for one-line discord.js-style calls on typed models, and builder `try_build()`/`validate()` to enforce Discord's documented limits before the HTTP round trip.
 - 3.0 removed the raw-JSON legacy helpers: use `list_public_archived_threads(...)` (not `get_public_archived_threads(...)`) and `get_guild_audit_log(guild_id, &AuditLogQuery)`.
-- `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
+- 3.0 removed the `discordrs::Error` and `discordrs::BoxError` aliases (deprecated since 0.4): use `DiscordError`, and `Box<dyn std::error::Error + Send + Sync>` where you used `BoxError`.
 
 ## 4.5 Route HTTP interactions
 

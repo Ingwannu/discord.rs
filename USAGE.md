@@ -59,7 +59,7 @@ The public API was tightened to make the typed surface the default:
 - `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
 - `1.2.2` fixes Gateway compression handling so default connections no longer request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
 - 3.0 removed the legacy raw-JSON helpers `get_public_archived_threads(...)` and the inline-parameter `get_guild_audit_log(...)`; use `list_public_archived_threads(...)` and `get_guild_audit_log(guild_id, &AuditLogQuery)`.
-- `discordrs::Error` and `discordrs::BoxError` remain compatibility aliases during the 2.x line. New code should use `DiscordError`; the aliases are candidates for removal in the next major release.
+- 3.0 removed the `discordrs::Error` and `discordrs::BoxError` aliases (deprecated since 0.4): use `DiscordError`, and `Box<dyn std::error::Error + Send + Sync>` where you used `BoxError`.
 
 Common replacements:
 
@@ -68,7 +68,7 @@ Common replacements:
 | `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(&request::CreateMessage)` |
 | `RestClient::edit_message(...)` (1.x), `update_message(...)` (2.x) | `RestClient::edit_message(&request::EditMessage)` (3.0) |
 | `RestClient::create_dm_channel(...)` (1.x), `create_dm_channel_typed(...)` (2.x) | `RestClient::create_dm_channel(&CreateDmChannel)` (3.0) |
-| `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
+| `RestClient::create_interaction_response(...)` (1.x), `create_interaction_response_typed(...)` (2.x) | `RestClient::create_interaction_response(&request::InteractionResponse)` (3.0), or the `InteractionResponder` methods |
 | `RestClient::bulk_overwrite_global_commands(...)` (1.x), `bulk_overwrite_global_commands_typed(...)` (2.x) | `RestClient::bulk_overwrite_global_commands(&[CommandDefinition])` (3.0) |
 | `RestClient::request(method, path, Option<&Value>)`, `request_typed`, `request_multipart` (2.x) | `RestClient::request::<T>(RawRequest)` (3.0) |
 | `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
@@ -1003,7 +1003,7 @@ async fn respond_and_inspect(
 }
 ```
 
-`create_interaction_response(...)` is the fire-and-forget variant when you do not need the callback resource. Both take the same `request::InteractionResponse` the HTTP endpoint returns; the 2.x `create_interaction_response_typed(...)` (an `InteractionCallbackResponse` with JSON `data`) stays until the 3.0 REST names are consolidated.
+`create_interaction_response(...)` is the fire-and-forget variant when you do not need the callback resource. Both take the same `request::InteractionResponse` the HTTP endpoint returns; the 2.x `create_interaction_response_typed(...)` and its `InteractionCallbackResponse` were removed in 3.0.
 
 ## 7. Build a Typed Interactions Endpoint
 
@@ -1357,7 +1357,7 @@ The reason applies to any mutating route called on the scoped clone — bans, ki
 Guild lifecycle routes are typed too:
 
 ```rust
-use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::request::{CreateGuild, CreateGuildFromTemplate};
 use discordrs::MfaLevel;
 use discordrs::DiscordHttpClient;
 

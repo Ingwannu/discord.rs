@@ -205,7 +205,7 @@ Re-exports parsers and provides JSON helpers:
 - **Key Methods:**
   - `new(token, application_id)`
   - `create_message(channel_id, body)`, `update_message(channel_id, message_id, body)`
-  - `create_interaction_response_typed(interaction_id, interaction_token, body)`
+  - `create_interaction_response(interaction_id, interaction_token, &InteractionResponse)`
   - `create_followup_message(interaction_token, body)`
   - `request(method, path, body)`: generic with rate limit logic.
 

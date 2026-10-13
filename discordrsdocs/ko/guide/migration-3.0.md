@@ -787,7 +787,10 @@ async fn rest_calls(
 | 2.x | 3.0 | 비고 |
 |---|---|---|
 | `update_channel(id, &Value)`, `update_channel_typed` | `update_channel(id, &request::ModifyChannel)` | `_typed` 삭제 |
-| `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | 크레이트 루트의 `CreateMessage`는 아직 2.x 모델 타입: `discordrs::request::CreateMessage`를 import |
+| `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | 2.x 구조체(JSON `components`/`embeds`)는 없어졌습니다. `discordrs::CreateMessage`와 prelude는 새 타입을 가리키고, `model::CreateMessage`는 그 타입의 deprecated 별칭(`new()`와 setter로 만듦) |
+| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, …(REST 본문 48개) | `request::ModifyGuild`, …(같은 이름) | 공개 필드와 `Default`를 그대로 둔 채 `discordrs::request`로 옮긴 같은 구조체. `Deserialize`는 더 이상 구현하지 않습니다. `discordrs::X`와 prelude는 그대로 동작하고 `model::X`는 deprecated 별칭 |
+| `create_interaction_response_typed(id, token, &InteractionCallbackResponse)` | `create_interaction_response(id, token, &request::InteractionResponse)` | `InteractionCallbackResponse`(`kind` + JSON `data`)와 함께 삭제. enum에 없는 콜백은 `InteractionResponse::Raw(RawInteractionResponse)`로 보냄 |
+| `ModifyStageInstance { privacy_level }` | `ModifyStageInstance { topic, privacy_level }` | `topic` 추가. 모든 필드를 나열한 리터럴은 `..Default::default()` 필요 |
 | `update_message`, `update_message_with_files` | `edit_message(_with_files)(.., &request::EditMessage)` | 삭제 |
 | `get_guild_emojis() -> Vec<Value>`, `get_guild_emojis_typed` | `get_guild_emojis() -> Vec<Emoji>` | `_typed`는 deprecated 전달 함수 |
 | `create_dm_channel_typed`, `get_guild_audit_log_typed`, `modify_guild_widget`, `*_from_request`, `*_config` | 정식 이름 | deprecated 전달 함수 35개 |
@@ -799,7 +802,7 @@ async fn rest_calls(
 | `available_tags: Vec<ForumTag>`(`CreateGuildChannel`, `update_channel`에는 JSON) | `Vec<request::AvailableForumTag>` | `AvailableForumTag::from(&tag)`는 태그를 유지, `AvailableForumTag::new("name")`은 새로 만듦. 빠진 태그는 삭제 |
 | `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container` → `Value` | → `Message` | 클라이언트 기본 `allowed_mentions`도 적용 |
 
-`_typed` 쌍 41개와 단독 `_typed` 메서드 5개를 정식 이름으로 합쳤고, 일대일 이름 변경 35개는 이 메이저 버전 동안 deprecated 전달 함수로 남으며, untyped 변형 35개는 삭제했습니다. 전체 표는 [HTTP 및 헬퍼](../api/http-and-helpers.md)의 "2.x에서 REST 이름 옮기기 (3.0)"에 있습니다. Discord가 형태를 정하지 않은 본문은 일부러 untyped로 둡니다: Slack/GitHub 호환 웹훅(`&Value`)과 로비 moderation 메타데이터.
+`_typed` 쌍 41개와 단독 `_typed` 메서드 5개를 정식 이름으로 합쳤고, 일대일 이름 변경 35개는 이 메이저 버전 동안 deprecated 전달 함수로 남으며, 2.x 이름 36개(untyped 변형 35개와 레거시 `create_interaction_response_typed`)는 삭제했습니다. 전체 표는 [HTTP 및 헬퍼](../api/http-and-helpers.md)의 "2.x에서 REST 이름 옮기기 (3.0)"에 있습니다. Discord가 형태를 정하지 않은 본문은 일부러 untyped로 둡니다: Slack/GitHub 호환 웹훅(`&Value`)과 로비 moderation 메타데이터.
 
 ## 10. 메시지·컴포넌트 빌더
 
@@ -1395,8 +1398,13 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | 인터랙션 헬퍼 11개(`defer_interaction`, `followup_message`, `edit_original_response`, …) | `InteractionResponder` 메서드 |
 | `interactions_endpoint`, `typed_interactions_endpoint` | `try_interactions_endpoint`, `try_typed_interactions_endpoint` |
 | `CheckboxBuilder::checked` | `default_checked` |
+| `ModalBuilder::add_text_input_row`, `LegacyTextInputRow::new`(Action Row 안의 텍스트 입력) | `ModalBuilder::add_text_input`, `Label::new(label, input)` |
+| `batch_edit_application_command_permissions` | `edit_application_command_permissions`(Discord가 일괄 수정을 막음) |
+| 옮긴 요청 본문 48개의 `model::X`, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
 | REST 이름 변경 35개(`*_typed`, `*_from_request`, `*_config`, …) | 정식 메서드 |
 | `create_guild`, `delete_guild`, `create_guild_from_template`, `modify_guild_mfa_level`, `Guild::delete`, `Guild::set_mfa_level` | 없음: Discord가 애플리케이션의 길드 생성을 없앰(2025-07-15) |
+
+0.4부터 deprecated였던 별칭은 3.0에서 삭제했습니다: `discordrs::Error`와 `types::Error`(`DiscordError` 사용), `error::BoxError`(`Box<dyn std::error::Error + Send + Sync>` 사용).
 
 ## 컴파일은 되지만 동작이 바뀐 것
 

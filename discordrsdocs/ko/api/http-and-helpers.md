@@ -20,7 +20,7 @@
 - **구체 요청 본문.** 메시지 엔드포인트는 `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`를 받습니다. 다른 도메인의 새 본문도 `discordrs::request`에 있습니다: `ModifyChannel`(`update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage`(새 `create_forum_thread(_with_files)`), `CreateAutoModerationRule`/`ModifyAutoModerationRule`, 이모지 4종, 사운드보드 3종, `CreateGuildTemplate`/`ModifyGuildTemplate`, `CreateGuildScheduledEvent`/`ModifyGuildScheduledEvent`, `EditApplicationCommand`. 생성 본문은 `Option` 필드, 수정 본문은 `Patch`/`NullablePatch` 필드이고 `clear_*` setter는 `null`을 보냅니다. 아직 `discordrs::model`에 있는 2.x 본문(`ModifyGuild`, `CreateGuildRole`, `CreateWebhook` 등)은 그대로 쓰고, 나중에 `request`로 옮깁니다. 포럼·미디어 채널의 `available_tags`(`ModifyChannel`, `CreateGuildChannel`)는 `request::AvailableForumTag` 목록입니다. `AvailableForumTag::from(&tag)`는 기존 태그를 id로 유지하고, `AvailableForumTag::new("이름")`은 새 태그를 만들며, 빠진 태그는 삭제됩니다(2.x는 id를 생략할 수 없는 응답 타입 `ForumTag`를 받았습니다).
 - **문서화된 예외.** `execute_slack_compatible_webhook`/`execute_github_compatible_webhook`은 Slack·GitHub 형식 본문이라 `&Value`를 받고, `update_lobby_message_moderation_metadata`는 애플리케이션이 정의하는 `HashMap<String, String>`을 받습니다.
 - **본문은 한 번만 인코딩합니다.** 본문은 `serde_json::to_vec`으로 바로 바이트가 되고(`serde_json::Value` 트리 없음), 재시도를 포함한 모든 시도가 같은 바이트를 보냅니다. 객체 키는 요청 타입의 필드 순서를 따릅니다.
-- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, Components V2 채널 헬퍼(`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), 그리고 인터랙션 쪽의 메시지 콜백(타입 4·7, `RawInteractionResponse` 제외), follow-up, `@original`·follow-up 수정. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 레거시 `create_interaction_response_typed`는 타입 4·7의 JSON `data`에 계속 넣습니다. 2.x는 `edit_webhook_message`와 채널 헬퍼에 적용하지 않았습니다.
+- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, Components V2 채널 헬퍼(`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), 그리고 인터랙션 쪽의 메시지 콜백(타입 4·7, `RawInteractionResponse` 제외), follow-up, `@original`·follow-up 수정. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 2.x는 `edit_webhook_message`와 채널 헬퍼에 적용하지 않았습니다.
 - **nonce 재전송**은 JSON을 다시 읽지 않고 타입 요청(`CreateMessage::nonce_replay()`, `.enforce_nonce("...")`로 설정)에서 판정하며, Create Message에만 해당합니다.
 - **음성 메시지**(`IS_VOICE_MESSAGE`)는 업로드 전에 로컬에서 확인합니다: `audio/*` 파일이 정확히 하나여야 합니다.
 - `modify_guild_member`는 `()` 대신 갱신된 `Member`(Discord의 200 본문)를 돌려줍니다. `Member::edit`/`timeout`/`remove_timeout`도 같습니다.
@@ -199,7 +199,7 @@ rest.with_reason("스팸")
 2.1에서 길드 생성/삭제 라우트가 타입드 헬퍼로 추가되었습니다.
 
 ```rust
-use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::request::{CreateGuild, CreateGuildFromTemplate};
 
 // POST /guilds — 10개 미만의 길드에 속한 봇만 사용 가능
 let guild = rest
@@ -271,7 +271,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 }
 ```
 
-콜백 리소스가 필요 없으면 `create_interaction_response(...)`를, 파일을 함께 올리려면 `create_interaction_response_with_files(...)`를 씁니다. 셋 모두 HTTP 엔드포인트가 돌려주는 것과 같은 `request::InteractionResponse`를 받습니다. 상태 비공유 호출이므로 파싱된 인터랙션에는 `InteractionResponder` 메서드를 권장합니다. 2.x의 `create_interaction_response_typed(...)`(JSON `data`를 담은 `InteractionCallbackResponse`)는 3.0 REST 이름 정리 때까지 남습니다. follow-up과 `@original` 엔드포인트는 `request::CreateFollowup` / `request::EditInteractionResponse`를 받습니다.
+콜백 리소스가 필요 없으면 `create_interaction_response(...)`를, 파일을 함께 올리려면 `create_interaction_response_with_files(...)`를 씁니다. 셋 모두 HTTP 엔드포인트가 돌려주는 것과 같은 `request::InteractionResponse`를 받습니다. 상태 비공유 호출이므로 파싱된 인터랙션에는 `InteractionResponder` 메서드를 권장합니다. 2.x의 `create_interaction_response_typed(...)`와 그 `InteractionCallbackResponse`(`kind` + JSON `data`)는 3.0에서 삭제했습니다. enum에 없는 콜백은 `InteractionResponse::Raw(RawInteractionResponse)`로 보냅니다. follow-up과 `@original` 엔드포인트는 `request::CreateFollowup` / `request::EditInteractionResponse`를 받습니다.
 
 ## OAuth2 토큰 폐기
 
@@ -310,6 +310,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 | `create_guild_scheduled_event_typed` | `create_guild_scheduled_event` | `CreateGuildScheduledEvent` | 제거 |
 | `create_guild_sticker_from_request` | `create_guild_sticker` | `CreateGuildSticker` | deprecated 전달 |
 | `create_guild_sticker_typed` | `create_guild_sticker` | `CreateGuildSticker` | 제거 |
+| `create_interaction_response_typed` | `create_interaction_response` | `CreateInteractionResponse` | 제거 |
 | `create_role` | `create_guild_role` | `CreateGuildRole` | 제거 |
 | `create_role_typed` | `create_guild_role` | `CreateGuildRole` | 제거 |
 | `create_stage_instance_from_request` | `create_stage_instance` | `CreateStageInstance` | deprecated 전달 |

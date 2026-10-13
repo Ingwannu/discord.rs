@@ -39,7 +39,7 @@ Every method takes a concrete request type and returns a typed model (3.0). For 
 - **Concrete request bodies.** Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. New bodies for the other domains live in `discordrs::request` too: `ModifyChannel` (for `update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage` (new `create_forum_thread(_with_files)`), `CreateAutoModerationRule` / `ModifyAutoModerationRule`, `CreateGuildEmoji` / `ModifyGuildEmoji` / `CreateApplicationEmoji` / `ModifyApplicationEmoji`, `SendSoundboardSound` / `CreateGuildSoundboardSound` / `ModifyGuildSoundboardSound`, `CreateGuildTemplate` / `ModifyGuildTemplate`, `CreateGuildScheduledEvent` / `ModifyGuildScheduledEvent`, and `EditApplicationCommand`. Create bodies use `Option` fields; modify bodies use `Patch` / `NullablePatch`, where the `clear_*` setters send `null`. The 2.x bodies still in `discordrs::model` (`ModifyGuild`, `CreateGuildRole`, `CreateWebhook`, ...) keep working and move to `request` later. A forum or media channel's `available_tags` (in `ModifyChannel` and `CreateGuildChannel`) is a list of `request::AvailableForumTag`: `AvailableForumTag::from(&tag)` keeps an existing tag by id, `AvailableForumTag::new("name")` creates one, and tags left out are deleted (2.x took the response type `ForumTag`, which cannot omit the id).
 - **Documented exceptions.** `execute_slack_compatible_webhook` / `execute_github_compatible_webhook` take `&Value` (Slack- and GitHub-format payloads), and `update_lobby_message_moderation_metadata` takes the application-defined `HashMap<String, String>`.
 - **Bodies are encoded once.** A body is serialized straight to bytes with `serde_json::to_vec` (no `serde_json::Value` tree) and every attempt, including retries, sends the same bytes. Object keys follow the request type's field order.
-- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, the Components V2 channel helpers (`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), and on the interaction side the message callbacks (types 4 and 7; not `RawInteractionResponse`), follow-ups, and `@original` / follow-up edits. An explicit value, or an explicit `null` on an edit, wins. The legacy `create_interaction_response_typed` still writes it into the JSON `data` of types 4 and 7. 2.x did not apply it to `edit_webhook_message` or the channel helpers.
+- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, the Components V2 channel helpers (`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), and on the interaction side the message callbacks (types 4 and 7; not `RawInteractionResponse`), follow-ups, and `@original` / follow-up edits. An explicit value, or an explicit `null` on an edit, wins. 2.x did not apply it to `edit_webhook_message` or the channel helpers.
 - **Nonce replay** comes from the typed request (`CreateMessage::nonce_replay()`, set with `.enforce_nonce("...")`), not from reading the JSON back, and only for Create Message.
 - **Voice messages** (`IS_VOICE_MESSAGE`) are checked locally before upload: exactly one `audio/*` file.
 - `modify_guild_member` returns the updated `Member` (Discord's 200 body) instead of `()`; `Member::edit` / `timeout` / `remove_timeout` follow.
@@ -243,7 +243,7 @@ rest.with_reason("spam")
 `2.1` added typed helpers for guild creation and deletion:
 
 ```rust
-use discordrs::model::{CreateGuild, CreateGuildFromTemplate};
+use discordrs::request::{CreateGuild, CreateGuildFromTemplate};
 
 // POST /guilds — only usable by bots in fewer than 10 guilds.
 let guild = rest
@@ -312,7 +312,7 @@ if let Some(message) = result.resource.and_then(|resource| resource.message) {
 }
 ```
 
-`create_interaction_response(...)` is the fire-and-forget variant and `create_interaction_response_with_files(...)` uploads files with the callback; all three take the same `request::InteractionResponse` the HTTP endpoint returns. They are stateless: prefer the `InteractionResponder` methods for a parsed interaction. The 2.x `create_interaction_response_typed(...)` (an `InteractionCallbackResponse` with JSON `data`) stays until the 3.0 REST names are consolidated. The follow-up and `@original` endpoints take `request::CreateFollowup` / `request::EditInteractionResponse`.
+`create_interaction_response(...)` is the fire-and-forget variant and `create_interaction_response_with_files(...)` uploads files with the callback; all three take the same `request::InteractionResponse` the HTTP endpoint returns. They are stateless: prefer the `InteractionResponder` methods for a parsed interaction. The 2.x `create_interaction_response_typed(...)` and its `InteractionCallbackResponse` (`kind` + JSON `data`) were removed in 3.0; a callback the enum does not model is sent as `InteractionResponse::Raw(RawInteractionResponse)`. The follow-up and `@original` endpoints take `request::CreateFollowup` / `request::EditInteractionResponse`.
 
 ## Application Resource Helpers
 
@@ -1095,6 +1095,7 @@ oauth
 | `create_guild_scheduled_event_typed` | `create_guild_scheduled_event` | `CreateGuildScheduledEvent` | removed |
 | `create_guild_sticker_from_request` | `create_guild_sticker` | `CreateGuildSticker` | deprecated forward |
 | `create_guild_sticker_typed` | `create_guild_sticker` | `CreateGuildSticker` | removed |
+| `create_interaction_response_typed` | `create_interaction_response` | `CreateInteractionResponse` | removed |
 | `create_role` | `create_guild_role` | `CreateGuildRole` | removed |
 | `create_role_typed` | `create_guild_role` | `CreateGuildRole` | removed |
 | `create_stage_instance_from_request` | `create_stage_instance` | `CreateStageInstance` | deprecated forward |

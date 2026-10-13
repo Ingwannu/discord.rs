@@ -135,7 +135,7 @@ If you are upgrading existing code, the common replacements are:
 | `RestClient::send_message(...)` | `send_message(...)` helper or `RestClient::create_message(&request::CreateMessage)` |
 | `RestClient::edit_message(...)` (1.x), `update_message(...)` (2.x) | `RestClient::edit_message(&request::EditMessage)` (3.0) |
 | `RestClient::create_dm_channel(...)` (1.x), `create_dm_channel_typed(...)` (2.x) | `RestClient::create_dm_channel(&CreateDmChannel)` (3.0) |
-| `RestClient::create_interaction_response(...)` | `RestClient::create_interaction_response_typed(...)` or typed helper functions |
+| `RestClient::create_interaction_response(...)` (1.x), `create_interaction_response_typed(...)` (2.x) | `RestClient::create_interaction_response(&request::InteractionResponse)` (3.0), or the `InteractionResponder` methods |
 | `RestClient::bulk_overwrite_global_commands(...)` (1.x), `bulk_overwrite_global_commands_typed(...)` (2.x) | `RestClient::bulk_overwrite_global_commands(&[CommandDefinition])` (3.0) |
 | `RestClient::request(method, path, Option<&Value>)`, `request_typed`, `request_multipart` (2.x) | `RestClient::request::<T>(RawRequest)` (3.0) |
 | `discordrs::builders::modal::*` | `discordrs::builders::{...}` or crate root re-exports |
@@ -331,7 +331,7 @@ fn app(public_key: &str) -> Router {
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
 - Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
-- Prefer the typed `RestClient` methods such as `create_message`, `edit_message`, `create_interaction_response_typed`, and `bulk_overwrite_global_commands`.
+- Prefer the typed `RestClient` methods such as `create_message`, `edit_message`, `create_interaction_response`, and `bulk_overwrite_global_commands`.
 - Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log`, `get_auto_moderation_rules`, `get_guild_preview`, `get_guild_vanity_url`, `get_voice_regions`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
 - `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
 - Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.

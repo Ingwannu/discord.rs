@@ -789,7 +789,10 @@ async fn rest_calls(
 | 2.x | 3.0 | Note |
 |---|---|---|
 | `update_channel(id, &Value)`, `update_channel_typed` | `update_channel(id, &request::ModifyChannel)` | `_typed` removed |
-| `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | the crate-root `CreateMessage` is still the 2.x model type: import `discordrs::request::CreateMessage` |
+| `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | the 2.x struct (JSON `components`/`embeds`) is gone; `discordrs::CreateMessage` and the prelude name the new type, `model::CreateMessage` is a deprecated alias of it (build with `new()` and setters) |
+| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, … (48 REST bodies) | `request::ModifyGuild`, … (same name) | the same structs with public fields and `Default`, moved to `discordrs::request`; they no longer implement `Deserialize`. `discordrs::X` and the prelude keep working; `model::X` is a deprecated alias |
+| `create_interaction_response_typed(id, token, &InteractionCallbackResponse)` | `create_interaction_response(id, token, &request::InteractionResponse)` | removed with `InteractionCallbackResponse` (`kind` + JSON `data`); a callback the enum does not model goes through `InteractionResponse::Raw(RawInteractionResponse)` |
+| `ModifyStageInstance { privacy_level }` | `ModifyStageInstance { topic, privacy_level }` | `topic` added; a literal that lists every field needs `..Default::default()` |
 | `update_message`, `update_message_with_files` | `edit_message(_with_files)(.., &request::EditMessage)` | removed |
 | `get_guild_emojis() -> Vec<Value>`, `get_guild_emojis_typed` | `get_guild_emojis() -> Vec<Emoji>` | `_typed` is a deprecated forward |
 | `create_dm_channel_typed`, `get_guild_audit_log_typed`, `modify_guild_widget`, `*_from_request`, `*_config` | the canonical name | 35 deprecated forwards |
@@ -801,7 +804,7 @@ async fn rest_calls(
 | `available_tags: Vec<ForumTag>` (`CreateGuildChannel`, JSON for `update_channel`) | `Vec<request::AvailableForumTag>` | `AvailableForumTag::from(&tag)` keeps a tag, `AvailableForumTag::new("name")` creates one; tags left out are deleted |
 | `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container` → `Value` | → `Message` | now apply the client's default `allowed_mentions` |
 
-41 `_typed` pairs and 5 standalone `_typed` methods were folded into the canonical names; 35 one-to-one renames remain as deprecated forwards for this major version and 35 untyped variants were removed. The complete table is "Migrating REST Names from 2.x" in [HTTP and Helpers](../api/http-and-helpers.md). Bodies Discord leaves open stay untyped on purpose: Slack/GitHub-compatible webhooks (`&Value`) and lobby moderation metadata.
+41 `_typed` pairs and 5 standalone `_typed` methods were folded into the canonical names; 35 one-to-one renames remain as deprecated forwards for this major version, and 36 2.x names were removed (35 untyped variants and the legacy `create_interaction_response_typed`). The complete table is "Migrating REST Names from 2.x" in [HTTP and Helpers](../api/http-and-helpers.md). Bodies Discord leaves open stay untyped on purpose: Slack/GitHub-compatible webhooks (`&Value`) and lobby moderation metadata.
 
 ## 10. Message and component builders
 
@@ -1397,8 +1400,13 @@ The crate now enforces its own code rules with lints (no `unwrap`/`panic!`/`as` 
 | 11 interaction helpers (`defer_interaction`, `followup_message`, `edit_original_response`, …) | `InteractionResponder` methods |
 | `interactions_endpoint`, `typed_interactions_endpoint` | `try_interactions_endpoint`, `try_typed_interactions_endpoint` |
 | `CheckboxBuilder::checked` | `default_checked` |
+| `ModalBuilder::add_text_input_row`, `LegacyTextInputRow::new` (text inputs in action rows) | `ModalBuilder::add_text_input`, `Label::new(label, input)` |
+| `batch_edit_application_command_permissions` | `edit_application_command_permissions` (Discord disabled batch edits) |
+| `model::X` for the 48 request bodies that moved, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
 | 35 REST renames (`*_typed`, `*_from_request`, `*_config`, …) | the canonical method |
 | `create_guild`, `delete_guild`, `create_guild_from_template`, `modify_guild_mfa_level`, `Guild::delete`, `Guild::set_mfa_level` | none: Discord removed guild creation by applications (2025-07-15) |
+
+The aliases deprecated since 0.4 are removed in 3.0: `discordrs::Error` and `types::Error` (use `DiscordError`) and `error::BoxError` (use `Box<dyn std::error::Error + Send + Sync>`).
 
 ## Behaviour changes that still compile
 
