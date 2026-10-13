@@ -1317,8 +1317,11 @@ open_discriminant! {
 }
 
 open_discriminant! {
-    /// Display name styles `font_id` (Discord docs: Display Name Font,
-    /// documented in discord-api-docs#8178). The names are the UI names.
+    /// Display name styles `font_id` (Display Name Font). The names are the
+    /// UI names.
+    ///
+    /// **Preview:** based on the unreleased discord-api-docs PR #8178, which
+    /// is still open; values and names may change.
     pub struct DisplayNameFont(u8) {
         /// Sakura (Cherry Bomb One).
         SAKURA = 3,
@@ -1340,8 +1343,10 @@ open_discriminant! {
 }
 
 open_discriminant! {
-    /// Display name styles `effect_id` (Discord docs: Display Name Effect,
-    /// documented in discord-api-docs#8178).
+    /// Display name styles `effect_id` (Display Name Effect).
+    ///
+    /// **Preview:** based on the unreleased discord-api-docs PR #8178, which
+    /// is still open; values and names may change.
     pub struct DisplayNameEffect(u8) {
         /// Displays the first color.
         SOLID = 1,

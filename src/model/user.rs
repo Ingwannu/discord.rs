@@ -56,8 +56,10 @@ pub struct UserPrimaryGuild {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// How a user's or member's name is displayed: font, effect, and colors
-/// (Discord docs: Display Name Styles Object, documented in
-/// discord-api-docs#8178).
+/// (Display Name Styles Object).
+///
+/// **Preview:** based on the unreleased discord-api-docs PR #8178, which is
+/// still open; the shape may change.
 ///
 /// Every field is optional here although the docs mark them required: the
 /// object sits inside every [`User`] and [`Member`](super::Member), so a
@@ -112,8 +114,9 @@ pub struct User {
     pub collectibles: Option<UserCollectibles>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_guild: Option<UserPrimaryGuild>,
-    /// Boxed: rarely set, and every cached user, member, and message author
-    /// would otherwise carry its 32 bytes inline.
+    /// Preview ([`DisplayNameStyles`]: unreleased discord-api-docs PR
+    /// #8178, may change). Boxed: rarely set, and every cached user, member,
+    /// and message author would otherwise carry its 32 bytes inline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name_styles: Option<Box<DisplayNameStyles>>,
 }

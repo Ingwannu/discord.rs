@@ -745,7 +745,7 @@ if let Some(member) = joined {
 
 `add_guild_member(...)` returns `None` when Discord responds with `204 No Content` because the user is already in the guild.
 
-Guild member payloads preserve current profile fields such as guild `banner`, `avatar_decoration_data`, `collectibles`, and `display_name_styles` (`DisplayNameStyles`: `font_id`, `effect_id`, `colors`; also on `User`, documented in Discord's pending docs PR #8178, so its fields are optional and a changed shape never fails the user or member that carries it). Message reactions carry `count_details`, `me_burst`, and `burst_colors` for super reactions. Guild member listing supports Discord's `after` cursor through `GuildMembersQuery`, and guild member search supports shared percent-encoded query building through `SearchGuildMembersQuery`:
+Guild member payloads preserve current profile fields such as guild `banner`, `avatar_decoration_data`, `collectibles`, and `display_name_styles` (`DisplayNameStyles`: `font_id`, `effect_id`, `colors`; also on `User`. **Preview:** it follows the unreleased discord-api-docs PR #8178, which is still open, so it may change; its fields are optional so that a changed shape never fails the user or member that carries it). Message reactions carry `count_details`, `me_burst`, and `burst_colors` for super reactions. Guild member listing supports Discord's `after` cursor through `GuildMembersQuery`, and guild member search supports shared percent-encoded query building through `SearchGuildMembersQuery`:
 
 ```rust
 use discordrs::{GuildMembersQuery, SearchGuildMembersQuery};

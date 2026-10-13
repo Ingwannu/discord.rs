@@ -47,8 +47,9 @@ pub struct Member {
     pub collectibles: Option<UserCollectibles>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u64>,
-    /// Styles applied to the member's display (or nick) name; boxed like
-    /// [`User::display_name_styles`].
+    /// Styles applied to the member's display (or nick) name; a preview
+    /// field boxed like [`User::display_name_styles`] (unreleased
+    /// discord-api-docs PR #8178, may change).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name_styles: Option<Box<DisplayNameStyles>>,
 }
