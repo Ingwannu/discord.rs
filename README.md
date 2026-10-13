@@ -116,7 +116,7 @@ async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordE
 
 ## Upgrading from 2.x to 3.0
 
-3.0 breaks the 2.x public types once, on purpose: typed IDs instead of `Snowflake`, open discriminants, a shared `Arc<Event>` envelope with patch-aware updates, typed request bodies for every REST route, and async traits without `async-trait`. The [migration guide](discordrsdocs/docs/guide/migration-3.0.md) ([한국어](discordrsdocs/ko/guide/migration-3.0.md)) walks through every change with before/after code for bots on 2.0.2 or 2.2.0, followed by a checklist. Its code is compiled in CI (`tests/migration_guide.rs`).
+3.0 breaks the 2.x public types once, on purpose: typed IDs instead of `Snowflake`, open discriminants, a shared `Arc<Event>` envelope with patch-aware updates, typed request bodies for every REST route, and async traits without `async-trait`. The [migration guide](discordrsdocs/docs/guide/migration-3.0.md) ([한국어](discordrsdocs/ko/guide/migration-3.0.md)) walks through the breaking changes area by area, with before/after code for bots on 2.0.2 or 2.2.0 and a checklist; long rename lists link to the full tables in the API docs, and `CHANGELOG.md` lists every change. The guide's code is compiled in CI (`tests/migration_guide.rs`).
 
 ## API Cleanup
 

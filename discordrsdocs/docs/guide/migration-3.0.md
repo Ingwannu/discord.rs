@@ -1,6 +1,6 @@
 # Migrating from 2.x to 3.0
 
-This guide takes a bot written against discord.rs **2.0.2** (the last release on crates.io) or **2.2.0** (the unpublished 2.x line that was on `main`) to 3.0. Where the two 2.x versions differ, the guide says so; "2.x" means both.
+This guide takes a bot written against discord.rs **2.0.2** (the last release on crates.io) or **2.2.0** (the unpublished 2.x line that was on `main`) to 3.0. Where the two 2.x versions differ, the guide says so; "2.x" means both. It covers the breaking changes listed under "Unreleased (3.0.0)" in the CHANGELOG, grouped by area; long lists (every REST rename, every discriminant type, every retyped model field) link to the complete tables on the API pages.
 
 <!--
 Every `rust` block in this guide is checked by tests/migration_guide.rs:
@@ -116,12 +116,17 @@ fn overwrite_owner(json: &str) -> Result<String, DiscordError> {
 | `MessageSelectDefaultValue` | `SelectDefaultValue` enum (deprecated alias) |
 | `RestClient::new(token, 0)` (`u64` application ID) | `RestClient::new(token, None)`; `Option<ApplicationId>` everywhere |
 | `Default` on `Message`, `User`, `Guild`, `Channel`, … | removed (a default would need a fake ID); build test models from JSON, use the new constructors (`CreateDmChannel::new`, `LobbyMember::new`, …) |
+| `DiscordModel::id() -> &Snowflake`, `id_opt() -> Option<&Snowflake>` | `type Marker`; `id() -> Id<Self::Marker>` by value (`User::id()` is a `UserId`), `id_opt() -> Option<Id<Self::Marker>>` |
+| `CachedManager<T>` taking `impl Into<Snowflake>`, synchronous without the `gateway` feature | `CachedManager<T: DiscordModel>` taking `Id<T::Marker>`, async in every build (section 8) |
+| `GuildApplicationCommandPermissions::id: Snowflake` (a command, or the application for app-wide permissions) | `CommandPermissionsId::{Command(CommandId), Application(ApplicationId)}` |
+| `authorizing_integration_owners: HashMap<String, Snowflake>` | `AuthorizingIntegrationOwners { guild_install: Option<GuildInstallOwner>, user_install: Option<UserId>, other }`; `"0"` (a DM with the bot) is `GuildInstallOwner::BotDm` |
+| builder `id(u32)` setters, `MessageComponent::id` (2.2.0) | `id(ComponentId)` (`ComponentId::new(12)`), `MessageComponent::id: Option<ComponentId>` |
 
-Zero, signed, empty, or non-numeric IDs are decode errors now; values that look like IDs but are not snowflakes have their own types (`WidgetUserId`, `GuildInstallOwner`, `ComponentId`, `PollAnswerId`, `UploadId`). The prelude exports `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, and `InvalidId`; import the other aliases from the crate root. Full list: "Migrating from 2.x `Snowflake`" in [Models and Constants](../api/core-types-and-constants.md).
+Zero, signed, empty, or non-numeric IDs are decode errors now; values that look like IDs but are not snowflakes have their own types (`WidgetUserId`, `GuildInstallOwner`, `ComponentId`, `PollAnswerId`, `UploadId`, and `CreateGuildPlaceholderId` in the deprecated create-guild body). `edit_channel_permissions` rejects a body whose `type` contradicts the `OverwriteTarget` before sending. The formatters added in 3.0 follow the same rule: `MentionResolver` methods take `UserId` / `RoleId` / `ChannelId`, and a closure resolver is `Fn(MentionTarget) -> Option<String>`. The prelude exports `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, and `InvalidId`; import the other aliases from the crate root. Full list: "Migrating from 2.x `Snowflake`" in [Models and Constants](../api/core-types-and-constants.md).
 
 ## 2. Open discriminants
 
-**Why:** 2.x stored integer enumerations as `u8`/`u64` (or a closed enum that rejected new values), so `channel.kind == 0` compiled and a value Discord added later either failed or vanished. In 3.0 every one is an open newtype with named constants that keeps unknown values and round-trips them unchanged.
+**Why:** 2.x stored integer enumerations as `u8`/`u64` (or a closed enum that rejected new values), so `channel.kind == 0` compiled and a value Discord added later either failed or vanished. In 3.0 every one is an open newtype with named constants that keeps unknown values and round-trips them unchanged. One field stays a raw number on purpose: `MessageComponent::style` (`Option<u8>`), because its meaning depends on the component type; read it with `button_style()` / `text_input_style()`.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -164,13 +169,14 @@ fn raw_numbers() {
 | closed `ChannelType::{Text, Dm, Voice, News, …}` (`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GUILD_ANNOUNCEMENT, …}`, including the thread types, with `is_thread()` / `is_voice_based()` / `is_text_based()` |
 | `ActivityType(0)`, `x.0`, `Default` | `ActivityType::PLAYING` / `ActivityType::new(0)`, `x.get()`, no `Default` (`Activity::new(kind, name)`) |
 | `constants::{component_type, button_style, separator_spacing, text_input_style}`, `command::{command_type, option_type}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle`, `CommandType`, `CommandOptionType` |
-| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType` |
+| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType` (`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
 | `MessageComponent::BUTTON` and the other `u8` constants | `ComponentType::BUTTON` |
 | `CommandOptionBuilder::new(u8, ..)`, `ButtonBuilder::style(u8)`, `channel_types(Vec<u8>)` | the newtype (`channel_types` takes any `IntoIterator<Item = ChannelType>`) |
-| `ApplicationCommand::kind: u8` | `Option<CommandType>`; `command_type()` applies Discord's `CHAT_INPUT` default |
-| `presence.status: Option<String>` | `PresenceStatus` (`ONLINE`, `IDLE`, …; compares with `&str`) |
+| `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>`: `None` means `CHAT_INPUT` (the builders always set it); `ApplicationCommand::command_type()` applies that default |
+| `MessageComponent::style: Option<u64>` (2.2.0), `component.style == Some(1)` | stays raw as `Option<u8>`: `component.button_style() == Some(ButtonStyle::PRIMARY)`, `text_input_style()` |
+| `Presence::status: Option<String>`, `UpdatePresence::status: String` | `Option<PresenceStatus>`, `PresenceStatus` (`PresenceStatus::ONLINE`, `PresenceStatus::new(..)`; compares with `&str`) |
 
-A missing required discriminant (component `type`, activity `type`, poll `layout_type`, …) is now a decode error instead of `0`/`PLAYING`, and a value wider than the storage fails instead of being truncated. Types whose discriminant is required lost `Default` (`Activity`, `MessageComponent`, `Poll`, `ApplicationCommandOption`, …); use their `new` constructors. Full table: "Migrating from 2.x discriminants" in [Models and Constants](../api/core-types-and-constants.md).
+A missing required discriminant (component `type`, activity `type`, poll `layout_type`, …) is now a decode error instead of `0`/`PLAYING`, and a value wider than the storage fails instead of being truncated. Types whose discriminant is required lost `Default` (`Activity`, `MessageComponent`, `Poll`, `ApplicationCommandOption`, `GuildMfaLevel`, `EditChannelPermission`, …); use `Activity::new`, `MessageComponent::new`, `ApplicationCommandOption::new`, `ApplicationRoleConnectionMetadata::new`, `GuildMfaLevel::new`, or `EditChannelPermission::for_target`. Builders whose constructor takes arguments (`SelectMenuBuilder`, `TextInputBuilder`, `CommandOptionBuilder`, the command builders) lost `Default` too. Full table: "Migrating from 2.x discriminants" in [Models and Constants](../api/core-types-and-constants.md).
 
 ## 3. Patch and Nullable
 
@@ -479,7 +485,7 @@ async fn track_edit(cache: &CacheHandle, message: Arc<Message>, update: &Message
 |---|---|
 | `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild` | take `impl Into<Arc<T>>`: pass the event's `Arc`, or a value as before |
 | GUILD_CREATE via the `Guild` with its collections | `apply_guild_create(&GuildCreate)` (from the event, or `GuildCreate::from(guild)`); `apply_guild_update(&Guild)` |
-| MESSAGE_UPDATE replaced the cached message | `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>` merges; an uncached message stays uncached; `apply_partial_user` patches the author |
+| MESSAGE_UPDATE merged into the cached message by checking which keys its raw JSON had | the typed `MessageUpdate` patch, merged copy-on-write by `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>`; the merge covers every message field (`components`, `poll`, `call`, `message_snapshots`, …), `null` clears and `[]` empties; an uncached message stays uncached; `apply_partial_user` patches the cached author field by field |
 | `&Snowflake` keys, string hashing | typed keys by value: members and presences by `(GuildId, UserId)`, messages by `(ChannelId, MessageId)`, roles by `(GuildId, RoleId)` |
 | every READY cleared the whole cache | READY clears only the shard's guilds (`CacheHandle::clear_shard`) |
 
@@ -662,7 +668,7 @@ impl CacheBackend for LoggingBackend {
 | `clear_cache(&self)` | `clear_cache(expected_epoch, clear_id) -> CacheClear::{Applied, Rejected}`; new required `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` |
 | `put_member(guild, user, Member)`, `put_message(Message)`, `put_presence(.., Presence)` | `put_*(epoch, .., Arc<T>)`: the event's snapshot, shared; ignore writes older than the store's epoch |
 | `delete_*(&Snowflake, ..)` | `delete_*(epoch, ..)` with typed IDs by value |
-| MESSAGE_UPDATE stored as a full message | merged into your stored copy (`get_message` → merge → `put_message`); skipped when no full copy exists |
+| a partial MESSAGE_UPDATE went to `put_message` as if it were a full message (2.2.0) | merged into your stored copy (`get_message` → merge → `put_message`); skipped when no full copy exists |
 | `Arc<dyn CacheBackend>` | `Arc<B>` for a concrete `B: CacheBackend` (see section 8) |
 
 The epoch contract is normative (one epoch per store, atomic compare-delete-increment, idempotent `CacheClearId` retries) and is spelled out under "External Cache Backend" in [Cache and Collectors](../api/cache-and-collectors.md). One client may write to a store at a time; `Context::cache_backend_health()` reports the mirror's state.
@@ -673,6 +679,7 @@ The epoch contract is normative (one epoch per store, atomic compare-delete-incr
 
 - **Delete `#[async_trait]`** and `use async_trait::async_trait;` from every impl of these traits. A leftover attribute fails with `E0195` ("lifetime parameters or bounds on method … do not match the trait declaration").
 - **Futures must be `Send`.** Do not hold an `Rc`, a `RefCell` borrow, or a `std::sync::MutexGuard` across an `.await`; the compiler reports "future cannot be sent between threads safely" at your impl.
+- **`CachedManager` is async in every build.** Without the `gateway` feature it used to be a synchronous trait; it is now the same `fn … -> impl Future` trait everywhere, so add `.await` to `get`, `cached`, `contains`, and `list_cached`, and pass the model's typed ID (section 1).
 - **No trait objects.** The traits are not object safe. `ClientBuilder::event_handler(handler)` is unchanged; `cache_backend` takes `Arc<B>` for a concrete backend type:
 
 <!-- snippet: no_dyn -->
@@ -748,6 +755,9 @@ async fn rest_calls(
 | `execute_webhook(&Value) -> Value` | `execute_webhook(&request::ExecuteWebhook) -> Message` | |
 | `modify_guild_member(..) -> ()` | `-> Member` | |
 | `request(Method, &str, Option<&Value>)`, `request_typed`, `request_multipart` | `request::<T>(RawRequest)`, `request_discard(RawRequest)` | same transport, rate limits, and token redaction |
+| `edit_channel_permissions(channel, overwrite_id, &Value)` | `edit_channel_permissions(channel, OverwriteTarget, &EditChannelPermission)` | `_typed` is a deprecated forward |
+| `available_tags: Vec<ForumTag>` (`CreateGuildChannel`, JSON for `update_channel`) | `Vec<request::AvailableForumTag>` | `AvailableForumTag::from(&tag)` keeps a tag, `AvailableForumTag::new("name")` creates one; tags left out are deleted |
+| `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container` → `Value` | → `Message` | now apply the client's default `allowed_mentions` |
 
 41 `_typed` pairs and 5 standalone `_typed` methods were folded into the canonical names; 35 one-to-one renames remain as deprecated forwards for this major version and 35 untyped variants were removed. The complete table is "Migrating REST Names from 2.x" in [HTTP and Helpers](../api/http-and-helpers.md). Bodies Discord leaves open stay untyped on purpose: Slack/GitHub-compatible webhooks (`&Value`) and lobby moderation metadata.
 
@@ -867,7 +877,7 @@ fn amount_option(body: &str) -> Result<Option<i64>, DiscordError> {
 }
 ```
 
-The HTTP endpoint handlers return an `EndpointReply`, built from a `request::InteractionResponse`:
+The HTTP endpoint handlers return an `EndpointReply`: `Inline` (a `request::InteractionResponse` sent as the HTTP answer) or `Accepted`. Return `EndpointReply::Accepted` only after you responded over REST (for example with `InteractionResponder`): it makes the endpoint answer `202` with no body, and if no REST response went out, Discord shows the interaction as failed. Everything else gets an inline answer.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -895,12 +905,19 @@ impl TypedInteractionHandler for Tickets {
 ```rust
 use discordrs::request::InteractionMessage;
 use discordrs::{
-    EndpointReply, Interaction, InteractionContextData, InteractionResponse, ModalBuilder,
-    TextInputBuilder, TextInputStyle, TypedInteractionHandler,
+    EndpointReply, Interaction, InteractionContextData, InteractionResponder,
+    InteractionResponse, ModalBuilder, RestClient, TextInputBuilder, TextInputStyle,
+    TypedInteractionHandler,
 };
 
 #[derive(Clone)]
-struct Tickets;
+struct Tickets {
+    rest: RestClient,
+}
+
+fn ephemeral(text: &str) -> EndpointReply {
+    InteractionResponse::reply(InteractionMessage::new().content(text).ephemeral(true)).into()
+}
 
 impl TypedInteractionHandler for Tickets {
     async fn handle_typed(
@@ -918,21 +935,67 @@ impl TypedInteractionHandler for Tickets {
                 );
                 InteractionResponse::modal(modal).into()
             }
-            Interaction::ModalSubmit(_) => InteractionResponse::reply(
-                InteractionMessage::new()
-                    .content("Ticket created")
-                    .ephemeral(true),
-            )
-            .into(),
-            // Answered over REST already (e.g. through `InteractionResponder`):
-            // the endpoint replies 202 with no body.
-            _ => EndpointReply::Accepted,
+            Interaction::ChatInputCommand(command)
+                if command.data.name.as_deref() == Some("status") =>
+            {
+                // `Accepted` (202, no body) only after responding over REST.
+                match command.reply_ephemeral(&self.rest, "All systems go").await {
+                    Ok(()) => EndpointReply::Accepted,
+                    // The endpoint sends this only if no REST response may
+                    // have reached Discord; otherwise it answers 202.
+                    Err(_) => ephemeral("Status is unavailable right now"),
+                }
+            }
+            Interaction::ModalSubmit(_) => ephemeral("Ticket created"),
+            // Autocomplete must be answered with choices, not a message.
+            Interaction::Autocomplete(_) => InteractionResponse::autocomplete([]).into(),
+            // Everything else is answered inline too: `Accepted` without a
+            // REST response would leave the interaction unanswered.
+            _ => ephemeral("Unknown command"),
         }
     }
 }
 ```
 
-On the gateway, answer through `InteractionResponder` (2.2.0) instead of the deprecated free functions (2.0.2):
+`AppFramework` routes and guards follow the same type:
+
+<!-- snippet: 2.x -->
+```rust
+// 2.x
+let app = AppFramework::builder()
+    .guard(|ctx: &AppContext| -> Result<(), InteractionResponse> { /* ... */ Ok(()) })
+    .command("hello", |_ctx| async move {
+        InteractionResponse::ChannelMessage(json!({ "content": "Hello from discord.rs" }))
+    })
+    .build();
+```
+
+<!-- snippet: framework -->
+```rust
+use discordrs::request::InteractionMessage;
+use discordrs::{AppContext, AppFramework, EndpointReply, InteractionResponse};
+
+fn app() -> AppFramework {
+    AppFramework::builder()
+        // Guards return `Result<(), EndpointReply>` (2.x: `InteractionResponse`).
+        .guard(|ctx: &AppContext| {
+            if ctx.context.guild_id.is_some() {
+                return Ok(());
+            }
+            let message = InteractionMessage::new()
+                .content("Use this command in a server")
+                .ephemeral(true);
+            Err(EndpointReply::from(InteractionResponse::reply(message)))
+        })
+        // Routes return anything that converts into an `EndpointReply`.
+        .command("hello", |_ctx: AppContext| async move {
+            InteractionResponse::reply("Hello from discord.rs")
+        })
+        .build()
+}
+```
+
+On the gateway, answer through `InteractionResponder` (2.2.0) instead of the free helper functions of 2.0.2; most of them are deprecated:
 
 <!-- snippet: interactions_responder -->
 ```rust
@@ -974,27 +1037,73 @@ fn ticket_form(body: &str) -> Result<Option<(String, bool)>, DiscordError> {
 }
 ```
 
+Command option choices are typed, and `validate()` / `try_build()` check more:
+
+<!-- snippet: 2.x -->
+```rust
+// 2.x
+let amount = CommandOptionBuilder::new(option_type::INTEGER, "amount", "How much")
+    .choice("ten", 10)
+    .choice("most", 9_007_199_254_740_991_u64); // any `impl Serialize`
+let command = SlashCommandBuilder::new("pay", "Send coins").option(amount).build();
+```
+
+<!-- snippet: command_choices -->
+```rust
+use discordrs::{
+    CommandDefinition, CommandOptionBuilder, CommandOptionType, DiscordError,
+    SlashCommandBuilder,
+};
+
+fn pay_command() -> Result<CommandDefinition, DiscordError> {
+    let amount = CommandOptionBuilder::new(CommandOptionType::INTEGER, "amount", "How much")
+        // `impl Into<CommandOptionValue>`: strings, i8-i64, u8-u32, floats.
+        .choice("ten", 10)
+        // Any other `Serialize` value (here a `u64`) goes through `try_choice`.
+        .try_choice("most", 9_007_199_254_740_991_u64)?;
+    // `try_build()` now also checks names (lowercase, no punctuation),
+    // locale keys, and each choice against the option type and +/-2^53.
+    SlashCommandBuilder::new("pay", "Send coins")
+        .option(amount)
+        .try_build()
+}
+```
+
 | 2.x | 3.0 |
 |---|---|
 | `parse_interaction(&Value)` | `decode_interaction(&str)`; `parse_interaction(&Value)` still works (through text) |
 | `Interaction` serialized as `{"ChatInputCommand": {..}}` | Discord's wire format |
 | `CommandInteractionOption::value: Option<Value>` | `Option<CommandOptionValue>` (`as_str`, `as_i64`, `as_f64`, `as_bool`, `as_id`) |
-| `ApplicationCommandOptionChoice::new(name, impl Serialize)` | `new(name, impl Into<CommandOptionValue>)`; `try_new` for other values |
+| `ApplicationCommandOptionChoice::new(name, impl Serialize)`, `CommandOptionBuilder::choice(name, impl Serialize)` | `new` / `choice` take `impl Into<CommandOptionValue>` (strings, `i8`–`i64`, `u8`–`u32`, floats); `try_new` / `try_choice` for other values; no `Default` |
 | `interactions::InteractionResponse::{ChannelMessage(Value), DeferredMessage, DeferredUpdate, Modal, ..}` | `request::InteractionResponse::{reply(..), defer(ephemeral), DeferredUpdateMessage, update(..), modal(..), autocomplete(..), Raw(..)}` |
-| handler returns `InteractionResponse` | returns `EndpointReply` (`response.into()`, or `EndpointReply::Accepted` after answering over REST) |
+| handler returns `InteractionResponse` | returns `EndpointReply` (`response.into()`, or `EndpointReply::Accepted` only after answering over REST) |
+| `AppFramework` routes, `FrameworkFuture`, and guards (`Result<(), InteractionResponse>`) | routes return `impl Into<EndpointReply>`, `FrameworkFuture` resolves to `EndpointReply`, guards return `Result<(), EndpointReply>` |
 | `interactions_endpoint`, `typed_interactions_endpoint` (panic on a bad key) | `try_interactions_endpoint`, `try_typed_interactions_endpoint` (return `Result`) |
-| `respond_with_message`, `defer_interaction`, `followup_message`, … (2.0.2) | `InteractionResponder`: `reply`, `reply_ephemeral`, `defer`, `edit_reply`, `follow_up`, … (11 helpers deprecated) |
+| `defer_interaction`, `followup_message`, `edit_original_response`, and the other helpers duplicated by `InteractionResponder` (2.0.2) | `InteractionResponder`: `defer`, `follow_up`, `edit_reply`, … (11 helpers are deprecated, see section 15) |
+| `respond_with_message`, `respond_to_interaction` | not deprecated: stateless helpers that now share the response state (deprecation is planned once the examples move off them); prefer `reply` / `reply_ephemeral` |
 | `InteractionReplyData`, `From<CreateMessage>` | `request::InteractionMessage` (deprecated alias); `TryFrom<CreateMessage>` rejects channel-only fields |
 | `ModalBuilder::add_text_input` → action row | wraps the input in a Label (Discord's current layout); the action-row form is only reachable through deprecated constructors |
-| `MessageComponent::value: Option<String>` | `Option<MessageComponentValue>` (`String` / `Bool` / `Other`), `values`, `default`; `V2ModalSubmission::get_checkbox` |
-| `CheckboxBuilder::checked(bool)`, `disabled` on radio/checkbox builders, `CheckboxBuilder::required` | `default_checked(bool)` (deprecated alias); the others are removed (Discord rejects them in modals) |
+| 2.0.2: `Message.components: Option<Vec<Value>>` (no `MessageComponent`) | the typed `MessageComponent` tree: `kind: ComponentType`, `custom_id`, `components`, `iter()`, `value: Option<MessageComponentValue>`, `values`, `default` |
+| 2.2.0: `MessageComponent::value: Option<String>`, `kind: u8` | `value: Option<MessageComponentValue>` (`String` / `Bool` / `Other`; `value_str()` / `value_bool()`), new `values` and `default`; `kind: ComponentType` |
+| `V2ModalComponent::RadioGroup { value: String }` | `value: Option<String>` (`null` when nothing was picked); checkboxes read Discord's `value` key; `V2ModalSubmission::get_checkbox` |
+| `CheckboxBuilder::checked(bool)` | `default_checked(bool)`; `checked` remains as a deprecated alias |
+| `disabled` on the radio-group, checkbox-group, and checkbox builders, `CheckboxBuilder::required` | removed: Discord rejects disabled components in modals, and a single checkbox cannot be required (use a one-option checkbox group with `required(true)`) |
 | an Entry Point command was `Interaction::Unknown` | `Interaction::PrimaryEntryPoint` |
 
-`Interaction::Unknown::raw_data` is `Option<Box<RawValue>>` and `kind` is always the interaction type; modal submissions and component interactions carry `resolved` data. See [Interactions Endpoint](../api/interactions-endpoint.md) and [Parsers](../api/parsers.md).
+`Interaction::Unknown::raw_data` is `Option<Box<RawValue>>` and `kind` is always the interaction type; modal submissions and component interactions carry `resolved` data.
+
+Also changed:
+
+- **Command validation.** `validate()` / `try_build()` on slash and entry-point command builders reject names Discord rejects (punctuation, uppercase in any script, the ASCII apostrophe; use `ʼ` U+02BC) and unknown locale keys, and check every choice against its option type and range (`INTEGER`: −2^53+1 to 2^53−1; no booleans or non-finite numbers). `build()` still never validates.
+- **Response state.** `is_acknowledged()`, `is_replied()`, and `is_deferred()` report only what Discord confirmed: a response that is in flight or whose outcome is uncertain is not "acknowledged" yet (`response_phase()` shows the full state). The callback body is built and checked before the response slot is claimed, so a local error leaves the interaction unacknowledged and an inline fallback still answers.
+- **Stricter decoding.** The interaction `type` must be a JSON number and `data` an object; repeated keys are rejected.
+- **Other model fields that held `serde_json::Value`** are typed: `AuditLogEntry::changes` (`AuditLogChange`, whose `new_value` / `old_value` are JSON text read with `new_value_as::<T>()` / `old_value_as::<T>()`) and `options` (`AuditLogEntryOptions`), `Application::team` (`Team`), `install_params` (`ApplicationInstallParams`), `integration_types_config` (keyed by `ApplicationIntegrationType`), `GuildOnboarding::prompts` (`OnboardingPrompt`), `Guild::guild_scheduled_events` (`GuildScheduledEvent`), the `Invite` partials (`guild`, `channel`, `target_application`, `guild_scheduled_event`), `UserConnection::integrations` (`PartialIntegration`), and `Embed::provider` (`EmbedProvider`). Fields whose shape Discord leaves open are `Box<RawValue>` (JSON text, read with `serde_json::from_str(raw.get())`): `Sku::manifest_labels` and `features`, and `GuildTemplate::serialized_source_guild`. The full table is "Interaction decoding and typed JSON values" in [Models and Constants](../api/core-types-and-constants.md).
+
+See [Interactions Endpoint](../api/interactions-endpoint.md) and [Parsers](../api/parsers.md).
 
 ## 12. Permissions and bitfields
 
-**Why:** 2.x had two permission types (`PermissionsBitField` and `BitField<PermissionFlags>`), a `String` on `CurrentUserGuild`, misnamed bits 41–52, and wrong message flag values. 3.0 has one `Permissions` type everywhere and Discord's documented bits and wire shapes.
+**Why:** 2.x had two permission types (`PermissionsBitField` and `BitField<PermissionFlags>`), an `Option<String>` in `CurrentUserGuild::permissions`, misnamed bits 41–52, and wrong message flag values. 3.0 has one `Permissions` type everywhere and Discord's documented bits and wire shapes.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -1029,10 +1138,31 @@ fn permission_sets() -> Result<(), serde_json::Error> {
 | 2.x | 3.0 |
 |---|---|
 | `PermissionsBitField(bits)`, `.0`, `insert`, in-place `remove` | `Permissions::from_bits(bits)`, `.bits()`, `\|=`, `set = set - flag` (`add` / `remove` / `merge` / `missing` return a new set and are `#[must_use]`) |
-| `CurrentUserGuild::permissions: String` | `Permissions` |
+| `CurrentUserGuild::permissions: Option<String>` | `Option<Permissions>` |
 | message, channel, and user flags, intents serialized as strings | numbers (permissions stay strings); negative input is rejected |
+| custom `BitFieldFlags` sets serialized as strings | numbers by default; `const STRING_ENCODED: bool = true` keeps strings (reading accepts both) |
 | `message_flags::SUPPRESS_NOTIFICATIONS` = `1 << 10`, `IS_VOICE_MESSAGE` = `1 << 12` | `1 << 12` and `1 << 13`; `HAS_SNAPSHOT` (`1 << 14`) added |
 | permission names shifted by one from bit 41, `SEND_POLLS` = bit 50 | Discord's table: `SEND_POLLS` = 49, `USE_EXTERNAL_APPS` = 50, `PIN_MESSAGES` = 51, `BYPASS_SLOWMODE` = 52 |
+
+Your own `BitFieldFlags` sets are written as numbers now. If something else reads them as strings, keep 2.x's shape:
+
+<!-- snippet: custom_bitfield -->
+```rust
+use discordrs::bitfield::{BitField, BitFieldFlags};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct FeatureFlags;
+
+impl BitFieldFlags for FeatureFlags {
+    const BITS: &'static [(u64, &'static str)] = &[(1 << 0, "BETA"), (1 << 1, "STAFF")];
+    // 3.0 writes custom sets as numbers (2.x: strings); this keeps strings.
+    const STRING_ENCODED: bool = true;
+}
+
+fn encode_features() -> Result<String, serde_json::Error> {
+    serde_json::to_string(&BitField::<FeatureFlags>::from_bits(0b11)) // "\"3\""
+}
+```
 
 3.0 also computes effective permissions (`discordrs::permissions`: `permissions_for`, `Member::guild_permissions`, cached variants); see [Permissions and Formatters](../api/permissions-and-formatters.md).
 
@@ -1208,6 +1338,7 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | `ParentMessage` / `ChildMessage` exhaustive | `#[non_exhaustive]` with identify variants |
 | `spawn_stagger` default > 0 | 0 (permits pace IDENTIFY) |
 | `wait()` / `shutdown()` | return errors for respawn exhaustion and unsuccessful exits; one deadline covers the whole shutdown |
+| `ProcessShardManager::broadcast(payload)` sent payloads of any size | fails before sending when the encoded request exceeds `max_ipc_frame_bytes` (default 1 MiB); longer child output is discarded |
 
 Terminal close codes (4004, 4010–4014) now make `start()` return `DiscordError::Gateway` instead of reconnecting forever, and the supervisor stops the other shards on the first fatal error. For a custom multi-process layout, implement `IdentifyGate` and pass it to `ClientBuilder::identify_gate`. See [Sharding](../api/sharding.md).
 

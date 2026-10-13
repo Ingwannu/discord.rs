@@ -9,7 +9,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ## Start Here
 
 - [Getting Started](#/docs/guide/getting-started)
-- [Migrating from 2.x to 3.0](#/docs/guide/migration-3.0): every breaking change with before/after code, for bots on 2.0.2 or 2.2.0
+- [Migrating from 2.x to 3.0](#/docs/guide/migration-3.0): the breaking changes area by area, with before/after code, for bots on 2.0.2 or 2.2.0
 - [Architecture](#/docs/guide/architecture)
 - [Usage Guide](#/docs/guide/usage-guide)
 - [Commands API](#/docs/api/commands)

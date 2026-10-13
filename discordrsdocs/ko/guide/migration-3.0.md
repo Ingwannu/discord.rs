@@ -1,6 +1,6 @@
 # 2.x에서 3.0으로 옮기기
 
-이 문서는 discord.rs **2.0.2**(crates.io에 배포된 마지막 버전) 또는 **2.2.0**(`main`에 있던 미배포 2.x)으로 작성한 봇을 3.0으로 옮기는 방법을 정리합니다. 두 2.x 버전이 다른 곳은 따로 적고, "2.x"는 둘 다를 뜻합니다. 코드 블록은 영어 가이드([Migrating from 2.x to 3.0](../../docs/guide/migration-3.0.md))와 같습니다.
+이 문서는 discord.rs **2.0.2**(crates.io에 배포된 마지막 버전) 또는 **2.2.0**(`main`에 있던 미배포 2.x)으로 작성한 봇을 3.0으로 옮기는 방법을 정리합니다. 두 2.x 버전이 다른 곳은 따로 적고, "2.x"는 둘 다를 뜻합니다. CHANGELOG "Unreleased (3.0.0)"에 적힌 깨지는 변경을 영역별로 다루며, 긴 목록(REST 이름 변경 전체, 판별값 타입 전체, 타입이 바뀐 모델 필드 전체)은 API 문서의 전체 표로 연결합니다. 코드 블록은 영어 가이드([Migrating from 2.x to 3.0](../../docs/guide/migration-3.0.md))와 같습니다.
 
 <!--
 이 문서의 `rust` 블록은 tests/migration_guide.rs가 검사한다. `<!- - snippet: NAME - ->`
@@ -93,12 +93,17 @@ fn overwrite_owner(json: &str) -> Result<String, DiscordError> {
 | `MessageSelectDefaultValue` | `SelectDefaultValue` enum(deprecated 별칭) |
 | `RestClient::new(token, 0)`(`u64` 애플리케이션 ID) | `RestClient::new(token, None)`. 모든 곳이 `Option<ApplicationId>` |
 | `Message`, `User`, `Guild`, `Channel` 등의 `Default` | 삭제(기본값에는 가짜 ID가 필요). 테스트 모델은 JSON으로 만들고 새 생성자(`CreateDmChannel::new`, `LobbyMember::new`, …)를 씀 |
+| `DiscordModel::id() -> &Snowflake`, `id_opt() -> Option<&Snowflake>` | `type Marker`. `id() -> Id<Self::Marker>`를 값으로(`User::id()`는 `UserId`), `id_opt() -> Option<Id<Self::Marker>>` |
+| `impl Into<Snowflake>`를 받고 `gateway` 기능 없이는 동기였던 `CachedManager<T>` | `Id<T::Marker>`를 받는 `CachedManager<T: DiscordModel>`, 모든 빌드에서 async(8절) |
+| `GuildApplicationCommandPermissions::id: Snowflake`(커맨드, 또는 앱 전체 권한이면 애플리케이션) | `CommandPermissionsId::{Command(CommandId), Application(ApplicationId)}` |
+| `authorizing_integration_owners: HashMap<String, Snowflake>` | `AuthorizingIntegrationOwners { guild_install: Option<GuildInstallOwner>, user_install: Option<UserId>, other }`. `"0"`(봇과의 DM)은 `GuildInstallOwner::BotDm` |
+| 빌더의 `id(u32)` setter, `MessageComponent::id`(2.2.0) | `id(ComponentId)`(`ComponentId::new(12)`), `MessageComponent::id: Option<ComponentId>` |
 
-0, 부호, 빈 값, 숫자가 아닌 ID는 이제 디코딩 오류입니다. ID처럼 보이지만 snowflake가 아닌 값은 자기 타입이 있습니다(`WidgetUserId`, `GuildInstallOwner`, `ComponentId`, `PollAnswerId`, `UploadId`). prelude는 `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, `InvalidId`를 내보내고, 나머지 별칭은 크레이트 루트에서 가져옵니다. 전체 목록: [핵심 타입 및 상수](../api/core-types-and-constants.md)의 "2.x `Snowflake`에서 옮기기".
+0, 부호, 빈 값, 숫자가 아닌 ID는 이제 디코딩 오류입니다. ID처럼 보이지만 snowflake가 아닌 값은 자기 타입이 있습니다(`WidgetUserId`, `GuildInstallOwner`, `ComponentId`, `PollAnswerId`, `UploadId`, deprecated 길드 생성 본문의 `CreateGuildPlaceholderId`). `edit_channel_permissions`는 `type`이 `OverwriteTarget`과 어긋나는 본문을 보내기 전에 거부합니다. 3.0에 추가된 포매터도 같은 규칙을 따릅니다: `MentionResolver` 메서드는 `UserId` / `RoleId` / `ChannelId`를 받고, 클로저 resolver는 `Fn(MentionTarget) -> Option<String>`입니다. prelude는 `GuildId`, `ChannelId`, `UserId`, `RoleId`, `MessageId`, `ApplicationId`, `InvalidId`를 내보내고, 나머지 별칭은 크레이트 루트에서 가져옵니다. 전체 목록: [핵심 타입 및 상수](../api/core-types-and-constants.md)의 "2.x `Snowflake`에서 옮기기".
 
 ## 2. 열린 판별값
 
-**이유:** 2.x는 정수 열거값을 `u8`/`u64`(또는 새 값을 거부하는 닫힌 enum)로 저장해서 `channel.kind == 0`이 컴파일됐고, Discord가 나중에 추가한 값은 실패하거나 사라졌습니다. 3.0에서는 모두 이름 붙은 상수가 있는 열린 newtype이며, 모르는 값도 보관하고 그대로 다시 씁니다.
+**이유:** 2.x는 정수 열거값을 `u8`/`u64`(또는 새 값을 거부하는 닫힌 enum)로 저장해서 `channel.kind == 0`이 컴파일됐고, Discord가 나중에 추가한 값은 실패하거나 사라졌습니다. 3.0에서는 모두 이름 붙은 상수가 있는 열린 newtype이며, 모르는 값도 보관하고 그대로 다시 씁니다. 필드 하나만 일부러 원시 숫자로 남았습니다: `MessageComponent::style`(`Option<u8>`)은 의미가 컴포넌트 타입에 따라 달라서 `button_style()` / `text_input_style()`로 읽습니다.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -141,13 +146,14 @@ fn raw_numbers() {
 | 닫힌 `ChannelType::{Text, Dm, Voice, News, …}`(`as u8`) | `ChannelType::{GUILD_TEXT, DM, GUILD_VOICE, GUILD_ANNOUNCEMENT, …}`. 스레드 타입 포함, `is_thread()` / `is_voice_based()` / `is_text_based()` |
 | `ActivityType(0)`, `x.0`, `Default` | `ActivityType::PLAYING` / `ActivityType::new(0)`, `x.get()`, `Default` 없음(`Activity::new(kind, name)`) |
 | `constants::{component_type, button_style, separator_spacing, text_input_style}`, `command::{command_type, option_type}` | `ComponentType`, `ButtonStyle`, `SeparatorSpacing`, `TextInputStyle`, `CommandType`, `CommandOptionType` |
-| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType` |
+| `helpers::INTERACTION_RESPONSE_*`, `bitfield::interaction_callback_type` | `InteractionResponseType`(`CHANNEL_MESSAGE` → `CHANNEL_MESSAGE_WITH_SOURCE`, `DEFERRED_CHANNEL_MESSAGE` → `DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE`, `AUTOCOMPLETE_RESULT` → `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`) |
 | `MessageComponent::BUTTON` 등 `u8` 상수 | `ComponentType::BUTTON` |
 | `CommandOptionBuilder::new(u8, ..)`, `ButtonBuilder::style(u8)`, `channel_types(Vec<u8>)` | newtype(`channel_types`는 `IntoIterator<Item = ChannelType>`) |
-| `ApplicationCommand::kind: u8` | `Option<CommandType>`. `command_type()`이 Discord 기본값 `CHAT_INPUT`을 적용 |
-| `presence.status: Option<String>` | `PresenceStatus`(`ONLINE`, `IDLE`, …, `&str`과 비교 가능) |
+| `ApplicationCommand::kind: u8`, `CommandDefinition::kind: u8` | `Option<CommandType>`: `None`은 `CHAT_INPUT`(빌더는 항상 설정). `ApplicationCommand::command_type()`이 그 기본값을 적용 |
+| `MessageComponent::style: Option<u64>`(2.2.0), `component.style == Some(1)` | `Option<u8>` 원시값으로 유지: `component.button_style() == Some(ButtonStyle::PRIMARY)`, `text_input_style()` |
+| `Presence::status: Option<String>`, `UpdatePresence::status: String` | `Option<PresenceStatus>`, `PresenceStatus`(`PresenceStatus::ONLINE`, `PresenceStatus::new(..)`, `&str`과 비교 가능) |
 
-필수 판별값(컴포넌트 `type`, activity `type`, poll `layout_type` 등)이 없으면 이제 `0`/`PLAYING`이 아니라 디코딩 오류이고, 저장 폭을 넘는 값은 잘리지 않고 실패합니다. 판별값이 필수인 타입은 `Default`를 잃었습니다(`Activity`, `MessageComponent`, `Poll`, `ApplicationCommandOption`, …). `new` 생성자를 씁니다. 전체 표: [핵심 타입 및 상수](../api/core-types-and-constants.md)의 "2.x 판별값에서 옮기기".
+필수 판별값(컴포넌트 `type`, activity `type`, poll `layout_type` 등)이 없으면 이제 `0`/`PLAYING`이 아니라 디코딩 오류이고, 저장 폭을 넘는 값은 잘리지 않고 실패합니다. 판별값이 필수인 타입은 `Default`를 잃었습니다(`Activity`, `MessageComponent`, `Poll`, `ApplicationCommandOption`, `GuildMfaLevel`, `EditChannelPermission`, …). `Activity::new`, `MessageComponent::new`, `ApplicationCommandOption::new`, `ApplicationRoleConnectionMetadata::new`, `GuildMfaLevel::new`, `EditChannelPermission::for_target`를 씁니다. 생성자가 인자를 받는 빌더(`SelectMenuBuilder`, `TextInputBuilder`, `CommandOptionBuilder`, 커맨드 빌더)도 `Default`를 잃었습니다. 전체 표: [핵심 타입 및 상수](../api/core-types-and-constants.md)의 "2.x 판별값에서 옮기기".
 
 ## 3. Patch와 Nullable
 
@@ -456,7 +462,7 @@ async fn track_edit(cache: &CacheHandle, message: Arc<Message>, update: &Message
 |---|---|
 | `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild` | `impl Into<Arc<T>>`를 받음: 이벤트의 `Arc`를 넘기거나, 예전처럼 값을 넘김 |
 | 컬렉션을 담은 `Guild`로 GUILD_CREATE 반영 | `apply_guild_create(&GuildCreate)`(이벤트에서, 또는 `GuildCreate::from(guild)`), `apply_guild_update(&Guild)` |
-| MESSAGE_UPDATE가 캐시 메시지를 교체 | `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>`가 병합. 캐시에 없던 메시지는 계속 없음. `apply_partial_user`가 작성자를 패치 |
+| raw JSON에 어떤 키가 있었는지 보고 MESSAGE_UPDATE를 캐시 메시지에 병합 | 타입 `MessageUpdate` 패치를 `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>`가 copy-on-write로 병합. 모든 메시지 필드(`components`, `poll`, `call`, `message_snapshots`, …)를 다루며 `null`은 지우고 `[]`는 비움. 캐시에 없던 메시지는 계속 없음. `apply_partial_user`가 캐시된 작성자를 필드 단위로 패치 |
 | `&Snowflake` 키, 문자열 해시 | 값으로 넘기는 타입 키: 멤버·presence는 `(GuildId, UserId)`, 메시지는 `(ChannelId, MessageId)`, 역할은 `(GuildId, RoleId)` |
 | READY마다 캐시 전체 삭제 | READY는 그 샤드의 길드만 지움(`CacheHandle::clear_shard`) |
 
@@ -639,7 +645,7 @@ impl CacheBackend for LoggingBackend {
 | `clear_cache(&self)` | `clear_cache(expected_epoch, clear_id) -> CacheClear::{Applied, Rejected}`. 새 필수 메서드 `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` |
 | `put_member(guild, user, Member)`, `put_message(Message)`, `put_presence(.., Presence)` | `put_*(epoch, .., Arc<T>)`: 공유된 이벤트 스냅샷. 저장소 epoch보다 오래된 쓰기는 무시 |
 | `delete_*(&Snowflake, ..)` | `delete_*(epoch, ..)`, 타입 ID를 값으로 |
-| MESSAGE_UPDATE를 전체 메시지로 저장 | 저장된 사본에 병합(`get_message` → 병합 → `put_message`). 전체 사본이 없으면 건너뜀 |
+| 부분 MESSAGE_UPDATE를 전체 메시지처럼 `put_message`로 보냄(2.2.0) | 저장된 사본에 병합(`get_message` → 병합 → `put_message`). 전체 사본이 없으면 건너뜀 |
 | `Arc<dyn CacheBackend>` | 구체 타입 `B: CacheBackend`의 `Arc<B>`(8절 참고) |
 
 epoch 계약은 규범입니다(저장소당 epoch 하나, 비교·삭제·증가의 원자성, 멱등한 `CacheClearId` 재시도). 자세한 내용은 [Cache and Collectors](../../docs/api/cache-and-collectors.md)의 "External Cache Backend"에 있습니다. 한 저장소에는 한 번에 클라이언트 하나만 쓸 수 있고, `Context::cache_backend_health()`가 미러 상태를 알려 줍니다.
@@ -650,6 +656,7 @@ epoch 계약은 규범입니다(저장소당 epoch 하나, 비교·삭제·증�
 
 - 이 트레잇들의 모든 impl에서 **`#[async_trait]`와 `use async_trait::async_trait;`를 지웁니다.** 남은 속성은 `E0195`("lifetime parameters or bounds on method … do not match the trait declaration")로 실패합니다.
 - **future는 `Send`여야 합니다.** `.await`를 넘어 `Rc`, `RefCell` 대여, `std::sync::MutexGuard`를 들고 있으면 안 됩니다. 컴파일러가 impl 위치에 "future cannot be sent between threads safely"를 보고합니다.
+- **`CachedManager`는 모든 빌드에서 async입니다.** `gateway` 기능 없이는 동기 트레잇이었지만 이제 어디서나 같은 `fn … -> impl Future` 트레잇이므로 `get`, `cached`, `contains`, `list_cached`에 `.await`를 붙이고 모델의 타입 ID를 넘깁니다(1절).
 - **트레잇 객체 불가.** 트레잇이 object safe하지 않습니다. `ClientBuilder::event_handler(handler)`는 그대로이고, `cache_backend`는 구체 백엔드 타입의 `Arc<B>`를 받습니다:
 
 <!-- snippet: no_dyn -->
@@ -725,6 +732,9 @@ async fn rest_calls(
 | `execute_webhook(&Value) -> Value` | `execute_webhook(&request::ExecuteWebhook) -> Message` | |
 | `modify_guild_member(..) -> ()` | `-> Member` | |
 | `request(Method, &str, Option<&Value>)`, `request_typed`, `request_multipart` | `request::<T>(RawRequest)`, `request_discard(RawRequest)` | 같은 전송 계층·rate limit·토큰 가리기 |
+| `edit_channel_permissions(channel, overwrite_id, &Value)` | `edit_channel_permissions(channel, OverwriteTarget, &EditChannelPermission)` | `_typed`는 deprecated 전달 함수 |
+| `available_tags: Vec<ForumTag>`(`CreateGuildChannel`, `update_channel`에는 JSON) | `Vec<request::AvailableForumTag>` | `AvailableForumTag::from(&tag)`는 태그를 유지, `AvailableForumTag::new("name")`은 새로 만듦. 빠진 태그는 삭제 |
+| `send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container` → `Value` | → `Message` | 클라이언트 기본 `allowed_mentions`도 적용 |
 
 `_typed` 쌍 41개와 단독 `_typed` 메서드 5개를 정식 이름으로 합쳤고, 일대일 이름 변경 35개는 이 메이저 버전 동안 deprecated 전달 함수로 남으며, untyped 변형 35개는 삭제했습니다. 전체 표는 [HTTP 및 헬퍼](../api/http-and-helpers.md)의 "2.x에서 REST 이름 옮기기 (3.0)"에 있습니다. Discord가 형태를 정하지 않은 본문은 일부러 untyped로 둡니다: Slack/GitHub 호환 웹훅(`&Value`)과 로비 moderation 메타데이터.
 
@@ -844,7 +854,7 @@ fn amount_option(body: &str) -> Result<Option<i64>, DiscordError> {
 }
 ```
 
-HTTP 엔드포인트 핸들러는 `request::InteractionResponse`로 만든 `EndpointReply`를 돌려줍니다:
+HTTP 엔드포인트 핸들러는 `EndpointReply`를 돌려줍니다: `Inline`(HTTP 응답으로 보내는 `request::InteractionResponse`) 또는 `Accepted`. `EndpointReply::Accepted`는 REST로 응답한 뒤에만(예: `InteractionResponder`로) 돌려줍니다. 엔드포인트가 본문 없는 `202`로 답하게 하므로, REST 응답이 나가지 않았으면 Discord는 인터랙션을 실패로 표시합니다. 나머지는 모두 인라인으로 답합니다.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -872,12 +882,19 @@ impl TypedInteractionHandler for Tickets {
 ```rust
 use discordrs::request::InteractionMessage;
 use discordrs::{
-    EndpointReply, Interaction, InteractionContextData, InteractionResponse, ModalBuilder,
-    TextInputBuilder, TextInputStyle, TypedInteractionHandler,
+    EndpointReply, Interaction, InteractionContextData, InteractionResponder,
+    InteractionResponse, ModalBuilder, RestClient, TextInputBuilder, TextInputStyle,
+    TypedInteractionHandler,
 };
 
 #[derive(Clone)]
-struct Tickets;
+struct Tickets {
+    rest: RestClient,
+}
+
+fn ephemeral(text: &str) -> EndpointReply {
+    InteractionResponse::reply(InteractionMessage::new().content(text).ephemeral(true)).into()
+}
 
 impl TypedInteractionHandler for Tickets {
     async fn handle_typed(
@@ -895,21 +912,67 @@ impl TypedInteractionHandler for Tickets {
                 );
                 InteractionResponse::modal(modal).into()
             }
-            Interaction::ModalSubmit(_) => InteractionResponse::reply(
-                InteractionMessage::new()
-                    .content("Ticket created")
-                    .ephemeral(true),
-            )
-            .into(),
-            // Answered over REST already (e.g. through `InteractionResponder`):
-            // the endpoint replies 202 with no body.
-            _ => EndpointReply::Accepted,
+            Interaction::ChatInputCommand(command)
+                if command.data.name.as_deref() == Some("status") =>
+            {
+                // `Accepted` (202, no body) only after responding over REST.
+                match command.reply_ephemeral(&self.rest, "All systems go").await {
+                    Ok(()) => EndpointReply::Accepted,
+                    // The endpoint sends this only if no REST response may
+                    // have reached Discord; otherwise it answers 202.
+                    Err(_) => ephemeral("Status is unavailable right now"),
+                }
+            }
+            Interaction::ModalSubmit(_) => ephemeral("Ticket created"),
+            // Autocomplete must be answered with choices, not a message.
+            Interaction::Autocomplete(_) => InteractionResponse::autocomplete([]).into(),
+            // Everything else is answered inline too: `Accepted` without a
+            // REST response would leave the interaction unanswered.
+            _ => ephemeral("Unknown command"),
         }
     }
 }
 ```
 
-게이트웨이에서는 deprecated 자유 함수(2.0.2) 대신 `InteractionResponder`(2.2.0)로 응답합니다:
+`AppFramework`의 라우트와 가드도 같은 타입을 따릅니다:
+
+<!-- snippet: 2.x -->
+```rust
+// 2.x
+let app = AppFramework::builder()
+    .guard(|ctx: &AppContext| -> Result<(), InteractionResponse> { /* ... */ Ok(()) })
+    .command("hello", |_ctx| async move {
+        InteractionResponse::ChannelMessage(json!({ "content": "Hello from discord.rs" }))
+    })
+    .build();
+```
+
+<!-- snippet: framework -->
+```rust
+use discordrs::request::InteractionMessage;
+use discordrs::{AppContext, AppFramework, EndpointReply, InteractionResponse};
+
+fn app() -> AppFramework {
+    AppFramework::builder()
+        // Guards return `Result<(), EndpointReply>` (2.x: `InteractionResponse`).
+        .guard(|ctx: &AppContext| {
+            if ctx.context.guild_id.is_some() {
+                return Ok(());
+            }
+            let message = InteractionMessage::new()
+                .content("Use this command in a server")
+                .ephemeral(true);
+            Err(EndpointReply::from(InteractionResponse::reply(message)))
+        })
+        // Routes return anything that converts into an `EndpointReply`.
+        .command("hello", |_ctx: AppContext| async move {
+            InteractionResponse::reply("Hello from discord.rs")
+        })
+        .build()
+}
+```
+
+게이트웨이에서는 2.0.2의 자유 헬퍼 함수 대신 `InteractionResponder`(2.2.0)로 응답합니다. 그 헬퍼 대부분은 deprecated입니다:
 
 <!-- snippet: interactions_responder -->
 ```rust
@@ -951,27 +1014,73 @@ fn ticket_form(body: &str) -> Result<Option<(String, bool)>, DiscordError> {
 }
 ```
 
+커맨드 옵션 choice는 타입을 가지며, `validate()` / `try_build()`가 더 많이 검사합니다:
+
+<!-- snippet: 2.x -->
+```rust
+// 2.x
+let amount = CommandOptionBuilder::new(option_type::INTEGER, "amount", "How much")
+    .choice("ten", 10)
+    .choice("most", 9_007_199_254_740_991_u64); // any `impl Serialize`
+let command = SlashCommandBuilder::new("pay", "Send coins").option(amount).build();
+```
+
+<!-- snippet: command_choices -->
+```rust
+use discordrs::{
+    CommandDefinition, CommandOptionBuilder, CommandOptionType, DiscordError,
+    SlashCommandBuilder,
+};
+
+fn pay_command() -> Result<CommandDefinition, DiscordError> {
+    let amount = CommandOptionBuilder::new(CommandOptionType::INTEGER, "amount", "How much")
+        // `impl Into<CommandOptionValue>`: strings, i8-i64, u8-u32, floats.
+        .choice("ten", 10)
+        // Any other `Serialize` value (here a `u64`) goes through `try_choice`.
+        .try_choice("most", 9_007_199_254_740_991_u64)?;
+    // `try_build()` now also checks names (lowercase, no punctuation),
+    // locale keys, and each choice against the option type and +/-2^53.
+    SlashCommandBuilder::new("pay", "Send coins")
+        .option(amount)
+        .try_build()
+}
+```
+
 | 2.x | 3.0 |
 |---|---|
 | `parse_interaction(&Value)` | `decode_interaction(&str)`. `parse_interaction(&Value)`도 동작(텍스트를 거침) |
 | `{"ChatInputCommand": {..}}`로 직렬화되던 `Interaction` | Discord 와이어 형식 |
 | `CommandInteractionOption::value: Option<Value>` | `Option<CommandOptionValue>`(`as_str`, `as_i64`, `as_f64`, `as_bool`, `as_id`) |
-| `ApplicationCommandOptionChoice::new(name, impl Serialize)` | `new(name, impl Into<CommandOptionValue>)`, 그 밖의 값은 `try_new` |
+| `ApplicationCommandOptionChoice::new(name, impl Serialize)`, `CommandOptionBuilder::choice(name, impl Serialize)` | `new` / `choice`는 `impl Into<CommandOptionValue>`(문자열, `i8`–`i64`, `u8`–`u32`, 부동소수)를 받음. 그 밖의 값은 `try_new` / `try_choice`. `Default` 없음 |
 | `interactions::InteractionResponse::{ChannelMessage(Value), DeferredMessage, DeferredUpdate, Modal, ..}` | `request::InteractionResponse::{reply(..), defer(ephemeral), DeferredUpdateMessage, update(..), modal(..), autocomplete(..), Raw(..)}` |
-| 핸들러가 `InteractionResponse`를 반환 | `EndpointReply`를 반환(`response.into()`, REST로 응답했으면 `EndpointReply::Accepted`) |
+| 핸들러가 `InteractionResponse`를 반환 | `EndpointReply`를 반환(`response.into()`, REST로 응답한 뒤에만 `EndpointReply::Accepted`) |
+| `AppFramework` 라우트, `FrameworkFuture`, 가드(`Result<(), InteractionResponse>`) | 라우트는 `impl Into<EndpointReply>`를 반환, `FrameworkFuture`는 `EndpointReply`로 끝나고, 가드는 `Result<(), EndpointReply>`를 반환 |
 | `interactions_endpoint`, `typed_interactions_endpoint`(잘못된 키에 panic) | `try_interactions_endpoint`, `try_typed_interactions_endpoint`(`Result` 반환) |
-| `respond_with_message`, `defer_interaction`, `followup_message`, …(2.0.2) | `InteractionResponder`: `reply`, `reply_ephemeral`, `defer`, `edit_reply`, `follow_up`, …(헬퍼 11개 deprecated) |
+| `defer_interaction`, `followup_message`, `edit_original_response` 등 `InteractionResponder`와 겹치는 헬퍼(2.0.2) | `InteractionResponder`: `defer`, `follow_up`, `edit_reply`, …(헬퍼 11개 deprecated, 15절 참고) |
+| `respond_with_message`, `respond_to_interaction` | deprecated 아님: 이제 응답 상태를 공유하는 상태 없는 헬퍼(예제가 옮겨 가면 deprecated 예정). `reply` / `reply_ephemeral` 권장 |
 | `InteractionReplyData`, `From<CreateMessage>` | `request::InteractionMessage`(deprecated 별칭). `TryFrom<CreateMessage>`는 채널 전용 필드를 거부 |
 | `ModalBuilder::add_text_input` → action row | 입력을 Label로 감쌈(Discord의 현재 레이아웃). action row 형태는 deprecated 생성자로만 |
-| `MessageComponent::value: Option<String>` | `Option<MessageComponentValue>`(`String` / `Bool` / `Other`), `values`, `default`. `V2ModalSubmission::get_checkbox` |
-| `CheckboxBuilder::checked(bool)`, 라디오·체크박스 빌더의 `disabled`, `CheckboxBuilder::required` | `default_checked(bool)`(deprecated 별칭). 나머지는 삭제(Discord가 모달에서 거부) |
+| 2.0.2: `Message.components: Option<Vec<Value>>`(`MessageComponent` 없음) | 타입 `MessageComponent` 트리: `kind: ComponentType`, `custom_id`, `components`, `iter()`, `value: Option<MessageComponentValue>`, `values`, `default` |
+| 2.2.0: `MessageComponent::value: Option<String>`, `kind: u8` | `value: Option<MessageComponentValue>`(`String` / `Bool` / `Other`, `value_str()` / `value_bool()`), 새 `values`와 `default`. `kind: ComponentType` |
+| `V2ModalComponent::RadioGroup { value: String }` | `value: Option<String>`(아무것도 고르지 않으면 `null`). 체크박스는 Discord의 `value` 키를 읽음. `V2ModalSubmission::get_checkbox` |
+| `CheckboxBuilder::checked(bool)` | `default_checked(bool)`. `checked`는 deprecated 별칭으로 남음 |
+| 라디오 그룹·체크박스 그룹·체크박스 빌더의 `disabled`, `CheckboxBuilder::required` | 삭제: Discord는 모달의 비활성 컴포넌트를 거부하고, 체크박스 하나는 required가 될 수 없음(옵션 하나짜리 체크박스 그룹에 `required(true)`) |
 | Entry Point 커맨드가 `Interaction::Unknown` | `Interaction::PrimaryEntryPoint` |
 
-`Interaction::Unknown::raw_data`는 `Option<Box<RawValue>>`이고 `kind`는 항상 인터랙션 타입입니다. 모달 제출과 컴포넌트 인터랙션은 `resolved` 데이터를 가집니다. [인터랙션 엔드포인트](../api/interactions-endpoint.md)와 [파서](../api/parsers.md)를 참고합니다.
+`Interaction::Unknown::raw_data`는 `Option<Box<RawValue>>`이고 `kind`는 항상 인터랙션 타입입니다. 모달 제출과 컴포넌트 인터랙션은 `resolved` 데이터를 가집니다.
+
+그 밖에 바뀐 것:
+
+- **커맨드 검증.** 슬래시·엔트리 포인트 커맨드 빌더의 `validate()` / `try_build()`는 Discord가 거부하는 이름(구두점, 모든 문자 체계의 대문자, ASCII 아포스트로피. 대신 `ʼ` U+02BC)과 모르는 로케일 키를 거부하고, 모든 choice를 옵션 타입과 범위(`INTEGER`: −2^53+1 ~ 2^53−1, 불리언·유한하지 않은 수 불가)에 맞춰 검사합니다. `build()`는 여전히 검증하지 않습니다.
+- **응답 상태.** `is_acknowledged()`, `is_replied()`, `is_deferred()`는 Discord가 확인한 것만 보고합니다. 전송 중이거나 결과가 불확실한 응답은 아직 "acknowledged"가 아닙니다(`response_phase()`가 전체 상태를 보여 줌). 콜백 본문은 응답 슬롯을 잡기 전에 만들고 검사하므로, 로컬 오류는 인터랙션을 미응답 상태로 남기고 인라인 대체 응답이 여전히 답할 수 있습니다.
+- **엄격해진 디코딩.** 인터랙션 `type`은 JSON 숫자, `data`는 객체여야 하고, 반복된 키는 거부합니다.
+- **`serde_json::Value`였던 다른 모델 필드**도 타입이 생겼습니다: `AuditLogEntry::changes`(`AuditLogChange`, `new_value` / `old_value`는 `new_value_as::<T>()` / `old_value_as::<T>()`로 읽는 JSON 텍스트)와 `options`(`AuditLogEntryOptions`), `Application::team`(`Team`), `install_params`(`ApplicationInstallParams`), `integration_types_config`(`ApplicationIntegrationType` 키), `GuildOnboarding::prompts`(`OnboardingPrompt`), `Guild::guild_scheduled_events`(`GuildScheduledEvent`), `Invite`의 부분 객체(`guild`, `channel`, `target_application`, `guild_scheduled_event`), `UserConnection::integrations`(`PartialIntegration`), `Embed::provider`(`EmbedProvider`). Discord가 형태를 정하지 않은 필드는 `Box<RawValue>`(JSON 텍스트, `serde_json::from_str(raw.get())`로 읽음)입니다: `Sku::manifest_labels`·`features`, `GuildTemplate::serialized_source_guild`. 전체 표는 [핵심 타입 및 상수](../api/core-types-and-constants.md)에 있습니다.
+
+[인터랙션 엔드포인트](../api/interactions-endpoint.md)와 [파서](../api/parsers.md)를 참고합니다.
 
 ## 12. 권한과 비트필드
 
-**이유:** 2.x에는 권한 타입이 두 개(`PermissionsBitField`와 `BitField<PermissionFlags>`) 있었고, `CurrentUserGuild`는 `String`이었으며, 41–52번 비트 이름이 어긋나 있었고, 메시지 플래그 값이 틀렸습니다. 3.0은 어디서나 `Permissions` 하나를 쓰고 Discord 문서의 비트와 와이어 형태를 따릅니다.
+**이유:** 2.x에는 권한 타입이 두 개(`PermissionsBitField`와 `BitField<PermissionFlags>`) 있었고, `CurrentUserGuild::permissions`는 `Option<String>`이었으며, 41–52번 비트 이름이 어긋나 있었고, 메시지 플래그 값이 틀렸습니다. 3.0은 어디서나 `Permissions` 하나를 쓰고 Discord 문서의 비트와 와이어 형태를 따릅니다.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -1006,10 +1115,31 @@ fn permission_sets() -> Result<(), serde_json::Error> {
 | 2.x | 3.0 |
 |---|---|
 | `PermissionsBitField(bits)`, `.0`, `insert`, 제자리 `remove` | `Permissions::from_bits(bits)`, `.bits()`, `\|=`, `set = set - flag`(`add` / `remove` / `merge` / `missing`은 새 집합을 돌려주며 `#[must_use]`) |
-| `CurrentUserGuild::permissions: String` | `Permissions` |
+| `CurrentUserGuild::permissions: Option<String>` | `Option<Permissions>` |
 | 메시지·채널·사용자 플래그와 intents를 문자열로 직렬화 | 숫자(권한은 계속 문자열). 음수 입력은 거부 |
+| 직접 만든 `BitFieldFlags` 집합을 문자열로 직렬화 | 기본은 숫자. `const STRING_ENCODED: bool = true`면 문자열 유지(읽기는 둘 다 허용) |
 | `message_flags::SUPPRESS_NOTIFICATIONS` = `1 << 10`, `IS_VOICE_MESSAGE` = `1 << 12` | `1 << 12`와 `1 << 13`. `HAS_SNAPSHOT`(`1 << 14`) 추가 |
 | 41번 비트부터 이름이 하나씩 밀림, `SEND_POLLS` = 50번 | Discord 표대로: `SEND_POLLS` = 49, `USE_EXTERNAL_APPS` = 50, `PIN_MESSAGES` = 51, `BYPASS_SLOWMODE` = 52 |
+
+직접 만든 `BitFieldFlags` 집합도 이제 숫자로 씁니다. 다른 쪽이 문자열로 읽는다면 2.x 형태를 유지합니다:
+
+<!-- snippet: custom_bitfield -->
+```rust
+use discordrs::bitfield::{BitField, BitFieldFlags};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct FeatureFlags;
+
+impl BitFieldFlags for FeatureFlags {
+    const BITS: &'static [(u64, &'static str)] = &[(1 << 0, "BETA"), (1 << 1, "STAFF")];
+    // 3.0 writes custom sets as numbers (2.x: strings); this keeps strings.
+    const STRING_ENCODED: bool = true;
+}
+
+fn encode_features() -> Result<String, serde_json::Error> {
+    serde_json::to_string(&BitField::<FeatureFlags>::from_bits(0b11)) // "\"3\""
+}
+```
 
 3.0은 실효 권한도 계산합니다(`discordrs::permissions`: `permissions_for`, `Member::guild_permissions`, 캐시 기반 변형). [Permissions and Formatters](../../docs/api/permissions-and-formatters.md)를 참고합니다.
 
@@ -1185,6 +1315,7 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | `ParentMessage` / `ChildMessage` 완전 열거 | `#[non_exhaustive]`, identify variant 추가 |
 | `spawn_stagger` 기본값 0보다 큼 | 0(허가가 IDENTIFY 간격을 정함) |
 | `wait()` / `shutdown()` | 재시작 한도 소진과 비정상 종료를 오류로 반환. 종료 전체에 기한 하나 |
+| `ProcessShardManager::broadcast(payload)`가 크기와 무관하게 전송 | 인코딩한 요청이 `max_ipc_frame_bytes`(기본 1 MiB)를 넘으면 보내기 전에 실패. 그보다 긴 자식 출력은 버림 |
 
 종료 close code(4004, 4010–4014)를 받으면 이제 끝없이 재접속하지 않고 `start()`가 `DiscordError::Gateway`를 반환하며, 감독자는 첫 치명적 오류에서 다른 샤드도 멈춥니다. 직접 만든 멀티 프로세스 구성에서는 `IdentifyGate`를 구현해 `ClientBuilder::identify_gate`에 넘깁니다. [Sharding](../../docs/api/sharding.md)을 참고합니다.
 

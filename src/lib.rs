@@ -8,8 +8,9 @@
 //!
 //! 3.0 changes the 2.x public types (typed IDs, open discriminants, the
 //! `Arc<Event>` envelope, typed REST request bodies, traits without
-//! `async-trait`). The migration guide covers every change with before/after
-//! code: <https://github.com/Ingwannu/discord.rs/blob/main/discordrsdocs/docs/guide/migration-3.0.md>.
+//! `async-trait`). The migration guide walks through the breaking changes
+//! with before/after code, and `CHANGELOG.md` lists every change:
+//! <https://github.com/Ingwannu/discord.rs/blob/main/discordrsdocs/docs/guide/migration-3.0.md>.
 
 // The code rules in Cargo.toml's `[lints]` table hold for library code
 // without exception; unit tests may unwrap, panic, cast, and discard, where

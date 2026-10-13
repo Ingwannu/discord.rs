@@ -214,6 +214,30 @@ mod permission_sets {
     }
 }
 
+mod custom_bitfield {
+    // snippet-start: custom_bitfield
+    use discordrs::bitfield::{BitField, BitFieldFlags};
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    struct FeatureFlags;
+
+    impl BitFieldFlags for FeatureFlags {
+        const BITS: &'static [(u64, &'static str)] = &[(1 << 0, "BETA"), (1 << 1, "STAFF")];
+        // 3.0 writes custom sets as numbers (2.x: strings); this keeps strings.
+        const STRING_ENCODED: bool = true;
+    }
+
+    fn encode_features() -> Result<String, serde_json::Error> {
+        serde_json::to_string(&BitField::<FeatureFlags>::from_bits(0b11)) // "\"3\""
+    }
+    // snippet-end
+
+    #[test]
+    fn keeps_the_string_shape() {
+        assert_eq!(encode_features().expect("encodes"), r#""3""#);
+    }
+}
+
 #[cfg(feature = "gateway")]
 mod events {
     // snippet-start: events_handle_event
@@ -776,12 +800,19 @@ mod interaction_endpoint {
     // snippet-start: interactions_endpoint
     use discordrs::request::InteractionMessage;
     use discordrs::{
-        EndpointReply, Interaction, InteractionContextData, InteractionResponse, ModalBuilder,
-        TextInputBuilder, TextInputStyle, TypedInteractionHandler,
+        EndpointReply, Interaction, InteractionContextData, InteractionResponder,
+        InteractionResponse, ModalBuilder, RestClient, TextInputBuilder, TextInputStyle,
+        TypedInteractionHandler,
     };
 
     #[derive(Clone)]
-    struct Tickets;
+    struct Tickets {
+        rest: RestClient,
+    }
+
+    fn ephemeral(text: &str) -> EndpointReply {
+        InteractionResponse::reply(InteractionMessage::new().content(text).ephemeral(true)).into()
+    }
 
     impl TypedInteractionHandler for Tickets {
         async fn handle_typed(
@@ -799,15 +830,23 @@ mod interaction_endpoint {
                     );
                     InteractionResponse::modal(modal).into()
                 }
-                Interaction::ModalSubmit(_) => InteractionResponse::reply(
-                    InteractionMessage::new()
-                        .content("Ticket created")
-                        .ephemeral(true),
-                )
-                .into(),
-                // Answered over REST already (e.g. through `InteractionResponder`):
-                // the endpoint replies 202 with no body.
-                _ => EndpointReply::Accepted,
+                Interaction::ChatInputCommand(command)
+                    if command.data.name.as_deref() == Some("status") =>
+                {
+                    // `Accepted` (202, no body) only after responding over REST.
+                    match command.reply_ephemeral(&self.rest, "All systems go").await {
+                        Ok(()) => EndpointReply::Accepted,
+                        // The endpoint sends this only if no REST response may
+                        // have reached Discord; otherwise it answers 202.
+                        Err(_) => ephemeral("Status is unavailable right now"),
+                    }
+                }
+                Interaction::ModalSubmit(_) => ephemeral("Ticket created"),
+                // Autocomplete must be answered with choices, not a message.
+                Interaction::Autocomplete(_) => InteractionResponse::autocomplete([]).into(),
+                // Everything else is answered inline too: `Accepted` without a
+                // REST response would leave the interaction unanswered.
+                _ => ephemeral("Unknown command"),
             }
         }
     }
@@ -817,7 +856,79 @@ mod interaction_endpoint {
     fn builds_a_router() {
         // The Ed25519 base point: a valid public key.
         let key = "5866666666666666666666666666666666666666666666666666666666666666";
-        let _router = discordrs::try_typed_interactions_endpoint(key, Tickets).expect("valid key");
+        let tickets = Tickets {
+            rest: RestClient::new("token", None),
+        };
+        let _router = discordrs::try_typed_interactions_endpoint(key, tickets).expect("valid key");
+    }
+}
+
+#[cfg(feature = "interactions")]
+mod framework {
+    // snippet-start: framework
+    use discordrs::request::InteractionMessage;
+    use discordrs::{AppContext, AppFramework, EndpointReply, InteractionResponse};
+
+    fn app() -> AppFramework {
+        AppFramework::builder()
+            // Guards return `Result<(), EndpointReply>` (2.x: `InteractionResponse`).
+            .guard(|ctx: &AppContext| {
+                if ctx.context.guild_id.is_some() {
+                    return Ok(());
+                }
+                let message = InteractionMessage::new()
+                    .content("Use this command in a server")
+                    .ephemeral(true);
+                Err(EndpointReply::from(InteractionResponse::reply(message)))
+            })
+            // Routes return anything that converts into an `EndpointReply`.
+            .command("hello", |_ctx: AppContext| async move {
+                InteractionResponse::reply("Hello from discord.rs")
+            })
+            .build()
+    }
+    // snippet-end
+
+    #[test]
+    fn builds() {
+        let _app = app();
+    }
+}
+
+mod command_choices {
+    // snippet-start: command_choices
+    use discordrs::{
+        CommandDefinition, CommandOptionBuilder, CommandOptionType, DiscordError,
+        SlashCommandBuilder,
+    };
+
+    fn pay_command() -> Result<CommandDefinition, DiscordError> {
+        let amount = CommandOptionBuilder::new(CommandOptionType::INTEGER, "amount", "How much")
+            // `impl Into<CommandOptionValue>`: strings, i8-i64, u8-u32, floats.
+            .choice("ten", 10)
+            // Any other `Serialize` value (here a `u64`) goes through `try_choice`.
+            .try_choice("most", 9_007_199_254_740_991_u64)?;
+        // `try_build()` now also checks names (lowercase, no punctuation),
+        // locale keys, and each choice against the option type and +/-2^53.
+        SlashCommandBuilder::new("pay", "Send coins")
+            .option(amount)
+            .try_build()
+    }
+    // snippet-end
+
+    #[test]
+    fn validates_names_and_choices() {
+        pay_command().expect("a valid command");
+        assert!(SlashCommandBuilder::new("Pay", "Send coins")
+            .validate()
+            .is_err());
+        let too_big = CommandOptionBuilder::new(CommandOptionType::INTEGER, "amount", "How much")
+            .try_choice("too big", 9_007_199_254_740_992_u64)
+            .expect("encodes");
+        assert!(SlashCommandBuilder::new("pay", "Send coins")
+            .option(too_big)
+            .validate()
+            .is_err());
     }
 }
 
