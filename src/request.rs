@@ -47,7 +47,7 @@ pub(crate) use component::{check_message_components, ComponentsMode};
 
 pub use attachment::{AttachmentUpload, ExistingAttachment, MessageAttachment};
 pub use channel::{
-    ForumThreadMessage, ModifyChannel, StartForumThread, StartThreadFromMessage,
+    AvailableForumTag, ForumThreadMessage, ModifyChannel, StartForumThread, StartThreadFromMessage,
     StartThreadWithoutMessage,
 };
 pub use command::EditApplicationCommand;

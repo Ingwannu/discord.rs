@@ -503,6 +503,20 @@ fn cases() -> Vec<Case> {
                 .rate_limit_per_user(5u64)
                 .archived(false)
         )),
+        // A forum's tag list: an existing tag kept by id, a new one by name.
+        case!(ModifyChannel, update_channel, |c| c.update_channel(
+            test_id(102),
+            &r::ModifyChannel::new().available_tags(vec![
+                r::AvailableForumTag::from(&m::ForumTag {
+                    id: test_id(31),
+                    name: "bug".to_string(),
+                    moderated: true,
+                    emoji_id: None,
+                    emoji_name: Some("🐛".to_string()),
+                }),
+                r::AvailableForumTag::new("idea").emoji_id(test_id(32)),
+            ])
+        )),
         case!(DeleteChannel, delete_channel, |c| c
             .delete_channel(test_id(100))),
         case!(EditChannelPermissions, edit_channel_permissions, |c| c
@@ -567,6 +581,16 @@ fn cases() -> Vec<Case> {
                     name: "golden".to_string(),
                     kind: Some(m::ChannelType::GUILD_TEXT),
                     parent_id: Some(None),
+                    ..m::CreateGuildChannel::default()
+                }
+            )),
+        case!(CreateGuildChannel, create_guild_channel, |c| c
+            .create_guild_channel(
+                test_id(200),
+                &m::CreateGuildChannel {
+                    name: "forum".to_string(),
+                    kind: Some(m::ChannelType::GUILD_FORUM),
+                    available_tags: Some(Some(vec![r::AvailableForumTag::new("bug")])),
                     ..m::CreateGuildChannel::default()
                 }
             )),

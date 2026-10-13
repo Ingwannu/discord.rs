@@ -434,6 +434,13 @@ content-type: application/json
 body:
 {"name":"renamed","topic":null,"rate_limit_per_user":5,"archived":false}
 
+### ModifyChannel · update_channel
+PATCH /channels/102
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"available_tags":[{"id":"31","name":"bug","moderated":true,"emoji_name":"🐛"},{"name":"idea","emoji_id":"32"}]}
+
 ### DeleteChannel · delete_channel
 DELETE /channels/100
 authorization: Bot golden-token
@@ -522,6 +529,13 @@ authorization: Bot golden-token
 content-type: application/json
 body:
 {"name":"golden","type":0,"parent_id":null}
+
+### CreateGuildChannel · create_guild_channel
+POST /guilds/200/channels
+authorization: Bot golden-token
+content-type: application/json
+body:
+{"name":"forum","type":15,"available_tags":[{"name":"bug"}]}
 
 ### ModifyGuildChannelPositions · modify_guild_channel_positions
 PATCH /guilds/200/channels

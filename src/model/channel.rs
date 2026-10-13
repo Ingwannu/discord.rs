@@ -7,6 +7,7 @@ use super::{
     ForumTagId, GenericId, GuildId, MessageId, OverwriteType, Permissions, RoleId, ThreadMetadata,
     UserId, VideoQualityMode, WebhookId,
 };
+use crate::request::AvailableForumTag;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Attachment`.
@@ -233,8 +234,9 @@ pub struct CreateGuildChannel {
     pub default_auto_archive_duration: Option<Option<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reaction_emoji: Option<Option<DefaultReaction>>,
+    /// New tags need only a name; see [`AvailableForumTag`].
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub available_tags: Option<Option<Vec<ForumTag>>>,
+    pub available_tags: Option<Option<Vec<AvailableForumTag>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_sort_order: Option<Option<ForumSortOrder>>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -6,12 +6,13 @@
 //! | [`StartThreadFromMessage`] | `POST /channels/{id}/messages/{id}/threads` |
 //! | [`StartThreadWithoutMessage`] | `POST /channels/{id}/threads` |
 //! | [`StartForumThread`] + [`ForumThreadMessage`] | `POST /channels/{id}/threads` in a forum or media channel |
+//! | [`AvailableForumTag`] | an entry of `available_tags` in Modify Channel and Create Guild Channel |
 //!
 //! The other channel bodies (`CreateGuildChannel`, `EditChannelPermission`,
 //! `CreateDmChannel`, ...) are still in [`crate::model`]; they move here in
 //! checkpoint 5C.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::attachment::MessageAttachment;
 use super::component::Component;
@@ -19,7 +20,7 @@ use super::embed::Embed;
 use super::fields::request_setters;
 use crate::bitfield::{ChannelFlags, MessageFlags};
 use crate::model::{
-    AllowedMentions, ChannelId, ChannelType, DefaultReaction, ForumLayout, ForumSortOrder,
+    AllowedMentions, ChannelId, ChannelType, DefaultReaction, EmojiId, ForumLayout, ForumSortOrder,
     ForumTag, ForumTagId, NullablePatch, Patch, PermissionOverwrite, StickerId, VideoQualityMode,
 };
 
@@ -70,8 +71,11 @@ pub struct ModifyChannel {
     /// Channel flags; `PINNED` only on forum and media threads.
     #[serde(skip_serializing_if = "Patch::is_missing")]
     pub flags: Patch<ChannelFlags>,
+    /// The forum or media channel's whole tag list (up to 20): listed tags
+    /// with an `id` are kept (and updated), tags without one are created,
+    /// and tags left out are deleted.
     #[serde(skip_serializing_if = "Patch::is_missing")]
-    pub available_tags: Patch<Vec<ForumTag>>,
+    pub available_tags: Patch<Vec<AvailableForumTag>>,
     #[serde(skip_serializing_if = "Patch::is_missing")]
     pub default_reaction_emoji: NullablePatch<DefaultReaction>,
     #[serde(skip_serializing_if = "Patch::is_missing")]
@@ -119,7 +123,7 @@ impl ModifyChannel {
         nullable video_quality_mode / clear_video_quality_mode: VideoQualityMode;
         nullable default_auto_archive_duration / clear_default_auto_archive_duration: u64;
         patch flags: ChannelFlags;
-        patch available_tags: Vec<ForumTag>;
+        patch available_tags: Vec<AvailableForumTag>;
         nullable default_reaction_emoji / clear_default_reaction_emoji: DefaultReaction;
         patch default_thread_rate_limit_per_user: u64;
         nullable default_sort_order / clear_default_sort_order: ForumSortOrder;
@@ -129,6 +133,93 @@ impl ModifyChannel {
         patch locked: bool;
         patch invitable: bool;
         patch applied_tags: Vec<ForumTagId>;
+    }
+}
+
+/// A tag in `available_tags` of [`ModifyChannel`] and
+/// [`CreateGuildChannel`](crate::model::CreateGuildChannel).
+///
+/// [`ForumTag`] is the tag Discord returns and always has an id; a request
+/// also lists tags that do not exist yet, which Discord creates and only
+/// requires a `name` for. Keep an existing tag with
+/// `AvailableForumTag::from(&tag)` (it keeps the id), add one with
+/// [`Self::new`]. At most one of `emoji_id` and `emoji_name` may be set; the
+/// setters clear the other.
+///
+/// Derives `Deserialize` only because `CreateGuildChannel` (still in
+/// `crate::model` until checkpoint 5C) does.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AvailableForumTag {
+    /// The existing tag's id; `None` creates a tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<ForumTagId>,
+    /// 0-20 characters.
+    pub name: String,
+    /// Whether only members with Manage Threads can apply the tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moderated: Option<bool>,
+    /// A guild emoji.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji_id: Option<EmojiId>,
+    /// A Unicode emoji.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emoji_name: Option<String>,
+}
+
+impl AvailableForumTag {
+    /// A new tag (no id).
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: None,
+            name: name.into(),
+            moderated: None,
+            emoji_id: None,
+            emoji_name: None,
+        }
+    }
+
+    request_setters! {
+        opt moderated: bool;
+    }
+
+    /// Uses a guild emoji (and clears `emoji_name`).
+    pub fn emoji_id(mut self, emoji_id: impl Into<EmojiId>) -> Self {
+        self.emoji_id = Some(emoji_id.into());
+        self.emoji_name = None;
+        self
+    }
+
+    /// Uses a Unicode emoji (and clears `emoji_id`).
+    pub fn emoji_name(mut self, emoji_name: impl Into<String>) -> Self {
+        self.emoji_name = Some(emoji_name.into());
+        self.emoji_id = None;
+        self
+    }
+}
+
+impl From<&ForumTag> for AvailableForumTag {
+    /// Keeps an existing tag as it is.
+    fn from(tag: &ForumTag) -> Self {
+        Self {
+            id: Some(tag.id),
+            name: tag.name.clone(),
+            moderated: Some(tag.moderated),
+            emoji_id: tag.emoji_id,
+            emoji_name: tag.emoji_name.clone(),
+        }
+    }
+}
+
+impl From<ForumTag> for AvailableForumTag {
+    fn from(tag: ForumTag) -> Self {
+        Self {
+            id: Some(tag.id),
+            name: tag.name,
+            moderated: Some(tag.moderated),
+            emoji_id: tag.emoji_id,
+            emoji_name: tag.emoji_name,
+        }
     }
 }
 
@@ -284,5 +375,63 @@ impl ForumThreadMessage {
         opt sticker_ids: Vec<StickerId>;
         opt attachments: Vec<MessageAttachment>;
         opt flags: MessageFlags;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{AvailableForumTag, ModifyChannel};
+    use crate::model::{test_id, CreateGuildChannel, ForumTag};
+
+    #[test]
+    fn a_tag_list_keeps_existing_tags_and_adds_new_ones() {
+        let existing = ForumTag {
+            id: test_id(31),
+            name: "bug".to_string(),
+            moderated: false,
+            emoji_id: Some(test_id(33)),
+            emoji_name: None,
+        };
+        let body = ModifyChannel::new().available_tags(vec![
+            AvailableForumTag::from(&existing),
+            AvailableForumTag::new("idea").moderated(true),
+            AvailableForumTag::from(existing.clone()).emoji_name("🐛"),
+        ]);
+        assert_eq!(
+            serde_json::to_value(&body).unwrap(),
+            json!({ "available_tags": [
+                { "id": "31", "name": "bug", "moderated": false, "emoji_id": "33" },
+                { "name": "idea", "moderated": true },
+                { "id": "31", "name": "bug", "moderated": false, "emoji_name": "🐛" },
+            ] })
+        );
+        // The emoji setters keep at most one of the two set.
+        let tag = AvailableForumTag::new("x")
+            .emoji_name("🐛")
+            .emoji_id(test_id(34));
+        assert_eq!((tag.emoji_id, tag.emoji_name), (Some(test_id(34)), None));
+    }
+
+    #[test]
+    fn a_new_forum_channel_can_list_tags_without_ids() {
+        let body = CreateGuildChannel {
+            name: "forum".to_string(),
+            available_tags: Some(Some(vec![AvailableForumTag::new("bug")])),
+            ..CreateGuildChannel::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&body).unwrap(),
+            json!({ "name": "forum", "available_tags": [{ "name": "bug" }] })
+        );
+        let parsed: CreateGuildChannel = serde_json::from_value(
+            json!({ "name": "forum", "available_tags": [{ "name": "bug" }] }),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.available_tags,
+            Some(Some(vec![AvailableForumTag::new("bug")]))
+        );
     }
 }
