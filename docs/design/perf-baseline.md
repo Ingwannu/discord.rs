@@ -481,9 +481,16 @@ IDENTIFY했다. 인터랙션에는 응답하지 않았고 메시지를 보내지
 | 게이트웨이 600초 | 13종 99개(MESSAGE_CREATE 13, MESSAGE_UPDATE 6, MESSAGE_DELETE 3, MESSAGE_REACTION_ADD 3, CHANNEL_CREATE/UPDATE/DELETE 3/6/3, THREAD_CREATE 1, VOICE_STATE_UPDATE 19, VOICE_CHANNEL_START_TIME_UPDATE 8, VOICE_CHANNEL_STATUS_UPDATE 3 등), 디코딩 실패 0, 알 수 없는 디스패치 0 |
 | 프로세스 RSS | 시작 4.4 MB → REST 뒤 9.5 MB → 길드 30개 접속·캐시 뒤 12.9 MB → 600초 뒤 13.6 MB |
 
-검증하지 못한 것: 음성 연결(봇이 음성 채널에 들어가면 서버에 보이는 변화가 생겨 하지 않았다), 인터랙션
-응답 경로, 쓰기 REST, 특권 인텐트(GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT)가 있는 큰 길드의
-멤버·프레즌스 페이로드.
+추가 검증(같은 날, 사용자 승인):
+
+| 항목 | 결과 |
+|---|---|
+| 특권 인텐트(GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT) 60초, 수정 전 | GUILD_CREATE 30개 중 **11개 디코딩 실패**(멤버 최대 446명 길드 포함). 원인: 받은 프레즌스 활동의 `buttons`가 라벨 문자열 배열인데 모델이 보낼 때 형식(`{label, url}`)이었다. 프레즌스 하나 때문에 길드 전체가 캐시에 들어가지 못했다 |
+| 같은 조건 120초, 수정 후(`fix-activity-buttons`) | GUILD_CREATE 30/30, PRESENCE_UPDATE 493, MESSAGE_CREATE 2, 디코딩 실패 0. RSS 22.6 MB |
+| 쓰기 경로(앱 소유자 DM 안에서만) | DM 열기, 메시지 생성·수정, 리액션 추가·제거, Components V2 메시지(컨테이너·버튼) 생성, 버튼 인터랙션 응답(ephemeral, 327 ms), flags 없는 V2 메시지 수정, 삭제 정리 모두 성공 |
+
+검증하지 못한 것: 음성 연결(봇이 음성 채널에 들어가면 서버에 보이는 변화가 생겨 하지 않았다), 길드 채널 쓰기,
+모달·자동완성 응답.
 
 특권 인텐트 재검증(2026-10-13, 같은 봇, 같은 30개 길드, 읽기 전용): GUILD_CREATE 30개 중 11개가
 `invalid type: string "…", expected struct ActivityButton`으로 디코딩에 실패해 캐시에 들어가지 못했다(활동 `buttons`는
