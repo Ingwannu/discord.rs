@@ -5,6 +5,7 @@ min_crate_routes = 1
 min_docs_events = 1
 min_crate_events = 1
 non_endpoint_functions = ["request"]
+forward_goldens = "src/http/tests/goldens.rs"
 
 [[ignored_route]]
 method = "GET"

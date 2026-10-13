@@ -410,6 +410,10 @@ edit:
   it to its row (or a new row), so the weekly report does not list the route as missing.
 - *`x` is recorded as removed (`was`) but still exists without #[deprecated]*: delete the old
   method or deprecate it as a forwarding shim.
+- *deprecated `x` does not call its replacement `y`*: a `was [x => y]` forward must call `self.y(..)`.
+- *deprecated forward `x` has no `forward!(...)` golden case* (or *`forward!(...)` is not a
+  deprecated forward*): add or remove the case in `forwards()` of `src/http/tests/goldens.rs`
+  (the `forward_goldens` setting), which checks that the old name sends the replacement's request.
 - *`Method::X`: endpoints name their route with `RouteId`*: an endpoint file builds a request
   with an HTTP method instead of a manifest route.
 - *evidence `...` no longer appears in src/*: an event-table entry's evidence moved; update it.

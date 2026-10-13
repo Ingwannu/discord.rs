@@ -4,7 +4,7 @@ Repository tooling that is not part of the published crate API.
 
 | File | Purpose |
 | --- | --- |
-| `api_drift.py` | Compares discord-api-docs REST routes and Gateway receive events with the crate's route manifest (`src/http/routes.rs`) and event decoder (report-only; Python 3.11+ standard library). `--self-check` also binds every manifest row to the endpoint methods that send it, in both directions. |
+| `api_drift.py` | Compares discord-api-docs REST routes and Gateway receive events with the crate's route manifest (`src/http/routes.rs`) and event decoder (report-only; Python 3.11+ standard library). `--self-check` also binds every manifest row to the endpoint methods that send it, in both directions, and every deprecated `was` forward to its replacement call and its `forward!` golden case. |
 | `api-drift-allowlist.toml` | Deliberate mismatches (ignored documented routes, crate-only routes and events), each with a mandatory reason, plus extractor settings. |
 | `doc_examples.py` | Regenerates `src/model/doc_examples/payloads.rs`, Discord's documented example payloads used by the model round-trip tests (`--docs <discord-api-docs clone>`; standard library only). |
 | `drift_issue.py` | Opens, updates, or closes the single `api-drift` issue from a report (used by `.github/workflows/api-drift.yml`). |

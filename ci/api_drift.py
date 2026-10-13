@@ -666,6 +666,9 @@ DEFAULT_SETTINGS = {
     # Public `async fn`s of the clients that are not endpoints of one route
     # (the raw escape hatch).
     "non_endpoint_functions": [],
+    # Test file whose `forward!(Route, old => new(..))` cases compare each
+    # deprecated forward with its replacement; "" skips the check.
+    "forward_goldens": "",
     "event_sources": ["src/event/decode.rs"],
     "event_name_pattern": r'"([A-Z][A-Z0-9_]+)"\s*(?:=>|\|)',
     "evidence_sources": ["src/**/*.rs"],
@@ -786,6 +789,12 @@ class CrateScan:
     direct_methods: list[str]
     events: dict[str, tuple[str, int]]
     evidence_corpus: str
+    # (route id, old, new) of each `forward!` golden case; None when the
+    # `forward_goldens` setting is empty.
+    forward_goldens: set[tuple[str, str, str]] | None = None
+
+
+_FORWARD_GOLDEN = re.compile(r"\bforward!\(\s*(\w+)\s*,\s*(\w+)\s*=>\s*(\w+)\s*\(")
 
 
 def scan_crate(repo: Path, allowlist: Allowlist) -> CrateScan:
@@ -818,9 +827,16 @@ def scan_crate(repo: Path, allowlist: Allowlist) -> CrateScan:
         )
         for name, line in names.items():
             events.setdefault(name, (relative, line))
+    forward_goldens = None
+    if settings["forward_goldens"]:
+        goldens_path = repo / settings["forward_goldens"]
+        if not goldens_path.is_file():
+            raise ConfigError(f"forward goldens not found: {goldens_path}")
+        text = mask_rust(goldens_path.read_text(encoding="utf-8"), blank_strings=True)
+        forward_goldens = {tuple(match) for match in _FORWARD_GOLDEN.findall(text)}
     return CrateScan(
         routes, manifest, manifest_errors, functions, direct_methods, events,
-        _evidence_corpus(repo, settings),
+        _evidence_corpus(repo, settings), forward_goldens,
     )
 
 
@@ -847,8 +863,11 @@ def manifest_binding(allowlist: Allowlist, scan: CrateScan) -> list[str]:
       `impl RestClient` / `impl OAuth2Client` block) is listed by some row,
       so a new endpoint cannot bypass the manifest;
     - a `was` name (removed in 3.0) is gone, or survives only as a
-      `#[deprecated]` forwarding method, and its replacement is listed in the
-      same row;
+      `#[deprecated]` forwarding method that calls its replacement, and the
+      replacement is listed in the same row;
+    - with `forward_goldens` set, every deprecated forward has a
+      `forward!(Route, old => new(..))` golden case comparing its request
+      with the replacement's, and every such case is a deprecated forward;
     - no endpoint file names an HTTP method directly.
 
     Without the second direction a new route would show up as "missing" in
@@ -884,6 +903,7 @@ def manifest_binding(allowlist: Allowlist, scan: CrateScan) -> list[str]:
         return sent
 
     listed: set[tuple[str, str]] = set()
+    forwards: set[tuple[str, str, str]] = set()
     for row in scan.manifest:
         owner = CLIENT_TYPES[row.client]
         if not row.api:
@@ -907,6 +927,24 @@ def manifest_binding(allowlist: Allowlist, scan: CrateScan) -> list[str]:
                     f"route manifest: `{owner}::{old}` is recorded as removed (`was`) under `{row.id}` "
                     f"but still exists without #[deprecated] ({function.file}:{function.line})"
                 )
+            elif function is not None:
+                forwards.add((row.id, old, new))
+                if new not in calls.findall(function.body):
+                    notes.append(
+                        f"route manifest: deprecated `{owner}::{old}` ({function.file}:{function.line}) "
+                        f"does not call its replacement `{new}`"
+                    )
+    if scan.forward_goldens is not None:
+        goldens = allowlist.settings["forward_goldens"]
+        for route, old, new in sorted(forwards - scan.forward_goldens):
+            notes.append(
+                f"deprecated forward `{old}` (`{route}`) has no `forward!({route}, {old} => {new}(..))` "
+                f"golden case in {goldens}"
+            )
+        for route, old, new in sorted(scan.forward_goldens - forwards):
+            notes.append(
+                f"{goldens}: `forward!({route}, {old} => {new}(..))` is not a deprecated forward of the manifest"
+            )
     exempt = set(allowlist.settings["non_endpoint_functions"])
     for function in scan.functions:
         if (

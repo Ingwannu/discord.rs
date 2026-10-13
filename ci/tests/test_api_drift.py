@@ -350,11 +350,17 @@ reason = "Fixture: evidence that exists only inside a comment."
 def binding_notes(**edits: tuple[str, str]) -> list[str]:
     """Manifest binding notes for a copy of the fixture crate with edits.
 
-    Each keyword names a fixture file (``http``, ``routes``, ``oauth2``) and
+    Each keyword names a fixture file (``http``, ``routes``, ``oauth2``,
+    ``goldens``) and
     maps to an ``(old, new)`` replacement applied to it.
     """
 
-    files = {"http": "src/http.rs", "routes": "src/http/routes.rs", "oauth2": "src/oauth2.rs"}
+    files = {
+        "http": "src/http.rs",
+        "routes": "src/http/routes.rs",
+        "oauth2": "src/oauth2.rs",
+        "goldens": "src/http/tests/goldens.rs",
+    }
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "crate"
         shutil.copytree(CRATE, root)
@@ -391,10 +397,39 @@ class ManifestBindingTests(unittest.TestCase):
 
     def test_removed_name_must_be_gone_or_deprecated(self):
         notes = binding_notes(http=('#[deprecated(note = "use get_pins")]\n', ""))
-        self.assertEqual(len(notes), 1)
+        self.assertEqual(len(notes), 2, notes)
         self.assertIn("`RestClient::pins` is recorded as removed (`was`) under `GetPinnedMessages`", notes[0])
+        # Its golden comparison no longer compares a deprecated forward.
+        self.assertIn("is not a deprecated forward of the manifest", notes[1])
         notes = binding_notes(routes=("was [pins => get_pins]", "was [pins => get_pin]"))
         self.assertIn("route manifest: `GetPinnedMessages` maps `pins` to `get_pin`, which the row does not list", notes)
+
+    def test_deprecated_forward_must_call_its_replacement(self):
+        notes = binding_notes(http=("        self.get_pins(channel_id).await\n    }\n\n    pub async fn get_sparkle",
+                                    "        self.get_pins_limited(channel_id, None).await\n    }\n\n    pub async fn get_sparkle"))
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("deprecated `RestClient::pins`", notes[0])
+        self.assertIn("does not call its replacement `get_pins`", notes[0])
+
+    def test_every_deprecated_forward_has_a_golden_case(self):
+        notes = binding_notes(goldens=("vec![forward!(GetPinnedMessages, pins => get_pins(1))]", "vec![]"))
+        self.assertEqual(
+            notes,
+            [
+                "deprecated forward `pins` (`GetPinnedMessages`) has no "
+                "`forward!(GetPinnedMessages, pins => get_pins(..))` golden case in src/http/tests/goldens.rs"
+            ],
+        )
+        notes = binding_notes(
+            goldens=("vec![forward!(", "vec![forward!(GetSparkle, sparkle => get_sparkle(\"x\")), forward!(")
+        )
+        self.assertEqual(
+            notes,
+            [
+                "src/http/tests/goldens.rs: `forward!(GetSparkle, sparkle => get_sparkle(..))` is not a "
+                "deprecated forward of the manifest"
+            ],
+        )
 
     def test_direct_methods_outside_the_transport_are_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
