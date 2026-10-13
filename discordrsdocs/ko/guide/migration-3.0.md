@@ -6,12 +6,11 @@
 이 문서의 `rust` 블록은 tests/migration_guide.rs가 검사한다. `<!- - snippet: NAME - ->`
 뒤의 블록은 그 파일의 NAME 영역과 같아야 하고(CI가 컴파일하며, Discord 연결이 필요 없는
 것은 실행도 한다), `<!- - snippet: 2.x - ->` 블록은 2.x 코드라 컴파일하지 않는다.
-4단계 체크포인트 C 이후 다시 확인할 항목은 영어 가이드 상단 주석의 TODO 목록과 같다.
 -->
 
 ## 왜 3.0인가
 
-2.1.0과 2.2.0은 배포되지 않았지만 이미 2.0.2의 공개 타입을 깨뜨렸기 때문에, 3.0은 깨지는 변경을 한 번에 모아 곧바로 4.0을 강요하지 않도록 했습니다. 2.x를 호환되게 고칠 수 없던 런타임 버그(응답을 잃은 REST 요청이 메시지를 두 번 보낼 수 있었고, Serial 모드에서 `fetch_members`를 기다리는 핸들러가 샤드를 교착시켰고, READY마다 다른 샤드의 캐시까지 지웠고, 음성 패킷을 잘못된 nonce 배치로 암호화했습니다)를 고치고, 타입을 숫자 ID·열린 판별값·공유 이벤트·타입 요청 본문 위에 다시 세웠습니다. 효과는 `tests/perf_report`(결정적 할당 수, 방법은 `docs/design/perf-baseline.md`)로 쟀습니다: 멤버 1,000명 GUILD_CREATE 디코딩이 **할당 508,698회 → 20,921회**(최대 힙 34.7 → 3.2 MB), MESSAGE_CREATE **573 → 23회**, INTERACTION_CREATE 1,519 → 66회, 큰 길드 25개를 받은 뒤 live 힙 **386 MB → 87 MB**, `Event` 4,848 → 128바이트, Components V2 메시지 인코딩 **313 → 26회**(인터랙션 응답 406 → 27회)입니다.
+2.1.0과 2.2.0은 배포되지 않았지만 이미 2.0.2의 공개 타입을 깨뜨렸기 때문에, 3.0은 깨지는 변경을 한 번에 모아 곧바로 4.0을 강요하지 않도록 했습니다. 2.x를 호환되게 고칠 수 없던 런타임 버그(응답을 잃은 REST 요청이 메시지를 두 번 보낼 수 있었고, Serial 모드에서 `fetch_members`를 기다리는 핸들러가 샤드를 교착시켰고, READY마다 다른 샤드의 캐시까지 지웠고, 음성 패킷을 잘못된 nonce 배치로 암호화했습니다)를 고치고, 타입을 숫자 ID·열린 판별값·공유 이벤트·타입 요청 본문 위에 다시 세웠습니다. 효과는 `tests/perf_report`(결정적 할당 수. 방법은 `docs/design/perf-baseline.md`, 최종 수치는 `docs/design/3.0-types-events-requests.md`의 4단계 기록)로 쟀습니다: 멤버 1,000명 GUILD_CREATE 디코딩이 **할당 508,698회 → 17,744회**(최대 힙 34.7 → 3.2 MB), MESSAGE_CREATE **573 → 20회**, INTERACTION_CREATE 1,519 → 67회, 큰 길드 25개를 받은 뒤 live 힙 **386 MB → 64 MB**, `Event` 4,848 → 128바이트, Components V2 메시지 인코딩 **313 → 26회**(인터랙션 응답 406 → 27회)입니다.
 
 ## 시작하기 전에
 
@@ -182,7 +181,7 @@ fn rename_and_clear_topic() -> Result<String, serde_json::Error> {
 }
 ```
 
-이벤트에서는 `MessageUpdate`(MESSAGE_UPDATE)가 바뀔 수 있는 모든 필드를 `Patch`로 가집니다:
+이벤트의 부분 갱신도 타입 패치입니다: `MessageUpdate`(MESSAGE_UPDATE), `MemberUpdate`(GUILD_MEMBER_UPDATE), `GuildUpdate`(GUILD_UPDATE)는 바뀔 수 있는 모든 필드를 `Patch`로 가지며 모두 `apply_to`가 있습니다:
 
 <!-- snippet: patch_event -->
 ```rust
@@ -205,6 +204,7 @@ fn apply_edit(message: &mut Message, update: &MessageUpdate) {
 | 2.x | 3.0 |
 |---|---|
 | MESSAGE_UPDATE를 `Message`로 | `model::MessageUpdate`. `update.apply_to(&mut message)`로 병합하고, `author`는 필드 단위로 병합되는 `PartialUser` |
+| GUILD_MEMBER_UPDATE를 `Member`로, GUILD_UPDATE를 `Guild`로 | `model::MemberUpdate`(전체 `user: Arc<User>`, 나머지 필드는 패치)와 `model::GuildUpdate`(`roles: Patch<Vec<Arc<Role>>>`, `emojis`, `stickers`). 둘 다 `apply_to`가 있음 |
 | `update_channel(&json!({..}))` | `request::ModifyChannel`(setter, `clear_*`는 `null`을 보냄) |
 | 생성 본문 | `Option<T>`: `None`은 키를 생략 |
 | `discordrs::request`의 수정 본문(`ModifyChannel`, `EditMessage`, `ModifyAutoModerationRule`, `ModifyGuildScheduledEvent`, …) | `Patch` / `NullablePatch` |
@@ -270,10 +270,10 @@ impl EventHandler for Router {
 ```rust
 use std::sync::Arc;
 
-use discordrs::model::MessageUpdate;
+use discordrs::model::{GuildUpdate, MemberUpdate, MessageUpdate};
 use discordrs::{
-    gateway_intents, Client, Context, DiscordError, EventDecodeError, EventHandler, GuildId,
-    Member, Message,
+    gateway_intents, Channel, Client, Context, DiscordError, EventDecodeError, EventHandler,
+    GuildId, Member, Message, Nullable, Patch, PresenceUpdateEvent,
 };
 use serde_json::value::RawValue;
 
@@ -290,9 +290,39 @@ impl EventHandler for Hooks {
     }
 
     async fn member_add(&self, _ctx: Context, guild_id: GuildId, member: Arc<Member>) {
+        // `member.user` is an `Option<Arc<User>>` shared with the cache.
         if let Some(user) = &member.user {
             println!("{} joined {guild_id}", user.username);
         }
+    }
+
+    // GUILD_MEMBER_UPDATE is a partial member: the full `user`, and the
+    // other fields as patches.
+    async fn member_update(&self, _ctx: Context, update: Arc<MemberUpdate>) {
+        match &update.nick {
+            Patch::Value(Nullable::Value(nick)) => {
+                println!("{} is now {nick}", update.user_id())
+            }
+            Patch::Value(Nullable::Null) => println!("{} cleared their nick", update.user_id()),
+            Patch::Missing => {}
+        }
+    }
+
+    // GUILD_UPDATE is a partial guild too; GUILD_CREATE-only fields such as
+    // `member_count` are never in it.
+    async fn guild_update(&self, _ctx: Context, update: &GuildUpdate) {
+        if let Patch::Value(name) = &update.name {
+            println!("guild {} renamed to {name}", update.id);
+        }
+    }
+
+    async fn channel_create(&self, _ctx: Context, channel: Arc<Channel>) {
+        println!("new channel {}", channel.id);
+    }
+
+    // The presence is an `Arc<Presence>` shared with the cache.
+    async fn presence_update(&self, _ctx: Context, event: &PresenceUpdateEvent) {
+        println!("{:?} is {:?}", event.user_id(), event.status());
     }
 
     // Dispatches this version has no type for: the name and the JSON text.
@@ -334,9 +364,15 @@ async fn run(token: &str) -> Result<(), DiscordError> {
 | 모든 이벤트의 raw `Value` | `ClientBuilder::keep_raw_events(true)`일 때만 `event.raw()`. 알 수 없는 디스패치와 디코딩 실패는 항상 보관 |
 | `message_create(ctx, Message)` | `message_create(ctx, Arc<Message>)` |
 | `message_update(ctx, Message)` | `message_update(ctx, Arc<MessageUpdate>)`(부분 갱신) |
-| `member_add(ctx, Snowflake, Member)`, `member_update(..)` | `member_add(ctx, GuildId, Arc<Member>)`, `member_update`도 같음 |
-| `guild_create(ctx, Guild)` | `guild_create(ctx, &GuildCreatePayload)`: `Available(GuildCreate)` 또는 `Unavailable(UnavailableGuild)`. `to_guild()`로 2.x식 `Guild`를 다시 만듦 |
-| 나머지 훅은 payload를 값으로(`ready(ctx, ReadyPayload)`, `channel_create(ctx, Channel)`, …) | 참조로(`&ReadyPayload`, `&Channel`, `&Interaction`, …). 보관할 것은 clone |
+| `member_add(ctx, Snowflake, Member)` | `member_add(ctx, GuildId, Arc<Member>)` |
+| `member_update(ctx, Snowflake, Member)` | `member_update(ctx, Arc<MemberUpdate>)`: `guild_id`, 전체 `user`, 나머지 필드는 패치 |
+| `guild_create(ctx, Guild)` | `guild_create(ctx, &GuildCreatePayload)`: `Available(GuildCreate)` 또는 `Unavailable(UnavailableGuild)`. `GuildCreate`는 `roles: Vec<Arc<Role>>`, `Vec<Arc<Channel>>`인 `channels` / `threads`, `members: Vec<Arc<Member>>` 등을 가짐. `to_guild()`로 2.x식 `Guild`를 다시 만듦 |
+| `guild_update(ctx, Guild)`(`member_count`처럼 GUILD_UPDATE에 없는 필드는 빈 값으로 읽힘) | `guild_update(ctx, &GuildUpdate)` |
+| `channel_create(ctx, Channel)`, `channel_update(..)` | `channel_create(ctx, Arc<Channel>)`, `channel_update`도 같음(`EventKind::ChannelCreate(Arc<Channel>)`). `channel_delete`는 `&Channel` |
+| `presence_update(ctx, PresenceUpdateEvent { user: Option<PresenceUpdateUser>, user_id, status, activities, .. })` | `presence_update(ctx, &PresenceUpdateEvent { guild_id, user: Option<PartialUser>, presence: Arc<Presence> })`: `user_id()`, `status()`, `activities()`, `client_status()`로 읽음. `PresenceUpdateUser` 삭제 |
+| `guild_members_chunk(ctx, GuildMembersChunkEvent)` | `guild_members_chunk(ctx, &GuildMembersChunkPayload)`, `members: Vec<Arc<Member>>`, `presences: Option<Vec<Arc<Presence>>>`. `ctx.fetch_members(..)`는 `Vec<Arc<Member>>`를 반환 |
+| `ThreadEvent::thread: Channel`, `RoleEvent::role: Role` | `Arc<Channel>`, `Arc<Role>`(훅은 여전히 `&ThreadEvent`, `role_create(ctx, GuildId, &Role)`) |
+| 나머지 훅은 payload를 값으로(`ready(ctx, ReadyPayload)`, `user_update(ctx, User)`, …) | 참조로(`&ReadyPayload`, `&User`, `&Interaction`, …). 보관할 것은 clone |
 | 알 수 없는 디스패치**와** 디코딩 실패 모두 `raw_event(ctx, String, Value)` | 알 수 없는 것은 `raw_event(ctx, &str, &RawValue)`, 실패는 새 `decode_failed(ctx, &str, &EventDecodeError, &RawValue)`와 `EventKind::DecodeFailed` |
 | `decode_event(name, Value)` | `decode_event(name, &str)` |
 
@@ -426,7 +462,7 @@ impl EventHandler for Quiz {
 
 ## 6. 캐시
 
-**이유:** 2.x는 멤버·메시지·presence를 이벤트에서 복제해 캐시에 넣었습니다. 3.0 캐시는 사본 대신 이벤트의 `Arc`를 그대로 저장하고, 수정은 copy-on-write로 병합하므로 옛 `Arc`를 든 핸들러는 일관된 스냅샷을 계속 봅니다.
+**이유:** 2.x는 멤버·메시지·presence·사용자·채널·역할을 이벤트에서 복제해 캐시에 넣었고, GUILD_MEMBER_UPDATE와 GUILD_UPDATE payload를 전체 멤버·길드처럼 저장했습니다. 3.0 캐시는 사본 대신 이벤트의 `Arc`를 그대로 저장하고(사용자 포함: `Member::user`와 `Message::author`는 `Option<Arc<User>>`), 부분 갱신은 copy-on-write로 병합하므로 옛 `Arc`를 든 핸들러는 일관된 스냅샷을 계속 보며, 부분 갱신만으로는 항목을 만들지 않습니다. 멤버 1,000명 GUILD_CREATE의 캐시 반영은 할당 31,291회에서 670회로 줄었습니다.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -458,15 +494,42 @@ async fn track_edit(cache: &CacheHandle, message: Arc<Message>, update: &Message
 }
 ```
 
+부분 갱신은 캐시가 이미 가진 것만 바꿉니다:
+
+<!-- snippet: cache_partial_updates -->
+```rust
+use discordrs::model::MemberUpdate;
+use discordrs::CacheHandle;
+
+async fn apply_member_change(cache: &CacheHandle, update: &MemberUpdate) {
+    match cache.apply_member_update(update).await {
+        // Merged copy-on-write into the cached member; the update's user is
+        // stored too. Earlier `Arc<Member>`s keep the old snapshot.
+        Some(member) => println!("{} now has nick {:?}", update.user_id(), member.nick),
+        // A partial update never creates an entry (2.x stored it as a whole
+        // member): members come from GUILD_CREATE, GUILD_MEMBER_ADD,
+        // GUILD_MEMBERS_CHUNK, `fetch_members`, or `upsert_member`.
+        None => println!("member {} is not cached", update.user_id()),
+    }
+}
+```
+
 | 2.x | 3.0 |
 |---|---|
-| `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild` | `impl Into<Arc<T>>`를 받음: 이벤트의 `Arc`를 넘기거나, 예전처럼 값을 넘김 |
-| 컬렉션을 담은 `Guild`로 GUILD_CREATE 반영 | `apply_guild_create(&GuildCreate)`(이벤트에서, 또는 `GuildCreate::from(guild)`), `apply_guild_update(&Guild)` |
+| `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild`, `upsert_user(User)`, `upsert_channel(Channel)`, `upsert_role(guild, Role)` | `impl Into<Arc<T>>`를 받음: 이벤트의 `Arc`를 넘기거나, 예전처럼 값을 넘김 |
+| `Member::user: Option<User>`, `Message::author: Option<User>` | `Option<Arc<User>>`(JSON은 같음), 사용자 저장소와 공유. `Some(Arc::new(user))`로 만들고 읽기는 `Arc`를 거쳐 예전처럼 |
+| 소유 사본 getter만(`user`, `channel`, `member`, `message`, …) | 여전히 소유 사본. `user_arc`, `channel_arc`, `member_arc`, `message_arc`, `members_arc` 등은 공유 `Arc`를 돌려줌 |
+| 컬렉션을 담은 `Guild`로 GUILD_CREATE 반영 | `apply_guild_create(&GuildCreate)`(이벤트에서, 또는 `GuildCreate::from(guild)`) |
+| GUILD_UPDATE를 디코딩한 `Guild`로 저장해 GUILD_CREATE 전용 필드가 지워짐 | `apply_guild_update(&GuildUpdate) -> Option<Arc<Guild>>`가 copy-on-write로 병합. 생략된 필드(`member_count`, `joined_at`, `large`, …)는 유지. REST `Guild`는 `GuildUpdate::from(guild)`로 반영 |
+| GUILD_MEMBER_UPDATE를 전체 멤버로 저장 | `apply_member_update(&MemberUpdate) -> Option<Arc<Member>>`가 copy-on-write로 병합하고 갱신의 사용자를 저장 |
+| 캐시에 없던 멤버·길드를 갱신이 만들었음 | 부분 갱신은 항목을 만들지 않음: 멤버와 길드는 GUILD_CREATE, GUILD_MEMBER_ADD, GUILD_MEMBERS_CHUNK, `fetch_members`, upsert로 들어옴 |
+| `guild()`가 마지막 GUILD_CREATE / GUILD_UPDATE의 역할을 돌려줌 | `guild()` / `guilds()`가 역할 저장소에서 `roles`를 채우므로 GUILD_ROLE_* 이벤트가 반영됨. 전체 스냅샷(`upsert_guild`, GUILD_CREATE, GUILD_UPDATE `roles`)은 그 길드의 역할을 교체 |
+| 소유 멤버를 받던 `apply_members_chunk` | `apply_members_chunk(guild_id, &[Arc<Member>], Option<&[Arc<Presence>]>)` |
 | raw JSON에 어떤 키가 있었는지 보고 MESSAGE_UPDATE를 캐시 메시지에 병합 | 타입 `MessageUpdate` 패치를 `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>`가 copy-on-write로 병합. 모든 메시지 필드(`components`, `poll`, `call`, `message_snapshots`, …)를 다루며 `null`은 지우고 `[]`는 비움. 캐시에 없던 메시지는 계속 없음. `apply_partial_user`가 캐시된 작성자를 필드 단위로 패치 |
 | `&Snowflake` 키, 문자열 해시 | 값으로 넘기는 타입 키: 멤버·presence는 `(GuildId, UserId)`, 메시지는 `(ChannelId, MessageId)`, 역할은 `(GuildId, RoleId)` |
 | READY마다 캐시 전체 삭제 | READY는 그 샤드의 길드만 지움(`CacheHandle::clear_shard`) |
 
-`_arc` getter(`message_arc`, `member_arc`, `members_arc`, …)는 공유 `Arc`를 복사 없이 돌려주고, 일반 getter는 여전히 소유한 사본을 돌려줍니다.
+부분 사용자(MESSAGE_UPDATE `author`, PRESENCE_UPDATE `user`)는 캐시된 사용자를 패치하고, `username`이 있을 때만 새 사용자를 만듭니다. 공유된 사용자에 대한 패치는 새 스냅샷으로 들어가므로 멤버와 메시지는 받았을 때의 사용자를 유지합니다. [Cache and Collectors](../../docs/api/cache-and-collectors.md)의 "Shared Entries and Copy-on-Write Updates"를 참고합니다.
 
 ## 7. 외부 캐시 백엔드
 
@@ -645,7 +708,7 @@ impl CacheBackend for LoggingBackend {
 | `clear_cache(&self)` | `clear_cache(expected_epoch, clear_id) -> CacheClear::{Applied, Rejected}`. 새 필수 메서드 `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` |
 | `put_member(guild, user, Member)`, `put_message(Message)`, `put_presence(.., Presence)` | `put_*(epoch, .., Arc<T>)`: 공유된 이벤트 스냅샷. 저장소 epoch보다 오래된 쓰기는 무시 |
 | `delete_*(&Snowflake, ..)` | `delete_*(epoch, ..)`, 타입 ID를 값으로 |
-| 부분 MESSAGE_UPDATE를 전체 메시지처럼 `put_message`로 보냄(2.2.0) | 저장된 사본에 병합(`get_message` → 병합 → `put_message`). 전체 사본이 없으면 건너뜀 |
+| 부분 MESSAGE_UPDATE를 전체 메시지처럼 `put_message`로 보냄(2.2.0). GUILD_MEMBER_UPDATE도 같은 식으로 `put_member`로 | 저장된 사본에 병합(`get_message` → 병합 → `put_message`, `get_member` → 병합 → `put_member`). 저장소와 메모리 캐시 모두 전체 사본이 없으면 건너뜀 |
 | `Arc<dyn CacheBackend>` | 구체 타입 `B: CacheBackend`의 `Arc<B>`(8절 참고) |
 
 epoch 계약은 규범입니다(저장소당 epoch 하나, 비교·삭제·증가의 원자성, 멱등한 `CacheClearId` 재시도). 자세한 내용은 [Cache and Collectors](../../docs/api/cache-and-collectors.md)의 "External Cache Backend"에 있습니다. 한 저장소에는 한 번에 클라이언트 하나만 쓸 수 있고, `Context::cache_backend_health()`가 미러 상태를 알려 줍니다.
@@ -1346,7 +1409,9 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 - **디코딩**이 엄격해졌습니다: 잘못된 ID, 빠진 필수 판별값, 범위를 넘는 값, 중복 키는 오류이고, REST 디코딩 오류에 위치가 붙습니다. `Webhook::kind`는 Discord의 `type` 키를 읽습니다.
 - 2.x에서 틀렸던 **와이어 값**이 Discord 값으로 바뀌었습니다: 메시지 플래그, 권한 비트 41–52, 체크박스 `default`, 권한 외 비트필드의 숫자 직렬화.
 - **기본 `allowed_mentions`**가 `edit_webhook_message`와 Components V2 채널 헬퍼에도 적용됩니다.
+- **캐시**: 부분 갱신(MESSAGE_UPDATE, GUILD_MEMBER_UPDATE, GUILD_UPDATE)은 항목을 만들지 않으므로 갱신으로만 본 멤버나 길드는 캐시되지 않습니다. 캐시된 길드의 역할은 GUILD_ROLE_* 이벤트를 따릅니다.
 - **컬렉터**는 창이 만료된 뒤 이벤트를 내지 않습니다.
+- **미리보기 필드**: `User`와 `Member`의 `display_name_styles`(`DisplayNameStyles`, `DisplayNameFont` / `DisplayNameEffect`)는 아직 병합되지 않은 discord-api-docs PR #8178을 따르므로 바뀔 수 있습니다. 필드가 모두 선택이라 형태가 바뀌어도 사용자나 멤버 디코딩은 실패하지 않습니다. 반응에는 `me_burst`와 `burst_colors`가 추가됐습니다.
 - **음성**이 실제 Discord 음성 서버와 송수신합니다(2.x는 불가능했습니다).
 
 ## 체크리스트
@@ -1357,8 +1422,8 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 - [ ] 원시 판별값 숫자와 `u8` 상수 모듈을 newtype과 그 상수로 교체. `_` 팔 추가.
 - [ ] `handle_event`에서 `event.kind()`로 match. 타입 훅 시그니처 갱신(`Arc<Message>`, `Arc<MessageUpdate>`, 참조). 디코딩 실패 처리는 `decode_failed`로.
 - [ ] 알려진 이벤트의 `event.raw()`를 읽는다면 `keep_raw_events(true)` 설정.
-- [ ] MESSAGE_UPDATE를 부분 `MessageUpdate`로 처리. 수정은 `MessageUpdateCollector`로 수집.
-- [ ] 캐시 upsert에 이벤트의 `Arc`를 넘김. `apply_message_update` / `apply_guild_create` 사용.
+- [ ] MESSAGE_UPDATE, GUILD_MEMBER_UPDATE, GUILD_UPDATE를 부분 `MessageUpdate` / `MemberUpdate` / `GuildUpdate`로 처리. 수정은 `MessageUpdateCollector`로 수집. presence는 `PresenceUpdateEvent::status()` 등으로 읽기.
+- [ ] 캐시 upsert에 이벤트의 `Arc`를 넘김. `apply_guild_create`, `apply_guild_update`, `apply_member_update`, `apply_message_update` 사용. 갱신이 캐시를 채운다고 기대하지 않기. `member.user`와 `message.author`는 `Option<Arc<User>>`.
 - [ ] 외부 `CacheBackend`를 epoch 계약, `Arc` 스냅샷, `clear_shard_cache`에 맞게 다시 작성. `Arc<YourBackend>`를 넘김.
 - [ ] `Value` 본문을 `discordrs::request` 타입으로 교체. `_typed`·삭제된 REST 메서드 이름 변경. 감싸지 않은 라우트는 `RawRequest`.
 - [ ] `CustomButtonBuilder` / `LinkButtonBuilder` / `PremiumButtonBuilder`와 종류별 select 빌더로 교체. 모든 section에 accessory 지정.

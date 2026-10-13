@@ -277,10 +277,10 @@ mod event_hooks {
     // snippet-start: events_hooks
     use std::sync::Arc;
 
-    use discordrs::model::MessageUpdate;
+    use discordrs::model::{GuildUpdate, MemberUpdate, MessageUpdate};
     use discordrs::{
-        gateway_intents, Client, Context, DiscordError, EventDecodeError, EventHandler, GuildId,
-        Member, Message,
+        gateway_intents, Channel, Client, Context, DiscordError, EventDecodeError, EventHandler,
+        GuildId, Member, Message, Nullable, Patch, PresenceUpdateEvent,
     };
     use serde_json::value::RawValue;
 
@@ -297,9 +297,39 @@ mod event_hooks {
         }
 
         async fn member_add(&self, _ctx: Context, guild_id: GuildId, member: Arc<Member>) {
+            // `member.user` is an `Option<Arc<User>>` shared with the cache.
             if let Some(user) = &member.user {
                 println!("{} joined {guild_id}", user.username);
             }
+        }
+
+        // GUILD_MEMBER_UPDATE is a partial member: the full `user`, and the
+        // other fields as patches.
+        async fn member_update(&self, _ctx: Context, update: Arc<MemberUpdate>) {
+            match &update.nick {
+                Patch::Value(Nullable::Value(nick)) => {
+                    println!("{} is now {nick}", update.user_id())
+                }
+                Patch::Value(Nullable::Null) => println!("{} cleared their nick", update.user_id()),
+                Patch::Missing => {}
+            }
+        }
+
+        // GUILD_UPDATE is a partial guild too; GUILD_CREATE-only fields such as
+        // `member_count` are never in it.
+        async fn guild_update(&self, _ctx: Context, update: &GuildUpdate) {
+            if let Patch::Value(name) = &update.name {
+                println!("guild {} renamed to {name}", update.id);
+            }
+        }
+
+        async fn channel_create(&self, _ctx: Context, channel: Arc<Channel>) {
+            println!("new channel {}", channel.id);
+        }
+
+        // The presence is an `Arc<Presence>` shared with the cache.
+        async fn presence_update(&self, _ctx: Context, event: &PresenceUpdateEvent) {
+            println!("{:?} is {:?}", event.user_id(), event.status());
         }
 
         // Dispatches this version has no type for: the name and the JSON text.
@@ -450,6 +480,60 @@ mod cache {
             .await
             .expect("cached");
         assert_eq!(cached.content, "new");
+    }
+}
+
+#[cfg(feature = "cache")]
+mod cache_partial_updates {
+    // snippet-start: cache_partial_updates
+    use discordrs::model::MemberUpdate;
+    use discordrs::CacheHandle;
+
+    async fn apply_member_change(cache: &CacheHandle, update: &MemberUpdate) {
+        match cache.apply_member_update(update).await {
+            // Merged copy-on-write into the cached member; the update's user is
+            // stored too. Earlier `Arc<Member>`s keep the old snapshot.
+            Some(member) => println!("{} now has nick {:?}", update.user_id(), member.nick),
+            // A partial update never creates an entry (2.x stored it as a whole
+            // member): members come from GUILD_CREATE, GUILD_MEMBER_ADD,
+            // GUILD_MEMBERS_CHUNK, `fetch_members`, or `upsert_member`.
+            None => println!("member {} is not cached", update.user_id()),
+        }
+    }
+    // snippet-end
+
+    #[tokio::test]
+    async fn updates_only_cached_members() {
+        use discordrs::{decode_event, EventKind, Member};
+
+        let event = decode_event(
+            "GUILD_MEMBER_UPDATE",
+            r#"{"guild_id": "1", "user": {"id": "4", "username": "a"}, "roles": [], "nick": "new"}"#,
+        )
+        .expect("decodes");
+        let EventKind::MemberUpdate(update) = event.kind() else {
+            panic!("expected a member update, got {:?}", event.kind());
+        };
+        let cache = CacheHandle::new();
+        apply_member_change(&cache, update).await;
+        assert!(cache
+            .member_arc(update.guild_id, update.user_id())
+            .await
+            .is_none());
+
+        let member: Member = serde_json::from_value(serde_json::json!({
+            "user": {"id": "4", "username": "a"}, "roles": [], "nick": "old",
+        }))
+        .expect("a member");
+        cache
+            .upsert_member(update.guild_id, update.user_id(), member)
+            .await;
+        apply_member_change(&cache, update).await;
+        let cached = cache
+            .member_arc(update.guild_id, update.user_id())
+            .await
+            .expect("cached");
+        assert_eq!(cached.nick.as_deref(), Some("new"));
     }
 }
 

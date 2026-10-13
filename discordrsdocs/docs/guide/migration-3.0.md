@@ -8,33 +8,11 @@ blocks after `<!- - snippet: NAME - ->` must equal the region NAME in that
 file, which CI compiles (and, where no Discord connection is needed, runs);
 `<!- - snippet: 2.x - ->` blocks show 2.x code and are not compiled. The
 Korean guide (ko/guide/migration-3.0.md) shows the same code blocks.
-
-TODO(phase 4 checkpoint C, re-check after the runtime branch merges):
-- §4 hook table: `guild_update` (now `&Guild`), `member_update` (now
-  `GuildId, Arc<Member>`), and `presence_update` (now `&PresenceUpdateEvent`)
-  become partial-update DTOs (GUILD_UPDATE, GUILD_MEMBER_UPDATE,
-  PRESENCE_UPDATE); update the table, the EventKind notes, and the snippets
-  `events_hooks` / `events_handle_event` if their payload types change.
-- §4/§6: `guild_members_chunk` payload and `CacheHandle::apply_members_chunk`
-  if chunks become `Vec<Arc<Member>>`.
-- §6 cache: users, channels, and roles stored as `Arc` (`Arc<User>` etc.):
-  `upsert_user` / `upsert_channel` / `upsert_role` may take
-  `impl Into<Arc<T>>`, getters (`user`, `channel`, `guild`) may gain `*_arc`
-  forms, and `apply_guild_update` may take the GUILD_UPDATE DTO. Re-check the
-  `cache` snippet and the cache table.
-- §7: `CacheBackend` signatures if presence/member writes become patches.
-- "Why 3.0": GUILD_CREATE allocations (20,921), peak heap (3.2 MB), and storm
-  live heap (87 MB) if checkpoint C re-measures them (CHANGELOG, perf-baseline.md).
-Other pending work (not the runtime branch):
-- §3/§9: request bodies still in `model` (`ModifyGuild`, `ModifyGuildMember`,
-  `ModifyGuildWelcomeScreen`, ...) keep `Option<Option<T>>` until phase 5C
-  moves them to `request` with `Patch`; the crate root / prelude
-  `CreateMessage` is still the 2.x `model::CreateMessage`.
 -->
 
 ## Why 3.0
 
-2.1.0 and 2.2.0 were never published and already broke 2.0.2's public types, so 3.0 collects every breaking change once instead of forcing a 4.0 right after. It fixes runtime bugs that 2.x could not fix compatibly (a lost REST response could post a message twice, a handler awaiting `fetch_members` deadlocked its shard in Serial mode, every READY wiped the other shards' cache, voice packets were encrypted with the wrong nonce layout) and rebuilds the types on numeric IDs, open discriminants, shared events, and typed request bodies. The effect is measured with `tests/perf_report` (deterministic allocation counts, method in `docs/design/perf-baseline.md`): decoding a 1,000-member GUILD_CREATE takes **20,921 allocations instead of 508,698** (peak heap 34.7 → 3.2 MB), a MESSAGE_CREATE **23 instead of 573**, an INTERACTION_CREATE 66 instead of 1,519; the live heap after 25 large guilds is **87 MB instead of 386 MB**; an `Event` is 128 bytes instead of 4,848; and encoding an outgoing Components V2 message takes **26 allocations instead of 313** (an interaction reply 27 instead of 406).
+2.1.0 and 2.2.0 were never published and already broke 2.0.2's public types, so 3.0 collects every breaking change once instead of forcing a 4.0 right after. It fixes runtime bugs that 2.x could not fix compatibly (a lost REST response could post a message twice, a handler awaiting `fetch_members` deadlocked its shard in Serial mode, every READY wiped the other shards' cache, voice packets were encrypted with the wrong nonce layout) and rebuilds the types on numeric IDs, open discriminants, shared events, and typed request bodies. The effect is measured with `tests/perf_report` (deterministic allocation counts; method in `docs/design/perf-baseline.md`, final figures in the phase 4 records of `docs/design/3.0-types-events-requests.md`): decoding a 1,000-member GUILD_CREATE takes **17,744 allocations instead of 508,698** (peak heap 34.7 → 3.2 MB), a MESSAGE_CREATE **20 instead of 573**, an INTERACTION_CREATE 67 instead of 1,519; the live heap after 25 large guilds is **64 MB instead of 386 MB**; an `Event` is 128 bytes instead of 4,848; and encoding an outgoing Components V2 message takes **26 allocations instead of 313** (an interaction reply 27 instead of 406).
 
 ## Before you start
 
@@ -205,7 +183,7 @@ fn rename_and_clear_topic() -> Result<String, serde_json::Error> {
 }
 ```
 
-In events, `MessageUpdate` (MESSAGE_UPDATE) has a `Patch` for every field that can change:
+In events, the partial updates are typed patches too: `MessageUpdate` (MESSAGE_UPDATE), `MemberUpdate` (GUILD_MEMBER_UPDATE), and `GuildUpdate` (GUILD_UPDATE) have a `Patch` for every field that can change, and each has `apply_to`:
 
 <!-- snippet: patch_event -->
 ```rust
@@ -228,6 +206,7 @@ fn apply_edit(message: &mut Message, update: &MessageUpdate) {
 | 2.x | 3.0 |
 |---|---|
 | MESSAGE_UPDATE as `Message` | `model::MessageUpdate`; `update.apply_to(&mut message)` merges it, `author` is a `PartialUser` merged field by field |
+| GUILD_MEMBER_UPDATE as `Member`, GUILD_UPDATE as `Guild` | `model::MemberUpdate` (full `user: Arc<User>`, the other fields as patches) and `model::GuildUpdate` (`roles: Patch<Vec<Arc<Role>>>`, `emojis`, `stickers`); both have `apply_to` |
 | `update_channel(&json!({..}))` | `request::ModifyChannel` (setters; `clear_*` sends `null`) |
 | create bodies | `Option<T>`: `None` omits the key |
 | modify bodies in `discordrs::request` (`ModifyChannel`, `EditMessage`, `ModifyAutoModerationRule`, `ModifyGuildScheduledEvent`, …) | `Patch` / `NullablePatch` |
@@ -293,10 +272,10 @@ The typed hooks receive the payload the way the event stores it, so no hook call
 ```rust
 use std::sync::Arc;
 
-use discordrs::model::MessageUpdate;
+use discordrs::model::{GuildUpdate, MemberUpdate, MessageUpdate};
 use discordrs::{
-    gateway_intents, Client, Context, DiscordError, EventDecodeError, EventHandler, GuildId,
-    Member, Message,
+    gateway_intents, Channel, Client, Context, DiscordError, EventDecodeError, EventHandler,
+    GuildId, Member, Message, Nullable, Patch, PresenceUpdateEvent,
 };
 use serde_json::value::RawValue;
 
@@ -313,9 +292,39 @@ impl EventHandler for Hooks {
     }
 
     async fn member_add(&self, _ctx: Context, guild_id: GuildId, member: Arc<Member>) {
+        // `member.user` is an `Option<Arc<User>>` shared with the cache.
         if let Some(user) = &member.user {
             println!("{} joined {guild_id}", user.username);
         }
+    }
+
+    // GUILD_MEMBER_UPDATE is a partial member: the full `user`, and the
+    // other fields as patches.
+    async fn member_update(&self, _ctx: Context, update: Arc<MemberUpdate>) {
+        match &update.nick {
+            Patch::Value(Nullable::Value(nick)) => {
+                println!("{} is now {nick}", update.user_id())
+            }
+            Patch::Value(Nullable::Null) => println!("{} cleared their nick", update.user_id()),
+            Patch::Missing => {}
+        }
+    }
+
+    // GUILD_UPDATE is a partial guild too; GUILD_CREATE-only fields such as
+    // `member_count` are never in it.
+    async fn guild_update(&self, _ctx: Context, update: &GuildUpdate) {
+        if let Patch::Value(name) = &update.name {
+            println!("guild {} renamed to {name}", update.id);
+        }
+    }
+
+    async fn channel_create(&self, _ctx: Context, channel: Arc<Channel>) {
+        println!("new channel {}", channel.id);
+    }
+
+    // The presence is an `Arc<Presence>` shared with the cache.
+    async fn presence_update(&self, _ctx: Context, event: &PresenceUpdateEvent) {
+        println!("{:?} is {:?}", event.user_id(), event.status());
     }
 
     // Dispatches this version has no type for: the name and the JSON text.
@@ -357,9 +366,15 @@ async fn run(token: &str) -> Result<(), DiscordError> {
 | raw `Value` on every event | `event.raw()` only with `ClientBuilder::keep_raw_events(true)`; always kept for unknown and undecodable dispatches |
 | `message_create(ctx, Message)` | `message_create(ctx, Arc<Message>)` |
 | `message_update(ctx, Message)` | `message_update(ctx, Arc<MessageUpdate>)` (partial) |
-| `member_add(ctx, Snowflake, Member)`, `member_update(..)` | `member_add(ctx, GuildId, Arc<Member>)`, likewise `member_update` |
-| `guild_create(ctx, Guild)` | `guild_create(ctx, &GuildCreatePayload)`: `Available(GuildCreate)` or `Unavailable(UnavailableGuild)`; `to_guild()` rebuilds a 2.x-style `Guild` |
-| other hooks take the payload by value (`ready(ctx, ReadyPayload)`, `channel_create(ctx, Channel)`, …) | by reference (`&ReadyPayload`, `&Channel`, `&Interaction`, …); clone what you keep |
+| `member_add(ctx, Snowflake, Member)` | `member_add(ctx, GuildId, Arc<Member>)` |
+| `member_update(ctx, Snowflake, Member)` | `member_update(ctx, Arc<MemberUpdate>)`: `guild_id`, the full `user`, the other fields as patches |
+| `guild_create(ctx, Guild)` | `guild_create(ctx, &GuildCreatePayload)`: `Available(GuildCreate)` or `Unavailable(UnavailableGuild)`; `GuildCreate` holds `roles: Vec<Arc<Role>>`, `channels` / `threads` as `Vec<Arc<Channel>>`, `members: Vec<Arc<Member>>`, …; `to_guild()` rebuilds a 2.x-style `Guild` |
+| `guild_update(ctx, Guild)` (fields GUILD_UPDATE does not carry, such as `member_count`, read as empty) | `guild_update(ctx, &GuildUpdate)` |
+| `channel_create(ctx, Channel)`, `channel_update(..)` | `channel_create(ctx, Arc<Channel>)`, likewise `channel_update` (`EventKind::ChannelCreate(Arc<Channel>)`); `channel_delete` takes `&Channel` |
+| `presence_update(ctx, PresenceUpdateEvent { user: Option<PresenceUpdateUser>, user_id, status, activities, .. })` | `presence_update(ctx, &PresenceUpdateEvent { guild_id, user: Option<PartialUser>, presence: Arc<Presence> })`: read `user_id()`, `status()`, `activities()`, `client_status()`; `PresenceUpdateUser` is removed |
+| `guild_members_chunk(ctx, GuildMembersChunkEvent)` | `guild_members_chunk(ctx, &GuildMembersChunkPayload)` with `members: Vec<Arc<Member>>` and `presences: Option<Vec<Arc<Presence>>>`; `ctx.fetch_members(..)` returns `Vec<Arc<Member>>` |
+| `ThreadEvent::thread: Channel`, `RoleEvent::role: Role` | `Arc<Channel>`, `Arc<Role>` (the hooks still take `&ThreadEvent`, `role_create(ctx, GuildId, &Role)`) |
+| other hooks take the payload by value (`ready(ctx, ReadyPayload)`, `user_update(ctx, User)`, …) | by reference (`&ReadyPayload`, `&User`, `&Interaction`, …); clone what you keep |
 | `raw_event(ctx, String, Value)` for unknown **and** undecodable dispatches | `raw_event(ctx, &str, &RawValue)` for unknown ones; failures go to the new `decode_failed(ctx, &str, &EventDecodeError, &RawValue)` and `EventKind::DecodeFailed` |
 | `decode_event(name, Value)` | `decode_event(name, &str)` |
 
@@ -449,7 +464,7 @@ The journal is bounded and lossy: a collector more than `capacity` events behind
 
 ## 6. Cache
 
-**Why:** 2.x cloned each member, message, and presence out of the event into the cache. In 3.0 the cache stores the event's own `Arc`s instead of copies, and edits are merged copy-on-write, so a handler holding the old `Arc` keeps a consistent snapshot.
+**Why:** 2.x cloned each member, message, presence, user, channel, and role out of the event into the cache, and stored GUILD_MEMBER_UPDATE and GUILD_UPDATE payloads as if they were whole members and guilds. In 3.0 the cache stores the event's own `Arc`s instead of copies (users included: `Member::user` and `Message::author` are `Option<Arc<User>>`), merges partial updates copy-on-write, so a handler holding the old `Arc` keeps a consistent snapshot, and never creates an entry from a partial update. Caching a 1,000-member GUILD_CREATE takes 670 allocations instead of 31,291.
 
 <!-- snippet: 2.x -->
 ```rust
@@ -481,15 +496,42 @@ async fn track_edit(cache: &CacheHandle, message: Arc<Message>, update: &Message
 }
 ```
 
+A partial update changes only what the cache already holds:
+
+<!-- snippet: cache_partial_updates -->
+```rust
+use discordrs::model::MemberUpdate;
+use discordrs::CacheHandle;
+
+async fn apply_member_change(cache: &CacheHandle, update: &MemberUpdate) {
+    match cache.apply_member_update(update).await {
+        // Merged copy-on-write into the cached member; the update's user is
+        // stored too. Earlier `Arc<Member>`s keep the old snapshot.
+        Some(member) => println!("{} now has nick {:?}", update.user_id(), member.nick),
+        // A partial update never creates an entry (2.x stored it as a whole
+        // member): members come from GUILD_CREATE, GUILD_MEMBER_ADD,
+        // GUILD_MEMBERS_CHUNK, `fetch_members`, or `upsert_member`.
+        None => println!("member {} is not cached", update.user_id()),
+    }
+}
+```
+
 | 2.x | 3.0 |
 |---|---|
-| `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild` | take `impl Into<Arc<T>>`: pass the event's `Arc`, or a value as before |
-| GUILD_CREATE via the `Guild` with its collections | `apply_guild_create(&GuildCreate)` (from the event, or `GuildCreate::from(guild)`); `apply_guild_update(&Guild)` |
+| `upsert_message(Message)`, `upsert_member`, `upsert_presence`, `upsert_guild`, `upsert_user(User)`, `upsert_channel(Channel)`, `upsert_role(guild, Role)` | take `impl Into<Arc<T>>`: pass the event's `Arc`, or a value as before |
+| `Member::user: Option<User>`, `Message::author: Option<User>` | `Option<Arc<User>>` (same JSON), shared with the user store; construct with `Some(Arc::new(user))`, read through the `Arc` as before |
+| owned getters only (`user`, `channel`, `member`, `message`, …) | still owned copies; `user_arc`, `channel_arc`, `member_arc`, `message_arc`, `members_arc`, … return the shared `Arc` |
+| GUILD_CREATE via the `Guild` with its collections | `apply_guild_create(&GuildCreate)` (from the event, or `GuildCreate::from(guild)`) |
+| GUILD_UPDATE stored the decoded `Guild`, clearing the GUILD_CREATE-only fields | `apply_guild_update(&GuildUpdate) -> Option<Arc<Guild>>` merges copy-on-write; omitted fields (`member_count`, `joined_at`, `large`, …) keep their value; `GuildUpdate::from(guild)` applies a REST `Guild` |
+| GUILD_MEMBER_UPDATE stored as a whole member | `apply_member_update(&MemberUpdate) -> Option<Arc<Member>>` merges copy-on-write and stores the update's user |
+| an update for an uncached member or guild created it | partial updates never create entries: members and guilds arrive with GUILD_CREATE, GUILD_MEMBER_ADD, GUILD_MEMBERS_CHUNK, `fetch_members`, or an upsert |
+| `guild()` returned the roles of the last GUILD_CREATE / GUILD_UPDATE | `guild()` / `guilds()` fill `roles` from the role store, so GUILD_ROLE_* events show; a full snapshot (`upsert_guild`, GUILD_CREATE, GUILD_UPDATE `roles`) replaces that guild's roles |
+| `apply_members_chunk` with owned members | `apply_members_chunk(guild_id, &[Arc<Member>], Option<&[Arc<Presence>]>)` |
 | MESSAGE_UPDATE merged into the cached message by checking which keys its raw JSON had | the typed `MessageUpdate` patch, merged copy-on-write by `apply_message_update(&MessageUpdate) -> Option<Arc<Message>>`; the merge covers every message field (`components`, `poll`, `call`, `message_snapshots`, …), `null` clears and `[]` empties; an uncached message stays uncached; `apply_partial_user` patches the cached author field by field |
 | `&Snowflake` keys, string hashing | typed keys by value: members and presences by `(GuildId, UserId)`, messages by `(ChannelId, MessageId)`, roles by `(GuildId, RoleId)` |
 | every READY cleared the whole cache | READY clears only the shard's guilds (`CacheHandle::clear_shard`) |
 
-The `_arc` getters (`message_arc`, `member_arc`, `members_arc`, …) return the shared `Arc` without copying; the plain getters still return owned clones.
+A partial user (a MESSAGE_UPDATE `author`, a PRESENCE_UPDATE `user`) patches the cached user and creates one only when it carries a `username`; a patch to a shared user goes into a new snapshot, so members and messages keep the user they arrived with. See "Shared Entries and Copy-on-Write Updates" in [Cache and Collectors](../api/cache-and-collectors.md).
 
 ## 7. External cache backends
 
@@ -668,7 +710,7 @@ impl CacheBackend for LoggingBackend {
 | `clear_cache(&self)` | `clear_cache(expected_epoch, clear_id) -> CacheClear::{Applied, Rejected}`; new required `clear_shard_cache(expected_epoch, clear_id, shard_id, shard_count)` |
 | `put_member(guild, user, Member)`, `put_message(Message)`, `put_presence(.., Presence)` | `put_*(epoch, .., Arc<T>)`: the event's snapshot, shared; ignore writes older than the store's epoch |
 | `delete_*(&Snowflake, ..)` | `delete_*(epoch, ..)` with typed IDs by value |
-| a partial MESSAGE_UPDATE went to `put_message` as if it were a full message (2.2.0) | merged into your stored copy (`get_message` → merge → `put_message`); skipped when no full copy exists |
+| a partial MESSAGE_UPDATE went to `put_message` as if it were a full message (2.2.0); GUILD_MEMBER_UPDATE likewise to `put_member` | merged into your stored copy (`get_message` → merge → `put_message`, `get_member` → merge → `put_member`); skipped when neither your store nor the in-memory cache holds a full copy |
 | `Arc<dyn CacheBackend>` | `Arc<B>` for a concrete `B: CacheBackend` (see section 8) |
 
 The epoch contract is normative (one epoch per store, atomic compare-delete-increment, idempotent `CacheClearId` retries) and is spelled out under "External Cache Backend" in [Cache and Collectors](../api/cache-and-collectors.md). One client may write to a store at a time; `Context::cache_backend_health()` reports the mirror's state.
@@ -1369,7 +1411,9 @@ These need no code change but can change what your bot observes:
 - **Decoding** is stricter: invalid IDs, missing required discriminants, out-of-range values, and duplicate keys are errors; REST decode errors include the position. `Webhook::kind` reads Discord's `type` key.
 - **Wire values** that were wrong in 2.x are now Discord's: message flags, permission bits 41–52, checkbox `default`, and non-permission bitfields as numbers.
 - **Default `allowed_mentions`** also apply to `edit_webhook_message` and the Components V2 channel helpers.
+- **Cache**: partial updates (MESSAGE_UPDATE, GUILD_MEMBER_UPDATE, GUILD_UPDATE) never create entries, so a member or guild seen only through updates is not cached; cached guild roles follow GUILD_ROLE_* events.
 - **Collectors** never yield an event after their window expired.
+- **New preview fields**: `display_name_styles` (`DisplayNameStyles` with `DisplayNameFont` / `DisplayNameEffect`) on `User` and `Member` follows the unreleased discord-api-docs PR #8178 and may change; its fields are optional, so a changed shape never fails the user or member. Reactions gained `me_burst` and `burst_colors`.
 - **Voice** sends and receives with real Discord voice servers (2.x could not).
 
 ## Checklist
@@ -1380,8 +1424,8 @@ These need no code change but can change what your bot observes:
 - [ ] Replace raw discriminant numbers and the `u8` constant modules with the newtypes and their constants; add `_` arms.
 - [ ] Match on `event.kind()` in `handle_event`; update typed hook signatures (`Arc<Message>`, `Arc<MessageUpdate>`, references); move decode-failure handling to `decode_failed`.
 - [ ] Set `keep_raw_events(true)` if you read `event.raw()` for known events.
-- [ ] Handle MESSAGE_UPDATE as a partial `MessageUpdate`; use `MessageUpdateCollector` for edits.
-- [ ] Pass event `Arc`s to cache upserts; use `apply_message_update` / `apply_guild_create`.
+- [ ] Handle MESSAGE_UPDATE, GUILD_MEMBER_UPDATE, and GUILD_UPDATE as partial `MessageUpdate` / `MemberUpdate` / `GuildUpdate`; use `MessageUpdateCollector` for edits; read presences through `PresenceUpdateEvent::status()` and friends.
+- [ ] Pass event `Arc`s to cache upserts; use `apply_guild_create`, `apply_guild_update`, `apply_member_update`, and `apply_message_update`; don't rely on updates to populate the cache. `member.user` and `message.author` are `Option<Arc<User>>`.
 - [ ] Rewrite external `CacheBackend`s for the epoch contract, `Arc` snapshots, and `clear_shard_cache`; pass `Arc<YourBackend>`.
 - [ ] Replace `Value` bodies with `discordrs::request` types; rename `_typed` / removed REST methods; use `RawRequest` for unwrapped routes.
 - [ ] Switch to `CustomButtonBuilder` / `LinkButtonBuilder` / `PremiumButtonBuilder` and per-kind select builders; give every section an accessory.
