@@ -7,9 +7,9 @@ use super::paths::{
 use super::{json_body, multipart_body, FileAttachment, RestClient, RouteId, NO_BODY};
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, CreateWebhook, GuildId, Message, ModifyWebhook, ModifyWebhookWithToken, Webhook,
-    WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
+    ChannelId, GuildId, Message, Webhook, WebhookExecuteQuery, WebhookId, WebhookMessageQuery,
 };
+use crate::request::{CreateWebhook, ModifyWebhook, ModifyWebhookWithToken};
 use crate::request::{EditWebhookMessage, ExecuteWebhook};
 
 impl RestClient {

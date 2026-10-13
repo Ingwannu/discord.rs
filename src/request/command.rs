@@ -2,7 +2,8 @@
 //!
 //! Creating and overwriting commands takes
 //! [`CommandDefinition`](crate::command::CommandDefinition), which the
-//! command builders produce; this module holds the partial edit.
+//! command builders produce; this module holds the partial edit and
+//! [`EditApplicationCommandPermissions`] (moved from `model` in 5C).
 
 use std::collections::HashMap;
 
@@ -11,8 +12,8 @@ use serde::Serialize;
 use super::fields::request_setters;
 use crate::bitfield::Permissions;
 use crate::model::{
-    ApplicationCommandHandlerType, ApplicationCommandOption, ApplicationIntegrationType,
-    InteractionContextType, NullablePatch, Patch,
+    ApplicationCommandHandlerType, ApplicationCommandOption, ApplicationCommandPermission,
+    ApplicationIntegrationType, InteractionContextType, NullablePatch, Patch,
 };
 
 /// Body of Edit Global / Guild Application Command
@@ -64,5 +65,21 @@ impl EditApplicationCommand {
         patch contexts: Vec<InteractionContextType>;
         patch nsfw: bool;
         patch handler: ApplicationCommandHandlerType;
+    }
+}
+
+/// Request body for editing a guild application command's permissions.
+#[derive(Clone, Debug, Serialize, Default, PartialEq, Eq)]
+pub struct EditApplicationCommandPermissions {
+    /// Permission overwrites to replace on the command.
+    pub permissions: Vec<ApplicationCommandPermission>,
+}
+
+impl EditApplicationCommandPermissions {
+    /// Creates a permission edit body from an iterator of overwrites.
+    pub fn new(permissions: impl IntoIterator<Item = ApplicationCommandPermission>) -> Self {
+        Self {
+            permissions: permissions.into_iter().collect(),
+        }
     }
 }

@@ -2,9 +2,10 @@
 //! voice states.
 
 use crate::error::DiscordError;
-use crate::model::{
-    ChannelId, CreateStageInstance, GuildId, ModifyCurrentUserVoiceState, ModifyStageInstance,
-    ModifyUserVoiceState, SetVoiceChannelStatus, StageInstance, UserId, VoiceRegion, VoiceState,
+use crate::model::{ChannelId, GuildId, StageInstance, UserId, VoiceRegion, VoiceState};
+use crate::request::{
+    CreateStageInstance, ModifyCurrentUserVoiceState, ModifyStageInstance, ModifyUserVoiceState,
+    SetVoiceChannelStatus,
 };
 
 use super::{json_body, RestClient, RouteId, NO_BODY};

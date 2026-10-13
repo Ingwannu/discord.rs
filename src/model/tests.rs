@@ -6,30 +6,33 @@ use serde_json::json;
 use super::{
     AllowedMentions, ApplicationCommand, ApplicationCommandOptionChoice,
     ApplicationEventWebhookStatus, ApplicationInstallParams, ApplicationIntegrationTypeConfig,
-    Attachment, AuthorizingIntegrationOwners, AutocompleteInteraction, BeginGuildPruneRequest,
-    Channel, ChannelType, ChatInputCommandInteraction, CommandInteractionData,
-    CommandInteractionOption, ComponentId, ComponentInteraction, ComponentInteractionData,
-    ComponentType, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateGuildSticker, CreateMessage, CreatePoll, CreateStageInstance,
-    CreateWebhook, DefaultReaction, DiscordModel, Embed, EmbedField, Entitlement, EntitlementType,
-    ForumTag, GatewayBot, GenericId, Guild, GuildId, GuildInstallOwner, GuildScheduledEvent,
-    GuildWidget, Integration, Interaction, InteractionCallbackResponse, InteractionContextData,
-    InteractionResponseType, InteractionType, Invite, InviteTargetUsersJobStatus,
+    Attachment, AuthorizingIntegrationOwners, AutocompleteInteraction, Channel, ChannelType,
+    ChatInputCommandInteraction, CommandInteractionData, CommandInteractionOption, ComponentId,
+    ComponentInteraction, ComponentInteractionData, ComponentType, DefaultReaction, DiscordModel,
+    Embed, EmbedField, Entitlement, EntitlementType, ForumTag, GatewayBot, GenericId, Guild,
+    GuildId, GuildInstallOwner, GuildScheduledEvent, GuildWidget, Integration, Interaction,
+    InteractionContextData, InteractionType, Invite, InviteTargetUsersJobStatus,
     InviteTargetUsersJobStatusType, InviteType, Member, Message, MessageComponent,
-    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction,
-    ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUserVoiceState, ModifyGuild,
-    ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition,
-    ModifyGuildSticker, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OnboardingMode, OverwriteType,
-    PermissionOverwrite, Permissions, PingInteraction, PollAnswer, PollAnswerCount, PollAnswerId,
-    PollAnswerVoters, PollLayoutType, PollMedia, PollResults, Presence, Reaction,
+    MessageContextMenuInteraction, MessageReferenceType, ModalSubmitInteraction, OnboardingMode,
+    OverwriteType, PermissionOverwrite, Permissions, PingInteraction, PollAnswerCount,
+    PollAnswerId, PollAnswerVoters, PollLayoutType, PollResults, Presence, Reaction,
     RecurrenceRuleWeekday, ResolvedData, Role, RoleColors, SeparatorSpacing, SessionStartLimit,
     Sku, SkuAccessType, SkuType, StageInstancePrivacyLevel, StickerFormatType, StickerItem,
     Subscription, SubscriptionStatus, ThreadListResponse, ThreadMember, ThreadMetadata, User,
     UserContextMenuInteraction, UserId, WebhookExecuteQuery, WebhookMessageQuery,
     WelcomeScreenChannel,
 };
+
 use crate::parsers::V2ModalSubmission;
+use crate::request::{
+    BeginGuildPruneRequest, CreateChannelInvite, CreateDmChannel, CreateGuildBan,
+    CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateMessage, CreatePoll,
+    CreateStageInstance, CreateWebhook, ModifyCurrentApplication, ModifyCurrentMember,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildMember, ModifyGuildOnboarding,
+    ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings, ModifyStageInstance, ModifyUserVoiceState, ModifyWebhook,
+    ModifyWebhookWithToken,
+};
 
 #[test]
 fn snowflake_deserializes_from_string_and_number() {
@@ -231,10 +234,7 @@ fn channel_and_create_message_keep_wire_aliases_and_omit_absent_optionals() {
         name: Some("announcements".to_string()),
         ..Channel::fixture()
     };
-    let message = CreateMessage {
-        content: Some("hello".to_string()),
-        ..CreateMessage::default()
-    };
+    let message = CreateMessage::new().content("hello");
 
     let channel_json = serde_json::to_value(&channel).unwrap();
     let message_json = serde_json::to_value(&message).unwrap();
@@ -374,30 +374,18 @@ fn message_poll_decodes_and_create_poll_keeps_wire_shape() {
     assert!(reaction.me_burst);
     assert_eq!(reaction.burst_colors, ["#ff8800", "#0088ff"]);
 
-    let create_message = CreateMessage {
-        allowed_mentions: Some(AllowedMentions {
+    let mut poll = CreatePoll::new("Pick one")
+        .add_answer("A")
+        .duration(24)
+        .allow_multiselect(false);
+    poll.layout_type = Some(PollLayoutType::DEFAULT);
+    let create_message = CreateMessage::new()
+        .allowed_mentions(AllowedMentions {
             users: vec![test_id(42)],
             replied_user: Some(false),
             ..AllowedMentions::default()
-        }),
-        poll: Some(CreatePoll {
-            question: PollMedia {
-                text: Some("Pick one".to_string()),
-                ..PollMedia::default()
-            },
-            answers: vec![PollAnswer {
-                poll_media: PollMedia {
-                    text: Some("A".to_string()),
-                    ..PollMedia::default()
-                },
-                ..PollAnswer::default()
-            }],
-            duration: Some(24),
-            allow_multiselect: Some(false),
-            layout_type: Some(PollLayoutType::DEFAULT),
-        }),
-        ..CreateMessage::default()
-    };
+        })
+        .poll(poll);
 
     assert_eq!(
         serde_json::to_value(&create_message).unwrap(),
@@ -1190,10 +1178,6 @@ fn serde_defaults_fill_missing_fields_for_core_models() {
 
 #[test]
 fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
-    let callback = InteractionCallbackResponse {
-        kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        data: None,
-    };
     let dm_channel = CreateDmChannel {
         recipient_id: test_id(321),
     };
@@ -1236,10 +1220,6 @@ fn simple_payload_models_keep_wire_aliases_and_omit_absent_optionals() {
         },
     };
 
-    assert_eq!(
-        serde_json::to_value(&callback).unwrap(),
-        json!({ "type": 4 })
-    );
     assert_eq!(
         serde_json::to_value(&dm_channel).unwrap(),
         json!({ "recipient_id": "321" })
@@ -1301,10 +1281,19 @@ fn stage_instance_request_bodies_keep_wire_shape() {
 
     let modify = ModifyStageInstance {
         privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
+        ..ModifyStageInstance::default()
     };
     assert_eq!(
         serde_json::to_value(&modify).unwrap(),
         json!({ "privacy_level": 2 })
+    );
+    let topic = ModifyStageInstance {
+        topic: Some("Q&A".to_string()),
+        ..ModifyStageInstance::default()
+    };
+    assert_eq!(
+        serde_json::to_value(&topic).unwrap(),
+        json!({ "topic": "Q&A" })
     );
 }
 
@@ -2095,7 +2084,7 @@ fn guild_widget_member_ids_are_opaque_and_may_be_zero() {
 
 #[test]
 fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
-    use super::{
+    use crate::request::{
         CreateGuild, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
         CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole,
     };
@@ -2144,9 +2133,10 @@ fn create_guild_placeholders_allow_zero_and_serialize_as_integers() {
 
 #[test]
 fn required_id_request_bodies_have_constructors_instead_of_default() {
-    use super::{
-        CreateDmChannel, CreateStageInstance, CreateTestEntitlement, LobbyMember,
-        LobbyMemberUpdate, ModifyGuildChannelPosition, ModifyGuildRolePosition,
+    use super::{LobbyMember, LobbyMemberUpdate};
+    use crate::request::{
+        CreateDmChannel, CreateStageInstance, CreateTestEntitlement, ModifyGuildChannelPosition,
+        ModifyGuildRolePosition,
     };
 
     assert_eq!(

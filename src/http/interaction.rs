@@ -1,12 +1,7 @@
 //! Interaction callback, original response, and follow-up message endpoints.
 
-use std::borrow::Cow;
-
 use crate::error::DiscordError;
-use crate::model::{
-    ApplicationId, InteractionCallbackResponse, InteractionCallbackResult, InteractionId,
-    InteractionResponseType, Message,
-};
+use crate::model::{ApplicationId, InteractionCallbackResult, InteractionId, Message};
 use crate::request::{
     encode_interaction_response, CreateFollowup, EditInteractionResponse, InteractionResponse,
 };
@@ -63,26 +58,6 @@ impl RestClient {
         let body = self.prepare_interaction_callback(response, files)?;
         self.post_interaction_callback(interaction_id, interaction_token, body)
             .await
-    }
-
-    /// The 2.x callback body (`kind` + JSON `data`).
-    ///
-    /// Kept until the phase 5 integration removes the `_typed` names;
-    /// prefer [`Self::create_interaction_response`].
-    pub async fn create_interaction_response_typed(
-        &self,
-        interaction_id: InteractionId,
-        interaction_token: &str,
-        body: &InteractionCallbackResponse,
-    ) -> Result<(), DiscordError> {
-        let path = interaction_callback_path(interaction_id, interaction_token)?;
-        let body = self.interaction_response_with_default_allowed_mentions(body);
-        self.send_unit(
-            RouteId::CreateInteractionResponse,
-            &path,
-            json_body(body.as_ref()),
-        )
-        .await
     }
 
     /// Builds the transport body of a callback: the callback encoded once
@@ -397,35 +372,6 @@ impl RestClient {
         let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
         self.send_unit(RouteId::DeleteFollowupMessage, &path, NO_BODY)
             .await
-    }
-
-    /// Applies the default `allowed_mentions` to message-bearing interaction
-    /// callbacks (`CHANNEL_MESSAGE_WITH_SOURCE`, `UPDATE_MESSAGE`) of the
-    /// 2.x callback body whose data object leaves it unset.
-    fn interaction_response_with_default_allowed_mentions<'a>(
-        &self,
-        body: &'a InteractionCallbackResponse,
-    ) -> Cow<'a, InteractionCallbackResponse> {
-        if self.default_allowed_mentions().is_none()
-            || !matches!(
-                body.kind,
-                InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE
-                    | InteractionResponseType::UPDATE_MESSAGE
-            )
-        {
-            return Cow::Borrowed(body);
-        }
-        let Some(data) = body.data.as_ref() else {
-            return Cow::Borrowed(body);
-        };
-        match self.json_with_default_allowed_mentions(data) {
-            Cow::Borrowed(_) => Cow::Borrowed(body),
-            Cow::Owned(data) => {
-                let mut body = body.clone();
-                body.data = Some(data);
-                Cow::Owned(body)
-            }
-        }
     }
 }
 

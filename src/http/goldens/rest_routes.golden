@@ -172,13 +172,6 @@ content-type: application/json
 body:
 [{"id":"401","application_id":"555","guild_id":"200","permissions":[{"id":"300","type":1,"permission":true}]}]
 
-### CreateInteractionResponse · create_interaction_response_typed
-POST /interactions/778/golden-interaction-token/callback
-authorization: -
-content-type: application/json
-body:
-{"type":4,"data":{"content":"golden"}}
-
 ### CreateInteractionResponse · create_interaction_response_with_files
 POST /interactions/778/golden-interaction-token/callback
 authorization: -
@@ -1682,7 +1675,7 @@ PATCH /stage-instances/400
 authorization: Bot golden-token
 content-type: application/json
 body:
-{"privacy_level":2}
+{"topic":"golden","privacy_level":2}
 
 ### DeleteStageInstance · delete_stage_instance
 DELETE /stage-instances/400

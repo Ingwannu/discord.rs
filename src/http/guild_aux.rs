@@ -3,10 +3,13 @@
 
 use crate::error::DiscordError;
 use crate::model::{
-    BeginGuildPruneRequest, GuildId, GuildOnboarding, GuildPruneCount, GuildPruneResult,
-    GuildTemplate, GuildWidget, GuildWidgetImageStyle, GuildWidgetSettings, Integration,
-    IntegrationId, ModifyGuildOnboarding, ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings,
-    RoleId, VanityUrl, WelcomeScreen,
+    GuildId, GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate, GuildWidget,
+    GuildWidgetImageStyle, GuildWidgetSettings, Integration, IntegrationId, RoleId, VanityUrl,
+    WelcomeScreen,
+};
+use crate::request::{
+    BeginGuildPruneRequest, ModifyGuildOnboarding, ModifyGuildWelcomeScreen,
+    ModifyGuildWidgetSettings,
 };
 
 use crate::request::{CreateGuildTemplate, ModifyGuildTemplate};

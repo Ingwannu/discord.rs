@@ -41,25 +41,6 @@ pub struct Sticker {
     pub sort_value: Option<u64>,
 }
 
-/// Multipart form fields for creating a guild sticker.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct CreateGuildSticker {
-    pub name: String,
-    pub description: String,
-    pub tags: String,
-}
-
-/// JSON request body for modifying a guild sticker.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyGuildSticker {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `StickerPack`.
 pub struct StickerPack {

@@ -1,14 +1,13 @@
-//! Auto moderation request bodies (3.0 phase 5 B).
-//!
-//! Bans keep their 2.x bodies in [`crate::model`] (`CreateGuildBan`,
-//! `BulkGuildBanRequest`) until checkpoint 5C.
+//! Auto moderation request bodies (3.0 phase 5 B) and the 2.x ban bodies
+//! ([`CreateGuildBan`], [`BulkGuildBanRequest`]), which moved here from
+//! `model` in checkpoint 5C.
 
 use serde::Serialize;
 
 use super::fields::request_setters;
 use crate::model::{
     AutoModerationAction, AutoModerationEventType, AutoModerationTriggerMetadata,
-    AutoModerationTriggerType, ChannelId, Patch, RoleId,
+    AutoModerationTriggerType, ChannelId, Patch, RoleId, UserId,
 };
 
 /// Body of Create Auto Moderation Rule
@@ -99,4 +98,23 @@ impl ModifyAutoModerationRule {
         patch exempt_roles: Vec<RoleId>;
         patch exempt_channels: Vec<ChannelId>;
     }
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+/// Typed Discord API object for `BulkGuildBanRequest`.
+pub struct BulkGuildBanRequest {
+    pub user_ids: Vec<UserId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_message_seconds: Option<u64>,
+}
+
+/// Request body for banning a single guild member.
+#[derive(Clone, Debug, Serialize, Default, PartialEq, Eq)]
+pub struct CreateGuildBan {
+    /// Deprecated Discord field for message deletion duration in days.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_message_days: Option<u64>,
+    /// Message deletion duration in seconds, between 0 and 604800.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delete_message_seconds: Option<u64>,
 }

@@ -4,12 +4,12 @@
 use serde::Serialize;
 
 use crate::error::DiscordError;
-use crate::model::{
-    AddGroupDmRecipient, Channel, ChannelId, CreateDmChannel, CreateGroupDmChannel,
-    CreateGuildChannel, EditChannelPermission, FollowedChannel, GuildId,
-    ModifyGuildChannelPosition, OverwriteTarget, UserId,
-};
+use crate::model::{Channel, ChannelId, FollowedChannel, GuildId, OverwriteTarget, UserId};
 use crate::request::ModifyChannel;
+use crate::request::{
+    AddGroupDmRecipient, CreateDmChannel, CreateGroupDmChannel, CreateGuildChannel,
+    EditChannelPermission, ModifyGuildChannelPosition,
+};
 
 use super::{json_body, RestClient, RouteId, NO_BODY};
 

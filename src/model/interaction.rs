@@ -711,20 +711,6 @@ impl Interaction {
     }
 }
 
-/// An interaction callback (`POST /interactions/{id}/{token}/callback`).
-/// No `Default`: `type` is required and has no protocol default.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InteractionCallbackResponse {
-    #[serde(rename = "type")]
-    pub kind: InteractionResponseType,
-    /// The callback data, whose shape depends on `kind` (message, choices,
-    /// or modal). It stays a `Value` until the request models of 3.0 step 5
-    /// replace this outgoing body with a typed response enum; the builders
-    /// that fill it still produce `Value`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
-}
-
 /// Interaction object returned inside an interaction callback result
 /// (`POST /interactions/{id}/{token}/callback?with_response=true`).
 #[derive(Clone, Debug, Serialize, Deserialize)]

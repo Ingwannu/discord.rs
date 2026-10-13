@@ -8,9 +8,9 @@ use url::form_urlencoded;
 
 use crate::error::DiscordError;
 use crate::model::{
-    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId,
-    UpdateApplicationIdentityProfile, UserId,
+    ApplicationIdentities, ApplicationIdentityProfile, ApplicationIdentityProviderId, UserId,
 };
+use crate::request::UpdateApplicationIdentityProfile;
 
 use super::paths::external_path_segment;
 use super::{configured_application_id, json_body, RestClient, RouteId, NO_BODY};

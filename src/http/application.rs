@@ -2,9 +2,8 @@
 //! connection metadata.
 
 use crate::error::DiscordError;
-use crate::model::{
-    ActivityInstance, Application, ApplicationRoleConnectionMetadata, ModifyCurrentApplication,
-};
+use crate::model::{ActivityInstance, Application, ApplicationRoleConnectionMetadata};
+use crate::request::ModifyCurrentApplication;
 
 use super::paths::{configured_application_id, validate_token_path_segment};
 use super::{json_body, RestClient, RouteId, NO_BODY};

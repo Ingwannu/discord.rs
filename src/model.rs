@@ -48,27 +48,26 @@ mod webhook;
 pub use application::{
     ActivityInstance, ActivityLocation, Application, ApplicationInstallParams,
     ApplicationIntegrationTypeConfig, ApplicationRoleConnectionMetadata, AuthorizationInformation,
-    ModifyCurrentApplication, PartialApplication, Team, TeamMember,
+    PartialApplication, Team, TeamMember,
 };
 pub use application_identity::{
     ApplicationIdentities, ApplicationIdentity, ApplicationIdentityProfile,
     ApplicationIdentityProfileData, ApplicationIdentityProviderId, DynamicProfileField,
-    PrimaryProfileData, ProfileMedia, UpdateApplicationIdentityProfile, MAX_PROFILE_DATA_BYTES,
-    MAX_PROFILE_DYNAMIC_FIELDS, MAX_PROFILE_STRING_CHARS, MAX_PROFILE_USERNAME_CHARS,
+    PrimaryProfileData, ProfileMedia, MAX_PROFILE_DATA_BYTES, MAX_PROFILE_DYNAMIC_FIELDS,
+    MAX_PROFILE_STRING_CHARS, MAX_PROFILE_USERNAME_CHARS,
 };
 pub use audit_log::{
     AuditLog, AuditLogChange, AuditLogEntry, AuditLogEntryOptions, AuditLogPartialRole,
     AuditLogQuery,
 };
 pub use channel::{
-    AddGroupDmRecipient, Attachment, Channel, CreateDmChannel, CreateGroupDmChannel,
-    CreateGuildChannel, DefaultReaction, EditChannelPermission, FollowedChannel, ForumTag,
-    ModifyGuildChannelPosition, OverwriteTarget, PermissionOverwrite,
+    Attachment, Channel, DefaultReaction, FollowedChannel, ForumTag, OverwriteTarget,
+    PermissionOverwrite,
 };
 pub use command::{
     ApplicationCommand, ApplicationCommandOption, ApplicationCommandOptionChoice,
     ApplicationCommandPermission, CommandOptionValue, CommandPermissionTarget,
-    CommandPermissionsId, EditApplicationCommandPermissions, GuildApplicationCommandPermissions,
+    CommandPermissionsId, GuildApplicationCommandPermissions,
 };
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use component::MessageSelectDefaultValue;
@@ -88,71 +87,56 @@ pub use gateway_payload::{
     UnavailableGuild,
 };
 pub use guild::{
-    CreateGuild, CreateGuildFromTemplate, CreateGuildPlaceholderChannel, CreateGuildPlaceholderId,
-    CreateGuildPlaceholderOverwrite, CreateGuildPlaceholderRole, CurrentUserGuild,
-    CurrentUserGuildsQuery, GetGuildQuery, Guild, GuildIncidentsData, GuildMfaLevel, GuildPreview,
-    ModifyGuild, ModifyGuildIncidentActions,
+    CurrentUserGuild, CurrentUserGuildsQuery, GetGuildQuery, Guild, GuildIncidentsData,
+    GuildMfaLevel, GuildPreview,
 };
 pub use guild_aux::{
-    BeginGuildPruneRequest, GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate,
-    GuildWidget, GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings,
-    Integration, IntegrationAccount, IntegrationApplication, ModifyGuildOnboarding,
-    ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, OnboardingPrompt, OnboardingPromptOption,
+    GuildOnboarding, GuildPruneCount, GuildPruneResult, GuildTemplate, GuildWidget,
+    GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings, Integration,
+    IntegrationAccount, IntegrationApplication, OnboardingPrompt, OnboardingPromptOption,
     PartialIntegration, VanityUrl, WelcomeScreen, WelcomeScreenChannel,
 };
 pub use interaction::{
     AuthorizingIntegrationOwners, AutocompleteInteraction, ChatInputCommandInteraction,
     CommandInteractionData, CommandInteractionOption, ComponentInteraction,
     ComponentInteractionData, Interaction, InteractionCallbackActivityInstance,
-    InteractionCallbackInteraction, InteractionCallbackResource, InteractionCallbackResponse,
-    InteractionCallbackResult, InteractionContextData, InteractionGuild,
-    MessageContextMenuInteraction, ModalSubmitInteraction, PingInteraction,
-    PrimaryEntryPointInteraction, ResolvedData, UserContextMenuInteraction,
+    InteractionCallbackInteraction, InteractionCallbackResource, InteractionCallbackResult,
+    InteractionContextData, InteractionGuild, MessageContextMenuInteraction,
+    ModalSubmitInteraction, PingInteraction, PrimaryEntryPointInteraction, ResolvedData,
+    UserContextMenuInteraction,
 };
-pub use invite::{CreateChannelInvite, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus};
+pub use invite::{Invite, InviteTargetUserIds, InviteTargetUsersJobStatus};
 pub use lobby::{
-    AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel, Lobby,
-    LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, LobbyMessageMember, ModifyLobby,
+    Lobby, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, LobbyMessageMember,
 };
 pub use media::{
-    CreateGuildSticker, ModifyGuildSticker, SoundboardSound, SoundboardSoundList, Sticker,
-    StickerItem, StickerPack, StickerPackList,
+    SoundboardSound, SoundboardSoundList, Sticker, StickerItem, StickerPack, StickerPackList,
 };
-pub use member::{
-    AddGuildMember, GuildMembersQuery, Member, ModifyCurrentMember, ModifyGuildMember,
-    SearchGuildMembersQuery,
-};
+pub use member::{GuildMembersQuery, Member, SearchGuildMembersQuery};
 pub use message::{
-    AllowedMentions, ChannelMention, ChannelPins, ChannelPinsQuery, CreateMessage,
-    GetReactionsQuery, Message, MessageActivity, MessageCall, MessageInteraction,
-    MessageInteractionMetadata, MessagePin, MessageReference, MessageSnapshot,
-    MessageSnapshotMessage, Reaction, ReactionCountDetails, RoleSubscriptionData,
-    SearchGuildMessagesQuery, SearchGuildMessagesResponse, SharedClientTheme,
+    AllowedMentions, ChannelMention, ChannelPins, ChannelPinsQuery, GetReactionsQuery, Message,
+    MessageActivity, MessageCall, MessageInteraction, MessageInteractionMetadata, MessagePin,
+    MessageReference, MessageSnapshot, MessageSnapshotMessage, Reaction, ReactionCountDetails,
+    RoleSubscriptionData, SearchGuildMessagesQuery, SearchGuildMessagesResponse, SharedClientTheme,
 };
 pub use moderation::{
     AutoModerationAction, AutoModerationActionMetadata, AutoModerationRule,
-    AutoModerationTriggerMetadata, Ban, BulkGuildBanRequest, BulkGuildBanResponse, CreateGuildBan,
-    GuildBansQuery,
+    AutoModerationTriggerMetadata, Ban, BulkGuildBanResponse, GuildBansQuery,
 };
 pub use monetization::{
-    CreateTestEntitlement, Entitlement, EntitlementOwner, EntitlementQuery, Sku, Subscription,
-    SubscriptionQuery,
+    Entitlement, EntitlementOwner, EntitlementQuery, Sku, Subscription, SubscriptionQuery,
 };
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use permissions::PermissionsBitField;
 // The permission set type of every model field. Not re-exported here: its
 // public paths are `discordrs::Permissions` and `bitfield::Permissions`.
 use crate::bitfield::Permissions;
-pub use poll::{
-    CreatePoll, Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia, PollResults,
-};
+pub use poll::{Poll, PollAnswer, PollAnswerCount, PollAnswerVoters, PollMedia, PollResults};
 pub use presence::{
     Activity, ActivityAssets, ActivityButton, ActivityParty, ActivitySecrets, ActivityTimestamps,
     ClientStatus, Presence, PresenceStatus, PresenceUser, UpdatePresence,
 };
-pub use role::{
-    CreateGuildRole, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleColors, RoleTags,
-};
+pub use role::{Role, RoleColors, RoleTags};
 pub use scheduled_event::{
     GuildScheduledEvent, GuildScheduledEventEntityMetadata, GuildScheduledEventRecurrenceRule,
     GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser,
@@ -163,18 +147,11 @@ pub use thread::{
     ThreadMemberQuery, ThreadMetadata,
 };
 pub use user::{
-    AvatarDecorationData, DisplayNameStyles, ModifyCurrentUser,
-    UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection, UserCollectibles,
+    AvatarDecorationData, DisplayNameStyles, User, UserApplicationRoleConnection, UserCollectibles,
     UserConnection, UserNameplate, UserPrimaryGuild,
 };
-pub use voice::{
-    CreateStageInstance, ModifyCurrentUserVoiceState, ModifyStageInstance, ModifyUserVoiceState,
-    SetVoiceChannelStatus, StageInstance, VoiceRegion, VoiceServerUpdate, VoiceState,
-};
-pub use webhook::{
-    CreateWebhook, ModifyWebhook, ModifyWebhookWithToken, Webhook, WebhookExecuteQuery,
-    WebhookMessageQuery,
-};
+pub use voice::{StageInstance, VoiceRegion, VoiceServerUpdate, VoiceState};
+pub use webhook::{Webhook, WebhookExecuteQuery, WebhookMessageQuery};
 
 // Phase 3 primitives. Since series 2 step B every ID field and parameter has
 // its per-resource alias (`GenericId` only where the kind is unknown); since
@@ -239,6 +216,94 @@ pub(crate) use id::SNOWFLAKE_TIMESTAMP_SHIFT;
     note = "Snowflake is now the numeric, Copy GenericId; use the typed ids (GuildId, ChannelId, UserId, ...) or GenericId, built with `\"123\".parse()?` or `GenericId::try_from(123)?`"
 )]
 pub type Snowflake = GenericId;
+
+// Request bodies that lived here in 2.x and moved to `crate::request` in 3.0
+// checkpoint 5C. The aliases are deprecated (removed in 4.0) so old
+// `model::X` paths compile with a note naming the new path instead of
+// failing with "not found"; the types are unchanged except that they no
+// longer implement `Deserialize` (they are only ever sent).
+macro_rules! moved_to_request {
+    ($($name:ident),* $(,)?) => {$(
+        #[doc = concat!(
+            "Moved to [`request::", stringify!($name), "`](crate::request::",
+            stringify!($name), ") in 3.0."
+        )]
+        #[deprecated(
+            since = "3.0.0",
+            note = "request bodies moved to the `discordrs::request` module (same name)"
+        )]
+        pub type $name = crate::request::$name;
+    )*};
+}
+
+moved_to_request!(
+    ModifyCurrentApplication,
+    UpdateApplicationIdentityProfile,
+    CreateGuildChannel,
+    EditChannelPermission,
+    ModifyGuildChannelPosition,
+    CreateDmChannel,
+    CreateGroupDmChannel,
+    AddGroupDmRecipient,
+    EditApplicationCommandPermissions,
+    CreateGuild,
+    CreateGuildPlaceholderId,
+    CreateGuildPlaceholderRole,
+    CreateGuildPlaceholderChannel,
+    CreateGuildPlaceholderOverwrite,
+    CreateGuildFromTemplate,
+    ModifyGuild,
+    ModifyGuildIncidentActions,
+    BeginGuildPruneRequest,
+    ModifyGuildWidgetSettings,
+    ModifyGuildWelcomeScreen,
+    ModifyGuildOnboarding,
+    CreateChannelInvite,
+    CreateLobby,
+    ModifyLobby,
+    AddLobbyMember,
+    GetOrCreateLobby,
+    CreateLobbyMessage,
+    LinkLobbyChannel,
+    CreateGuildSticker,
+    ModifyGuildSticker,
+    AddGuildMember,
+    ModifyGuildMember,
+    ModifyCurrentMember,
+    BulkGuildBanRequest,
+    CreateGuildBan,
+    CreateTestEntitlement,
+    ModifyGuildRolePosition,
+    CreateGuildRole,
+    ModifyGuildRole,
+    ModifyCurrentUser,
+    UpdateUserApplicationRoleConnection,
+    ModifyCurrentUserVoiceState,
+    ModifyUserVoiceState,
+    SetVoiceChannelStatus,
+    CreateStageInstance,
+    ModifyStageInstance,
+    CreateWebhook,
+    ModifyWebhook,
+    ModifyWebhookWithToken,
+);
+
+/// The 2.x create-message body (`components`/`embeds` as JSON) is gone; this
+/// alias names its 3.0 replacement, [`request::CreateMessage`](crate::request::CreateMessage),
+/// which is built with `new()` and setters instead of a struct literal.
+#[deprecated(
+    since = "3.0.0",
+    note = "use discordrs::request::CreateMessage (built with CreateMessage::new() and setters, typed components and embeds)"
+)]
+pub type CreateMessage = crate::request::CreateMessage;
+
+/// The 2.x poll body is gone; this alias names its 3.0 replacement,
+/// [`request::CreatePoll`](crate::request::CreatePoll).
+#[deprecated(
+    since = "3.0.0",
+    note = "use discordrs::request::CreatePoll (CreatePoll::new(question).add_answer(..))"
+)]
+pub type CreatePoll = crate::request::CreatePoll;
 
 // The response state machine lives in `response.rs` next to the methods that
 // drive it; re-exported so `model::InteractionResponseState` keeps working.

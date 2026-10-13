@@ -40,10 +40,12 @@
 use crate::error::DiscordError;
 use crate::http::RestClient;
 use crate::model::{
-    Channel, ChannelId, CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member, Message,
-    MessageReference, MfaLevel, ModifyGuild, ModifyGuildMember, ModifyGuildRole, Role, RoleId,
-    User, UserId,
+    Channel, ChannelId, Guild, GuildId, GuildMfaLevel, Id, IdMarker, Invite, Member, Message,
+    MessageReference, MfaLevel, Role, RoleId, User, UserId,
+};
+use crate::request::{
+    CreateChannelInvite, CreateDmChannel, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
+    ModifyGuild, ModifyGuildMember, ModifyGuildRole,
 };
 use crate::request::{CreateMessage, EditMessage, ModifyChannel, StartThreadFromMessage};
 

@@ -104,13 +104,6 @@ fn metadata() -> HashMap<String, String> {
     HashMap::from([("topic".to_string(), "golden".to_string())])
 }
 
-fn interaction_response() -> m::InteractionCallbackResponse {
-    m::InteractionCallbackResponse {
-        kind: m::InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        data: Some(json!({ "content": "golden" })),
-    }
-}
-
 /// A typed message callback (type 4).
 fn typed_interaction_response() -> r::InteractionResponse {
     r::InteractionResponse::ChannelMessage(r::InteractionMessage::from("golden"))
@@ -124,8 +117,8 @@ fn interaction_edit() -> r::EditInteractionResponse {
     r::EditInteractionResponse::from("golden")
 }
 
-fn permission_edit() -> m::EditApplicationCommandPermissions {
-    m::EditApplicationCommandPermissions::new([m::ApplicationCommandPermission::role(
+fn permission_edit() -> r::EditApplicationCommandPermissions {
+    r::EditApplicationCommandPermissions::new([m::ApplicationCommandPermission::role(
         test_id(300),
         true,
     )])
@@ -138,10 +131,10 @@ fn cases() -> Vec<Case> {
         case!(GetCurrentApplication, get_current_application, |c| c
             .get_current_application()),
         case!(EditCurrentApplication, edit_current_application, |c| c
-            .edit_current_application(&m::ModifyCurrentApplication {
+            .edit_current_application(&r::ModifyCurrentApplication {
                 description: Some("golden".to_string()),
                 role_connections_verification_url: Some(None),
-                ..m::ModifyCurrentApplication::default()
+                ..r::ModifyCurrentApplication::default()
             })),
         case!(
             GetApplicationActivityInstance,
@@ -184,9 +177,9 @@ fn cases() -> Vec<Case> {
             |c| c.update_application_identity_profile(
                 test_id(42),
                 "player-1",
-                &m::UpdateApplicationIdentityProfile {
+                &r::UpdateApplicationIdentityProfile {
                     username: Some("golden".to_string()),
-                    ..m::UpdateApplicationIdentityProfile::default()
+                    ..r::UpdateApplicationIdentityProfile::default()
                 }
             )
         ),
@@ -282,15 +275,6 @@ fn cases() -> Vec<Case> {
             )
         ),
         // --- Interactions (worker C's methods) ------------------------------
-        case!(
-            CreateInteractionResponse,
-            create_interaction_response_typed,
-            |c| c.create_interaction_response_typed(
-                test_id(778),
-                INTERACTION_TOKEN,
-                &interaction_response()
-            )
-        ),
         case!(
             CreateInteractionResponse,
             create_interaction_response_with_files,
@@ -523,7 +507,7 @@ fn cases() -> Vec<Case> {
             .edit_channel_permissions(
                 test_id(100),
                 m::OverwriteTarget::Role(test_id(9)),
-                &m::EditChannelPermission {
+                &r::EditChannelPermission {
                     kind: m::OverwriteType::ROLE,
                     allow: Some(Permissions::from_bits(1024)),
                     deny: None,
@@ -539,10 +523,10 @@ fn cases() -> Vec<Case> {
         case!(CreateChannelInvite, create_channel_invite, |c| c
             .create_channel_invite(
                 test_id(100),
-                &m::CreateChannelInvite {
+                &r::CreateChannelInvite {
                     max_age: Some(3600),
                     unique: Some(true),
-                    ..m::CreateChannelInvite::default()
+                    ..r::CreateChannelInvite::default()
                 }
             )),
         case!(
@@ -550,7 +534,7 @@ fn cases() -> Vec<Case> {
             create_channel_invite_with_target_users_file,
             |c| c.create_channel_invite_with_target_users_file(
                 test_id(100),
-                &m::CreateChannelInvite::default(),
+                &r::CreateChannelInvite::default(),
                 &sample_file("users.csv", "42\n43\n")
             )
         ),
@@ -565,7 +549,7 @@ fn cases() -> Vec<Case> {
             .add_group_dm_recipient(
                 test_id(100),
                 test_id(42),
-                &m::AddGroupDmRecipient {
+                &r::AddGroupDmRecipient {
                     access_token: "oauth".to_string(),
                     nick: "friend".to_string(),
                 }
@@ -577,21 +561,21 @@ fn cases() -> Vec<Case> {
         case!(CreateGuildChannel, create_guild_channel, |c| c
             .create_guild_channel(
                 test_id(200),
-                &m::CreateGuildChannel {
+                &r::CreateGuildChannel {
                     name: "golden".to_string(),
                     kind: Some(m::ChannelType::GUILD_TEXT),
                     parent_id: Some(None),
-                    ..m::CreateGuildChannel::default()
+                    ..r::CreateGuildChannel::default()
                 }
             )),
         case!(CreateGuildChannel, create_guild_channel, |c| c
             .create_guild_channel(
                 test_id(200),
-                &m::CreateGuildChannel {
+                &r::CreateGuildChannel {
                     name: "forum".to_string(),
                     kind: Some(m::ChannelType::GUILD_FORUM),
                     available_tags: Some(Some(vec![r::AvailableForumTag::new("bug")])),
-                    ..m::CreateGuildChannel::default()
+                    ..r::CreateGuildChannel::default()
                 }
             )),
         case!(
@@ -599,7 +583,7 @@ fn cases() -> Vec<Case> {
             modify_guild_channel_positions,
             |c| c.modify_guild_channel_positions(
                 test_id(200),
-                &[m::ModifyGuildChannelPosition {
+                &[r::ModifyGuildChannelPosition {
                     id: test_id(100),
                     position: Some(Some(1)),
                     lock_permissions: None,
@@ -608,19 +592,19 @@ fn cases() -> Vec<Case> {
             )
         ),
         case!(CreateDm, create_dm_channel, |c| c.create_dm_channel(
-            &m::CreateDmChannel {
+            &r::CreateDmChannel {
                 recipient_id: test_id(42),
             }
         )),
         case!(CreateGroupDm, create_group_dm_channel, |c| c
-            .create_group_dm_channel(&m::CreateGroupDmChannel {
+            .create_group_dm_channel(&r::CreateGroupDmChannel {
                 access_tokens: vec!["oauth".to_string()],
                 nicks: HashMap::from([(test_id(42), "friend".to_string())]),
             })),
         case!(SetVoiceChannelStatus, set_voice_channel_status, |c| c
             .set_voice_channel_status(
                 test_id(300),
-                &m::SetVoiceChannelStatus {
+                &r::SetVoiceChannelStatus {
                     status: Some("golden".to_string()),
                 }
             )),
@@ -912,7 +896,7 @@ fn cases() -> Vec<Case> {
         case!(ConsumeEntitlement, consume_entitlement, |c| c
             .consume_entitlement(test_id(901))),
         case!(CreateTestEntitlement, create_test_entitlement, |c| c
-            .create_test_entitlement(&m::CreateTestEntitlement::new(
+            .create_test_entitlement(&r::CreateTestEntitlement::new(
                 test_id(900),
                 m::EntitlementOwner::User(test_id(42))
             ))),
@@ -933,10 +917,10 @@ fn cases() -> Vec<Case> {
             .get_guild_preview(test_id(200))),
         case!(ModifyGuild, modify_guild, |c| c.modify_guild(
             test_id(200),
-            &m::ModifyGuild {
+            &r::ModifyGuild {
                 name: Some("golden".to_string()),
                 afk_channel_id: Some(None),
-                ..m::ModifyGuild::default()
+                ..r::ModifyGuild::default()
             }
         )),
         case!(
@@ -944,22 +928,22 @@ fn cases() -> Vec<Case> {
             modify_guild_incident_actions,
             |c| c.modify_guild_incident_actions(
                 test_id(200),
-                &m::ModifyGuildIncidentActions {
+                &r::ModifyGuildIncidentActions {
                     invites_disabled_until: Some("2026-05-01T12:00:00.000000+00:00".to_string()),
                     dms_disabled_until: None,
                 }
             )
         ),
         case!(CreateGuild, create_guild, |c| c.create_guild(
-            &m::CreateGuild {
+            &r::CreateGuild {
                 name: "golden".to_string(),
-                ..m::CreateGuild::default()
+                ..r::CreateGuild::default()
             }
         )),
         case!(CreateGuildFromTemplate, create_guild_from_template, |c| c
             .create_guild_from_template(
                 "tmpl",
-                &m::CreateGuildFromTemplate {
+                &r::CreateGuildFromTemplate {
                     name: "golden".to_string(),
                     icon: None,
                 }
@@ -979,7 +963,7 @@ fn cases() -> Vec<Case> {
             )),
         case!(BeginGuildPrune, begin_guild_prune, |c| c.begin_guild_prune(
             test_id(200),
-            &m::BeginGuildPruneRequest {
+            &r::BeginGuildPruneRequest {
                 days: Some(7),
                 compute_prune_count: Some(false),
                 include_roles: Some(vec![test_id(9)]),
@@ -997,7 +981,7 @@ fn cases() -> Vec<Case> {
         case!(ModifyGuildWidget, modify_guild_widget_settings, |c| c
             .modify_guild_widget_settings(
                 test_id(200),
-                &m::ModifyGuildWidgetSettings {
+                &r::ModifyGuildWidgetSettings {
                     enabled: Some(true),
                     channel_id: Some(None),
                 }
@@ -1014,10 +998,10 @@ fn cases() -> Vec<Case> {
         case!(ModifyGuildWelcomeScreen, modify_guild_welcome_screen, |c| c
             .modify_guild_welcome_screen(
                 test_id(200),
-                &m::ModifyGuildWelcomeScreen {
+                &r::ModifyGuildWelcomeScreen {
                     enabled: Some(Some(true)),
                     description: Some(None),
-                    ..m::ModifyGuildWelcomeScreen::default()
+                    ..r::ModifyGuildWelcomeScreen::default()
                 }
             )),
         case!(GetGuildOnboarding, get_guild_onboarding, |c| c
@@ -1025,10 +1009,10 @@ fn cases() -> Vec<Case> {
         case!(ModifyGuildOnboarding, modify_guild_onboarding, |c| c
             .modify_guild_onboarding(
                 test_id(200),
-                &m::ModifyGuildOnboarding {
+                &r::ModifyGuildOnboarding {
                     default_channel_ids: Some(vec![test_id(100)]),
                     enabled: Some(true),
-                    ..m::ModifyGuildOnboarding::default()
+                    ..r::ModifyGuildOnboarding::default()
                 }
             )),
         // --- Guild templates ------------------------------------------------
@@ -1077,28 +1061,28 @@ fn cases() -> Vec<Case> {
         case!(AddGuildMember, add_guild_member, |c| c.add_guild_member(
             test_id(200),
             test_id(42),
-            &m::AddGuildMember {
+            &r::AddGuildMember {
                 access_token: "oauth".to_string(),
                 nick: Some("golden".to_string()),
-                ..m::AddGuildMember::default()
+                ..r::AddGuildMember::default()
             }
         )),
         case!(ModifyGuildMember, modify_guild_member, |c| c
             .modify_guild_member(
                 test_id(200),
                 test_id(42),
-                &m::ModifyGuildMember {
+                &r::ModifyGuildMember {
                     nick: Some(None),
                     communication_disabled_until: Some(Some("2026-05-01T00:00:00Z".to_string())),
-                    ..m::ModifyGuildMember::default()
+                    ..r::ModifyGuildMember::default()
                 }
             )),
         case!(ModifyCurrentMember, modify_current_member, |c| c
             .modify_current_member(
                 test_id(200),
-                &m::ModifyCurrentMember {
+                &r::ModifyCurrentMember {
                     nick: Some(Some("bot".to_string())),
-                    ..m::ModifyCurrentMember::default()
+                    ..r::ModifyCurrentMember::default()
                 }
             )),
         case!(ModifyCurrentUserNick, modify_current_member_nick, |c| c
@@ -1132,7 +1116,7 @@ fn cases() -> Vec<Case> {
         case!(CreateGuildBan, create_guild_ban, |c| c.create_guild_ban(
             test_id(200),
             test_id(42),
-            &m::CreateGuildBan {
+            &r::CreateGuildBan {
                 delete_message_days: None,
                 delete_message_seconds: Some(60),
             }
@@ -1141,7 +1125,7 @@ fn cases() -> Vec<Case> {
             .remove_guild_ban(test_id(200), test_id(42))),
         case!(BulkGuildBan, bulk_guild_ban, |c| c.bulk_guild_ban(
             test_id(200),
-            &m::BulkGuildBanRequest {
+            &r::BulkGuildBanRequest {
                 user_ids: vec![test_id(42), test_id(43)],
                 delete_message_seconds: Some(0),
             }
@@ -1156,24 +1140,24 @@ fn cases() -> Vec<Case> {
         ),
         case!(CreateGuildRole, create_guild_role, |c| c.create_guild_role(
             test_id(200),
-            &m::CreateGuildRole {
+            &r::CreateGuildRole {
                 name: Some("golden".to_string()),
                 permissions: Some(Permissions::from_bits(8)),
-                ..m::CreateGuildRole::default()
+                ..r::CreateGuildRole::default()
             }
         )),
         case!(ModifyGuildRolePositions, modify_guild_role_positions, |c| c
             .modify_guild_role_positions(
                 test_id(200),
-                &[m::ModifyGuildRolePosition::new(test_id(9))]
+                &[r::ModifyGuildRolePosition::new(test_id(9))]
             )),
         case!(ModifyGuildRole, modify_guild_role, |c| c.modify_guild_role(
             test_id(200),
             test_id(9),
-            &m::ModifyGuildRole {
+            &r::ModifyGuildRole {
                 name: Some(Some("renamed".to_string())),
                 icon: Some(None),
-                ..m::ModifyGuildRole::default()
+                ..r::ModifyGuildRole::default()
             }
         )),
         case!(DeleteGuildRole, delete_role, |c| c
@@ -1218,33 +1202,33 @@ fn cases() -> Vec<Case> {
         ),
         // --- Lobbies --------------------------------------------------------
         case!(CreateLobby, create_lobby, |c| c.create_lobby(
-            &m::CreateLobby {
+            &r::CreateLobby {
                 metadata: Some(metadata()),
                 idle_timeout_seconds: Some(300),
-                ..m::CreateLobby::default()
+                ..r::CreateLobby::default()
             }
         )),
         case!(CreateOrJoinLobby, get_or_create_lobby, |c| c
             .get_or_create_lobby(
                 BEARER,
-                &m::GetOrCreateLobby {
+                &r::GetOrCreateLobby {
                     secret: "lobby-secret".to_string(),
-                    ..m::GetOrCreateLobby::default()
+                    ..r::GetOrCreateLobby::default()
                 }
             )),
         case!(GetLobby, get_lobby, |c| c.get_lobby(test_id(600))),
         case!(ModifyLobby, modify_lobby, |c| c.modify_lobby(
             test_id(600),
-            &m::ModifyLobby {
+            &r::ModifyLobby {
                 idle_timeout_seconds: Some(60),
-                ..m::ModifyLobby::default()
+                ..r::ModifyLobby::default()
             }
         )),
         case!(DeleteLobby, delete_lobby, |c| c.delete_lobby(test_id(600))),
         case!(AddLobbyMember, add_lobby_member, |c| c.add_lobby_member(
             test_id(600),
             test_id(42),
-            &m::AddLobbyMember {
+            &r::AddLobbyMember {
                 metadata: Some(metadata()),
                 flags: Some(1),
             }
@@ -1267,7 +1251,7 @@ fn cases() -> Vec<Case> {
             .link_lobby_channel(
                 BEARER,
                 test_id(600),
-                &m::LinkLobbyChannel {
+                &r::LinkLobbyChannel {
                     channel_id: Some(test_id(100)),
                 }
             )),
@@ -1285,9 +1269,9 @@ fn cases() -> Vec<Case> {
             .send_lobby_message(
                 BEARER,
                 test_id(600),
-                &m::CreateLobbyMessage {
+                &r::CreateLobbyMessage {
                     content: "hello lobby".to_string(),
-                    ..m::CreateLobbyMessage::default()
+                    ..r::CreateLobbyMessage::default()
                 }
             )),
         case!(GetLobbyMessages, get_lobby_messages, |c| c
@@ -1380,7 +1364,7 @@ fn cases() -> Vec<Case> {
         case!(CreateGuildSticker, create_guild_sticker, |c| c
             .create_guild_sticker(
                 test_id(200),
-                &m::CreateGuildSticker {
+                &r::CreateGuildSticker {
                     name: "golden".to_string(),
                     description: "a sticker".to_string(),
                     tags: "star".to_string(),
@@ -1391,7 +1375,7 @@ fn cases() -> Vec<Case> {
             .modify_guild_sticker(
                 test_id(200),
                 test_id(12),
-                &m::ModifyGuildSticker {
+                &r::ModifyGuildSticker {
                     name: Some("renamed".to_string()),
                     description: Some(None),
                     tags: None,
@@ -1443,7 +1427,7 @@ fn cases() -> Vec<Case> {
         ),
         // --- Stage instances and voice --------------------------------------
         case!(CreateStageInstance, create_stage_instance, |c| c
-            .create_stage_instance(&m::CreateStageInstance::new(
+            .create_stage_instance(&r::CreateStageInstance::new(
                 test_id(400),
                 "town hall"
             ))),
@@ -1452,7 +1436,8 @@ fn cases() -> Vec<Case> {
         case!(ModifyStageInstance, modify_stage_instance, |c| c
             .modify_stage_instance(
                 test_id(400),
-                &m::ModifyStageInstance {
+                &r::ModifyStageInstance {
+                    topic: Some("golden".to_string()),
                     privacy_level: Some(m::StageInstancePrivacyLevel::GUILD_ONLY),
                 }
             )),
@@ -1472,10 +1457,10 @@ fn cases() -> Vec<Case> {
             modify_current_user_voice_state,
             |c| c.modify_current_user_voice_state(
                 test_id(200),
-                &m::ModifyCurrentUserVoiceState {
+                &r::ModifyCurrentUserVoiceState {
                     suppress: Some(false),
                     request_to_speak_timestamp: Some(None),
-                    ..m::ModifyCurrentUserVoiceState::default()
+                    ..r::ModifyCurrentUserVoiceState::default()
                 }
             )
         ),
@@ -1483,7 +1468,7 @@ fn cases() -> Vec<Case> {
             .modify_user_voice_state(
                 test_id(200),
                 test_id(42),
-                &m::ModifyUserVoiceState {
+                &r::ModifyUserVoiceState {
                     channel_id: Some(test_id(400)),
                     suppress: Some(true),
                 }
@@ -1492,9 +1477,9 @@ fn cases() -> Vec<Case> {
         case!(GetCurrentUser, get_current_user, |c| c.get_current_user()),
         case!(GetUser, get_user, |c| c.get_user(test_id(42))),
         case!(ModifyCurrentUser, modify_current_user, |c| c
-            .modify_current_user(&m::ModifyCurrentUser {
+            .modify_current_user(&r::ModifyCurrentUser {
                 username: Some("golden".to_string()),
-                ..m::ModifyCurrentUser::default()
+                ..r::ModifyCurrentUser::default()
             })),
         case!(GetCurrentUserGuilds, get_current_user_guilds, |c| c
             .get_current_user_guilds()),
@@ -1530,9 +1515,9 @@ fn cases() -> Vec<Case> {
             update_current_user_application_role_connection,
             |c| c.update_current_user_application_role_connection(
                 BEARER,
-                &m::UpdateUserApplicationRoleConnection {
+                &r::UpdateUserApplicationRoleConnection {
                     platform_name: Some("Golden".to_string()),
-                    ..m::UpdateUserApplicationRoleConnection::default()
+                    ..r::UpdateUserApplicationRoleConnection::default()
                 }
             )
         ),
@@ -1549,7 +1534,7 @@ fn cases() -> Vec<Case> {
         // --- Webhooks -------------------------------------------------------
         case!(CreateWebhook, create_webhook, |c| c.create_webhook(
             test_id(100),
-            &m::CreateWebhook {
+            &r::CreateWebhook {
                 name: "golden".to_string(),
                 avatar: Some(None),
             }
@@ -1563,17 +1548,17 @@ fn cases() -> Vec<Case> {
             .get_webhook_with_token(test_id(700), WEBHOOK_TOKEN)),
         case!(ModifyWebhook, modify_webhook, |c| c.modify_webhook(
             test_id(700),
-            &m::ModifyWebhook {
+            &r::ModifyWebhook {
                 name: Some("renamed".to_string()),
                 channel_id: Some(test_id(101)),
-                ..m::ModifyWebhook::default()
+                ..r::ModifyWebhook::default()
             }
         )),
         case!(ModifyWebhookWithToken, modify_webhook_with_token, |c| c
             .modify_webhook_with_token(
                 test_id(700),
                 WEBHOOK_TOKEN,
-                &m::ModifyWebhookWithToken {
+                &r::ModifyWebhookWithToken {
                     name: Some("public".to_string()),
                     avatar: Some(None),
                 }
@@ -1727,16 +1712,16 @@ fn forwards() -> Vec<(Case, Case)> {
     vec![
         forward!(CreateGuildChannel, create_guild_channel_from_request => create_guild_channel(
             test_id(200),
-            &m::CreateGuildChannel {
+            &r::CreateGuildChannel {
                 name: "golden".to_string(),
-                ..m::CreateGuildChannel::default()
+                ..r::CreateGuildChannel::default()
             }
         )),
-        forward!(CreateDm, create_dm_channel_typed => create_dm_channel(&m::CreateDmChannel {
+        forward!(CreateDm, create_dm_channel_typed => create_dm_channel(&r::CreateDmChannel {
             recipient_id: test_id(42),
         })),
         forward!(CreateGroupDm, create_group_dm_channel_typed => create_group_dm_channel(
-            &m::CreateGroupDmChannel {
+            &r::CreateGroupDmChannel {
                 access_tokens: vec!["oauth".to_string()],
                 nicks: HashMap::new(),
             }
@@ -1744,11 +1729,11 @@ fn forwards() -> Vec<(Case, Case)> {
         forward!(EditChannelPermissions, edit_channel_permissions_typed => edit_channel_permissions(
             test_id(100),
             m::OverwriteTarget::Member(test_id(42)),
-            &m::EditChannelPermission::for_target(m::OverwriteTarget::Member(test_id(42)))
+            &r::EditChannelPermission::for_target(m::OverwriteTarget::Member(test_id(42)))
         )),
         forward!(CreateChannelInvite, create_channel_invite_typed => create_channel_invite(
             test_id(100),
-            &m::CreateChannelInvite::default()
+            &r::CreateChannelInvite::default()
         )),
         forward!(GetGuildPreview, get_guild_preview_typed => get_guild_preview(test_id(200))),
         forward!(GetGuildPruneCount, get_guild_prune_count_typed => get_guild_prune_count(
@@ -1758,24 +1743,24 @@ fn forwards() -> Vec<(Case, Case)> {
         )),
         forward!(BeginGuildPrune, begin_guild_prune_with_request => begin_guild_prune(
             test_id(200),
-            &m::BeginGuildPruneRequest::default()
+            &r::BeginGuildPruneRequest::default()
         )),
         forward!(ModifyGuildWidget, modify_guild_widget => modify_guild_widget_settings(
             test_id(200),
-            &m::ModifyGuildWidgetSettings::default()
+            &r::ModifyGuildWidgetSettings::default()
         )),
         forward!(GetGuildWidget, get_guild_widget_typed => get_guild_widget(test_id(200))),
         forward!(ModifyGuildWelcomeScreen, modify_guild_welcome_screen_config => modify_guild_welcome_screen(
             test_id(200),
-            &m::ModifyGuildWelcomeScreen::default()
+            &r::ModifyGuildWelcomeScreen::default()
         )),
         forward!(ModifyGuildOnboarding, modify_guild_onboarding_config => modify_guild_onboarding(
             test_id(200),
-            &m::ModifyGuildOnboarding::default()
+            &r::ModifyGuildOnboarding::default()
         )),
         forward!(ModifyGuildRolePositions, modify_guild_role_positions_typed => modify_guild_role_positions(
             test_id(200),
-            &[m::ModifyGuildRolePosition::new(test_id(9))]
+            &[r::ModifyGuildRolePosition::new(test_id(9))]
         )),
         forward!(ListAutoModerationRulesForGuild, get_auto_moderation_rules_typed => get_auto_moderation_rules(
             test_id(200)
@@ -1790,7 +1775,7 @@ fn forwards() -> Vec<(Case, Case)> {
         forward!(GetApplicationEmoji, get_application_emoji_typed => get_application_emoji(test_id(4))),
         forward!(CreateGuildSticker, create_guild_sticker_from_request => create_guild_sticker(
             test_id(200),
-            &m::CreateGuildSticker {
+            &r::CreateGuildSticker {
                 name: "golden".to_string(),
                 description: String::new(),
                 tags: "star".to_string(),
@@ -1800,27 +1785,27 @@ fn forwards() -> Vec<(Case, Case)> {
         forward!(ModifyGuildSticker, modify_guild_sticker_from_request => modify_guild_sticker(
             test_id(200),
             test_id(12),
-            &m::ModifyGuildSticker::default()
+            &r::ModifyGuildSticker::default()
         )),
         forward!(CreateStageInstance, create_stage_instance_from_request => create_stage_instance(
-            &m::CreateStageInstance::new(test_id(400), "town hall")
+            &r::CreateStageInstance::new(test_id(400), "town hall")
         )),
         forward!(ModifyStageInstance, modify_stage_instance_from_request => modify_stage_instance(
             test_id(400),
-            &m::ModifyStageInstance::default()
+            &r::ModifyStageInstance::default()
         )),
         forward!(ListVoiceRegions, get_voice_regions_typed => get_voice_regions()),
         forward!(ModifyCurrentUserVoiceState, modify_current_user_voice_state_from_request => modify_current_user_voice_state(
             test_id(200),
-            &m::ModifyCurrentUserVoiceState::default()
+            &r::ModifyCurrentUserVoiceState::default()
         )),
         forward!(ModifyUserVoiceState, modify_user_voice_state_from_request => modify_user_voice_state(
             test_id(200),
             test_id(42),
-            &m::ModifyUserVoiceState::default()
+            &r::ModifyUserVoiceState::default()
         )),
         forward!(EditCurrentApplication, edit_current_application_from_request => edit_current_application(
-            &m::ModifyCurrentApplication::default()
+            &r::ModifyCurrentApplication::default()
         )),
         forward!(BulkOverwriteGlobalApplicationCommands, bulk_overwrite_global_commands_typed => bulk_overwrite_global_commands(
             &[sample_command()]
@@ -1835,7 +1820,7 @@ fn forwards() -> Vec<(Case, Case)> {
         )),
         forward!(CreateWebhook, create_webhook_from_request => create_webhook(
             test_id(100),
-            &m::CreateWebhook {
+            &r::CreateWebhook {
                 name: "golden".to_string(),
                 avatar: None,
             }
@@ -1843,12 +1828,12 @@ fn forwards() -> Vec<(Case, Case)> {
         forward!(GetChannelWebhooks, get_channel_webhooks_typed => get_channel_webhooks(test_id(100))),
         forward!(ModifyWebhook, modify_webhook_from_request => modify_webhook(
             test_id(700),
-            &m::ModifyWebhook::default()
+            &r::ModifyWebhook::default()
         )),
         forward!(ModifyWebhookWithToken, modify_webhook_with_token_from_request => modify_webhook_with_token(
             test_id(700),
             WEBHOOK_TOKEN,
-            &m::ModifyWebhookWithToken::default()
+            &r::ModifyWebhookWithToken::default()
         )),
     ]
 }

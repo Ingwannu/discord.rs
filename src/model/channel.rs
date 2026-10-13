@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -7,7 +5,6 @@ use super::{
     ForumTagId, GenericId, GuildId, MessageId, OverwriteType, Permissions, RoleId, ThreadMetadata,
     UserId, VideoQualityMode, WebhookId,
 };
-use crate::request::AvailableForumTag;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Attachment`.
@@ -200,78 +197,6 @@ impl From<PermissionOverwrite> for PermissionOverwriteWire {
     }
 }
 
-/// Request body for creating a guild channel.
-///
-/// The outer `Option` controls omission. Use `Some(None)` to send JSON `null`
-/// for nullable Discord fields such as `parent_id`, `rtc_region`, or
-/// `default_reaction_emoji`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub struct CreateGuildChannel {
-    pub name: String,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub kind: Option<ChannelType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub topic: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bitrate: Option<Option<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_limit: Option<Option<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rate_limit_per_user: Option<Option<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Option<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub permission_overwrites: Option<Option<Vec<PermissionOverwrite>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<ChannelId>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nsfw: Option<Option<bool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rtc_region: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub video_quality_mode: Option<Option<VideoQualityMode>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_auto_archive_duration: Option<Option<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_reaction_emoji: Option<Option<DefaultReaction>>,
-    /// New tags need only a name; see [`AvailableForumTag`].
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub available_tags: Option<Option<Vec<AvailableForumTag>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_sort_order: Option<Option<ForumSortOrder>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_forum_layout: Option<Option<ForumLayout>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_thread_rate_limit_per_user: Option<Option<u64>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-/// Typed Discord API object for `EditChannelPermission`.
-///
-/// `kind` must match the [`OverwriteTarget`] passed to
-/// [`RestClient::edit_channel_permissions_typed`](crate::http::RestClient::edit_channel_permissions_typed);
-/// [`EditChannelPermission::for_target`] fills it in. No `Default`: `type`
-/// is required and 2.x's default (`0`, a role overwrite) was a guess.
-pub struct EditChannelPermission {
-    #[serde(rename = "type")]
-    pub kind: OverwriteType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow: Option<Permissions>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deny: Option<Permissions>,
-}
-
-impl EditChannelPermission {
-    /// A body whose `type` matches `target`, allowing and denying nothing yet.
-    pub const fn for_target(target: OverwriteTarget) -> Self {
-        Self {
-            kind: target.kind(),
-            allow: None,
-            deny: None,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `Channel`.
 pub struct Channel {
@@ -417,64 +342,6 @@ pub struct ForumTag {
     pub emoji_id: Option<EmojiId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub emoji_name: Option<String>,
-}
-
-/// Request entry for moving or reparenting a guild channel.
-///
-/// The outer `Option` controls whether a field is omitted. Use `Some(None)` to
-/// send JSON `null` for nullable Discord fields such as `parent_id`.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModifyGuildChannelPosition {
-    /// Channel to modify.
-    pub id: ChannelId,
-    /// New sorting position, or `Some(None)` to send `null`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Option<i64>>,
-    /// Whether to sync permission overwrites with the new parent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lock_permissions: Option<Option<bool>>,
-    /// New parent category ID, or `Some(None)` to remove the parent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<Option<ChannelId>>,
-}
-
-impl ModifyGuildChannelPosition {
-    /// Entry for channel `id` that changes nothing until a field is set.
-    pub fn new(id: ChannelId) -> Self {
-        Self {
-            id,
-            position: None,
-            lock_permissions: None,
-            parent_id: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-/// Typed Discord API object for `CreateDmChannel`.
-pub struct CreateDmChannel {
-    pub recipient_id: UserId,
-}
-
-impl CreateDmChannel {
-    /// Opens (or returns) the DM channel with `recipient_id`.
-    pub fn new(recipient_id: UserId) -> Self {
-        Self { recipient_id }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-/// Typed Discord API object for `CreateGroupDmChannel`.
-pub struct CreateGroupDmChannel {
-    pub access_tokens: Vec<String>,
-    pub nicks: HashMap<UserId, String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-/// Typed Discord API object for `AddGroupDmRecipient`.
-pub struct AddGroupDmRecipient {
-    pub access_token: String,
-    pub nick: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

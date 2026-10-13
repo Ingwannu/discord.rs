@@ -2,16 +2,16 @@
 //!
 //! Discord's Poll Create Request Object, shaped so that what it cannot hold
 //! is not representable: the question is text only ("Only `text` is
-//! supported"), and answers have no `answer_id` (Discord assigns those). The
-//! 2.x [`crate::model::CreatePoll`] converts with `TryFrom`, which fails
-//! instead of dropping a question emoji or an answer id.
+//! supported"), and answers have no `answer_id` (Discord assigns those). It
+//! replaces the 2.x `model::CreatePoll` (removed in checkpoint 5C; that
+//! path is now a deprecated alias of this type).
 
 use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::Serialize;
 
 use crate::builders::limits;
 use crate::error::DiscordError;
-use crate::model::{PollAnswer, PollLayoutType, PollMedia};
+use crate::model::PollLayoutType;
 use crate::types::Emoji;
 
 use super::component::{at, check_count, check_len, check_max_len, child_path, entry_some};
@@ -194,95 +194,9 @@ impl Serialize for CreatePollAnswer {
     }
 }
 
-/// Converts the 2.x request type. Fails when the question has an emoji or
-/// no text (the question is text only), when an answer carries an
-/// `answer_id` (assigned by Discord, never sent), or when `duration` does
-/// not fit `u32`.
-impl TryFrom<crate::model::CreatePoll> for CreatePoll {
-    type Error = DiscordError;
-
-    fn try_from(poll: crate::model::CreatePoll) -> Result<Self, Self::Error> {
-        let crate::model::CreatePoll {
-            question,
-            answers,
-            duration,
-            allow_multiselect,
-            layout_type,
-        } = poll;
-        let PollMedia {
-            text: question,
-            emoji: question_emoji,
-        } = question;
-        if question_emoji.is_some() {
-            return Err(DiscordError::model(
-                "poll question cannot have an emoji (only text is supported)",
-            ));
-        }
-        let question =
-            question.ok_or_else(|| DiscordError::model("poll question must have text"))?;
-        let answers = answers
-            .into_iter()
-            .enumerate()
-            .map(|(index, answer)| {
-                let PollAnswer {
-                    answer_id,
-                    poll_media,
-                } = answer;
-                if answer_id.is_some() {
-                    return Err(DiscordError::model(format!(
-                        "answers[{index}]: answer_id is assigned by Discord and cannot be sent"
-                    )));
-                }
-                Ok(CreatePollAnswer {
-                    text: poll_media.text,
-                    emoji: poll_media.emoji,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let duration = duration
-            .map(u32::try_from)
-            .transpose()
-            .map_err(|_| DiscordError::model("poll duration does not fit in u32 hours"))?;
-        Ok(Self {
-            question,
-            answers,
-            duration,
-            allow_multiselect,
-            layout_type,
-        })
-    }
-}
-
-/// Lossless: every field has a place in the 2.x type.
-impl From<CreatePoll> for crate::model::CreatePoll {
-    fn from(poll: CreatePoll) -> Self {
-        Self {
-            question: PollMedia {
-                text: Some(poll.question),
-                emoji: None,
-            },
-            answers: poll
-                .answers
-                .into_iter()
-                .map(|answer| PollAnswer {
-                    answer_id: None,
-                    poll_media: PollMedia {
-                        text: answer.text,
-                        emoji: answer.emoji,
-                    },
-                })
-                .collect(),
-            duration: poll.duration.map(u64::from),
-            allow_multiselect: poll.allow_multiselect,
-            layout_type: poll.layout_type,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{CreatePoll, CreatePollAnswer};
-    use crate::model::{PollAnswer, PollAnswerId, PollMedia};
     use crate::types::Emoji;
 
     fn message(poll: &CreatePoll) -> String {
@@ -348,58 +262,5 @@ mod tests {
             message(&valid().duration(769)),
             "poll duration must be 1-768 hours, got 769"
         );
-    }
-
-    #[test]
-    fn converts_from_and_to_the_2x_type() {
-        let poll = valid().duration(24);
-        let legacy = crate::model::CreatePoll::from(poll.clone());
-        assert_eq!(legacy.question.text.as_deref(), Some("Q?"));
-        assert_eq!(legacy.duration, Some(24));
-        let back = CreatePoll::try_from(legacy).expect("round trip");
-        assert_eq!(back, poll);
-
-        let with_emoji = crate::model::CreatePoll {
-            question: PollMedia {
-                text: Some("Q".to_owned()),
-                emoji: Some(Emoji::unicode("❓")),
-            },
-            ..crate::model::CreatePoll::default()
-        };
-        assert!(CreatePoll::try_from(with_emoji)
-            .unwrap_err()
-            .to_string()
-            .contains("cannot have an emoji"));
-        assert!(CreatePoll::try_from(crate::model::CreatePoll::default())
-            .unwrap_err()
-            .to_string()
-            .contains("poll question must have text"));
-        let with_id = crate::model::CreatePoll {
-            question: PollMedia {
-                text: Some("Q".to_owned()),
-                emoji: None,
-            },
-            answers: vec![PollAnswer {
-                answer_id: Some(PollAnswerId::new(1)),
-                poll_media: PollMedia::default(),
-            }],
-            ..crate::model::CreatePoll::default()
-        };
-        assert!(CreatePoll::try_from(with_id)
-            .unwrap_err()
-            .to_string()
-            .contains("answers[0]: answer_id is assigned by Discord"));
-        let huge = crate::model::CreatePoll {
-            question: PollMedia {
-                text: Some("Q".to_owned()),
-                emoji: None,
-            },
-            duration: Some(u64::MAX),
-            ..crate::model::CreatePoll::default()
-        };
-        assert!(CreatePoll::try_from(huge)
-            .unwrap_err()
-            .to_string()
-            .contains("does not fit"));
     }
 }

@@ -1,9 +1,8 @@
 //! Guild ban endpoints. Auto-moderation rules live in `auto_moderation.rs`.
 
 use crate::error::DiscordError;
-use crate::model::{
-    Ban, BulkGuildBanRequest, BulkGuildBanResponse, CreateGuildBan, GuildBansQuery, GuildId, UserId,
-};
+use crate::model::{Ban, BulkGuildBanResponse, GuildBansQuery, GuildId, UserId};
+use crate::request::{BulkGuildBanRequest, CreateGuildBan};
 
 use super::paths::guild_bans_query;
 use super::{json_body, RestClient, RouteId, NO_BODY};

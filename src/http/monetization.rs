@@ -1,8 +1,9 @@
 use crate::error::DiscordError;
 use crate::model::{
-    CreateTestEntitlement, Entitlement, EntitlementId, EntitlementQuery, Sku, SkuId, Subscription,
-    SubscriptionId, SubscriptionQuery,
+    Entitlement, EntitlementId, EntitlementQuery, Sku, SkuId, Subscription, SubscriptionId,
+    SubscriptionQuery,
 };
+use crate::request::CreateTestEntitlement;
 
 use super::{
     configured_application_id, entitlement_query, json_body, subscription_query, RestClient,

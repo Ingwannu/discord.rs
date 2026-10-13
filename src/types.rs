@@ -3,10 +3,6 @@ use serde::{Deserialize, Serialize};
 use crate::error::DiscordError;
 use crate::model::{ButtonStyle, EmojiId};
 
-/// Backward-compatible error type alias. Prefer `DiscordError` directly.
-#[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
-pub type Error = DiscordError;
-
 pub(crate) fn invalid_data_error(message: impl Into<String>) -> DiscordError {
     DiscordError::model(message)
 }

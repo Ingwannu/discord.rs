@@ -3,9 +3,8 @@
 use std::collections::HashMap;
 
 use crate::error::DiscordError;
-use crate::model::{
-    CreateGuildRole, GuildId, ModifyGuildRole, ModifyGuildRolePosition, Role, RoleId,
-};
+use crate::model::{GuildId, Role, RoleId};
+use crate::request::{CreateGuildRole, ModifyGuildRole, ModifyGuildRolePosition};
 
 use super::{json_body, RestClient, RouteId, NO_BODY};
 

@@ -64,17 +64,3 @@ pub struct PollAnswerVoters {
     #[serde(default)]
     pub users: Vec<User>,
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `CreatePoll`.
-pub struct CreatePoll {
-    pub question: PollMedia,
-    #[serde(default)]
-    pub answers: Vec<PollAnswer>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allow_multiselect: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub layout_type: Option<PollLayoutType>,
-}

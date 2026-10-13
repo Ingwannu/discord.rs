@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::error::DiscordError;
 use crate::http::FileAttachment;
-use crate::model::CreateGuildSticker;
+use crate::request::CreateGuildSticker;
 use crate::types::invalid_data_error;
 
 // [Decision Log] Encoded request bodies

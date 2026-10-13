@@ -1,10 +1,8 @@
 //! Guild member endpoints: list, search, add, modify, remove, and member roles.
 
 use crate::error::DiscordError;
-use crate::model::{
-    AddGuildMember, GuildId, GuildMembersQuery, Member, ModifyCurrentMember, ModifyGuildMember,
-    RoleId, SearchGuildMembersQuery, UserId,
-};
+use crate::model::{GuildId, GuildMembersQuery, Member, RoleId, SearchGuildMembersQuery, UserId};
+use crate::request::{AddGuildMember, ModifyCurrentMember, ModifyGuildMember};
 
 use super::paths::{guild_members_query, search_guild_members_query};
 use super::{json_body, RestClient, RouteId, NO_BODY};

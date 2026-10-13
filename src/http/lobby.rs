@@ -2,9 +2,11 @@ use std::collections::HashMap;
 
 use crate::error::DiscordError;
 use crate::model::{
-    AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel, Lobby,
-    LobbyId, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, MessageId, ModifyLobby,
-    UserId,
+    Lobby, LobbyId, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage, MessageId, UserId,
+};
+use crate::request::{
+    AddLobbyMember, CreateLobby, CreateLobbyMessage, GetOrCreateLobby, LinkLobbyChannel,
+    ModifyLobby,
 };
 use crate::types::invalid_data_error;
 

@@ -29,34 +29,6 @@ pub struct Webhook {
     pub url: Option<String>,
 }
 
-/// Request body for creating an incoming channel webhook.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CreateWebhook {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<Option<String>>,
-}
-
-/// Request body for modifying a bot-authenticated webhook.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyWebhook {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<ChannelId>,
-}
-
-/// Request body for modifying a token-authenticated webhook.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyWebhookWithToken {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub avatar: Option<Option<String>>,
-}
-
 /// Query options for executing a webhook.
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct WebhookExecuteQuery {

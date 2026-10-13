@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -650,28 +649,6 @@ impl RestClient {
             headers,
             body,
         })
-    }
-}
-
-impl RestClient {
-    /// Inserts the configured default `allowed_mentions` into a raw JSON
-    /// object payload that does not already contain the key.
-    pub(super) fn json_with_default_allowed_mentions<'a>(&self, body: &'a Value) -> Cow<'a, Value> {
-        let Some(default) = &self.default_allowed_mentions else {
-            return Cow::Borrowed(body);
-        };
-        let Some(object) = body.as_object() else {
-            return Cow::Borrowed(body);
-        };
-        if object.contains_key("allowed_mentions") {
-            return Cow::Borrowed(body);
-        }
-        let Ok(default_value) = serde_json::to_value(default) else {
-            return Cow::Borrowed(body);
-        };
-        let mut object = object.clone();
-        object.insert("allowed_mentions".to_string(), default_value);
-        Cow::Owned(Value::Object(object))
     }
 }
 

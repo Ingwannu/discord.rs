@@ -2,10 +2,8 @@
 //! the deprecated guild-creation/ownership routes.
 
 use crate::error::DiscordError;
-use crate::model::{
-    GetGuildQuery, Guild, GuildId, GuildIncidentsData, GuildPreview, ModifyGuild,
-    ModifyGuildIncidentActions,
-};
+use crate::model::{GetGuildQuery, Guild, GuildId, GuildIncidentsData, GuildPreview};
+use crate::request::{ModifyGuild, ModifyGuildIncidentActions};
 
 use super::paths::{self, get_guild_query};
 use super::{json_body, RestClient, RouteId, NO_BODY};
@@ -84,7 +82,7 @@ impl RestClient {
     )]
     pub async fn create_guild(
         &self,
-        body: &crate::model::CreateGuild,
+        body: &crate::request::CreateGuild,
     ) -> Result<Guild, DiscordError> {
         self.send(RouteId::CreateGuild, "/guilds", json_body(body))
             .await
@@ -116,7 +114,7 @@ impl RestClient {
     pub async fn create_guild_from_template(
         &self,
         template_code: &str,
-        body: &crate::model::CreateGuildFromTemplate,
+        body: &crate::request::CreateGuildFromTemplate,
     ) -> Result<Guild, DiscordError> {
         let template_code = template_code.trim();
         paths::validate_template_code(template_code)?;

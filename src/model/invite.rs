@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ApplicationId, Channel, Guild, GuildScheduledEvent, InviteTargetType,
-    InviteTargetUsersJobStatusType, InviteType, PartialApplication, Role, RoleId, User, UserId,
+    Channel, Guild, GuildScheduledEvent, InviteTargetType, InviteTargetUsersJobStatusType,
+    InviteType, PartialApplication, Role, User, UserId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -61,31 +61,6 @@ pub struct Invite {
     pub temporary: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-/// Typed Discord API object for `CreateChannelInvite`.
-pub struct CreateChannelInvite {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_age: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_uses: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temporary: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unique: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_type: Option<InviteTargetType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_user_id: Option<UserId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_application_id: Option<ApplicationId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_ids: Option<Vec<RoleId>>,
-    /// Users allowed to see and accept the invite (max 1000). Mutually
-    /// exclusive with a `target_users_file` CSV upload.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_user_ids: Option<Vec<UserId>>,
 }
 
 /// JSON body for the invite target-user bulk-add and bulk-delete routes.

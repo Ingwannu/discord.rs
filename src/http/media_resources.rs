@@ -1,8 +1,9 @@
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, CreateGuildSticker, GuildId, ModifyGuildSticker, SoundboardSound, SoundboardSoundId,
-    SoundboardSoundList, Sticker, StickerId, StickerPack, StickerPackId, StickerPackList,
+    ChannelId, GuildId, SoundboardSound, SoundboardSoundId, SoundboardSoundList, Sticker,
+    StickerId, StickerPack, StickerPackId, StickerPackList,
 };
+use crate::request::{CreateGuildSticker, ModifyGuildSticker};
 
 use crate::request::{CreateGuildSoundboardSound, ModifyGuildSoundboardSound, SendSoundboardSound};
 

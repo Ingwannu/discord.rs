@@ -31,23 +31,6 @@ pub struct GuildPruneCount {
 /// Type alias for `GuildPruneResult`.
 pub type GuildPruneResult = GuildPruneCount;
 
-/// Request body for beginning a guild prune.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct BeginGuildPruneRequest {
-    /// Number of inactive days to prune, between 1 and 30.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub days: Option<u64>,
-    /// Whether Discord should compute and return the prune count.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compute_prune_count: Option<bool>,
-    /// Role IDs to include in the prune.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub include_roles: Option<Vec<RoleId>>,
-    /// Deprecated Discord field for audit-log prune reason.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 /// Typed Discord API object for `IntegrationAccount`.
 pub struct IntegrationAccount {
@@ -142,15 +125,6 @@ pub struct GuildWidgetSettings {
     pub channel_id: Option<ChannelId>,
 }
 
-/// Request body for modifying guild widget settings.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyGuildWidgetSettings {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub channel_id: Option<Option<ChannelId>>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `GuildWidgetChannel`.
 pub struct GuildWidgetChannel {
@@ -237,17 +211,6 @@ pub struct WelcomeScreen {
     pub description: Option<String>,
     #[serde(default)]
     pub welcome_channels: Vec<WelcomeScreenChannel>,
-}
-
-/// Request body for modifying a guild welcome screen.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyGuildWelcomeScreen {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<Option<bool>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub welcome_channels: Option<Option<Vec<WelcomeScreenChannel>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -354,20 +317,6 @@ pub struct OnboardingPromptOption {
     pub title: String,
     /// Description of the option; nullable, so `None` is written as `null`.
     pub description: Option<String>,
-}
-
-/// Request body for modifying guild onboarding.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
-pub struct ModifyGuildOnboarding {
-    /// Prompts shown during onboarding and in Customize Community.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompts: Option<Vec<OnboardingPrompt>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_channel_ids: Option<Vec<ChannelId>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode: Option<OnboardingMode>,
 }
 
 #[cfg(test)]

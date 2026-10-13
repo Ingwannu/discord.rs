@@ -302,10 +302,6 @@ impl From<ed25519_dalek::SignatureError> for DiscordError {
     }
 }
 
-/// Backward-compatible type alias. Deprecated in favor of [`DiscordError`].
-#[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
-pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
-
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;

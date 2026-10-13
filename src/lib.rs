@@ -141,57 +141,58 @@ pub use framework::{
 pub use manager::CachedManager;
 pub use model::{
     Activity, ActivityAssets, ActivityButton, ActivityInstance, ActivityLocation, ActivityParty,
-    ActivitySecrets, ActivityTimestamps, AddGroupDmRecipient, AddGuildMember, AddLobbyMember,
-    AllowedMentions, Application, ApplicationCommand, ApplicationCommandOption,
-    ApplicationCommandOptionChoice, ApplicationCommandPermission, ApplicationIdentities,
-    ApplicationIdentity, ApplicationIdentityProfile, ApplicationIdentityProfileData,
-    ApplicationIdentityProviderId, ApplicationInstallParams, ApplicationIntegrationTypeConfig,
-    ApplicationRoleConnectionMetadata, ArchivedThreadsQuery, Attachment, AuditLog, AuditLogChange,
-    AuditLogEntry, AuditLogEntryOptions, AuditLogPartialRole, AuditLogQuery,
-    AuthorizationInformation, AuthorizingIntegrationOwners, AutoModerationAction,
+    ActivitySecrets, ActivityTimestamps, AllowedMentions, Application, ApplicationCommand,
+    ApplicationCommandOption, ApplicationCommandOptionChoice, ApplicationCommandPermission,
+    ApplicationIdentities, ApplicationIdentity, ApplicationIdentityProfile,
+    ApplicationIdentityProfileData, ApplicationIdentityProviderId, ApplicationInstallParams,
+    ApplicationIntegrationTypeConfig, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
+    Attachment, AuditLog, AuditLogChange, AuditLogEntry, AuditLogEntryOptions, AuditLogPartialRole,
+    AuditLogQuery, AuthorizationInformation, AuthorizingIntegrationOwners, AutoModerationAction,
     AutoModerationActionMetadata, AutoModerationRule, AutoModerationTriggerMetadata,
-    AutocompleteInteraction, Ban, BeginGuildPruneRequest, BulkGuildBanRequest,
-    BulkGuildBanResponse, Channel, ChannelMention, ChannelPins, ChannelPinsQuery,
-    ChatInputCommandInteraction, ClientStatus, CommandInteractionData, CommandInteractionOption,
-    CommandOptionValue, CommandPermissionTarget, CommandPermissionsId, ComponentInteraction,
-    CreateChannelInvite, CreateDmChannel, CreateGroupDmChannel, CreateGuildBan, CreateGuildChannel,
-    CreateGuildRole, CreateGuildSticker, CreateLobby, CreateLobbyMessage, CreateMessage,
-    CreatePoll, CreateStageInstance, CreateTestEntitlement, CreateWebhook, CurrentUserGuild,
-    CurrentUserGuildsQuery, DefaultReaction, DiscordModel, DisplayNameStyles, DynamicProfileField,
-    EditApplicationCommandPermissions, EditChannelPermission, Embed, Entitlement, EntitlementOwner,
-    EntitlementQuery, FollowedChannel, ForumTag, Gateway, GatewayBot, GetGuildQuery,
-    GetOrCreateLobby, Guild, GuildApplicationCommandPermissions, GuildBansQuery,
-    GuildIncidentsData, GuildMembersQuery, GuildOnboarding, GuildPreview, GuildPruneCount,
-    GuildPruneResult, GuildScheduledEvent, GuildScheduledEventEntityMetadata,
-    GuildScheduledEventRecurrenceRule, GuildScheduledEventRecurrenceRuleNWeekday,
-    GuildScheduledEventUser, GuildTemplate, GuildWidget, GuildWidgetChannel, GuildWidgetImageStyle,
-    GuildWidgetMember, GuildWidgetSettings, Integration, IntegrationAccount,
-    IntegrationApplication, Interaction, InteractionCallbackResponse, InteractionContextData,
+    AutocompleteInteraction, Ban, BulkGuildBanResponse, Channel, ChannelMention, ChannelPins,
+    ChannelPinsQuery, ChatInputCommandInteraction, ClientStatus, CommandInteractionData,
+    CommandInteractionOption, CommandOptionValue, CommandPermissionTarget, CommandPermissionsId,
+    ComponentInteraction, CurrentUserGuild, CurrentUserGuildsQuery, DefaultReaction, DiscordModel,
+    DisplayNameStyles, DynamicProfileField, Embed, Entitlement, EntitlementOwner, EntitlementQuery,
+    FollowedChannel, ForumTag, Gateway, GatewayBot, GetGuildQuery, Guild,
+    GuildApplicationCommandPermissions, GuildBansQuery, GuildIncidentsData, GuildMembersQuery,
+    GuildOnboarding, GuildPreview, GuildPruneCount, GuildPruneResult, GuildScheduledEvent,
+    GuildScheduledEventEntityMetadata, GuildScheduledEventRecurrenceRule,
+    GuildScheduledEventRecurrenceRuleNWeekday, GuildScheduledEventUser, GuildTemplate, GuildWidget,
+    GuildWidgetChannel, GuildWidgetImageStyle, GuildWidgetMember, GuildWidgetSettings, Integration,
+    IntegrationAccount, IntegrationApplication, Interaction, InteractionContextData,
     InteractionGuild, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus,
-    JoinedArchivedThreadsQuery, LinkLobbyChannel, Lobby, LobbyInvite, LobbyMember,
-    LobbyMemberUpdate, LobbyMessage, LobbyMessageMember, Member, MentionableId, Message,
-    MessageActivity, MessageCall, MessageComponent, MessageComponentIter, MessageComponentValue,
-    MessageContextMenuInteraction, MessageInteraction, MessageInteractionMetadata,
-    MessageMediaGalleryItem, MessagePin, MessageReference, MessageSelectOption, MessageSnapshot,
-    MessageSnapshotMessage, ModalSubmitInteraction, ModifyCurrentApplication, ModifyCurrentMember,
-    ModifyCurrentUser, ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
+    JoinedArchivedThreadsQuery, Lobby, LobbyInvite, LobbyMember, LobbyMemberUpdate, LobbyMessage,
+    LobbyMessageMember, Member, MentionableId, Message, MessageActivity, MessageCall,
+    MessageComponent, MessageComponentIter, MessageComponentValue, MessageContextMenuInteraction,
+    MessageInteraction, MessageInteractionMetadata, MessageMediaGalleryItem, MessagePin,
+    MessageReference, MessageSelectOption, MessageSnapshot, MessageSnapshotMessage,
+    ModalSubmitInteraction, OnboardingPrompt, OnboardingPromptOption, OverwriteTarget,
+    PartialApplication, PartialIntegration, PermissionOverwrite, Poll, PollAnswer, PollAnswerCount,
+    PollAnswerVoters, PollMedia, PollResults, PresenceStatus, PrimaryEntryPointInteraction,
+    PrimaryProfileData, ProfileMedia, ReactionCountDetails, RequestChannelInfo,
+    RequestGuildMembers, ResolvedData, Role, RoleColors, RoleSubscriptionData, RoleTags,
+    SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
+    SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList, StageInstance, Sticker,
+    StickerItem, StickerPack, StickerPackList, Subscription, SubscriptionQuery, Team, TeamMember,
+    ThreadListResponse, ThreadMember, ThreadMemberQuery, UnfurledMediaItem, UpdatePresence, User,
+    UserApplicationRoleConnection, UserCollectibles, UserConnection, UserContextMenuInteraction,
+    UserNameplate, UserPrimaryGuild, VanityUrl, VoiceRegion, VoiceServerUpdate, VoiceState,
+    Webhook, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreen, WelcomeScreenChannel,
+};
+pub use request::{
+    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, BeginGuildPruneRequest,
+    BulkGuildBanRequest, CreateChannelInvite, CreateDmChannel, CreateGroupDmChannel,
+    CreateGuildBan, CreateGuildChannel, CreateGuildRole, CreateGuildSticker, CreateLobby,
+    CreateLobbyMessage, CreateMessage, CreatePoll, CreateStageInstance, CreateTestEntitlement,
+    CreateWebhook, EditApplicationCommandPermissions, EditChannelPermission, GetOrCreateLobby,
+    LinkLobbyChannel, ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser,
+    ModifyCurrentUserVoiceState, ModifyGuild, ModifyGuildChannelPosition,
     ModifyGuildIncidentActions, ModifyGuildMember, ModifyGuildOnboarding, ModifyGuildRole,
     ModifyGuildRolePosition, ModifyGuildSticker, ModifyGuildWelcomeScreen,
     ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance, ModifyUserVoiceState,
-    ModifyWebhook, ModifyWebhookWithToken, OnboardingPrompt, OnboardingPromptOption,
-    OverwriteTarget, PartialApplication, PartialIntegration, PermissionOverwrite, Poll, PollAnswer,
-    PollAnswerCount, PollAnswerVoters, PollMedia, PollResults, PresenceStatus,
-    PrimaryEntryPointInteraction, PrimaryProfileData, ProfileMedia, ReactionCountDetails,
-    RequestChannelInfo, RequestGuildMembers, ResolvedData, Role, RoleColors, RoleSubscriptionData,
-    RoleTags, SearchGuildMembersQuery, SearchGuildMessagesQuery, SearchGuildMessagesResponse,
-    SetVoiceChannelStatus, SharedClientTheme, Sku, SoundboardSound, SoundboardSoundList,
-    StageInstance, Sticker, StickerItem, StickerPack, StickerPackList, Subscription,
-    SubscriptionQuery, Team, TeamMember, ThreadListResponse, ThreadMember, ThreadMemberQuery,
-    UnfurledMediaItem, UpdateApplicationIdentityProfile, UpdatePresence,
-    UpdateUserApplicationRoleConnection, User, UserApplicationRoleConnection, UserCollectibles,
-    UserConnection, UserContextMenuInteraction, UserNameplate, UserPrimaryGuild, VanityUrl,
-    VoiceRegion, VoiceServerUpdate, VoiceState, Webhook, WebhookExecuteQuery, WebhookMessageQuery,
-    WelcomeScreen, WelcomeScreenChannel,
+    ModifyWebhook, ModifyWebhookWithToken, SetVoiceChannelStatus, UpdateApplicationIdentityProfile,
+    UpdateUserApplicationRoleConnection,
 };
 // Phase 3 primitives (typed IDs, open discriminants, patch fields). Since
 // series 2 step B every ID has its per-resource alias and since series 3
@@ -242,6 +243,11 @@ pub use response::{
 };
 // Deprecated in 3.0 in favour of `InteractionResponse`, the message request
 // types, and `ApplicationCommandOptionChoice`.
+pub use bitfield::{
+    BitField, BitFieldFlags, ChannelFlagBits, ChannelFlags, GatewayCapabilities,
+    GatewayCapabilityBits, IntentFlags, Intents, MessageFlagBits, MessageFlags, PermissionFlags,
+    Permissions,
+};
 #[expect(deprecated, reason = "deliberate re-export of deprecated items")]
 pub use response::{AutocompleteChoice, InteractionReplyData, InteractionResponseBuilder};
 #[cfg(feature = "sharding")]
@@ -250,19 +256,6 @@ pub use sharding::{
     ShardSupervisorEvent, ShardingManager,
 };
 pub use types::{ButtonConfig, Emoji, MediaGalleryItem, MediaInfo, SelectOption};
-pub use webhook_events::{
-    parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,
-    ApplicationDeauthorizedWebhookEvent, WebhookDeletedMessage, WebhookEvent, WebhookEventBody,
-    WebhookEventPayload, WebhookPayloadType, WebhookSocialMessage,
-};
-/// Backward-compatible alias. Prefer `DiscordError`.
-#[deprecated(since = "0.4.0", note = "Use DiscordError instead")]
-pub type Error = DiscordError;
-pub use bitfield::{
-    BitField, BitFieldFlags, ChannelFlagBits, ChannelFlags, GatewayCapabilities,
-    GatewayCapabilityBits, IntentFlags, Intents, MessageFlagBits, MessageFlags, PermissionFlags,
-    Permissions,
-};
 #[cfg(feature = "voice")]
 pub use voice::{
     AudioPlayer, AudioTrack, VoiceConnectionConfig, VoiceConnectionState, VoiceConnectionStatus,
@@ -283,6 +276,11 @@ pub use voice_runtime::{
 pub use voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
 #[cfg(all(feature = "voice", feature = "dave"))]
 pub use voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
+pub use webhook_events::{
+    parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,
+    ApplicationDeauthorizedWebhookEvent, WebhookDeletedMessage, WebhookEvent, WebhookEventBody,
+    WebhookEventPayload, WebhookPayloadType, WebhookSocialMessage,
+};
 #[cfg(any(feature = "gateway", feature = "sharding"))]
 pub use ws::{
     GatewayCompression, GatewayConnectionConfig, GatewayEncoding, IdentifyGate, IdentifyOutcome,

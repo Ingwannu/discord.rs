@@ -178,37 +178,6 @@ pub struct ApplicationIntegrationTypeConfig {
     pub oauth2_install_params: Option<ApplicationInstallParams>,
 }
 
-/// Request body for editing the current application.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct ModifyCurrentApplication {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub custom_install_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_connections_verification_url: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub install_params: Option<ApplicationInstallParams>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub integration_types_config: Option<HashMap<String, ApplicationIntegrationTypeConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flags: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub icon: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cover_image: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interactions_endpoint_url: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_webhooks_url: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_webhooks_status: Option<ApplicationEventWebhookStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event_webhooks_types: Option<Vec<String>>,
-}
-
 /// One application role connection metadata record. No `Default`: `type`,
 /// `key`, `name`, and `description` are required; use
 /// [`ApplicationRoleConnectionMetadata::new`].

@@ -8,10 +8,12 @@ use serde_json::{json, Value};
 
 use super::{
     test_id, ApplicationCommandPermission, Channel, CommandPermissionTarget, CommandPermissionType,
-    CommandPermissionsId, CreateTestEntitlement, EntitlementOwner, GenericId,
-    GuildApplicationCommandPermissions, GuildId, Interaction, MentionableId, MessageComponent,
-    OverwriteTarget, OverwriteType, PermissionOverwrite, ResolvedData, SelectDefaultValue,
+    CommandPermissionsId, EntitlementOwner, GenericId, GuildApplicationCommandPermissions, GuildId,
+    Interaction, MentionableId, MessageComponent, OverwriteTarget, OverwriteType,
+    PermissionOverwrite, ResolvedData, SelectDefaultValue,
 };
+
+use crate::request::CreateTestEntitlement;
 
 /// Decodes `wire` as `T` and checks that encoding gives `wire` back.
 fn round_trip<T>(wire: Value) -> T
@@ -134,7 +136,7 @@ fn overwrite_target_conversions_and_wire_parts_agree() {
         }
     );
     assert_eq!(
-        super::EditChannelPermission::for_target(member).kind,
+        crate::request::EditChannelPermission::for_target(member).kind,
         OverwriteType::MEMBER
     );
 }
@@ -405,36 +407,33 @@ fn resolved_data_tells_mentionable_users_from_roles() {
 
 #[test]
 fn test_entitlement_bodies_keep_owner_id_and_owner_type() {
-    // The documented example (a guild subscription).
-    let guild: CreateTestEntitlement = round_trip(json!({
-        "sku_id": "999184799365857331",
-        "owner_id": "847184799365857999",
-        "owner_type": 1
-    }));
-    assert_eq!(
-        guild,
-        CreateTestEntitlement::new(
-            test_id(999184799365857331),
-            EntitlementOwner::Guild(test_id(847184799365857999)),
-        )
+    // The documented example (a guild subscription). Request bodies are
+    // only encoded, so the check is one-way.
+    let guild = CreateTestEntitlement::new(
+        test_id(999184799365857331),
+        EntitlementOwner::Guild(test_id(847184799365857999)),
     );
-    let user: CreateTestEntitlement =
-        round_trip(json!({ "sku_id": "1", "owner_id": "2", "owner_type": 2 }));
     assert_eq!(
-        user.owner,
-        EntitlementOwner::from(test_id::<super::marker::User>(2))
+        serde_json::to_value(guild).unwrap(),
+        json!({
+            "sku_id": "999184799365857331",
+            "owner_id": "847184799365857999",
+            "owner_type": 1
+        })
+    );
+    let user = CreateTestEntitlement::new(
+        test_id(1),
+        EntitlementOwner::from(test_id::<super::marker::User>(2)),
+    );
+    assert_eq!(
+        serde_json::to_value(user).unwrap(),
+        json!({ "sku_id": "1", "owner_id": "2", "owner_type": 2 })
     );
     assert_eq!(user.owner.kind(), super::EntitlementOwnerType::USER);
     assert_eq!(
         EntitlementOwner::from(test_id::<super::marker::Guild>(3)).id(),
         test_id::<super::marker::Generic>(3)
     );
-
-    let error = serde_json::from_value::<CreateTestEntitlement>(
-        json!({ "sku_id": "1", "owner_id": "2", "owner_type": 3 }),
-    )
-    .expect_err("unknown owner types are rejected");
-    assert!(error.to_string().contains("owner_type 3"));
 }
 
 // --- Context menu targets ---

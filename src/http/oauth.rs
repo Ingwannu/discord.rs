@@ -3,9 +3,9 @@ use super::{json_body, validate_authorization_token, RestClient, RouteId, NO_BOD
 use crate::error::DiscordError;
 use crate::model::{
     Application, AuthorizationInformation, CurrentUserGuild, CurrentUserGuildsQuery, GuildId,
-    Member, ModifyCurrentUser, UpdateUserApplicationRoleConnection, User,
-    UserApplicationRoleConnection, UserConnection, UserId,
+    Member, User, UserApplicationRoleConnection, UserConnection, UserId,
 };
+use crate::request::{ModifyCurrentUser, UpdateUserApplicationRoleConnection};
 
 impl RestClient {
     pub async fn get_current_user(&self) -> Result<User, DiscordError> {

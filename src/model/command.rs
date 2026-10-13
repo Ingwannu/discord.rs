@@ -786,22 +786,6 @@ impl From<GuildApplicationCommandPermissionsWire> for GuildApplicationCommandPer
     }
 }
 
-/// Request body for editing a guild application command's permissions.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct EditApplicationCommandPermissions {
-    /// Permission overwrites to replace on the command.
-    pub permissions: Vec<ApplicationCommandPermission>,
-}
-
-impl EditApplicationCommandPermissions {
-    /// Creates a permission edit body from an iterator of overwrites.
-    pub fn new(permissions: impl IntoIterator<Item = ApplicationCommandPermission>) -> Self {
-        Self {
-            permissions: permissions.into_iter().collect(),
-        }
-    }
-}
-
 impl ApplicationCommand {
     /// The command type, applying Discord's documented default
     /// ([`CommandType::CHAT_INPUT`]) when `type` is absent.

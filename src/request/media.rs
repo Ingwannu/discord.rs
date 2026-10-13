@@ -1,7 +1,7 @@
 //! Emoji and soundboard request bodies (3.0 phase 5 B).
 //!
-//! Stickers keep their 2.x bodies in [`crate::model`] (`CreateGuildSticker`,
-//! `ModifyGuildSticker`) until checkpoint 5C.
+//! The 2.x sticker bodies ([`CreateGuildSticker`], [`ModifyGuildSticker`])
+//! moved here from `model` in checkpoint 5C.
 
 use serde::Serialize;
 
@@ -181,4 +181,23 @@ impl ModifyGuildSoundboardSound {
         nullable emoji_id / clear_emoji_id: EmojiId;
         nullable emoji_name / clear_emoji_name: String;
     }
+}
+
+/// Multipart form fields for creating a guild sticker.
+#[derive(Clone, Debug, Serialize, Default, PartialEq, Eq)]
+pub struct CreateGuildSticker {
+    pub name: String,
+    pub description: String,
+    pub tags: String,
+}
+
+/// JSON request body for modifying a guild sticker.
+#[derive(Clone, Debug, Serialize, Default, PartialEq, Eq)]
+pub struct ModifyGuildSticker {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
 }

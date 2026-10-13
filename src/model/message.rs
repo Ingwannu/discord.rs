@@ -7,11 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::types::Emoji;
 
 use super::{
-    is_false, ApplicationId, Attachment, AuthorizingIntegrationOwners, BaseTheme, Channel,
-    ChannelId, ChannelType, CreatePoll, Embed, GuildId, InteractionId, InteractionType, Member,
-    MessageActivityType, MessageComponent, MessageId, MessageReferenceType, MessageType,
-    PartialApplication, Poll, ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId,
-    Sticker, StickerId, StickerItem, ThreadMember, User, UserId, WebhookId,
+    ApplicationId, Attachment, AuthorizingIntegrationOwners, BaseTheme, Channel, ChannelId,
+    ChannelType, Embed, GuildId, InteractionId, InteractionType, Member, MessageActivityType,
+    MessageComponent, MessageId, MessageReferenceType, MessageType, PartialApplication, Poll,
+    ReactionType, ResolvedData, RoleId, RoleSubscriptionListingId, Sticker, StickerItem,
+    ThreadMember, User, UserId, WebhookId,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -381,40 +381,6 @@ pub struct ReactionCountDetails {
     pub burst: u64,
     #[serde(default)]
     pub normal: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-/// Typed Discord API object for `CreateMessage`.
-pub struct CreateMessage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    /// Components as the JSON the [`crate::builders`] produce. Stays JSON
-    /// until the typed request models (3.0 design §4, series 6), where
-    /// outgoing components become their own data enums rather than the
-    /// received [`MessageComponent`](super::MessageComponent) and the
-    /// builders stop producing intermediate JSON.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub components: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flags: Option<u64>,
-    /// Embeds as the JSON [`EmbedBuilder`](crate::builders::EmbedBuilder)
-    /// produces. Stays JSON until the typed request models (3.0 design §4,
-    /// series 6) move the builders and interaction replies off
-    /// intermediate JSON together.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embeds: Option<Vec<serde_json::Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed_mentions: Option<AllowedMentions>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub message_reference: Option<MessageReference>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sticker_ids: Option<Vec<StickerId>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub poll: Option<CreatePoll>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub enforce_nonce: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

@@ -2,10 +2,8 @@
 
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
-use crate::model::{
-    ApplicationCommand, CommandId, EditApplicationCommandPermissions,
-    GuildApplicationCommandPermissions, GuildId,
-};
+use crate::model::{ApplicationCommand, CommandId, GuildApplicationCommandPermissions, GuildId};
+use crate::request::EditApplicationCommandPermissions;
 
 use crate::request::EditApplicationCommand;
 

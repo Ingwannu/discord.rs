@@ -2,9 +2,10 @@
 
 use crate::error::DiscordError;
 use crate::model::{
-    ChannelId, CreateChannelInvite, GuildId, Invite, InviteTargetUserIds,
-    InviteTargetUsersJobStatus, ScheduledEventId, UserId,
+    ChannelId, GuildId, Invite, InviteTargetUserIds, InviteTargetUsersJobStatus, ScheduledEventId,
+    UserId,
 };
+use crate::request::CreateChannelInvite;
 use crate::types::invalid_data_error;
 
 use super::body::{named_file_multipart_body, payload_named_file_multipart_body};

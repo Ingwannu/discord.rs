@@ -1,7 +1,7 @@
 use crate::model::{
-    test_id, AuditLogActionType, ChannelType, CommandType, InteractionResponseType, MfaLevel,
-    OnboardingMode, OverwriteType, RoleConnectionMetadataType, ScheduledEventEntityType,
-    ScheduledEventPrivacyLevel, ScheduledEventStatus, SkuAccessType, StageInstancePrivacyLevel,
+    test_id, AuditLogActionType, ChannelType, CommandType, MfaLevel, OnboardingMode, OverwriteType,
+    RoleConnectionMetadataType, ScheduledEventEntityType, ScheduledEventPrivacyLevel,
+    ScheduledEventStatus, SkuAccessType, StageInstancePrivacyLevel,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -27,24 +27,26 @@ use crate::bitfield::Permissions;
 use crate::command::CommandDefinition;
 use crate::error::DiscordError;
 use crate::model::{
-    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, AllowedMentions,
-    ApplicationCommandPermission, ApplicationRoleConnectionMetadata, ArchivedThreadsQuery,
-    AuditLogQuery, AutoModerationAction, AutoModerationActionType, AutoModerationEventType,
-    AutoModerationTriggerType, BeginGuildPruneRequest, BulkGuildBanRequest, ChannelPinsQuery,
-    CommandPermissionsId, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
+    AllowedMentions, ApplicationCommandPermission, ApplicationRoleConnectionMetadata,
+    ArchivedThreadsQuery, AuditLogQuery, AutoModerationAction, AutoModerationActionType,
+    AutoModerationEventType, AutoModerationTriggerType, ChannelPinsQuery, CommandPermissionsId,
+    CurrentUserGuildsQuery, EntitlementOwner, EntitlementQuery, GetGuildQuery,
+    GuildApplicationCommandPermissions, GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle,
+    JoinedArchivedThreadsQuery, LobbyMember, LobbyMemberUpdate, OverwriteTarget, PollAnswerId,
+    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SubscriptionQuery,
+    ThreadMemberQuery, WebhookExecuteQuery, WebhookMessageQuery, WelcomeScreenChannel,
+};
+use crate::request::{
+    AddGroupDmRecipient, AddGuildMember, AddLobbyMember, BeginGuildPruneRequest,
+    BulkGuildBanRequest, CreateChannelInvite, CreateGuildBan, CreateGuildChannel, CreateGuildRole,
     CreateGuildSticker, CreateLobby, CreateStageInstance, CreateTestEntitlement, CreateWebhook,
-    CurrentUserGuildsQuery, EditApplicationCommandPermissions, EditChannelPermission,
-    EntitlementOwner, EntitlementQuery, GetGuildQuery, GuildApplicationCommandPermissions,
-    GuildBansQuery, GuildMembersQuery, GuildWidgetImageStyle, InteractionCallbackResponse,
-    JoinedArchivedThreadsQuery, LinkLobbyChannel, LobbyMember, LobbyMemberUpdate,
+    EditApplicationCommandPermissions, EditChannelPermission, LinkLobbyChannel,
     ModifyCurrentApplication, ModifyCurrentMember, ModifyCurrentUser, ModifyCurrentUserVoiceState,
     ModifyGuild, ModifyGuildChannelPosition, ModifyGuildIncidentActions, ModifyGuildMember,
     ModifyGuildOnboarding, ModifyGuildRole, ModifyGuildRolePosition, ModifyGuildSticker,
     ModifyGuildWelcomeScreen, ModifyGuildWidgetSettings, ModifyLobby, ModifyStageInstance,
-    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, OverwriteTarget, PollAnswerId,
-    RoleColors, SearchGuildMembersQuery, SearchGuildMessagesQuery, SetVoiceChannelStatus,
-    SubscriptionQuery, ThreadMemberQuery, UpdateUserApplicationRoleConnection, WebhookExecuteQuery,
-    WebhookMessageQuery, WelcomeScreenChannel,
+    ModifyUserVoiceState, ModifyWebhook, ModifyWebhookWithToken, SetVoiceChannelStatus,
+    UpdateUserApplicationRoleConnection,
 };
 use crate::request::{
     CreateApplicationEmoji, CreateAutoModerationRule, CreateGuildEmoji, CreateGuildScheduledEvent,
@@ -679,13 +681,6 @@ fn sample_create() -> RequestCreateMessage {
 
 fn sample_message_edit() -> EditMessage {
     EditMessage::new().content("hello")
-}
-
-fn sample_interaction_response() -> InteractionCallbackResponse {
-    InteractionCallbackResponse {
-        kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-        data: Some(json!({ "content": "ack" })),
-    }
 }
 
 fn sample_followup() -> crate::request::CreateFollowup {
@@ -4511,6 +4506,7 @@ async fn sticker_stage_and_guild_admin_wrappers_hit_expected_paths() {
                 test_id(400),
                 &ModifyStageInstance {
                     privacy_level: Some(StageInstancePrivacyLevel::GUILD_ONLY),
+                    ..ModifyStageInstance::default()
                 },
             )
             .await
@@ -5588,7 +5584,6 @@ async fn client_methods_reject_missing_application_id_before_request() {
 #[tokio::test]
 async fn client_methods_reject_unsafe_tokens_before_request() {
     let client = RestClient::new("token", Some(test_id(123)));
-    let response = sample_interaction_response();
 
     assert_model_error_contains(
         client
@@ -5596,13 +5591,6 @@ async fn client_methods_reject_unsafe_tokens_before_request() {
             .await
             .unwrap_err(),
         "webhook_token",
-    );
-    assert_model_error_contains(
-        client
-            .create_interaction_response_typed(test_id(789), "bad/token", &response)
-            .await
-            .unwrap_err(),
-        "interaction_token",
     );
     assert_model_error_contains(
         client
@@ -7025,7 +7013,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(executed.id.get(), 901);
 
     let dm = client
-        .create_dm_channel(&crate::model::CreateDmChannel {
+        .create_dm_channel(&crate::request::CreateDmChannel {
             recipient_id: test_id(42),
         })
         .await
@@ -7033,7 +7021,7 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(dm.id.get(), 500);
 
     let group_dm = client
-        .create_group_dm_channel(&crate::model::CreateGroupDmChannel {
+        .create_group_dm_channel(&crate::request::CreateGroupDmChannel {
             access_tokens: vec!["oauth-gdm-one".to_string(), "oauth-gdm-two".to_string()],
             nicks: HashMap::from([(test_id(43), "friend".to_string())]),
         })
@@ -7042,9 +7030,13 @@ async fn client_webhook_and_followup_wrappers_hit_local_server() {
     assert_eq!(group_dm.id.get(), 501);
 
     client
-        .create_interaction_response_typed(test_id(777), "token", &sample_interaction_response())
+        .create_interaction_response(
+            test_id(777),
+            "token",
+            &crate::request::InteractionResponse::reply("ack"),
+        )
         .await
-        .expect("create interaction response typed");
+        .expect("create interaction response");
     client
         .create_interaction_response(
             test_id(778),
@@ -7851,9 +7843,9 @@ async fn new_guild_lifecycle_routes_have_expected_shapes() {
 
     let client = RestClient::new_with_base_url("guild-token", 123, base_url);
     client
-        .create_guild(&crate::model::CreateGuild {
+        .create_guild(&crate::request::CreateGuild {
             name: "created".to_string(),
-            ..crate::model::CreateGuild::default()
+            ..crate::request::CreateGuild::default()
         })
         .await
         .expect("create guild");
@@ -7861,7 +7853,7 @@ async fn new_guild_lifecycle_routes_have_expected_shapes() {
     client
         .create_guild_from_template(
             "abcDEF123",
-            &crate::model::CreateGuildFromTemplate {
+            &crate::request::CreateGuildFromTemplate {
                 name: "from-template".to_string(),
                 icon: None,
             },
@@ -8180,38 +8172,33 @@ async fn default_allowed_mentions_cover_webhook_and_interaction_response_payload
         .await
         .expect("execute webhook");
     client
-        .create_interaction_response_typed(
+        .create_interaction_response(
             test_id(10),
             "interactiontoken",
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(json!({ "content": "reply" })),
-            },
+            &crate::request::InteractionResponse::reply("reply"),
         )
         .await
         .expect("interaction response");
     client
-        .create_interaction_response_typed(
+        .create_interaction_response(
             test_id(11),
             "interactiontoken",
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::CHANNEL_MESSAGE_WITH_SOURCE,
-                data: Some(json!({
-                    "content": "explicit",
-                    "allowed_mentions": { "parse": ["roles"] }
-                })),
-            },
+            &crate::request::InteractionResponse::reply(
+                crate::request::InteractionMessage::new()
+                    .content("explicit")
+                    .allowed_mentions(crate::model::AllowedMentions {
+                        parse: vec!["roles".to_owned()],
+                        ..crate::model::AllowedMentions::default()
+                    }),
+            ),
         )
         .await
         .expect("interaction response with explicit mentions");
     client
-        .create_interaction_response_typed(
+        .create_interaction_response(
             test_id(12),
             "interactiontoken",
-            &InteractionCallbackResponse {
-                kind: InteractionResponseType::MODAL,
-                data: Some(json!({ "custom_id": "modal", "title": "t", "components": [] })),
-            },
+            &crate::request::InteractionResponse::modal(crate::request::Modal::new("modal", "t")),
         )
         .await
         .expect("modal response");
@@ -8371,7 +8358,7 @@ async fn application_identity_profile_routes_have_expected_shapes() {
     .await;
 
     let client = RestClient::new_with_base_url("identity-token", 555, base_url);
-    let update = crate::model::UpdateApplicationIdentityProfile {
+    let update = crate::request::UpdateApplicationIdentityProfile {
         username: Some("PlayerOne".to_string()),
         data: Some(crate::model::ApplicationIdentityProfileData {
             primary: Some(crate::model::PrimaryProfileData {
@@ -8458,7 +8445,7 @@ async fn application_identity_profile_routes_have_expected_shapes() {
 #[tokio::test]
 async fn application_identity_profile_update_enforces_documented_limits() {
     let client = RestClient::new("identity-limits", Some(test_id(555)));
-    let too_many = crate::model::UpdateApplicationIdentityProfile {
+    let too_many = crate::request::UpdateApplicationIdentityProfile {
         username: None,
         data: Some(crate::model::ApplicationIdentityProfileData {
             primary: None,
@@ -8476,7 +8463,7 @@ async fn application_identity_profile_update_enforces_documented_limits() {
         .expect_err("31 dynamic fields exceed the cap");
     assert!(error.to_string().contains("30"), "{error}");
 
-    let long_rank = crate::model::UpdateApplicationIdentityProfile {
+    let long_rank = crate::request::UpdateApplicationIdentityProfile {
         data: Some(crate::model::ApplicationIdentityProfileData {
             primary: Some(crate::model::PrimaryProfileData {
                 rank_name: Some("r".repeat(101)),
@@ -8488,7 +8475,7 @@ async fn application_identity_profile_update_enforces_documented_limits() {
     };
     assert!(long_rank.validate().is_err());
 
-    let oversized = crate::model::UpdateApplicationIdentityProfile {
+    let oversized = crate::request::UpdateApplicationIdentityProfile {
         data: Some(crate::model::ApplicationIdentityProfileData {
             primary: None,
             dynamic: (0..30)
@@ -8538,7 +8525,7 @@ async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes
     let joined = client
         .get_or_create_lobby(
             "bearer-1",
-            &crate::model::GetOrCreateLobby {
+            &crate::request::GetOrCreateLobby {
                 secret: "match-42".to_string(),
                 idle_timeout_seconds: Some(300),
                 ..Default::default()
@@ -8551,7 +8538,7 @@ async fn social_sdk_lobby_routes_added_since_the_last_audit_have_expected_shapes
         .send_lobby_message(
             "bearer-1",
             test_id(100),
-            &crate::model::CreateLobbyMessage {
+            &crate::request::CreateLobbyMessage {
                 content: "gg".to_string(),
                 ..Default::default()
             },
