@@ -114,7 +114,7 @@ pub use command::{
     CommandDefinition, CommandOptionBuilder, MessageCommandBuilder,
     PrimaryEntryPointCommandBuilder, SlashCommandBuilder, UserCommandBuilder,
 };
-pub use error::{DiscordError, HttpError};
+pub use error::{DiscordError, HttpError, IncompleteMemberFetch};
 pub use event::{
     decode_event, ApplicationCommandPermissionsUpdateEvent, AuditLogEntryEvent,
     AutoModerationEvent, BulkMessageDeleteEvent, ChannelInfoChannel, ChannelInfoEvent,

@@ -3648,6 +3648,7 @@ async fn cache_backend_receives_ready_clear_and_member_chunk_writes() {
                 client_status: None,
             })]),
             nonce: None,
+            dropped_members: 0,
         })),
     );
 
@@ -5974,6 +5975,7 @@ fn member_chunk_progress_requires_every_chunk_index() {
             not_found: Vec::new(),
             presences: None,
             nonce: Some("n".to_string()),
+            dropped_members: 0,
         }
     }
 
@@ -6008,6 +6010,158 @@ fn member_chunk_progress_requires_every_chunk_index() {
         super::MemberChunkProgress::default().describe(),
         "no chunks received"
     );
+}
+
+#[test]
+fn member_chunk_progress_reports_members_that_did_not_decode() {
+    fn chunk(index: u64, user_id: &str, dropped: usize) -> crate::event::GuildMembersChunkPayload {
+        crate::event::GuildMembersChunkPayload {
+            guild_id: test_id(42),
+            members: vec![std::sync::Arc::new(Member {
+                user: Some(Arc::new(User {
+                    id: named_id(user_id),
+                    ..User::fixture()
+                })),
+                ..Member::default()
+            })],
+            chunk_index: index,
+            chunk_count: 2,
+            not_found: Vec::new(),
+            presences: None,
+            nonce: Some("n".to_string()),
+            dropped_members: dropped,
+        }
+    }
+
+    let mut progress = super::MemberChunkProgress::default();
+    assert!(progress.add(chunk(0, "a", 2)).unwrap().is_none());
+    // A repeated chunk counts its drops once, like its members.
+    assert!(progress.add(chunk(0, "a", 2)).unwrap().is_none());
+    let error = progress.add(chunk(1, "b", 1)).unwrap_err();
+    let crate::DiscordError::IncompleteMemberFetch(partial) = &error else {
+        panic!("expected an incomplete fetch, got {error:?}");
+    };
+    assert_eq!(partial.guild_id, test_id(42));
+    assert_eq!(partial.dropped, 3);
+    let ids: Vec<_> = partial
+        .members
+        .iter()
+        .filter_map(|member| member.user.as_ref().map(|user| user.id))
+        .collect();
+    assert_eq!(ids, vec![named_id("a"), named_id("b")]);
+    assert_eq!(
+        error.to_string(),
+        "Gateway error: 3 members of guild 42 did not decode (2 decoded)"
+    );
+}
+
+#[tokio::test]
+async fn fetch_members_reports_members_that_did_not_decode() {
+    let context = pipeline_test_context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let pending = tokio::spawn({
+        let context = context.clone();
+        async move {
+            context
+                .fetch_members_with_timeout(test_id(42), None, None, Duration::from_secs(5))
+                .await
+        }
+    });
+    let nonce = match commands.recv().await {
+        Some(GatewayCommand::RequestGuildMembers(request)) => request.nonce.unwrap(),
+        other => panic!("expected a member request, got {other:?}"),
+    };
+    // Chunk 0 decodes; chunk 1 holds one member that does not (`roles`
+    // must be a list) beside one that does.
+    super::process_gateway_dispatch(
+        &context,
+        #[cfg(feature = "cache")]
+        None,
+        members_chunk_dispatch("42", &nonce, 0, 2, "7"),
+        false,
+    )
+    .await;
+    super::process_gateway_dispatch(
+        &context,
+        #[cfg(feature = "cache")]
+        None,
+        super::GatewayDispatch::new(
+            "GUILD_MEMBERS_CHUNK".to_string(),
+            json!({
+                "guild_id": "42",
+                "members": [
+                    { "user": { "id": "8", "username": "user-8" }, "roles": "none" },
+                    { "user": { "id": "9", "username": "user-9" } }
+                ],
+                "chunk_index": 1,
+                "chunk_count": 2,
+                "nonce": nonce
+            }),
+        ),
+        false,
+    )
+    .await;
+    let error = pending.await.unwrap().unwrap_err();
+    let crate::DiscordError::IncompleteMemberFetch(partial) = error else {
+        panic!("expected an incomplete fetch, got {error:?}");
+    };
+    assert_eq!(partial.dropped, 1);
+    let ids: Vec<_> = partial
+        .members
+        .iter()
+        .filter_map(|member| member.user.as_ref().map(|user| user.id))
+        .collect();
+    assert_eq!(ids, vec![test_id(7), test_id(9)]);
+    // The members that decoded are cached as usual.
+    #[cfg(feature = "cache")]
+    assert!(context
+        .cache
+        .member(test_id(42), test_id(9))
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn fetch_members_reports_a_fetch_where_no_member_decoded() {
+    let context = pipeline_test_context((0, 1));
+    let mut commands = attach_test_messenger(&context, 0);
+    let pending = tokio::spawn({
+        let context = context.clone();
+        async move {
+            context
+                .fetch_members_with_timeout(test_id(42), None, None, Duration::from_secs(5))
+                .await
+        }
+    });
+    let nonce = match commands.recv().await {
+        Some(GatewayCommand::RequestGuildMembers(request)) => request.nonce.unwrap(),
+        other => panic!("expected a member request, got {other:?}"),
+    };
+    super::process_gateway_dispatch(
+        &context,
+        #[cfg(feature = "cache")]
+        None,
+        super::GatewayDispatch::new(
+            "GUILD_MEMBERS_CHUNK".to_string(),
+            json!({
+                "guild_id": "42",
+                "members": [{ "roles": 1 }, { "roles": {} }],
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "nonce": nonce
+            }),
+        ),
+        false,
+    )
+    .await;
+    // 3.0.0 returned `Ok([])` here.
+    match pending.await.unwrap() {
+        Err(crate::DiscordError::IncompleteMemberFetch(partial)) => {
+            assert!(partial.members.is_empty());
+            assert_eq!(partial.dropped, 2);
+        }
+        other => panic!("expected an incomplete fetch, got {other:?}"),
+    }
 }
 
 #[tokio::test]

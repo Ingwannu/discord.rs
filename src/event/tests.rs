@@ -1368,6 +1368,7 @@ fn decode_event_covers_new_gateway_surface_variants() {
         EventKind::GuildMembersChunk(event) => {
             assert_eq!(event.guild_id.get(), 1);
             assert_eq!(event.members.len(), 1);
+            assert_eq!(event.dropped_members, 0);
             assert_eq!(event.not_found[0].get(), 4);
             assert_eq!(
                 event.presences.as_ref().unwrap()[0]
@@ -2316,6 +2317,7 @@ fn members_chunk_drops_only_the_elements_that_do_not_decode() {
     };
     assert_eq!((chunk.chunk_index, chunk.chunk_count), (1, 2));
     assert_eq!(chunk.members.len(), 1);
+    assert_eq!(chunk.dropped_members, 1);
     assert_eq!(chunk.nonce.as_deref(), Some("n"));
     let presences = chunk.presences.as_ref().unwrap();
     assert_eq!(presences[0].user_id, Some(snowflake("2")));

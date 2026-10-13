@@ -1,4 +1,7 @@
 use std::fmt;
+use std::sync::Arc;
+
+use crate::model::{GuildId, Member};
 
 /// Wrapper around `reqwest::Error` that is `Clone`-able.
 /// Stores the Display representation since reqwest errors are not Clone,
@@ -132,6 +135,63 @@ pub enum DiscordError {
         /// Cache operation error message.
         message: String,
     },
+    /// `Context::fetch_members` received every member chunk, but some
+    /// members in them did not decode and are missing. Carries the members
+    /// that did decode, so callers can choose to use a partial list.
+    IncompleteMemberFetch(Box<IncompleteMemberFetch>),
+}
+
+/// The partial result of a `Context::fetch_members` call whose chunks all
+/// arrived but held members that did not decode
+/// ([`DiscordError::IncompleteMemberFetch`]).
+///
+/// A member Discord sends in a shape this version cannot read is left out
+/// of its GUILD_MEMBERS_CHUNK (logged with `tracing::warn!`) instead of
+/// failing the chunk; the fetch reports the loss instead of returning a
+/// shorter list as if it were complete.
+///
+/// ```
+/// use discordrs::{error::IncompleteMemberFetch, DiscordError};
+///
+/// fn members_or_partial(
+///     result: Result<Vec<std::sync::Arc<discordrs::Member>>, DiscordError>,
+/// ) -> Result<Vec<std::sync::Arc<discordrs::Member>>, DiscordError> {
+///     match result {
+///         Err(DiscordError::IncompleteMemberFetch(partial)) => {
+///             let IncompleteMemberFetch { members, dropped, .. } = *partial;
+///             eprintln!("{dropped} members could not be decoded");
+///             Ok(members)
+///         }
+///         other => other,
+///     }
+/// }
+/// # let _ = members_or_partial;
+/// ```
+// [Decision Log]
+// - 목적과 의도: 요소 단위 재디코딩이 멤버를 버린 GUILD_MEMBERS_CHUNK를 `fetch_members`가 완전한
+//   수집으로 돌려주지 않게 한다(astra 리뷰 P2). 버리기 전에는 청크 전체가 실패했으므로 호출자는
+//   빠진 멤버를 몰래 잃지 않았다.
+// - 기존 구현 및 제약 조건: `fetch_members`는 `Result<Vec<Arc<Member>>, DiscordError>`이고 모든
+//   청크 인덱스가 와야 끝난다. 디코딩된 멤버는 이미 캐시에 들어간다. `DiscordError`는 `Clone`이고
+//   크기가 모든 `Result`에 실린다.
+// - 검토한 주요 대안: (1) 메시지만 있는 `Gateway` 오류, (2) 반환 타입을 부분 결과 구조체로 바꾸기,
+//   (3) 받은 멤버와 버린 수를 담은 타입 오류 변형.
+// - 선택한 방식: (3). `DiscordError::IncompleteMemberFetch(Box<IncompleteMemberFetch>)`.
+// - 다른 대안 대신 이 방식을 선택한 이유: (1)은 이미 받은 멤버를 버려 다시 요청하게 만든다. (2)는 드문
+//   경우 때문에 모든 호출자의 타입을 바꾼다. (3)은 `?`로 쓰는 코드에는 실패로 드러나고, 부분 목록을
+//   받아들일 호출자는 match 한 번으로 꺼낸다. 상자라서 `DiscordError` 크기가 그대로다.
+// - 장점, 단점 및 영향: `DiscordError`에 변형이 하나 늘어 그것을 빠짐없이 match하던 코드는 팔을
+//   더해야 한다(3.0.0 미배포). 청크 하나가 아니라 모든 청크가 온 뒤에 알리므로 부분 목록이 가능한 한
+//   크다.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct IncompleteMemberFetch {
+    /// The guild the members were requested for.
+    pub guild_id: GuildId,
+    /// Every member that decoded, from all chunks. Also in the cache.
+    pub members: Vec<Arc<Member>>,
+    /// How many members Discord sent that did not decode.
+    pub dropped: usize,
 }
 
 impl DiscordError {
@@ -231,6 +291,13 @@ impl fmt::Display for DiscordError {
             Self::Gateway { message } => write!(f, "Gateway error: {message}"),
             Self::Voice { message } => write!(f, "Voice error: {message}"),
             Self::Cache { message } => write!(f, "Cache error: {message}"),
+            Self::IncompleteMemberFetch(partial) => write!(
+                f,
+                "Gateway error: {} members of guild {} did not decode ({} decoded)",
+                partial.dropped,
+                partial.guild_id,
+                partial.members.len()
+            ),
         }
     }
 }

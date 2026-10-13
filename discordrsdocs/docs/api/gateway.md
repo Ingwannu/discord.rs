@@ -313,6 +313,23 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 
 Since checkpoint C it returns `Vec<Arc<Member>>`: GUILD_MEMBERS_CHUNK decodes `members` (and `presences`, with `user_id` filled in) straight into `Arc`s that the event, the cache, the external backend, and `fetch_members` share, so collecting a large guild copies no member. Since 3.0, `fetch_members` is safe to await inside any handler (see Event Pipeline above), returns only once every chunk index `0..chunk_count` arrived (a missing chunk is a timeout error naming how many arrived, never a silently incomplete list), removes its chunk waiter when the call returns, times out, or is cancelled, and fails immediately if the shard stops. Guild-scoped gateway commands — `request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice` — are sent on the shard that owns the guild (`(guild_id >> 22) % shard_count`) when that shard runs in the same process, so any shard's `Context` can use them.
 
+If every chunk arrives but some members in them did not decode (a shape this version cannot read; the chunk keeps the members that did and logs the rest), `fetch_members` returns `Err(DiscordError::IncompleteMemberFetch(partial))` instead of a shorter list as if it were complete. `partial.members` holds every member that decoded (they are cached as usual) and `partial.dropped` how many were left out, so a caller that can work with a partial list takes `partial.members`:
+
+```rust
+use discordrs::DiscordError;
+
+let members = match ctx.fetch_members(guild_id, None, None).await {
+    Ok(members) => members,
+    Err(DiscordError::IncompleteMemberFetch(partial)) => {
+        eprintln!("{} members could not be decoded", partial.dropped);
+        partial.members
+    }
+    Err(error) => return Err(error),
+};
+```
+
+Each `GuildMembersChunkPayload` reports its own count in `dropped_members` (0 unless the chunk needed the element-by-element fallback; not serialized).
+
 ## Event Surface
 
 - `EventKind` has a typed variant for every documented receive dispatch (READY, guild/channel/member/role flows, messages, reactions, interactions, voice, threads, scheduled events, soundboard, entitlements, auto moderation, `CHANNEL_INFO`, `RATE_LIMITED`, ...), plus `Unknown` and `DecodeFailed`.

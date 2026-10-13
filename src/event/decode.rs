@@ -643,8 +643,9 @@ fn decode_reaction_event(data: &str) -> Result<ReactionEvent, EventDecodeError> 
 /// GUILD_MEMBERS_CHUNK with the derived decoder; when that fails, again
 /// with each member and presence decoded on its own, as GUILD_CREATE does
 /// (`GuildCreatePayload::from_json_str`): a member or presence this version
-/// cannot read is dropped and logged instead of failing the chunk, which
-/// would also fail the `fetch_members` call waiting for it.
+/// cannot read is dropped and logged instead of failing the chunk. The
+/// members it delivers still reach the cache, and `dropped_members` lets
+/// `fetch_members` report the loss instead of a short list as complete.
 fn decode_members_chunk(data: &str) -> Result<GuildMembersChunkPayload, EventDecodeError> {
     /// The chunk's fields, with the two collections kept as text for the
     /// element-by-element pass.
@@ -696,6 +697,7 @@ fn decode_members_chunk(data: &str) -> Result<GuildMembersChunkPayload, EventDec
         not_found: wire.not_found,
         presences,
         nonce: wire.nonce,
+        dropped_members: skipped.members,
     })
 }
 

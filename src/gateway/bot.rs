@@ -22,7 +22,7 @@ use crate::cache::{
 };
 #[cfg(feature = "collectors")]
 use crate::collector::CollectorHub;
-use crate::error::DiscordError;
+use crate::error::{DiscordError, IncompleteMemberFetch};
 use crate::event::{Event, EventDecodeError, EventKind};
 use crate::http::DiscordHttpClient;
 #[cfg(feature = "voice")]
@@ -172,10 +172,15 @@ struct MemberChunkProgress {
     expected: Option<u64>,
     seen: HashSet<u64>,
     members: Vec<Arc<crate::model::Member>>,
+    /// Members the chunks reported as not decoded
+    /// (`GuildMembersChunkPayload::dropped_members`).
+    dropped: usize,
 }
 
 impl MemberChunkProgress {
-    /// Adds a chunk; returns the members once every chunk arrived.
+    /// Adds a chunk; returns the members once every chunk arrived, or
+    /// [`DiscordError::IncompleteMemberFetch`] with them when any member
+    /// in the chunks did not decode.
     fn add(
         &mut self,
         chunk: crate::event::GuildMembersChunkPayload,
@@ -196,9 +201,22 @@ impl MemberChunkProgress {
         // A repeated index must not add its members twice.
         if self.seen.insert(chunk.chunk_index) {
             self.members.extend(chunk.members);
+            self.dropped = self.dropped.saturating_add(chunk.dropped_members);
         }
         if u64::try_from(self.seen.len()).unwrap_or(u64::MAX) >= count {
-            return Ok(Some(std::mem::take(&mut self.members)));
+            let members = std::mem::take(&mut self.members);
+            // Waits for every chunk first, so the partial list is as
+            // complete as the request can make it.
+            if self.dropped > 0 {
+                return Err(DiscordError::IncompleteMemberFetch(Box::new(
+                    IncompleteMemberFetch {
+                        guild_id: chunk.guild_id,
+                        members,
+                        dropped: self.dropped,
+                    },
+                )));
+            }
+            return Ok(Some(members));
         }
         Ok(None)
     }
@@ -414,6 +432,13 @@ impl Context {
     /// event processor, which keeps running while handlers await. The
     /// request goes out on the shard that owns the guild when that shard
     /// runs in this process.
+    ///
+    /// If every chunk arrived but some members in them did not decode (a
+    /// shape this version cannot read; each chunk keeps the members that
+    /// did and logs the rest), the call fails with
+    /// [`DiscordError::IncompleteMemberFetch`], which carries the decoded
+    /// members and the number dropped; take `members` from it to accept a
+    /// partial list. The decoded members are cached either way.
     pub async fn fetch_members(
         &self,
         guild_id: GuildId,

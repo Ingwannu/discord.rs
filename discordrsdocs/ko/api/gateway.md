@@ -282,6 +282,23 @@ let admins = ctx.fetch_members(guild_id, Some("admin".to_string()), Some(10)).aw
 
 체크포인트 C부터는 `Vec<Arc<Member>>`를 돌려줍니다. GUILD_MEMBERS_CHUNK의 `members`(와 `user_id`를 채운 `presences`)를 바로 `Arc`로 디코딩해 이벤트·캐시·외부 캐시 백엔드·`fetch_members`가 공유하므로, 큰 길드를 모아도 멤버를 복사하지 않습니다. 3.0부터 `fetch_members`는 어떤 핸들러 안에서든 기다려도 안전하고(위 이벤트 파이프라인 참고), 청크 번호 `0..chunk_count`가 모두 도착해야만 돌아오며(빠진 청크가 있으면 받은 개수를 밝힌 타임아웃 오류이지, 조용히 모자란 목록이 아닙니다), 호출이 끝나거나 타임아웃되거나 취소되면 청크 대기 항목이 지워지고, 샤드가 멈추면 즉시 실패합니다. 길드 단위 게이트웨이 명령(`request_guild_members`, `fetch_members`, `update_voice_state`, `join_voice`, `leave_voice`)은 그 길드를 맡은 샤드(`(guild_id >> 22) % shard_count`)가 같은 프로세스에 있으면 그 샤드로 보내므로, 어느 샤드의 `Context`에서든 쓸 수 있습니다.
 
+모든 청크가 왔지만 그 안의 멤버 일부가 디코딩되지 않으면(이 버전이 읽지 못하는 모양. 청크는 디코딩된 멤버만 담고 나머지는 로그로 남깁니다) `fetch_members`는 모자란 목록을 완전한 것처럼 돌려주지 않고 `Err(DiscordError::IncompleteMemberFetch(partial))`를 돌려줍니다. `partial.members`에 디코딩된 멤버가 모두 있고(캐시에도 평소처럼 들어갑니다) `partial.dropped`가 빠진 수입니다. 부분 목록을 써도 되는 호출자는 `partial.members`를 가져갑니다.
+
+```rust
+use discordrs::DiscordError;
+
+let members = match ctx.fetch_members(guild_id, None, None).await {
+    Ok(members) => members,
+    Err(DiscordError::IncompleteMemberFetch(partial)) => {
+        eprintln!("멤버 {}명을 디코딩하지 못했습니다", partial.dropped);
+        partial.members
+    }
+    Err(error) => return Err(error),
+};
+```
+
+각 `GuildMembersChunkPayload`는 자기 몫을 `dropped_members`로 알려 줍니다(요소 단위 재디코딩이 없었다면 0, 직렬화하지 않음).
+
 ## 운영 노트
 
 - 핸들러는 스레드를 막지 말고 `await`하도록 작성합니다. 무거운 작업은 백그라운드 태스크로 넘기거나 `EventDispatchMode::Concurrent`를 씁니다. Serial 모드에서 느린 핸들러는 다음 핸들러 호출(캐시 갱신은 아님)을 늦추고, `event_queue_capacity`만큼 밀리면 전달을 버리기 시작합니다.

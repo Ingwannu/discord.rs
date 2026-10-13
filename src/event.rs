@@ -116,6 +116,13 @@ pub struct GuildMembersChunkPayload {
     pub presences: Option<Vec<Arc<Presence>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
+    /// Members Discord sent in this chunk that did not decode and are not
+    /// in `members` (0 unless the chunk needed the element-by-element
+    /// fallback). Not a Discord field, so never serialized.
+    /// `Context::fetch_members` turns a nonzero total into
+    /// [`DiscordError::IncompleteMemberFetch`].
+    #[serde(skip)]
+    pub dropped_members: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
