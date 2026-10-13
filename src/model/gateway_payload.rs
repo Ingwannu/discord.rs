@@ -1846,6 +1846,13 @@ impl PartialUser {
             && display_name_styles.is_missing())
     }
 
+    /// Whether [`Self::to_user`] would return a user (`username` was sent),
+    /// without building it.
+    #[cfg(feature = "cache")]
+    pub(crate) fn is_complete(&self) -> bool {
+        !self.username.is_missing()
+    }
+
     /// A complete [`User`] when `username` (the only required field besides
     /// `id`) was sent: omitted optional fields are `None`, exactly as when a
     /// full user object omits them. `None` otherwise; a user is never made up

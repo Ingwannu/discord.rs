@@ -759,29 +759,36 @@ impl CacheHandle {
             return;
         }
         let mut store = self.store.write().await;
-        self.patch_user_locked(&mut store, user);
+        if self.patch_cached_user_locked(&mut store, user).is_none() {
+            if let Some(complete) = user.to_user() {
+                self.insert_user(&mut store, Arc::new(complete));
+            }
+        }
     }
 
-    /// [`Self::apply_partial_user`] under a held lock; returns the cached user
-    /// after the patch, if there is one.
+    /// Patches the user the store holds (copy-on-write) and returns it after
+    /// the patch; `None`, with nothing stored, when the store does not hold
+    /// the user. Callers decide what a miss stores: a partial user alone can
+    /// only be stored when complete, and a message update has a better base
+    /// in the message's own author.
     #[cfg(feature = "cache")]
     // Compiled where called (like a generic), so builds that never call it
     // (no gateway) do not compile it.
     #[inline]
-    fn patch_user_locked(&self, store: &mut CacheStore, user: &PartialUser) -> Option<Arc<User>> {
-        if let Some(cached) = store.users.get_mut(&user.id) {
-            // An id-only partial changes nothing; do not copy a shared user.
-            if user.carries_changes() {
-                user.apply_to(Arc::make_mut(cached));
-            }
-            let patched = Arc::clone(cached);
-            // Refresh recency as the 2.x upsert of the author did.
-            remember_key(&mut store.user_order, user.id);
-            return Some(patched);
+    fn patch_cached_user_locked(
+        &self,
+        store: &mut CacheStore,
+        user: &PartialUser,
+    ) -> Option<Arc<User>> {
+        let cached = store.users.get_mut(&user.id)?;
+        // An id-only partial changes nothing; do not copy a shared user.
+        if user.carries_changes() {
+            user.apply_to(Arc::make_mut(cached));
         }
-        let complete = Arc::new(user.to_user()?);
-        self.insert_user(store, Arc::clone(&complete));
-        Some(complete)
+        let patched = Arc::clone(cached);
+        // Refresh recency as the 2.x upsert of the author did.
+        remember_key(&mut store.user_order, user.id);
+        Some(patched)
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1047,16 +1054,40 @@ impl CacheHandle {
         let key = (update.channel_id, update.id);
         let now = Instant::now();
         let mut store = self.store.write().await;
-        let author = match &update.author {
-            Patch::Value(Nullable::Value(author)) => self.patch_user_locked(&mut store, author),
+        let partial = match &update.author {
+            Patch::Value(Nullable::Value(author)) => Some(author),
             _ => None,
         };
-        if seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
+        let shared = partial.and_then(|author| self.patch_cached_user_locked(&mut store, author));
+        // The user store does not hold the author (never seen, or evicted by
+        // `max_users`): the message's own author is the merge base, so a
+        // username-only edit keeps the avatar the message has, exactly as the
+        // external backend merges its stored copy.
+        let missed = partial.filter(|_| shared.is_none());
+        let cached = if seen_expired(store.message_seen.get(&key), self.config.message_ttl, now) {
+            None
+        } else {
+            store.messages.get_mut(&key)
+        };
+        let Some(cached) = cached else {
+            if let Some(author) = missed.and_then(PartialUser::to_user) {
+                self.insert_user(&mut store, Arc::new(author));
+            }
             return None;
-        }
-        let cached = store.messages.get_mut(&key)?;
-        update.apply_with_author(Arc::make_mut(cached), author);
+        };
+        update.apply_with_author(Arc::make_mut(cached), shared);
         let merged = Arc::clone(cached);
+        // Store the merged author (one allocation with the message) when the
+        // partial alone would have been stored, i.e. it carries a username.
+        if let Some(partial) = missed.filter(|partial| partial.is_complete()) {
+            if let Some(author) = merged
+                .author
+                .as_ref()
+                .filter(|author| author.id == partial.id)
+            {
+                self.insert_user(&mut store, Arc::clone(author));
+            }
+        }
         // Refresh recency and TTL as replacing the entry did in 2.x.
         store.message_seen.insert(key, now);
         store.message_order.touch(key);

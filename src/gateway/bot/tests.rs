@@ -5095,6 +5095,94 @@ async fn channels_and_roles_are_shared_and_guild_roles_follow_role_events() {
 
 #[cfg(feature = "cache")]
 #[tokio::test]
+async fn author_patches_merge_into_the_message_author_after_user_eviction() {
+    let store = crate::cache::CacheHandle::new();
+    let (forwarder, _worker) =
+        super::CacheBackendForwarder::spawn(Arc::new(store.clone()), 16, Duration::from_secs(5));
+    // One cached user at a time: the second author evicts the first.
+    let cache = crate::cache::CacheHandle::with_config(crate::cache::CacheConfig {
+        max_users: Some(1),
+        ..crate::cache::CacheConfig::default()
+    });
+    let apply = |event: Event| {
+        let cache = cache.clone();
+        let forwarder = &forwarder;
+        async move {
+            super::apply_cache_updates(&cache, SINGLE_SHARD, &event).await;
+            super::forward_cache_backend_updates(forwarder, &cache, SINGLE_SHARD, &event).await;
+            event
+        }
+    };
+    let message = |id: &str, author: Value| {
+        decode_event(
+            "MESSAGE_CREATE",
+            json!({ "id": id, "channel_id": "10", "guild_id": "9", "content": "c", "author": author }),
+        )
+        .unwrap()
+    };
+    let update = |author: Value| {
+        decode_event(
+            "MESSAGE_UPDATE",
+            json!({ "id": "11", "channel_id": "10", "author": author }),
+        )
+        .unwrap()
+    };
+    let evict_5 = || message("12", json!({ "id": "6", "username": "other" }));
+
+    apply(message(
+        "11",
+        json!({ "id": "5", "username": "a", "avatar": "x" }),
+    ))
+    .await;
+    apply(evict_5()).await;
+    assert!(cache.user(test_id(5)).await.is_none(), "evicted");
+    let before = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+
+    // A username-only edit keeps the avatar the message's author has, and
+    // the complete partial stores the merged author again.
+    apply(update(json!({ "id": "5", "username": "renamed" }))).await;
+    forwarder.flush().await;
+    for merged in [
+        cache.message(test_id(10), test_id(11)).await.unwrap(),
+        store.message(test_id(10), test_id(11)).await.unwrap(),
+    ] {
+        let author = merged.author.unwrap();
+        assert_eq!(author.username, "renamed");
+        assert_eq!(
+            author.avatar.as_deref(),
+            Some("x"),
+            "memory and backend agree"
+        );
+    }
+    let merged = cache.message_arc(test_id(10), test_id(11)).await.unwrap();
+    assert!(Arc::ptr_eq(
+        merged.author.as_ref().unwrap(),
+        &cache.user_arc(test_id(5)).await.unwrap()
+    ));
+    assert_eq!(
+        before.author.as_ref().unwrap().username,
+        "a",
+        "old snapshot unchanged"
+    );
+
+    // After another eviction an explicit `null` clears; a partial without a
+    // username is not stored on its own.
+    apply(evict_5()).await;
+    apply(update(json!({ "id": "5", "avatar": null }))).await;
+    forwarder.flush().await;
+    for merged in [
+        cache.message(test_id(10), test_id(11)).await.unwrap(),
+        store.message(test_id(10), test_id(11)).await.unwrap(),
+    ] {
+        let author = merged.author.unwrap();
+        assert_eq!(author.avatar, None);
+        assert_eq!(author.username, "renamed");
+    }
+    assert!(cache.user(test_id(5)).await.is_none());
+}
+
+#[cfg(feature = "cache")]
+#[tokio::test]
 async fn members_and_messages_share_their_user_with_the_user_store() {
     let cache = crate::cache::CacheHandle::new();
     let guild = decode_event(
