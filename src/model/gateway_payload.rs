@@ -91,6 +91,12 @@ use super::{
 /// logged with `tracing::warn!`, instead of failing the whole dispatch and
 /// leaving the guild uncached. The guild's own fields, channels, threads,
 /// and roles must decode.
+///
+/// Leaving an element out does not delete it from the cache: the cache
+/// inserts what a GUILD_CREATE carries and removes nothing it lacks, so a
+/// member, presence, or voice state cached before (a repeated GUILD_CREATE,
+/// or one after an outage) keeps its old value until a later event for that
+/// user replaces or removes it, or the cache's size and TTL limits evict it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct GuildCreate {

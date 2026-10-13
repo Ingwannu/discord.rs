@@ -121,6 +121,7 @@ pub struct GuildMembersChunkPayload {
     /// fallback). Not a Discord field, so never serialized.
     /// `Context::fetch_members` turns a nonzero total into
     /// [`DiscordError::IncompleteMemberFetch`].
+    /// The cache keeps whatever it already held for a dropped member.
     #[serde(skip)]
     pub dropped_members: usize,
 }
