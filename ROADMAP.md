@@ -32,13 +32,19 @@
 |---|---|---|---|
 | 1 ✅ | REST 재시도 안전성(메서드·결과 모호성 기준), 버킷 식별(버킷 해시 + major parameter), 진단용 경로의 토큰 마스킹, 종료 close code 처리, 게이트웨이 워커 정리 보장 | M | 모호한 완료·재접속 가능 여부의 오분류 |
 | 1.5 ✅ | 2026-05-02 감사 이후 Discord 변경 반영: 채널 가리기(`CHANNEL_OBFUSCATED`, IDENTIFY `capabilities`, 11/16 강제), 대규모 봇 샤딩 `shard` 파라미터(9/15부터 필수), 초대 대상 사용자 API, `file_types`, Component Embed 수신, Application Identity Profile API, 빠져 있던 Social SDK 로비 경로. 공식 문서 `3714862` 기준 REST 234/234 | S–M | 기존 공개 타입 위에 추가하는 작업이라 3단계 타입 교체 때 함께 옮겨야 함 |
-| 2 | 내부 이벤트 처리(캐시·청크 대기·컬렉터)와 사용자 핸들러 실행 분리, 핸들러 작업 상한, 인터랙션 응답 상태(Unacknowledged → InFlight → Acknowledged, 취소 처리), 샤드 단위 캐시 무효화, 외부 캐시 백엔드 쓰기 순서 보장 | L | 순서 보장과 과부하 동작을 지키며 교착을 푸는 것 |
+| 2 ✅ | 내부 이벤트 처리(캐시·청크 대기·컬렉터)와 사용자 핸들러 실행 분리, 핸들러 작업 상한, 인터랙션 응답 상태(Unacknowledged → InFlight → Acknowledged, 취소 처리), 샤드 단위 캐시 무효화, 외부 캐시 백엔드 쓰기 순서 보장 | L | 순서 보장과 과부하 동작을 지키며 교착을 푸는 것 |
 | 3 ✅ | `Id<M>(NonZeroU64)` 타입 ID, 열린 판별값 newtype(`ChannelType(u8)` 등), 권한 표현 통일, `Embed.components`·`flags` 수신 필드(Component Embed) | L | 잘못된 기본 ID, 다형 대상(역할/사용자), 허용 값 축소 |
-| 4 | 누락/null/값을 구분하는 patch 필드 타입, 캐시 병합 수정, `Arc` 이벤트 전달, 직접 타입 디코딩, raw 보관 옵션(알 수 없는 이벤트·디코드 실패는 항상 보관), 참조 기반 컬렉터 필터 | L | 누락/null 구분이나 알 수 없는 payload 손실 |
-| 5 | 타입 요청·컴포넌트 모델과 빌더 출력, REST 이름 정리(`_typed` 제거), 응답 경로 통합, Component Embed 생성 빌더(웹사이트용 payload·`<script>` 태그·제한 검증, 2026-10-11 완료) | L | wire 형태 차이, 필드 누락 |
-| 6 | 멀티 프로세스 샤딩 IPC·종료·IDENTIFY 조율, 취소 가능한 오디오 읽기와 sink 전달 | L | 프로세스·작업 누수, 취소로 인한 PCM 프레임 손상 |
-| 7 | 권한 계산(`permissions_for`), 포매터, 리액션 컬렉터, 커맨드 옵션 검증(아래 부록 1) | M | 불완전한 캐시를 권위 있는 권한으로 오인, 과잉 검증 |
-| 8 | 라우트 기준 drift 리포트(아래 부록 2), 마이그레이션 가이드, compile-fail 테스트, MSRV 명시·검증, 할당 벤치마크 | M | drift 오탐, 검증되지 않은 마이그레이션 경로 |
+| 4 ✅ | 누락/null/값을 구분하는 patch 필드 타입, 캐시 병합 수정, `Arc` 이벤트 전달, 직접 타입 디코딩, raw 보관 옵션(알 수 없는 이벤트·디코드 실패는 항상 보관), 참조 기반 컬렉터 필터 | L | 누락/null 구분이나 알 수 없는 payload 손실 |
+| 5 ✅ | 타입 요청·컴포넌트 모델과 빌더 출력, REST 이름 정리(`_typed` 제거), 응답 경로 통합, Component Embed 생성 빌더(웹사이트용 payload·`<script>` 태그·제한 검증, 2026-10-11 완료) | L | wire 형태 차이, 필드 누락 |
+| 6 ✅ | 멀티 프로세스 샤딩 IPC·종료·IDENTIFY 조율, 취소 가능한 오디오 읽기와 sink 전달 | L | 프로세스·작업 누수, 취소로 인한 PCM 프레임 손상 |
+| 7 ✅ | 권한 계산(`permissions_for`), 포매터, 리액션 컬렉터, 커맨드 옵션 검증(아래 부록 1) | M | 불완전한 캐시를 권위 있는 권한으로 오인, 과잉 검증 |
+| 8 ✅ | 라우트 기준 drift 리포트(아래 부록 2), 마이그레이션 가이드(`discordrsdocs/docs/guide/migration-3.0.md`, 코드 조각 컴파일 검증), compile-fail 테스트, MSRV 명시·검증, 할당 벤치마크(`tests/perf_report`, `ci/perf-gates.json`, 비차단 `perf-report` CI). 남은 것: 3.0.0 버전 표기와 crates.io 배포(승인 필요) | M | drift 오탐, 검증되지 않은 마이그레이션 경로 |
+
+진행 상태(2026-10-13): 1~8단계 구현이 main에 들어갔다(각 브랜치는 GPT-6-astra 독립 리뷰 후 병합). 측정된 효과는
+`docs/design/perf-baseline.md`와 CHANGELOG "Unreleased (3.0.0)"에 있다. 대형 GUILD_CREATE 할당 508,698 → 17,744,
+MESSAGE_CREATE 573 → 20, 25길드 폭주 뒤 힙 386 → 64 MB, Components V2 메시지 송신 313 → 26, 인터랙션 응답 406 → 27.
+크레이트만 다시 빌드하는 시간(디버그, 같은 기계, 3회 교대 측정, 2026-10-13)은 4단계 직전 `23775d1` 대비 전체 기능
+33.7 → 34.8초(+3%), 기본 기능 20.6 → 22.4초(+9%)다. 요청 모델·라우트 목록·타입 빌더가 늘어난 몫이며, 의존성 빌드는 그대로다.
 
 3~5단계의 상세 설계(타입 ID와 0/센티널 예외, 열린 판별값, `Patch`/`Nullable`, `Arc<Event>` 봉투,
 요청 모델과 REST 이름, 실행 순서)는 `docs/design/3.0-types-events-requests.md`에 있다.
