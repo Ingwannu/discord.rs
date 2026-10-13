@@ -465,3 +465,22 @@ python3 ci/perf_diff.py docs/design/perf/23775d1.json target/perf-report.json \
   같음이 확인되면, 요약 스크립트가 회귀 때 실패하게 하고 `continue-on-error`를 빼서 (2)로 올릴
   수 있다(이 문서와 워크플로를 함께 고친다).
 ```
+
+## 11. 실전 읽기 전용 검증 (2026-10-13, main `5a81f20`)
+
+운영 중인 봇 하나의 토큰으로, 서버를 바꾸지 않는 범위에서 3.0을 실제 Discord에 붙여 봤다. 토큰과 길드 이름은
+기록하지 않는다. REST는 GET만 보냈고, 게이트웨이는 presence 없이 특권 없는 인텐트
+(GUILDS, GUILD_MESSAGES, GUILD_MESSAGE_REACTIONS, GUILD_VOICE_STATES, GUILD_EXPRESSIONS)로
+IDENTIFY했다. 인터랙션에는 응답하지 않았고 메시지를 보내지 않았다. 측정 프로그램은 리포 밖 임시 크레이트다
+(`discordrs` path 의존, release 빌드).
+
+| 항목 | 결과 |
+|---|---|
+| REST GET 15건 (`/users/@me`, `/gateway/bot`, 길드 목록 30개, 글로벌 커맨드 15개, 길드 3곳의 길드·채널 70/69/21개·최근 메시지 5개·이모지 101/34/37개) | 전부 성공, 타입 디코딩 오류 0 |
+| 게이트웨이 60초 | READY 1, GUILD_CREATE 30(채널 최대 118개, 역할 최대 72개), 디코딩 실패 0, 알 수 없는 디스패치 0 |
+| 게이트웨이 600초 | 13종 99개(MESSAGE_CREATE 13, MESSAGE_UPDATE 6, MESSAGE_DELETE 3, MESSAGE_REACTION_ADD 3, CHANNEL_CREATE/UPDATE/DELETE 3/6/3, THREAD_CREATE 1, VOICE_STATE_UPDATE 19, VOICE_CHANNEL_START_TIME_UPDATE 8, VOICE_CHANNEL_STATUS_UPDATE 3 등), 디코딩 실패 0, 알 수 없는 디스패치 0 |
+| 프로세스 RSS | 시작 4.4 MB → REST 뒤 9.5 MB → 길드 30개 접속·캐시 뒤 12.9 MB → 600초 뒤 13.6 MB |
+
+검증하지 못한 것: 음성 연결(봇이 음성 채널에 들어가면 서버에 보이는 변화가 생겨 하지 않았다), 인터랙션
+응답 경로, 쓰기 REST, 특권 인텐트(GUILD_MEMBERS, GUILD_PRESENCES, MESSAGE_CONTENT)가 있는 큰 길드의
+멤버·프레즌스 페이로드.
