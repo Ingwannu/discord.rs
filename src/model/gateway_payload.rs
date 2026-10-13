@@ -574,7 +574,7 @@ impl<T> Lenient<Vec<T>> {
 // - 장점, 단점 및 영향: 길드가 통째로 사라지는 대신 원소 몇 개가 빠지고 경고가 남는다(캐시에서
 //   그 멤버·presence만 없다). 실패한 GUILD_CREATE는 두 번 디코딩한다. 관대한 경로는 serde_json
 //   텍스트에서만 동작하므로 공개 모델의 `Deserialize`(`Value` 등 모든 입력)는 엄격한 그대로다.
-//   로그에는 페이로드 값을 남기지 않는다(`redacted`).
+//   로그에는 페이로드 값을 남기지 않는다(`redacted`: 오류 범주·위치와 디코더가 쓴 `expected` 절만).
 
 /// What a lenient decode dropped, per kind of element.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -595,33 +595,75 @@ impl fmt::Display for Skipped {
     }
 }
 
-/// `error`'s message with every quoted value elided, for logs.
+/// Why `error` happened, for logs, with nothing taken from the payload.
 ///
-/// serde quotes the offending value (`invalid type: string "Get Valorant
-/// Tracker", expected ...`), and in a presence or member that is user
-/// content: activity text, nicknames, URLs. The kind of mismatch, what was
-/// expected, and the position stay, which is what a bug report needs.
+/// serde's messages quote the offending value (`invalid type: string "Get
+/// Valorant Tracker"`, ``integer `1234567890` ``, ``unknown variant `x` ``),
+/// and in a presence or member that is user content: activity text,
+/// nicknames, IDs. The reason is therefore rebuilt from parts that cannot
+/// carry it: serde_json's error category and position, plus, for serde's
+/// structured messages only, the clause the decoder wrote (the `expected`
+/// part, or the field of `missing field`). Any other message (custom errors
+/// may embed values) contributes nothing.
+///
+/// Holds as long as visitors' `expecting` texts and `missing_field` names
+/// are static, as every one in this crate is.
 pub(crate) fn redacted(error: &serde_json::Error) -> String {
-    let message = error.to_string();
-    let mut out = String::with_capacity(message.len());
-    let mut chars = message.chars();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c == '"' {
-            // serde writes the value with `{:?}`, so `\"` is an escape.
-            let mut escaped = false;
-            for c in chars.by_ref() {
-                match c {
-                    _ if escaped => escaped = false,
-                    '\\' => escaped = true,
-                    '"' => break,
-                    _ => {}
-                }
-            }
-            out.push_str("…\"");
-        }
+    let kind = match error.classify() {
+        serde_json::error::Category::Io => "I/O error",
+        serde_json::error::Category::Syntax => "syntax error",
+        serde_json::error::Category::Data => "data error",
+        serde_json::error::Category::Eof => "unexpected end of input",
+    };
+    let (line, column) = (error.line(), error.column());
+    match decoder_clause(&error.to_string()) {
+        Some(clause) => format!("{kind}: {clause} at line {line} column {column}"),
+        None => format!("{kind} at line {line} column {column}"),
     }
-    out
+}
+
+/// The part of a serde message that the decoder wrote, if the message has
+/// one of serde's structured shapes.
+fn decoder_clause(message: &str) -> Option<String> {
+    /// serde's `invalid_type` / `invalid_value` / `invalid_length` /
+    /// `unknown_variant` messages: `<prefix><value>, expected <expected>`.
+    /// The value comes first, so the last `, expected ` is serde's own even
+    /// when a quoted value contains the same text.
+    const VALUE_THEN_EXPECTED: [&str; 4] = [
+        "invalid type: ",
+        "invalid value: ",
+        "invalid length ",
+        "unknown variant ",
+    ];
+    /// `missing_field` / `duplicate_field` name a field of the decoder.
+    const FIELD: [&str; 2] = ["missing field `", "duplicate field `"];
+
+    let mut message = message;
+    // serde_json appends ` at line L column C`, once per nesting level (a
+    // GUILD_CREATE field error is wrapped once more).
+    while let Some(head) = without_position(message) {
+        message = head;
+    }
+    if FIELD.iter().any(|prefix| message.starts_with(prefix)) {
+        return Some(message.to_owned());
+    }
+    if VALUE_THEN_EXPECTED
+        .iter()
+        .any(|prefix| message.starts_with(prefix))
+    {
+        return message
+            .rsplit_once(", expected ")
+            .map(|(_, expected)| format!("expected {expected}"));
+    }
+    None
+}
+
+/// `message` without a trailing ` at line L column C`.
+fn without_position(message: &str) -> Option<&str> {
+    let (head, position) = message.rsplit_once(" at line ")?;
+    let (line, column) = position.split_once(" column ")?;
+    let number = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    (number(line) && number(column)).then_some(head)
 }
 
 /// Visits a JSON array in serde_json text and hands each element to the

@@ -315,19 +315,134 @@ fn guild_create_keeps_guild_structure_strict() {
     }
 }
 
+/// Values that must not reach a logged reason. The numbers are larger than
+/// any line or column these payloads produce.
+const LEAKS: [&str; 9] = [
+    "Valorant",
+    "leak",
+    "987654321",
+    "123.456789",
+    "true",
+    "false",
+    "array-secret",
+    "object-secret",
+    "424242",
+];
+
+fn assert_no_value(reason: &str) {
+    for leak in LEAKS {
+        assert!(!reason.contains(leak), "{leak:?} leaked: {reason}");
+    }
+}
+
 #[test]
 fn redacted_errors_keep_the_reason_but_not_the_values() {
-    let error = serde_json::from_str::<Vec<u8>>(r#"["Get \"Valorant\" Tracker"]"#).unwrap_err();
-    assert!(error.to_string().contains("Valorant"));
-    let message = redacted(&error);
-    assert!(!message.contains("Valorant"), "{message}");
-    assert_eq!(
-        message,
-        "invalid type: string \"…\", expected u8 at line 1 column 27"
-    );
+    // An activity with one wrong-shaped field, the value serde's own
+    // message shows (arrays and objects show only their kind), and the
+    // reason logged instead.
+    let cases = [
+        // A string where a number belongs; the quoted value even contains
+        // serde's own separator.
+        (
+            r#"{"name":"n","type":"Get \"Valorant\", expected leak"}"#,
+            Some("Valorant"),
+            "data error: expected u8",
+        ),
+        // Numbers, booleans, arrays, and objects where a string belongs.
+        (
+            r#"{"name":987654321,"type":0}"#,
+            Some("987654321"),
+            "data error: expected a string",
+        ),
+        (
+            r#"{"name":123.456789,"type":0}"#,
+            Some("123.456789"),
+            "data error: expected a string",
+        ),
+        (
+            r#"{"name":true,"type":0}"#,
+            Some("true"),
+            "data error: expected a string",
+        ),
+        (
+            r#"{"name":false,"type":0}"#,
+            Some("false"),
+            "data error: expected a string",
+        ),
+        (
+            r#"{"name":["array-secret",424242],"type":0}"#,
+            None,
+            "data error: expected a string",
+        ),
+        (
+            r#"{"name":{"object-secret":424242},"type":0}"#,
+            None,
+            "data error: expected a string",
+        ),
+        // Out of range for the discriminant's storage.
+        (
+            r#"{"name":"n","type":424242}"#,
+            Some("424242"),
+            "data error: expected u8",
+        ),
+        (
+            r#"{"type":0,"state":"object-secret"}"#,
+            None,
+            "data error: missing field `name`",
+        ),
+    ];
+    for (json, shown, reason) in cases {
+        let error = serde_json::from_str::<Activity>(json).unwrap_err();
+        if let Some(shown) = shown {
+            assert!(error.to_string().contains(shown), "{error}");
+        }
+        let logged = redacted(&error);
+        assert!(logged.starts_with(reason), "{json}: {logged}");
+        assert!(logged.contains(" at line 1 column "), "{logged}");
+        assert_no_value(&logged);
+    }
 
-    let missing = serde_json::from_str::<Member>(r#"{"roles":"x"}"#).unwrap_err();
-    assert!(redacted(&missing).starts_with("invalid type: string \"…\""));
+    // GUILD_CREATE wraps the guild's own field errors once more: both
+    // positions leave the clause and the outer one is reported.
+    let error = decode_available(r#"{"id":"10","name":987654321}"#).unwrap_err();
+    assert!(error.to_string().contains("987654321"));
+    let logged = redacted(&error);
+    assert!(
+        logged.starts_with("data error: expected a string at line 1 column "),
+        "{logged}"
+    );
+    assert_no_value(&logged);
+
+    // A message without serde's structure (custom errors may embed the
+    // value) contributes only its category and position.
+    let custom = <serde_json::Error as de::Error>::custom("option value 424242 is out of range");
+    assert_eq!(redacted(&custom), "data error at line 0 column 0");
+
+    // Syntax errors keep their category.
+    let error = serde_json::from_str::<Activity>(r#"{"name":"x" "#).unwrap_err();
+    assert!(redacted(&error).starts_with("unexpected end of input at line 1 column "));
+    let error = serde_json::from_str::<Activity>(r#"{"name":"x",}"#).unwrap_err();
+    assert!(redacted(&error).starts_with("syntax error at line 1 column "));
+}
+
+#[test]
+fn redacted_keeps_only_the_last_expected_clause_of_structured_messages() {
+    // A quoted value containing serde's separator does not move the split.
+    assert_eq!(
+        decoder_clause(r#"invalid type: string "a, expected b", expected u8 at line 1 column 9"#)
+            .as_deref(),
+        Some("expected u8")
+    );
+    assert_eq!(
+        decoder_clause("unknown variant `x`, expected one of `a`, `b`").as_deref(),
+        Some("expected one of `a`, `b`")
+    );
+    assert_eq!(
+        decoder_clause("invalid length 424242, expected a tuple of size 2").as_deref(),
+        Some("expected a tuple of size 2")
+    );
+    assert_eq!(decoder_clause("option value 424242 is out of range"), None);
+    assert_eq!(decoder_clause("invalid snowflake"), None);
 }
 
 fn cached_message() -> Message {
