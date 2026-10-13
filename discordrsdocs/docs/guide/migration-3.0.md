@@ -790,7 +790,7 @@ async fn rest_calls(
 |---|---|---|
 | `update_channel(id, &Value)`, `update_channel_typed` | `update_channel(id, &request::ModifyChannel)` | `_typed` removed |
 | `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | the 2.x struct (JSON `components`/`embeds`) is gone; `discordrs::CreateMessage` and the prelude name the new type, `model::CreateMessage` is a deprecated alias of it (build with `new()` and setters) |
-| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, … (48 REST bodies) | `request::ModifyGuild`, … (same name) | the same structs with public fields and `Default`, moved to `discordrs::request`; they no longer implement `Deserialize`. `discordrs::X` and the prelude keep working; `model::X` is a deprecated alias |
+| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, … (49 REST bodies) | `request::ModifyGuild`, … (same name) | the same structs with public fields and `Default`, moved to `discordrs::request`; they no longer implement `Deserialize`. `discordrs::X` and the prelude keep working; `model::X` is a deprecated alias |
 | `create_interaction_response_typed(id, token, &InteractionCallbackResponse)` | `create_interaction_response(id, token, &request::InteractionResponse)` | removed with `InteractionCallbackResponse` (`kind` + JSON `data`); a callback the enum does not model goes through `InteractionResponse::Raw(RawInteractionResponse)` |
 | `ModifyStageInstance { privacy_level }` | `ModifyStageInstance { topic, privacy_level }` | `topic` added; a literal that lists every field needs `..Default::default()` |
 | `update_message`, `update_message_with_files` | `edit_message(_with_files)(.., &request::EditMessage)` | removed |
@@ -1402,7 +1402,7 @@ The crate now enforces its own code rules with lints (no `unwrap`/`panic!`/`as` 
 | `CheckboxBuilder::checked` | `default_checked` |
 | `ModalBuilder::add_text_input_row`, `LegacyTextInputRow::new` (text inputs in action rows) | `ModalBuilder::add_text_input`, `Label::new(label, input)` |
 | `batch_edit_application_command_permissions` | `edit_application_command_permissions` (Discord disabled batch edits) |
-| `model::X` for the 48 request bodies that moved, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
+| `model::X` for the 49 request bodies that moved, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
 | 35 REST renames (`*_typed`, `*_from_request`, `*_config`, …) | the canonical method |
 | `create_guild`, `delete_guild`, `create_guild_from_template`, `modify_guild_mfa_level`, `Guild::delete`, `Guild::set_mfa_level` | none: Discord removed guild creation by applications (2025-07-15) |
 

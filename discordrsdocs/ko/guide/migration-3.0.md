@@ -788,7 +788,7 @@ async fn rest_calls(
 |---|---|---|
 | `update_channel(id, &Value)`, `update_channel_typed` | `update_channel(id, &request::ModifyChannel)` | `_typed` 삭제 |
 | `create_message(id, &model::CreateMessage)` | `create_message(id, &request::CreateMessage)` | 2.x 구조체(JSON `components`/`embeds`)는 없어졌습니다. `discordrs::CreateMessage`와 prelude는 새 타입을 가리키고, `model::CreateMessage`는 그 타입의 deprecated 별칭(`new()`와 setter로 만듦) |
-| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, …(REST 본문 48개) | `request::ModifyGuild`, …(같은 이름) | 공개 필드와 `Default`를 그대로 둔 채 `discordrs::request`로 옮긴 같은 구조체. `Deserialize`는 더 이상 구현하지 않습니다. `discordrs::X`와 prelude는 그대로 동작하고 `model::X`는 deprecated 별칭 |
+| `model::ModifyGuild`, `model::CreateGuildRole`, `model::ModifyGuildMember`, …(REST 본문 49개) | `request::ModifyGuild`, …(같은 이름) | 공개 필드와 `Default`를 그대로 둔 채 `discordrs::request`로 옮긴 같은 구조체. `Deserialize`는 더 이상 구현하지 않습니다. `discordrs::X`와 prelude는 그대로 동작하고 `model::X`는 deprecated 별칭 |
 | `create_interaction_response_typed(id, token, &InteractionCallbackResponse)` | `create_interaction_response(id, token, &request::InteractionResponse)` | `InteractionCallbackResponse`(`kind` + JSON `data`)와 함께 삭제. enum에 없는 콜백은 `InteractionResponse::Raw(RawInteractionResponse)`로 보냄 |
 | `ModifyStageInstance { privacy_level }` | `ModifyStageInstance { topic, privacy_level }` | `topic` 추가. 모든 필드를 나열한 리터럴은 `..Default::default()` 필요 |
 | `update_message`, `update_message_with_files` | `edit_message(_with_files)(.., &request::EditMessage)` | 삭제 |
@@ -1400,7 +1400,7 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | `CheckboxBuilder::checked` | `default_checked` |
 | `ModalBuilder::add_text_input_row`, `LegacyTextInputRow::new`(Action Row 안의 텍스트 입력) | `ModalBuilder::add_text_input`, `Label::new(label, input)` |
 | `batch_edit_application_command_permissions` | `edit_application_command_permissions`(Discord가 일괄 수정을 막음) |
-| 옮긴 요청 본문 48개의 `model::X`, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
+| 옮긴 요청 본문 49개의 `model::X`, `model::CreateMessage`, `model::CreatePoll` | `request::X` |
 | REST 이름 변경 35개(`*_typed`, `*_from_request`, `*_config`, …) | 정식 메서드 |
 | `create_guild`, `delete_guild`, `create_guild_from_template`, `modify_guild_mfa_level`, `Guild::delete`, `Guild::set_mfa_level` | 없음: Discord가 애플리케이션의 길드 생성을 없앰(2025-07-15) |
 

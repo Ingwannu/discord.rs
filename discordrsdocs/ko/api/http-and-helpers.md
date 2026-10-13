@@ -232,16 +232,12 @@ rest.delete_guild(from_template.id).await?;
 `MessageReference::reply(...)`와 `MessageReference::forward(...)`는 타입드 참조(`MessageReferenceType::DEFAULT` / `FORWARD`)를 생성하고, `forward_message(...)`는 한 번의 호출로 메시지를 전달합니다. discord.js의 `message.forward(channel)`에 해당합니다.
 
 ```rust
-use discordrs::{CreateMessage, MessageReference};
+use discordrs::request::CreateMessage;
 
 // 같은 채널에서 답장
 rest.create_message(
     channel_id,
-    &CreateMessage {
-        content: Some("확인했습니다!".to_string()),
-        message_reference: Some(MessageReference::reply(message_id)),
-        ..Default::default()
-    },
+    &CreateMessage::new().content("확인했습니다!").reply_to(message_id),
 )
 .await?;
 
