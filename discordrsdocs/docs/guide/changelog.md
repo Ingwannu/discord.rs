@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (3.0.0)
+## 3.0.0 - 2026-10-13
 
 - REST 5xx/timeout retries are limited to requests that are safe to repeat (GET/HEAD/OPTIONS/PUT/DELETE, and nonce-enforced channel message creates within 60 seconds); `RestClientBuilder::retry_non_idempotent_requests(true)` opts POST/PATCH back in. The managed transport no longer follows redirects.
 - Rate-limit buckets are scoped by major parameter, so one channel's 429 no longer blocks other channels sharing a bucket hash.

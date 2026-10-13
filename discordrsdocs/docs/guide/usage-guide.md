@@ -9,28 +9,28 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # Core default with cache storage
-discordrs = "2.2.0"
+discordrs = "3.0.0"
 
 # Typed gateway runtime
-discordrs = { version = "2.2.0", features = ["gateway"] }
+discordrs = { version = "3.0.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "2.2.0", default-features = false }
+discordrs = { version = "3.0.0", default-features = false }
 
 # Typed gateway runtime with collectors
-discordrs = { version = "2.2.0", features = ["gateway", "collectors"] }
+discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "2.2.0", features = ["interactions"] }
+discordrs = { version = "3.0.0", features = ["interactions"] }
 
 # Voice receive and Opus decode
-discordrs = { version = "2.2.0", features = ["voice"] }
+discordrs = { version = "3.0.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
 
 # DAVE/MLS receive and outbound media hook
-discordrs = { version = "2.2.0", features = ["voice", "dave"] }
+discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client

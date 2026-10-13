@@ -41,7 +41,7 @@
 | 8 ✅ | 라우트 기준 drift 리포트(아래 부록 2), 마이그레이션 가이드(`discordrsdocs/docs/guide/migration-3.0.md`, 코드 조각 컴파일 검증), compile-fail 테스트, MSRV 명시·검증, 할당 벤치마크(`tests/perf_report`, `ci/perf-gates.json`, 비차단 `perf-report` CI). 남은 것: 3.0.0 버전 표기와 crates.io 배포(승인 필요) | M | drift 오탐, 검증되지 않은 마이그레이션 경로 |
 
 진행 상태(2026-10-13): 1~8단계 구현이 main에 들어갔다(각 브랜치는 GPT-6-astra 독립 리뷰 후 병합). 측정된 효과는
-`docs/design/perf-baseline.md`와 CHANGELOG "Unreleased (3.0.0)"에 있다. 대형 GUILD_CREATE 할당 508,698 → 17,744,
+`docs/design/perf-baseline.md`와 CHANGELOG "3.0.0"에 있다. 대형 GUILD_CREATE 할당 508,698 → 17,744,
 MESSAGE_CREATE 573 → 20, 25길드 폭주 뒤 힙 386 → 64 MB, Components V2 메시지 송신 313 → 26, 인터랙션 응답 406 → 27.
 크레이트만 다시 빌드하는 시간(디버그, 같은 기계, 3회 교대 측정, 2026-10-13)은 4단계 직전 `23775d1` 대비 전체 기능
 33.7 → 34.8초(+3%), 기본 기능 20.6 → 22.4초(+9%)다. 요청 모델·라우트 목록·타입 빌더가 늘어난 몫이며, 의존성 빌드는 그대로다.

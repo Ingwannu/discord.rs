@@ -29,24 +29,24 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "2.2.0"
+discordrs = "3.0.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "2.2.0", features = ["gateway"] }
+discordrs = { version = "3.0.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "2.2.0", features = ["interactions"] }
+discordrs = { version = "3.0.0", features = ["interactions"] }
 
 # Both runtime modes
-discordrs = { version = "2.2.0", features = ["gateway", "interactions"] }
+discordrs = { version = "3.0.0", features = ["gateway", "interactions"] }
 
 # Voice playback/receive and DAVE hook
-discordrs = { version = "2.2.0", features = ["voice"] }
-discordrs = { version = "2.2.0", features = ["voice", "voice-encode"] }
-discordrs = { version = "2.2.0", features = ["voice", "dave"] }
+discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## Quick Example

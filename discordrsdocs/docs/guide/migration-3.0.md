@@ -1,6 +1,6 @@
 # Migrating from 2.x to 3.0
 
-This guide takes a bot written against discord.rs **2.0.2** (the last release on crates.io) or **2.2.0** (the unpublished 2.x line that was on `main`) to 3.0. Where the two 2.x versions differ, the guide says so; "2.x" means both. It covers the breaking changes listed under "Unreleased (3.0.0)" in the CHANGELOG, grouped by area; long lists (every REST rename, every discriminant type, every retyped model field) link to the complete tables on the API pages.
+This guide takes a bot written against discord.rs **2.0.2** (the last release on crates.io) or **2.2.0** (the unpublished 2.x line that was on `main`) to 3.0. Where the two 2.x versions differ, the guide says so; "2.x" means both. It covers the breaking changes listed under "3.0.0" in the CHANGELOG, grouped by area; long lists (every REST rename, every discriminant type, every retyped model field) link to the complete tables on the API pages.
 
 <!--
 Every `rust` block in this guide is checked by tests/migration_guide.rs:
