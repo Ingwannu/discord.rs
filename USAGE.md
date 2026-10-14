@@ -1048,7 +1048,7 @@ Typed slash/autocomplete input now keeps real user-entered option data. `interac
 
 ## 7.5 Route Interactions with `AppFramework`
 
-When the `interactions` feature is enabled, `AppFramework` provides a small high-level routing layer on top of `TypedInteractionHandler`. It routes slash/user/message commands by command name, components by `custom_id`, and modal submissions by `custom_id`.
+When the `interactions` feature is enabled, `AppFramework` provides a small high-level routing layer on top of `TypedInteractionHandler`. It routes slash/user/message commands by command name, autocomplete by command name on its own route (`autocomplete(name, handler)`), components by `custom_id`, and modal submissions by `custom_id`. Autocomplete does not use the command's cooldown and is answered with an empty list of choices whenever a guard, a cooldown, or a missing route would otherwise answer it with a message, which Discord rejects for autocomplete.
 
 ```rust
 use discordrs::request::{InteractionMessage, InteractionResponse};

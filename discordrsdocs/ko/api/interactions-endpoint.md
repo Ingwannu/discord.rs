@@ -97,6 +97,8 @@ let app = AppFramework::builder()
 
 라우트는 `EndpointReply`로 변환되는 값을 반환합니다(`InteractionResponse`, 또는 REST로 응답했다면 `EndpointReply::Accepted`). 가드는 `Result<(), EndpointReply>`를 반환합니다.
 
+자동완성(autocomplete)은 명령과 다른 라우트입니다(3.0): `autocomplete(name, handler)`로 등록하고 키는 `RouteKey::Autocomplete(name)`입니다. 2.x에서는 `RouteKey::Command(name)`으로 라우팅되어, 옵션을 입력하기만 해도 명령의 쿨다운이 시작되고 이후 자동완성에는 쿨다운 메시지(자동완성에는 무효)가 가며 정작 명령은 거부됐습니다. 이제 자동완성에는 따로 설정하지 않는 한 쿨다운이 없고, 가드나 쿨다운이 거부하거나 맞는 `autocomplete(...)` 라우트가 없거나(명령 핸들러는 호출하지 않음) 라우트가 다른 응답 타입을 반환하면 빈 선택지로 답합니다. Discord는 자동완성에 `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT`만 받기 때문입니다.
+
 ## 2.x에서 옮기기
 
 | 2.x | 3.0 |
@@ -110,3 +112,4 @@ let app = AppFramework::builder()
 | `DeferredUpdate` | `InteractionResponse::DeferredUpdateMessage` |
 | `Modal(ModalBuilder)` | `InteractionResponse::modal(builder)`(`Modal` 또는 `ModalBuilder`) |
 | `type` 키가 있는 `Raw(Value)` | `InteractionResponse::Raw(RawInteractionResponse::new(kind).data(&value)?)` |
+| `command(name, ..)`가 자동완성도 받음 | `autocomplete(name, ..)`(`RouteKey::Autocomplete`). 없으면 빈 선택지 |

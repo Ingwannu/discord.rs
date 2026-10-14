@@ -1123,6 +1123,7 @@ fn pay_command() -> Result<CommandDefinition, DiscordError> {
 | 핸들러가 `InteractionResponse`를 반환 | `EndpointReply`를 반환(`response.into()`, REST로 응답한 뒤에만 `EndpointReply::Accepted`) |
 | `AppFramework` 라우트, `FrameworkFuture`, 가드(`Result<(), InteractionResponse>`) | 라우트는 `impl Into<EndpointReply>`를 반환, `FrameworkFuture`는 `EndpointReply`로 끝나고, 가드는 `Result<(), EndpointReply>`를 반환 |
 | `interactions_endpoint`, `typed_interactions_endpoint`(잘못된 키에 panic) | `try_interactions_endpoint`, `try_typed_interactions_endpoint`(`Result` 반환) |
+| `AppFramework`: `command(name, ..)`가 자동완성도 `RouteKey::Command(name)`과 그 쿨다운으로 받음 | `autocomplete(name, ..)`와 `RouteKey::Autocomplete(name)`. 따로 정하지 않으면 쿨다운 없음. 자동완성 라우트가 없거나 가드·쿨다운이 거부하면 빈 선택지로 응답 |
 | `defer_interaction`, `followup_message`, `edit_original_response` 등 `InteractionResponder`와 겹치는 헬퍼(2.0.2) | `InteractionResponder`: `defer`, `follow_up`, `edit_reply`, …(헬퍼 11개 deprecated, 15절 참고) |
 | `respond_with_message`, `respond_to_interaction` | deprecated 아님: 이제 응답 상태를 공유하는 상태 없는 헬퍼(예제가 옮겨 가면 deprecated 예정). `reply` / `reply_ephemeral` 권장 |
 | `InteractionReplyData`, `From<CreateMessage>` | `request::InteractionMessage`(deprecated 별칭). `TryFrom<CreateMessage>`는 채널 전용 필드를 거부 |

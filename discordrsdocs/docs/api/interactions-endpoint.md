@@ -123,6 +123,7 @@ Notes:
 `AppFramework` implements `TypedInteractionHandler` and is cheaply `Clone` (clones share routes and cooldown state; 3.0), so it can be passed directly to `try_typed_interactions_endpoint(...)`. It routes:
 
 - slash/user/message commands by command name
+- autocomplete by command name, as its own route (`autocomplete(name, handler)`, `RouteKey::Autocomplete`; 3.0)
 - component interactions by `custom_id`
 - modal submissions by `custom_id`
 
@@ -139,6 +140,8 @@ let handler = AppFramework::builder()
 
 A route returns anything that converts into an `EndpointReply` (an `InteractionResponse`, or `EndpointReply::Accepted` when it responds over REST). Guards return `Result<(), EndpointReply>`. Use guards for shared authorization checks and `fallback(...)` for a custom unknown-route response.
 
+Autocomplete never shares the command's cooldown, and it is never answered with a message: a guard or cooldown rejection, a missing `autocomplete(...)` route, or a route that returns another response type is answered with an empty list of choices. See "Autocomplete" in [Application Framework](app-framework.md).
+
 ## Migrating from 2.x
 
 | 2.x | 3.0 |
@@ -152,4 +155,5 @@ A route returns anything that converts into an `EndpointReply` (an `InteractionR
 | `DeferredUpdate` | `InteractionResponse::DeferredUpdateMessage` |
 | `Modal(ModalBuilder)` | `InteractionResponse::modal(builder)` (`Modal` or `ModalBuilder`) |
 | `Raw(Value)` with a `type` key | `InteractionResponse::Raw(RawInteractionResponse::new(kind).data(&value)?)` |
+| `command(name, ..)` also received autocomplete | `autocomplete(name, ..)` (`RouteKey::Autocomplete`); without it, no choices |
 

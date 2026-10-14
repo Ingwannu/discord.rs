@@ -1125,6 +1125,7 @@ fn pay_command() -> Result<CommandDefinition, DiscordError> {
 | handler returns `InteractionResponse` | returns `EndpointReply` (`response.into()`, or `EndpointReply::Accepted` only after answering over REST) |
 | `AppFramework` routes, `FrameworkFuture`, and guards (`Result<(), InteractionResponse>`) | routes return `impl Into<EndpointReply>`, `FrameworkFuture` resolves to `EndpointReply`, guards return `Result<(), EndpointReply>` |
 | `interactions_endpoint`, `typed_interactions_endpoint` (panic on a bad key) | `try_interactions_endpoint`, `try_typed_interactions_endpoint` (return `Result`) |
+| `AppFramework`: `command(name, ..)` also received autocomplete, under `RouteKey::Command(name)` and its cooldown | `autocomplete(name, ..)` and `RouteKey::Autocomplete(name)`, with no cooldown unless set; without an autocomplete route, or when a guard or cooldown rejects it, autocomplete is answered with no choices |
 | `defer_interaction`, `followup_message`, `edit_original_response`, and the other helpers duplicated by `InteractionResponder` (2.0.2) | `InteractionResponder`: `defer`, `follow_up`, `edit_reply`, … (11 helpers are deprecated, see section 15) |
 | `respond_with_message`, `respond_to_interaction` | not deprecated: stateless helpers that now share the response state (deprecation is planned once the examples move off them); prefer `reply` / `reply_ephemeral` |
 | `InteractionReplyData`, `From<CreateMessage>` | `request::InteractionMessage` (deprecated alias); `TryFrom<CreateMessage>` rejects channel-only fields |

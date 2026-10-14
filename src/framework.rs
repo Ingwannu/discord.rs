@@ -6,9 +6,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tracing::debug;
+
 use crate::{
     interactions::TypedInteractionHandler,
-    model::{Interaction, InteractionContextData, UserId},
+    model::{Interaction, InteractionContextData, InteractionResponseType, UserId},
     request::{EndpointReply, InteractionMessage, InteractionResponse},
     response::InteractionResponder,
 };
@@ -19,8 +21,12 @@ pub type FrameworkFuture = Pin<Box<dyn Future<Output = EndpointReply> + Send>>;
 /// Route key used by the application framework.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum RouteKey {
-    /// Slash, user-context, message-context, or autocomplete command name.
+    /// Slash, user-context, message-context, or entry-point command name.
     Command(String),
+    /// Autocomplete for the command with this name: a separate route from
+    /// [`Self::Command`], with its own handler and no cooldown unless one is
+    /// set for this key (3.0; it shared the command's key before).
+    Autocomplete(String),
     /// Message component `custom_id`.
     Component(String),
     /// Modal submit `custom_id`.
@@ -111,6 +117,55 @@ fn ephemeral_notice(content: &str) -> EndpointReply {
     InteractionResponse::reply(InteractionMessage::from(content).ephemeral(true)).into()
 }
 
+// [Decision Log] Autocomplete as its own route
+// - Purpose: typing into an autocomplete option must not start, consume, or
+//   trip the command's cooldown, and must never get a message as its answer.
+// - Before: `route_key` mapped autocomplete to `RouteKey::Command(name)`, so
+//   it ran the command's guards, cooldown, and handler. With a 10 s cooldown
+//   the first keystroke started it, later keystrokes got the type-4
+//   cooldown message (Discord accepts only type 8 for autocomplete), and the
+//   command itself was then refused.
+// - Alternatives: (1) keep the shared key and skip cooldowns for
+//   autocomplete; (2) a separate key that falls back to the command's
+//   handler when no autocomplete route exists; (3) a separate key and route,
+//   with no fallback to the command's handler.
+// - Chosen: (3), and every autocomplete answer that is not a list of choices
+//   (guard, cooldown, fallback, or the route itself) becomes no choices.
+// - Why: (1) still sends the command's guard messages and its handler's
+//   replies to autocomplete. (2) runs a command handler on every keystroke,
+//   with whatever side effects it has, unless the handler checks the
+//   interaction type itself.
+// - Trade-offs: a 2.x app that answered autocomplete inside `command(...)`
+//   now gets no choices until it registers `autocomplete(...)` (3.0 is the
+//   breaking release; the migration guide lists it). Replacing a wrong
+//   answer hides a handler bug from Discord's error, so it is logged at
+//   debug level.
+
+/// The answer to an autocomplete interaction: `reply` when it is a list of
+/// choices (or REST already answered), otherwise an empty list of choices.
+///
+/// Discord accepts only `APPLICATION_COMMAND_AUTOCOMPLETE_RESULT` for
+/// autocomplete. A guard, a cooldown, or the fallback answers with a message
+/// meant for commands, and Discord would reject it and show the user that
+/// loading the options failed; no choices is what "nothing to suggest"
+/// looks like instead.
+fn autocomplete_reply(route: &RouteKey, reply: EndpointReply) -> EndpointReply {
+    match reply {
+        EndpointReply::Inline(response)
+            if response.kind()
+                != InteractionResponseType::APPLICATION_COMMAND_AUTOCOMPLETE_RESULT =>
+        {
+            debug!(
+                ?route,
+                kind = ?response.kind(),
+                "answering autocomplete with no choices instead of a non-autocomplete response"
+            );
+            InteractionResponse::autocomplete([]).into()
+        }
+        reply => reply,
+    }
+}
+
 /// Minimal high-level interaction router for command, component, and modal apps.
 ///
 /// The framework is intentionally small: it composes typed interactions,
@@ -147,6 +202,11 @@ impl AppFramework {
     /// typed interactions endpoint, the endpoint sends it and records it in
     /// the interaction's shared response state, or answers `202` with no body
     /// when the route already responded over REST.
+    ///
+    /// An autocomplete interaction is never answered with anything but
+    /// choices: when a guard or cooldown rejects it, no autocomplete route
+    /// matches, or its route answers with another response type, the reply
+    /// is an empty list of choices.
     pub async fn dispatch(
         &self,
         context: InteractionContextData,
@@ -159,6 +219,15 @@ impl AppFramework {
             route: route.clone(),
         };
 
+        let reply = self.run_route(app_context).await;
+        if matches!(route, RouteKey::Autocomplete(_)) {
+            autocomplete_reply(&route, reply)
+        } else {
+            reply
+        }
+    }
+
+    async fn run_route(&self, app_context: AppContext) -> EndpointReply {
         for guard in &self.guards {
             if let Err(response) = guard.check(&app_context) {
                 return response;
@@ -170,7 +239,7 @@ impl AppFramework {
         }
 
         self.routes
-            .get(&route)
+            .get(&app_context.route)
             .unwrap_or(&self.fallback)
             .handle(app_context)
             .await
@@ -221,13 +290,35 @@ pub struct AppFrameworkBuilder {
 }
 
 impl AppFrameworkBuilder {
-    /// Registers a command route by command name.
+    /// Registers a command route by command name: slash, user-context,
+    /// message-context, and entry-point commands. Autocomplete for the
+    /// command goes to [`Self::autocomplete`] instead.
     pub fn command<H>(mut self, name: impl Into<String>, handler: H) -> Self
     where
         H: AppRouteHandler,
     {
         self.routes
             .insert(RouteKey::Command(name.into()), Arc::new(handler));
+        self
+    }
+
+    /// Registers the autocomplete route of the command with this name.
+    ///
+    /// The handler answers with
+    /// [`InteractionResponse::autocomplete`]; any other inline response is
+    /// replaced with an empty list of choices. Autocomplete has no cooldown
+    /// unless [`Self::cooldown`] sets one for
+    /// [`RouteKey::Autocomplete`], so typing an option never uses up the
+    /// command's own cooldown. Without this route, autocomplete for the
+    /// command is answered with no choices.
+    pub fn autocomplete<H>(mut self, command_name: impl Into<String>, handler: H) -> Self
+    where
+        H: AppRouteHandler,
+    {
+        self.routes.insert(
+            RouteKey::Autocomplete(command_name.into()),
+            Arc::new(handler),
+        );
         self
     }
 
@@ -260,13 +351,17 @@ impl AppFrameworkBuilder {
         self
     }
 
-    /// Adds a per-user cooldown for one route.
+    /// Adds a per-user cooldown for one route. A rejected interaction is
+    /// answered with an ephemeral "This action is on cooldown." message, or
+    /// with no choices on an autocomplete route.
     pub fn cooldown(mut self, route: RouteKey, duration: Duration) -> Self {
         self.cooldowns.insert(route, duration);
         self
     }
 
-    /// Sets the response handler for unmatched interactions.
+    /// Sets the response handler for unmatched interactions. For an
+    /// unmatched autocomplete, an answer other than choices is replaced
+    /// with no choices, as on the autocomplete routes.
     pub fn fallback<H>(mut self, handler: H) -> Self
     where
         H: AppRouteHandler,
@@ -319,7 +414,7 @@ fn route_key(interaction: &Interaction) -> RouteKey {
             .data
             .name
             .clone()
-            .map(RouteKey::Command)
+            .map(RouteKey::Autocomplete)
             .unwrap_or(RouteKey::Unknown),
         Interaction::Component(interaction) => {
             RouteKey::Component(interaction.data.custom_id.clone())
@@ -390,6 +485,148 @@ mod tests {
             name: Some(name.to_string()),
             ..CommandInteractionData::default()
         }
+    }
+
+    fn autocomplete(name: &str, user_id: &str) -> (InteractionContextData, Interaction) {
+        let ctx = context(user_id);
+        (
+            ctx.clone(),
+            Interaction::Autocomplete(AutocompleteInteraction {
+                context: ctx,
+                data: command_data(name),
+            }),
+        )
+    }
+
+    /// The choice names of an autocomplete reply; fails on any other reply.
+    fn choice_names(reply: EndpointReply) -> Vec<String> {
+        let EndpointReply::Inline(response) = reply else {
+            panic!("expected an inline reply");
+        };
+        let InteractionResponse::AutocompleteResult(choices) = *response else {
+            panic!("expected autocomplete choices, got {:?}", response.kind());
+        };
+        choices.into_iter().map(|choice| choice.name).collect()
+    }
+
+    fn suggest(_ctx: AppContext) -> impl Future<Output = InteractionResponse> {
+        std::future::ready(InteractionResponse::autocomplete([
+            crate::model::ApplicationCommandOptionChoice::new("first", "first"),
+        ]))
+    }
+
+    /// Regression: autocomplete shared the command's route key, so typing an
+    /// option started the command's cooldown, later autocompletes were
+    /// answered with the cooldown message (invalid for autocomplete), and
+    /// the command itself was then refused.
+    #[tokio::test]
+    async fn autocomplete_has_its_own_route_and_leaves_the_command_cooldown_alone() {
+        let framework = AppFramework::builder()
+            .command("search", |_ctx| async { InteractionResponse::reply("ran") })
+            .autocomplete("search", suggest)
+            .cooldown(
+                RouteKey::Command("search".to_string()),
+                Duration::from_secs(10),
+            )
+            .build();
+
+        for _ in 0..3 {
+            let (ctx, interaction) = autocomplete("search", "20");
+            assert_eq!(
+                choice_names(framework.dispatch(ctx, interaction).await),
+                ["first"]
+            );
+        }
+        let (ctx, interaction) = command("search", "20");
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "ran"
+        );
+        let (ctx, interaction) = autocomplete("search", "20");
+        assert_eq!(
+            choice_names(framework.dispatch(ctx, interaction).await),
+            ["first"]
+        );
+        let (ctx, interaction) = command("search", "20");
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "This action is on cooldown."
+        );
+
+        let (ctx, interaction) = autocomplete("search", "20");
+        let app_context = AppContext {
+            context: ctx,
+            interaction: interaction.clone(),
+            route: route_key(&interaction),
+        };
+        assert_eq!(
+            app_context.route,
+            RouteKey::Autocomplete("search".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn autocomplete_rejections_answer_with_no_choices() {
+        let command_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let runs = Arc::clone(&command_runs);
+        let framework = AppFramework::builder()
+            .guard(|ctx: &AppContext| match ctx.user_id() {
+                Some(user_id) if user_id == test_id(99) => {
+                    Err(InteractionResponse::reply("blocked").into())
+                }
+                _ => Ok(()),
+            })
+            .command("only-command", move |_ctx| {
+                runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                async { InteractionResponse::reply("ran") }
+            })
+            .autocomplete("limited", suggest)
+            .autocomplete("wrong-kind", |_ctx| async {
+                InteractionResponse::reply("not choices")
+            })
+            .cooldown(
+                RouteKey::Autocomplete("limited".to_string()),
+                Duration::from_secs(10),
+            )
+            .build();
+
+        // A guard's message is for commands; autocomplete gets no choices.
+        let (ctx, interaction) = command("only-command", "99");
+        assert_eq!(
+            reply_content(framework.dispatch(ctx, interaction).await),
+            "blocked"
+        );
+        let (ctx, interaction) = autocomplete("limited", "99");
+        assert!(choice_names(framework.dispatch(ctx, interaction).await).is_empty());
+
+        // An autocomplete cooldown, when one is set, answers no choices.
+        let (ctx, interaction) = autocomplete("limited", "21");
+        assert_eq!(
+            choice_names(framework.dispatch(ctx, interaction).await),
+            ["first"]
+        );
+        let (ctx, interaction) = autocomplete("limited", "21");
+        assert!(choice_names(framework.dispatch(ctx, interaction).await).is_empty());
+
+        // No autocomplete route: the fallback's message becomes no choices,
+        // and the command's handler does not run on a keystroke.
+        let (ctx, interaction) = autocomplete("only-command", "21");
+        assert!(choice_names(framework.dispatch(ctx, interaction).await).is_empty());
+        assert_eq!(command_runs.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // A route that answers with a message is corrected the same way.
+        let (ctx, interaction) = autocomplete("wrong-kind", "21");
+        assert!(choice_names(framework.dispatch(ctx, interaction).await).is_empty());
+
+        // REST already answered: the endpoint's 202 is kept.
+        let framework = AppFramework::builder()
+            .autocomplete("rest", |_ctx| async { EndpointReply::Accepted })
+            .build();
+        let (ctx, interaction) = autocomplete("rest", "21");
+        assert!(matches!(
+            framework.dispatch(ctx, interaction).await,
+            EndpointReply::Accepted
+        ));
     }
 
     #[tokio::test]
@@ -507,10 +744,6 @@ mod tests {
                 data: command_data("inspect"),
             }),
             Interaction::MessageContextMenu(MessageContextMenuInteraction {
-                context: context("12"),
-                data: command_data("inspect"),
-            }),
-            Interaction::Autocomplete(AutocompleteInteraction {
                 context: context("12"),
                 data: command_data("inspect"),
             }),
