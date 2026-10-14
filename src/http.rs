@@ -95,6 +95,16 @@ impl RequestAuthorization<'_> {
     /// The header for a manifest route sent without a caller-supplied token.
     /// A bearer route reached this way sends no header rather than the bot
     /// token; the endpoint must use the bearer shims.
+    /// Whether a request sent with this authorization carries an
+    /// `Authorization` header (`request_once_bytes` applies the same rule).
+    fn sends_header(self, path: &str) -> bool {
+        match self {
+            Self::Bot | Self::Bearer(_) => true,
+            Self::Auto => request_uses_bot_authorization(path),
+            Self::None => false,
+        }
+    }
+
     fn for_route(route: RouteId) -> Self {
         match route.auth() {
             RouteAuth::Bot => Self::Bot,
@@ -423,7 +433,8 @@ impl RestClient {
         let body = body?;
         let method = target.method();
         let authorization = target.authorization();
-        let route = RequestRoute::new(&method, path, target.route());
+        let mut route = RequestRoute::new(&method, path, target.route());
+        route.authorized = authorization.sends_header(path);
         let route_key = route.key.as_str();
         let token = route_token(path);
         let replay =

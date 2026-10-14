@@ -1651,26 +1651,143 @@ fn global_rate_limit_spares_the_interaction_token_routes() {
     assert!(state.wait_duration(&callback).is_some());
 }
 
+/// Regression: a global 429 on an interaction route blocked only that route,
+/// so requests with other interaction tokens kept running into the limit.
+/// Discord limits requests without an `Authorization` header per IP address;
+/// such a 429 holds every unauthenticated request but no bot request.
 #[test]
-fn a_global_429_on_an_interaction_route_blocks_only_that_route() {
-    // Interaction routes are not bound to the bot's global limit, so a
-    // global 429 there (an IP-level limit) must not stall bot requests.
+fn a_global_429_without_authorization_holds_every_unauthenticated_request() {
+    let unauthenticated = [
+        routed(
+            RouteId::CreateInteractionResponse,
+            "/interactions/2/token-b/callback",
+        ),
+        routed(RouteId::CreateFollowupMessage, "/webhooks/9/token-b"),
+        routed(RouteId::ExecuteWebhook, "/webhooks/3/hook-token"),
+        routed(RouteId::GetGuildWidgetImage, "/guilds/1/widget.png"),
+        route(Method::POST, "/interactions/3/token-c/callback"),
+    ];
+    let bot = [
+        routed(RouteId::CreateMessage, "/channels/1/messages"),
+        route(Method::GET, "/channels/1"),
+    ];
+    let global_429 = r#"{"retry_after":5,"global":true}"#;
+
+    for limited in [
+        routed(
+            RouteId::CreateInteractionResponse,
+            "/interactions/1/token-a/callback",
+        ),
+        routed(RouteId::ExecuteWebhook, "/webhooks/4/other-hook"),
+    ] {
+        let state = RateLimitState::default();
+        state.observe(
+            &limited,
+            &HeaderMap::new(),
+            StatusCode::TOO_MANY_REQUESTS,
+            global_429,
+        );
+        assert!(state.global_blocked_until.lock().unwrap().is_none());
+        assert!(state
+            .unauthenticated_global_blocked_until
+            .lock()
+            .unwrap()
+            .is_some());
+        for route in unauthenticated.iter().chain([&limited]) {
+            assert!(state.wait_duration(route).is_some(), "{}", route.key);
+        }
+        for route in &bot {
+            assert!(state.wait_duration(route).is_none(), "{}", route.key);
+        }
+    }
+
+    // The bot's global 429 still holds bot requests, not interaction routes.
     let state = RateLimitState::default();
-    let callback = routed(
-        RouteId::CreateInteractionResponse,
-        "/interactions/1/token-a/callback",
-    );
     state.observe(
-        &callback,
+        &bot[0],
         &HeaderMap::new(),
         StatusCode::TOO_MANY_REQUESTS,
-        r#"{"retry_after":5,"global":true}"#,
+        global_429,
     );
-    assert!(state.global_blocked_until.lock().unwrap().is_none());
-    assert!(state.wait_duration(&callback).is_some());
     assert!(state
-        .wait_duration(&routed(RouteId::CreateMessage, "/channels/1/messages"))
+        .unauthenticated_global_blocked_until
+        .lock()
+        .unwrap()
         .is_none());
+    assert!(state.wait_duration(&unauthenticated[0]).is_none());
+    assert!(state.wait_duration(&unauthenticated[1]).is_none());
+    assert!(state.wait_duration(&bot[1]).is_some());
+}
+
+#[test]
+fn request_routes_know_whether_they_send_an_authorization_header() {
+    assert!(routed(RouteId::CreateMessage, "/channels/1/messages").authorized);
+    assert!(
+        routed(
+            RouteId::EditApplicationCommandPermissions,
+            "/applications/1/guilds/2/commands/3/permissions"
+        )
+        .authorized
+    );
+    for unauthenticated in [
+        routed(RouteId::CreateFollowupMessage, "/webhooks/1/token"),
+        routed(RouteId::ExecuteWebhook, "/webhooks/1/token"),
+        routed(RouteId::GetGuildWidgetImage, "/guilds/1/widget.png"),
+        route(Method::POST, "/interactions/1/token/callback"),
+    ] {
+        assert!(!unauthenticated.authorized, "{}", unauthenticated.key);
+    }
+    assert!(route(Method::GET, "/webhooks/1").authorized);
+
+    // The transport replaces the derived value with the header it sends.
+    use super::RequestAuthorization;
+    assert!(RequestAuthorization::Bot.sends_header("/webhooks/1/token"));
+    assert!(RequestAuthorization::Bearer("access").sends_header("/users/@me"));
+    assert!(!RequestAuthorization::None.sends_header("/channels/1"));
+    assert!(RequestAuthorization::Auto.sends_header("/channels/1"));
+    assert!(!RequestAuthorization::Auto.sends_header("/webhooks/1/token"));
+}
+
+/// A global 429 on an interaction callback reaches the unauthenticated
+/// deadline through the transport, and the retried callback succeeds.
+#[tokio::test]
+async fn transport_records_unauthenticated_global_429s_separately() {
+    let mut limited = PlannedResponse::json(
+        StatusCode::TOO_MANY_REQUESTS,
+        json!({ "message": "You are being rate limited.", "retry_after": 0.05, "global": true }),
+    );
+    limited
+        .headers
+        .push(("X-RateLimit-Global".to_string(), "true".to_string()));
+    let (base_url, captured, server) = spawn_test_server(vec![
+        limited,
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("bot-token", 123, base_url);
+
+    client
+        .create_interaction_response(
+            test_id(778),
+            "interaction-token",
+            &crate::request::InteractionResponse::defer(false),
+        )
+        .await
+        .expect("callback after the 429");
+    server.await.expect("test server");
+    assert_eq!(captured.lock().unwrap().len(), 2);
+    assert!(client
+        .rate_limits
+        .global_blocked_until
+        .lock()
+        .unwrap()
+        .is_none());
+    assert!(client
+        .rate_limits
+        .unauthenticated_global_blocked_until
+        .lock()
+        .unwrap()
+        .is_some());
 }
 
 /// Regression: every request waited out the shared global deadline, so a
@@ -1746,6 +1863,7 @@ fn rate_limit_state_ignores_expired_route_and_global_blocks() {
         Instant::now(),
     );
     *state.global_blocked_until.lock().unwrap() = Some(Instant::now());
+    *state.unauthenticated_global_blocked_until.lock().unwrap() = Some(Instant::now());
 
     assert!(state
         .wait_duration(&route(Method::GET, "/channels/123/messages"))
@@ -1753,8 +1871,16 @@ fn rate_limit_state_ignores_expired_route_and_global_blocks() {
     assert!(state
         .wait_duration(&route(Method::GET, "/anything"))
         .is_none());
+    assert!(state
+        .wait_duration(&route(Method::POST, "/webhooks/1/token"))
+        .is_none());
     assert!(state.blocked_until.lock().unwrap().is_empty());
     assert!(state.global_blocked_until.lock().unwrap().is_none());
+    assert!(state
+        .unauthenticated_global_blocked_until
+        .lock()
+        .unwrap()
+        .is_none());
 }
 
 #[test]

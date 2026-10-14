@@ -112,7 +112,15 @@ pub(crate) struct RateLimitState {
     pub(crate) route_buckets: Mutex<HashMap<String, String>>,
     pub(crate) bucket_last_seen: Mutex<HashMap<String, Instant>>,
     pub(crate) blocked_until: Mutex<HashMap<String, Instant>>,
+    /// The bot's global limit: set by a global 429 on a request that carried
+    /// an `Authorization` header, and waited for by every request except the
+    /// interaction-token routes, which Discord does not bind to it.
     pub(crate) global_blocked_until: Mutex<Option<Instant>>,
+    /// The global limit Discord applies per IP address to requests without
+    /// an `Authorization` header (interaction and webhook token routes,
+    /// public routes): set by a global 429 on any of them and waited for by
+    /// all of them.
+    pub(crate) unauthenticated_global_blocked_until: Mutex<Option<Instant>>,
     last_cleanup: Mutex<Option<Instant>>,
 }
 
@@ -123,24 +131,36 @@ impl RateLimitState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// How long a request for `route` must wait: until the bot's global
-    /// block ends, then until its bucket's block ends.
+    /// How long a request for `route` must wait: until the global blocks
+    /// that apply to it end, then until its bucket's block ends.
     ///
-    /// Routes exempt from the global limit (the interaction-token routes,
-    /// see [`RouteId::exempt_from_global_limit`]) skip the global block and
-    /// wait only for their own bucket. Without that, any REST call that got
-    /// a global 429 delayed `defer()` and every other initial callback by
-    /// the full retry-after, past Discord's three-second deadline for the
-    /// initial response. A raw request has no route ID and always honours
-    /// the global block.
+    /// Two global deadlines exist (see the fields). The bot's applies to
+    /// every request except the interaction-token routes
+    /// ([`RouteId::exempt_from_global_limit`]): without that exemption, a
+    /// global 429 on any REST call delayed `defer()` and every other initial
+    /// callback past Discord's three-second deadline. The unauthenticated
+    /// one applies to every request sent without an `Authorization` header,
+    /// interaction routes included, because a global 429 there means the IP
+    /// address is limited for all of them. Webhook-token routes are not
+    /// documented as exempt from the bot's limit, so they wait for both. A
+    /// raw request has no route ID: it waits for the bot's deadline, and for
+    /// the unauthenticated one when it sends no header.
     pub(crate) fn wait_duration(&self, route: &RequestRoute) -> Option<Duration> {
         let now = Instant::now();
         self.maybe_cleanup(now);
-        if !is_exempt_from_global_limit(route) {
-            if let Some(global_until) = *Self::lock(&self.global_blocked_until) {
-                if global_until > now {
-                    return Some(global_until.duration_since(now));
-                }
+        let bot_global = if is_exempt_from_global_limit(route) {
+            None
+        } else {
+            *Self::lock(&self.global_blocked_until)
+        };
+        let unauthenticated_global = if route.authorized {
+            None
+        } else {
+            *Self::lock(&self.unauthenticated_global_blocked_until)
+        };
+        if let Some(global_until) = bot_global.max(unauthenticated_global) {
+            if global_until > now {
+                return Some(global_until.duration_since(now));
             }
         }
 
@@ -177,13 +197,19 @@ impl RateLimitState {
             let blocked_until =
                 now + wait_duration_from_seconds(retry_after).unwrap_or(MAX_SERVER_WAIT);
 
-            // A global 429 on an exempt route is not the bot's global
-            // limit (those routes are not bound to it; one sent without an
-            // `Authorization` header is limited per IP address), so it
-            // blocks only that route's own key and bot-token requests do
-            // not wait for it.
-            if is_global_rate_limit(headers, body) && !is_exempt_from_global_limit(route) {
-                extend_deadline(&mut Self::lock(&self.global_blocked_until), blocked_until);
+            // A global 429 belongs to what Discord limited: the token a
+            // request authorized with, or, for a request without an
+            // `Authorization` header, the IP address. Recording an
+            // unauthenticated one as the bot's would stall every bot
+            // request; recording it on the route alone would let requests
+            // with other interaction or webhook tokens keep running into it.
+            if is_global_rate_limit(headers, body) {
+                let deadline = if route.authorized {
+                    &self.global_blocked_until
+                } else {
+                    &self.unauthenticated_global_blocked_until
+                };
+                extend_deadline(&mut Self::lock(deadline), blocked_until);
             } else {
                 self.block_key(route, headers, blocked_until);
             }
@@ -243,8 +269,11 @@ impl RateLimitState {
     }
 
     pub(crate) fn cleanup_old_buckets(&self, now: Instant) {
-        {
-            let mut global = Self::lock(&self.global_blocked_until);
+        for deadline in [
+            &self.global_blocked_until,
+            &self.unauthenticated_global_blocked_until,
+        ] {
+            let mut global = Self::lock(deadline);
             if global.is_some_and(|until| until <= now) {
                 *global = None;
             }

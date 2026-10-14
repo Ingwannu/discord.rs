@@ -10,7 +10,7 @@ use crate::model::{
 };
 use crate::types::invalid_data_error;
 
-use super::RouteId;
+use super::{RouteAuth, RouteId};
 
 /// The client's application ID as a path parameter. An unset ID becomes an
 /// error here instead of a `/applications/0/...` request.
@@ -624,6 +624,13 @@ pub(crate) struct RequestRoute {
     pub(crate) major_scope: String,
     /// The manifest route, or `None` for a raw request.
     pub(crate) id: Option<RouteId>,
+    /// Whether the request carries an `Authorization` header. Discord
+    /// applies the global limit of a request without one to the IP address
+    /// instead of the bot, so the two have separate global deadlines
+    /// (`RateLimitState`). `new` derives it from the manifest row, or for a
+    /// raw request from the path as `RequestAuthorization::Auto` does; the
+    /// transport then sets it from the header it actually sends.
+    pub(crate) authorized: bool,
 }
 
 impl RequestRoute {
@@ -671,10 +678,16 @@ impl RequestRoute {
             .collect::<Vec<_>>()
             .join("/");
 
+        let authorized = match id {
+            Some(id) => matches!(id.auth(), RouteAuth::Bot | RouteAuth::Bearer),
+            None => request_uses_bot_authorization(path),
+        };
+
         Self {
             key: format!("{method}:{}", normalized.join("/")),
             major_scope,
             id,
+            authorized,
         }
     }
 }

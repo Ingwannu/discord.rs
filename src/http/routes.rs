@@ -76,9 +76,11 @@ pub(crate) enum RouteAuth {
     ///
     /// Discord's docs list these routes (the initial callback, the
     /// `@original` response, and the follow-ups) as not bound to the bot's
-    /// global rate limit, so the transport does not hold them behind a
-    /// global 429 another request received; their own route buckets still
-    /// apply (`RouteId::exempt_from_global_limit`).
+    /// global rate limit, so the transport does not hold them behind the
+    /// bot's global 429 (`RouteId::exempt_from_global_limit`). Their own
+    /// route buckets still apply, and so does the separate global deadline
+    /// of requests sent without an `Authorization` header, which Discord
+    /// limits per IP address (`RateLimitState`).
     ///
     /// [Decision Log] Interaction auth kind
     /// - Purpose: let the transport tell the routes exempt from the global
