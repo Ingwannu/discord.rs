@@ -339,7 +339,8 @@ pub use gateway::{
 #[cfg(feature = "interactions")]
 pub use interactions::{
     try_interactions_endpoint, try_typed_interactions_endpoint, verify_discord_signature,
-    InteractionHandler, TypedInteractionHandler,
+    InteractionHandler, InteractionsEndpointBuilder, TypedInteractionHandler,
+    DEFAULT_INTERACTION_BODY_LIMIT,
 };
 // Deprecated in 3.0: they panic on an invalid public key.
 #[cfg(feature = "interactions")]

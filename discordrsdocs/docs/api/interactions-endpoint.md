@@ -13,12 +13,26 @@ discordrs = { version = "3.0.0", features = ["interactions"] }
 
 - Ed25519 request signature verification
 - Axum routing helpers
-- 64 KiB request body cap on generated `/interactions` routes
+- 1 MiB request body cap on generated `/interactions` routes, configurable with `InteractionsEndpointBuilder::body_limit` (64 KiB before 3.0)
 - Typed interaction parsing
 - Typed response encoding: handlers return an `EndpointReply`, inline callbacks are `request::InteractionResponse` values encoded once to the response bytes
 - Optional `AppFramework` routing for commands, components, and modals
 
 Build the router with `try_interactions_endpoint` / `try_typed_interactions_endpoint`, which return an error for an invalid public key. The non-`try_` wrappers panic on that error and are deprecated since 3.0.
+
+### Request Body Limit
+
+The route reads request bodies up to 1 MiB (`DEFAULT_INTERACTION_BODY_LIMIT`). A larger request is answered `413 Payload Too Large` before the signature is checked or a handler runs, and Discord reports the interaction as failed. The 64 KiB limit before 3.0 rejected real requests: a channel select with 25 forum channels whose resolved objects carry 4,096-character topics is 104,741 bytes. Use `InteractionsEndpointBuilder` for another limit:
+
+```rust
+use discordrs::InteractionsEndpointBuilder;
+
+let router = InteractionsEndpointBuilder::new(public_key)
+    .body_limit(4 * 1024 * 1024)
+    .build_typed(handler)?; // .build(handler) for a raw InteractionHandler
+```
+
+The documentation of `DEFAULT_INTERACTION_BODY_LIMIT` gives the size estimate behind 1 MiB. A reverse proxy in front of the endpoint must allow at least the same size.
 
 ## Typical Flow
 
@@ -156,4 +170,5 @@ Autocomplete never shares the command's cooldown, and it is never answered with 
 | `Modal(ModalBuilder)` | `InteractionResponse::modal(builder)` (`Modal` or `ModalBuilder`) |
 | `Raw(Value)` with a `type` key | `InteractionResponse::Raw(RawInteractionResponse::new(kind).data(&value)?)` |
 | `command(name, ..)` also received autocomplete | `autocomplete(name, ..)` (`RouteKey::Autocomplete`); without it, no choices |
+| 64 KiB request body limit (fixed) | 1 MiB by default, `InteractionsEndpointBuilder::body_limit(bytes)` |
 

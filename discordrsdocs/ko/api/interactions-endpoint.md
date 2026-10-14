@@ -10,6 +10,18 @@ HTTP `/interactions` 콜백 처리 모드입니다.
 
 라우터는 잘못된 공개 키를 오류로 돌려주는 `try_interactions_endpoint` / `try_typed_interactions_endpoint`로 만듭니다. `try_`가 없는 래퍼는 그 오류에서 패닉하며 3.0부터 deprecated입니다.
 
+요청 본문은 기본 1 MiB(`DEFAULT_INTERACTION_BODY_LIMIT`)까지 읽습니다. 더 큰 요청은 서명 검증과 핸들러 전에 `413 Payload Too Large`로 거부되고, Discord는 그 인터랙션을 실패로 표시합니다. 3.0 이전의 64 KiB는 실제 요청도 거부했습니다(포럼 채널 25개를 고른 채널 선택 메뉴, 각 채널 topic 4,096자: 104,741바이트). 다른 한도는 `InteractionsEndpointBuilder`로 정합니다:
+
+```rust
+use discordrs::InteractionsEndpointBuilder;
+
+let router = InteractionsEndpointBuilder::new(public_key)
+    .body_limit(4 * 1024 * 1024)
+    .build_typed(handler)?; // raw 핸들러는 .build(handler)
+```
+
+1 MiB를 고른 근거(실제 요청 크기 추정)는 `DEFAULT_INTERACTION_BODY_LIMIT` 문서에 있습니다. 앞단 리버스 프록시도 같은 크기 이상을 허용해야 합니다.
+
 ## 사용 시점
 
 - Slash Command 중심 앱
@@ -113,3 +125,4 @@ let app = AppFramework::builder()
 | `Modal(ModalBuilder)` | `InteractionResponse::modal(builder)`(`Modal` 또는 `ModalBuilder`) |
 | `type` 키가 있는 `Raw(Value)` | `InteractionResponse::Raw(RawInteractionResponse::new(kind).data(&value)?)` |
 | `command(name, ..)`가 자동완성도 받음 | `autocomplete(name, ..)`(`RouteKey::Autocomplete`). 없으면 빈 선택지 |
+| 요청 본문 한도 64 KiB(변경 불가) | 기본 1 MiB, `InteractionsEndpointBuilder::body_limit(bytes)` |

@@ -93,7 +93,40 @@ struct InteractionsState<H> {
 }
 
 const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
-const INTERACTION_BODY_LIMIT_BYTES: usize = 64 * 1024;
+
+/// The request body limit of the `/interactions` route unless
+/// [`InteractionsEndpointBuilder::body_limit`] sets another: 1 MiB.
+///
+/// A larger body is answered `413 Payload Too Large` before the signature is
+/// checked or a handler runs, so Discord reports the interaction as failed.
+///
+/// [Decision Log] Interaction body limit
+/// - Purpose: never reject a request Discord can really send, while still
+///   bounding what an unauthenticated client can make the server buffer
+///   (the Ed25519 signature covers the whole body, so it can only be checked
+///   after the body is read).
+/// - Before: 64 KiB. A channel select with 25 forum channels whose resolved
+///   objects carry 4,096-character topics measured 104,741 bytes and was
+///   answered 413 before the handler ran.
+/// - Size of a large real request, all-ASCII text: up to 25 resolved
+///   channels with 4,096-character topics (~106 KB); the message a component
+///   sits on, with 2,000 characters of content, 6,000 of embeds, five
+///   25-option selects with 100-character labels, values, and descriptions,
+///   and the users its content mentions (~90 KB); the message it replies to
+///   (another ~90 KB); and the invoking member with up to 250 roles (~6 KB):
+///   about 300 KB. A modal with five channel selects can resolve 125
+///   channels (~530 KB). Non-ASCII text takes up to four bytes a character,
+///   so a payload built from maximal emoji-only text can exceed 1 MiB.
+/// - Alternatives: keep 64 KiB (drops real interactions); axum's own
+///   default of 2 MiB; no limit (lets any client make the server buffer an
+///   unbounded body before verification).
+/// - Chosen: 1 MiB, about ten times the largest payload observed and above
+///   every all-ASCII bound above, and half of axum's default, with
+///   [`InteractionsEndpointBuilder::body_limit`] for apps that expect more.
+/// - Trade-offs: each in-flight unauthenticated request can hold up to
+///   1 MiB; a reverse proxy in front of the endpoint should allow at least
+///   the same size, or it rejects these requests before this limit does.
+pub const DEFAULT_INTERACTION_BODY_LIMIT: usize = 1024 * 1024;
 
 fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
     let public_key_bytes = crate::hex::decode(public_key)
@@ -344,20 +377,106 @@ where
     EndpointAnswer::from_reply(reply).into_response()
 }
 
+/// Builds the signed `/interactions` route with settings other than the
+/// defaults of [`try_interactions_endpoint`] and
+/// [`try_typed_interactions_endpoint`].
+///
+/// ```no_run
+/// # use discordrs::request::{EndpointReply, InteractionResponse};
+/// # use discordrs::model::{Interaction, InteractionContextData};
+/// # use discordrs::interactions::InteractionsEndpointBuilder;
+/// # use discordrs::TypedInteractionHandler;
+/// # #[derive(Clone)]
+/// # struct Handler;
+/// # impl TypedInteractionHandler for Handler {
+/// #     async fn handle_typed(&self, _: InteractionContextData, _: Interaction) -> EndpointReply {
+/// #         InteractionResponse::defer(false).into()
+/// #     }
+/// # }
+/// # fn main() -> Result<(), discordrs::DiscordError> {
+/// # let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
+/// let router = InteractionsEndpointBuilder::new(public_key)
+///     .body_limit(4 * 1024 * 1024)
+///     .build_typed(Handler)?;
+/// # let _ = router;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug)]
+pub struct InteractionsEndpointBuilder {
+    public_key: String,
+    body_limit: usize,
+}
+
+impl InteractionsEndpointBuilder {
+    /// Starts a builder for the application's hex-encoded Ed25519 public
+    /// key. The key is checked by [`Self::build`] or [`Self::build_typed`].
+    pub fn new(public_key: impl Into<String>) -> Self {
+        Self {
+            public_key: public_key.into(),
+            body_limit: DEFAULT_INTERACTION_BODY_LIMIT,
+        }
+    }
+
+    /// Sets the largest request body the route reads, in bytes (default
+    /// [`DEFAULT_INTERACTION_BODY_LIMIT`], 1 MiB). A larger request is
+    /// answered `413 Payload Too Large` before its signature is checked, so
+    /// the handler never sees it and Discord reports the interaction as
+    /// failed. See the default's documentation for how large real
+    /// interactions get.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
+        self
+    }
+
+    /// Builds the route for a raw [`InteractionHandler`]. Fails when the
+    /// public key is not a hex-encoded Ed25519 public key.
+    pub fn build<H>(self, handler: H) -> Result<Router, DiscordError>
+    where
+        H: InteractionHandler + Clone + Send + Sync + 'static,
+    {
+        let verifying_key = decode_verifying_key(&self.public_key)?;
+
+        Ok(Router::new()
+            .route("/interactions", post(handle_interactions_request::<H>))
+            .layer(DefaultBodyLimit::max(self.body_limit))
+            .with_state(InteractionsState {
+                verifying_key,
+                handler,
+            }))
+    }
+
+    /// Builds the route for a [`TypedInteractionHandler`] (an
+    /// [`AppFramework`](crate::AppFramework), for example). Fails when the
+    /// public key is not a hex-encoded Ed25519 public key.
+    pub fn build_typed<H>(self, handler: H) -> Result<Router, DiscordError>
+    where
+        H: TypedInteractionHandler + Clone + Send + Sync + 'static,
+    {
+        let verifying_key = decode_verifying_key(&self.public_key)?;
+
+        Ok(Router::new()
+            .route(
+                "/interactions",
+                post(handle_typed_interactions_request::<H>),
+            )
+            .layer(DefaultBodyLimit::max(self.body_limit))
+            .with_state(InteractionsState {
+                verifying_key,
+                handler,
+            }))
+    }
+}
+
 /// Provides the `try_interactions_endpoint` helper.
+///
+/// Reads request bodies up to [`DEFAULT_INTERACTION_BODY_LIMIT`]; use
+/// [`InteractionsEndpointBuilder`] for another limit.
 pub fn try_interactions_endpoint<H>(public_key: &str, handler: H) -> Result<Router, DiscordError>
 where
     H: InteractionHandler + Clone + Send + Sync + 'static,
 {
-    let verifying_key = decode_verifying_key(public_key)?;
-
-    Ok(Router::new()
-        .route("/interactions", post(handle_interactions_request::<H>))
-        .layer(DefaultBodyLimit::max(INTERACTION_BODY_LIMIT_BYTES))
-        .with_state(InteractionsState {
-            verifying_key,
-            handler,
-        }))
+    InteractionsEndpointBuilder::new(public_key).build(handler)
 }
 
 /// Provides the `interactions_endpoint` helper.
@@ -500,6 +619,9 @@ fn typed_endpoint_answer(
 }
 
 /// Provides the `try_typed_interactions_endpoint` helper.
+///
+/// Reads request bodies up to [`DEFAULT_INTERACTION_BODY_LIMIT`]; use
+/// [`InteractionsEndpointBuilder`] for another limit.
 pub fn try_typed_interactions_endpoint<H>(
     public_key: &str,
     handler: H,
@@ -507,18 +629,7 @@ pub fn try_typed_interactions_endpoint<H>(
 where
     H: TypedInteractionHandler + Clone + Send + Sync + 'static,
 {
-    let verifying_key = decode_verifying_key(public_key)?;
-
-    Ok(Router::new()
-        .route(
-            "/interactions",
-            post(handle_typed_interactions_request::<H>),
-        )
-        .layer(DefaultBodyLimit::max(INTERACTION_BODY_LIMIT_BYTES))
-        .with_state(InteractionsState {
-            verifying_key,
-            handler,
-        }))
+    InteractionsEndpointBuilder::new(public_key).build_typed(handler)
 }
 
 /// Provides the `typed_interactions_endpoint` helper.
@@ -555,8 +666,9 @@ mod tests {
         handle_typed_interactions_request, try_interactions_endpoint,
         try_typed_interactions_endpoint, typed_endpoint_answer,
         verify_discord_request_signature_at_time, verify_discord_signature,
-        verify_signature_with_key_at_time, EndpointAnswer, InteractionHandler, InteractionsState,
-        TypedInteractionHandler, PONG_BODY, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
+        verify_signature_with_key_at_time, EndpointAnswer, InteractionHandler,
+        InteractionsEndpointBuilder, InteractionsState, TypedInteractionHandler,
+        DEFAULT_INTERACTION_BODY_LIMIT, PONG_BODY, SIGNATURE_TIMESTAMP_TOLERANCE_SECS,
     };
     use crate::builders::ModalBuilder;
     use crate::framework::{AppContext, AppFramework};
@@ -1684,5 +1796,140 @@ mod tests {
         let (ctx, interaction) = &records[0];
         assert!(ctx.is_replied());
         assert!(interaction.is_replied());
+    }
+
+    /// A component interaction like the one the old 64 KiB cap rejected: a
+    /// channel select whose 25 resolved forum channels each carry a
+    /// 4,096-character topic.
+    fn large_channel_select_body() -> Vec<u8> {
+        let ids: Vec<String> = (0..25).map(|index| (1000 + index).to_string()).collect();
+        let channels: serde_json::Map<String, Value> = ids
+            .iter()
+            .map(|id| {
+                (
+                    id.clone(),
+                    json!({
+                        "id": id,
+                        "name": format!("forum-{id}"),
+                        "type": 15,
+                        "permissions": "0",
+                        "topic": "t".repeat(4096)
+                    }),
+                )
+            })
+            .collect();
+        serde_json::to_vec(&json!({
+            "id": "11",
+            "application_id": "22",
+            "token": "typed_token",
+            "channel_id": "33",
+            "user": { "id": "44", "username": "typed-user" },
+            "type": 3,
+            "data": {
+                "custom_id": "pick",
+                "component_type": 8,
+                "values": ids,
+                "resolved": { "channels": channels }
+            }
+        }))
+        .unwrap()
+    }
+
+    /// `body` padded with trailing JSON whitespace to exactly `len` bytes.
+    fn padded(mut body: Vec<u8>, len: usize) -> Vec<u8> {
+        assert!(body.len() <= len);
+        body.resize(len, b' ');
+        body
+    }
+
+    /// The public key `test_signing_key` signs for, as the constructors
+    /// take it.
+    fn test_public_key() -> String {
+        crate::hex::encode(test_signing_key().verifying_key().as_bytes())
+    }
+
+    /// Serves `router` on a loopback port, POSTs `body` to `/interactions`
+    /// with a valid signature, and returns the status.
+    ///
+    /// A rejected body is sent with exactly one byte over the limit: the
+    /// server then has read all of it when it answers 413, so it closes the
+    /// connection cleanly and the client always reads the answer.
+    async fn post_signed(router: axum::Router, body: Vec<u8>) -> StatusCode {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/interactions", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        let headers = signed_headers_for_body(&body);
+        let mut request = reqwest::Client::new().post(url).body(body);
+        for (name, value) in &headers {
+            request = request.header(name.as_str(), value.to_str().unwrap());
+        }
+        let status = request.send().await.unwrap().status();
+        server.abort();
+        StatusCode::from_u16(status.as_u16()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn default_body_limit_admits_large_real_interactions() {
+        let body = large_channel_select_body();
+        assert!(
+            (100_000..120_000).contains(&body.len()),
+            "{} bytes",
+            body.len()
+        );
+        let handler = RecordingTypedHandler {
+            response: json!({ "type": 6 }),
+            ..Default::default()
+        };
+        let router = try_typed_interactions_endpoint(&test_public_key(), handler.clone()).unwrap();
+        assert_eq!(post_signed(router, body).await, StatusCode::OK);
+        let resolved_channels = match &handler.records.lock().unwrap()[0].1 {
+            Interaction::Component(component) => component
+                .data
+                .resolved
+                .as_ref()
+                .map(|resolved| resolved.channels.len()),
+            _ => panic!("expected a component interaction"),
+        };
+        assert_eq!(resolved_channels, Some(25));
+
+        let router = try_interactions_endpoint(&test_public_key(), TestHandler).unwrap();
+        assert_eq!(
+            post_signed(router, large_channel_select_body()).await,
+            StatusCode::ACCEPTED
+        );
+    }
+
+    #[tokio::test]
+    async fn body_limit_rejects_one_byte_over_and_is_configurable() {
+        let limit = DEFAULT_INTERACTION_BODY_LIMIT;
+        let router = try_typed_interactions_endpoint(&test_public_key(), TypedTestHandler).unwrap();
+        assert_eq!(
+            post_signed(router.clone(), padded(command_body("token"), limit)).await,
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            post_signed(router, padded(command_body("token"), limit + 1)).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        let raw = InteractionsEndpointBuilder::new(test_public_key())
+            .body_limit(2048)
+            .build(TestHandler)
+            .unwrap();
+        assert_eq!(
+            post_signed(raw.clone(), padded(command_body("token"), 2048)).await,
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            post_signed(raw, padded(command_body("token"), 2049)).await,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+
+        assert!(InteractionsEndpointBuilder::new("bad-key")
+            .build_typed(TypedTestHandler)
+            .is_err());
+        assert!(InteractionsEndpointBuilder::new("bad-key")
+            .build(TestHandler)
+            .is_err());
     }
 }

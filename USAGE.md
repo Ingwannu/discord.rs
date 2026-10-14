@@ -1957,6 +1957,7 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 - `parse_raw_interaction(...)`
 - `try_interactions_endpoint(...)`
 - `try_typed_interactions_endpoint(...)`
+- `InteractionsEndpointBuilder` (`body_limit`), `DEFAULT_INTERACTION_BODY_LIMIT`
 - `AppFramework`, `AppFrameworkBuilder`, `RouteKey`
 - `CacheConfig`, `CacheHandle`, `CacheBackend`, `GuildManager`, `ChannelManager`, `MemberManager`, `MessageManager`, `RoleManager`
 - `ShardMessenger`
