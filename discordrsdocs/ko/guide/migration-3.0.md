@@ -1378,6 +1378,7 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | 샤드 하나가 끝나면 `drain_events()`가 실패 | 끝난 샤드도 drain. 남은 것이 없고 모든 샤드가 끝났을 때만 실패 |
 | IPC 프레임이 맨 JSON 줄(2.2.0) | `@discordrs-ipc/1 ` 접두사와 크기 상한: 2.2.0 부모는 3.0 자식을 다룰 수 없으므로 함께 배포 |
 | 자식이 연결할 때 바로 IDENTIFY(2.2.0) | `IdentifyGate`: 부모가 `shard_id % max_concurrency` 버킷마다 IDENTIFY를 허가하고 일일 세션 시작 예산을 지킴. `child.identify_gate()`를 `GatewayConnectionConfig::identify_gate`에 연결 |
+| 같은 프로세스 샤드(`spawn_shards`)는 첫 부팅만 시차를 두고 세션 시작 예산은 `remaining == 0`일 때만 확인. `/gateway/bot` 실패 시 `max_concurrency = 1`로 계속 | 클라이언트마다 내장 IDENTIFY 게이트 하나: 버킷마다 5초에 IDENTIFY 한 번(재-IDENTIFY 포함), 하나하나 예산에서 차감(남은 예산이 없으면 리셋까지 대기). `ClientBuilder::identify_gate`로 직접 게이트를 지정하지 않았다면 `spawn_shards`가 `/gateway/bot` 오류를 반환 |
 | `ShardChildProcess::serve(..)`가 `()` 반환 | `Result` 반환 |
 | `ParentMessage` / `ChildMessage` 완전 열거 | `#[non_exhaustive]`, identify variant 추가 |
 | `spawn_stagger` 기본값 0보다 큼 | 0(허가가 IDENTIFY 간격을 정함) |

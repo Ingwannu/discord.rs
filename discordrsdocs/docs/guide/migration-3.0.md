@@ -1380,6 +1380,7 @@ async fn run_child(child: ShardChildProcess, token: &str) -> Result<(), DiscordE
 | `drain_events()` failed once any shard ended | drains ended shards too; fails only when nothing is left and every shard ended |
 | IPC frames were bare JSON lines (2.2.0) | prefixed `@discordrs-ipc/1 ` and size-capped: a 2.2.0 parent cannot drive a 3.0 child, so deploy both together |
 | children identified when they connected (2.2.0) | `IdentifyGate`: the parent grants each IDENTIFY per `shard_id % max_concurrency` bucket and enforces the daily session-start budget; wire `child.identify_gate()` into `GatewayConnectionConfig::identify_gate` |
+| in-process shards (`spawn_shards`) staggered only the first boot and checked the session-start budget only for `remaining == 0`; `spawn_shards` fell back to `max_concurrency = 1` when `/gateway/bot` failed | one built-in IDENTIFY gate per client: one IDENTIFY per bucket every 5 s, re-IDENTIFYs included, each counted against the budget (waits for the reset when none is left); `spawn_shards` returns the `/gateway/bot` error unless `ClientBuilder::identify_gate` sets your own gate |
 | `ShardChildProcess::serve(..)` returned `()` | returns `Result` |
 | `ParentMessage` / `ChildMessage` exhaustive | `#[non_exhaustive]` with identify variants |
 | `spawn_stagger` default > 0 | 0 (permits pace IDENTIFY) |

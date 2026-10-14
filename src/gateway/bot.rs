@@ -1982,6 +1982,10 @@ impl ClientBuilder {
     /// coordinator outside this process paces session starts per
     /// `shard_id % max_concurrency` bucket. RESUME is never gated.
     ///
+    /// `spawn_shards` and `spawn_auto_shards` otherwise install their own
+    /// gate (bucket pacing plus the session-start budget); a gate set here
+    /// replaces it and becomes responsible for both.
+    ///
     /// This is a shorthand for setting the gate on the gateway connection
     /// config, which already reaches every shard, reconnect, and resume path.
     pub fn identify_gate(mut self, gate: Arc<dyn crate::ws::IdentifyGate>) -> Self {
@@ -2109,6 +2113,19 @@ impl ClientBuilder {
         }
     }
 
+    /// Starts `shard_count` shards in this process and returns their
+    /// [`ShardSupervisor`] as soon as the shard tasks exist.
+    ///
+    /// `/gateway/bot` is read first, for `max_concurrency` and the daily
+    /// session-start budget; if that request fails, so does this call
+    /// (unless a gate set with [`Self::identify_gate`] takes over Discord's
+    /// limits, in which case the boot waves assume `max_concurrency` 1). All
+    /// shards then share one IDENTIFY gate: at most one IDENTIFY per
+    /// `shard_id % max_concurrency` bucket every 5 seconds, each counted
+    /// against the budget, including re-IDENTIFYs after INVALID_SESSION,
+    /// close codes 4007/4009, or a reconnect before READY. An IDENTIFY the
+    /// budget cannot cover waits for its reset (the budget is then read
+    /// again); `Shutdown` still ends that wait at once.
     #[cfg(feature = "sharding")]
     pub async fn spawn_shards(self, shard_count: u32) -> Result<ShardSupervisor, DiscordError> {
         #[cfg(feature = "cache")]
@@ -2129,17 +2146,23 @@ impl ClientBuilder {
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let total_shards = shard_count.max(1);
-        // Even with a manual shard count, /gateway/bot tells us how many
-        // shards may IDENTIFY concurrently; fall back to one at a time if
-        // the metadata fetch fails.
+        // Even with a manual shard count, /gateway/bot supplies how many
+        // shards may IDENTIFY concurrently and the session-start budget the
+        // built-in IDENTIFY gate enforces. Starting without the budget would
+        // silently drop that protection, so a failed fetch is an error,
+        // unless the caller's own gate is responsible for Discord's limits.
         let metadata_http = DiscordHttpClient::new(&token, application_id);
-        let boot_window_size = match metadata_http.get_gateway_bot().await {
-            Ok(gateway_bot) => gateway_bot.session_start_limit.max_concurrency.max(1),
-            Err(error) => {
+        let session_start_limit = match metadata_http.get_gateway_bot().await {
+            Ok(gateway_bot) => Some(gateway_bot.session_start_limit),
+            Err(error) if gateway_config.identify_gate_ref().is_some() => {
                 warn!("failed to fetch /gateway/bot for identify concurrency, using 1: {error}");
-                1
+                None
             }
+            Err(error) => return Err(error),
         };
+        let boot_window_size = session_start_limit
+            .as_ref()
+            .map_or(1, |limit| limit.max_concurrency.max(1));
         let runtime = SharedRuntime::new(
             &token,
             application_id,
@@ -2159,7 +2182,8 @@ impl ClientBuilder {
             total_shards,
             boot_window_size,
             boot_delay: SHARD_BOOT_DELAY,
-            initial_delay: None,
+            session_start_limit,
+            budget_refresher: Some(metadata_http),
             presence,
             dispatch,
             #[cfg(feature = "cache")]
@@ -2170,6 +2194,8 @@ impl ClientBuilder {
         .await
     }
 
+    /// Like [`Self::spawn_shards`] with Discord's recommended shard count
+    /// and gateway URL from `/gateway/bot`.
     #[cfg(feature = "sharding")]
     pub async fn spawn_auto_shards(self) -> Result<ShardSupervisor, DiscordError> {
         #[cfg(feature = "cache")]
@@ -2213,7 +2239,8 @@ impl ClientBuilder {
             total_shards: auto_shard_plan.total_shards,
             boot_window_size: auto_shard_plan.boot_window_size,
             boot_delay: SHARD_BOOT_DELAY,
-            initial_delay: auto_shard_plan.initial_delay,
+            session_start_limit: Some(gateway_bot.session_start_limit),
+            budget_refresher: Some(metadata_http),
             presence,
             dispatch,
             #[cfg(feature = "cache")]
@@ -2381,10 +2408,16 @@ struct SpawnShardSupervisorConfig {
     runtime: SharedRuntime,
     gateway_config: GatewayConnectionConfig,
     total_shards: u32,
+    /// Discord's `max_concurrency`: identify wave size and bucket count.
     boot_window_size: u32,
-    /// Pause between identify waves ([`SHARD_BOOT_DELAY`] outside tests).
+    /// Pause between identify waves, and the IDENTIFY spacing within one
+    /// bucket ([`SHARD_BOOT_DELAY`] outside tests).
     boot_delay: Duration,
-    initial_delay: Option<Duration>,
+    /// Session-start budget for the built-in IDENTIFY gate. `None` leaves
+    /// the budget unchecked; bucket pacing still applies.
+    session_start_limit: Option<crate::model::SessionStartLimit>,
+    /// Reads the budget again from `/gateway/bot` at its reset.
+    budget_refresher: Option<DiscordHttpClient>,
     presence: Option<crate::model::UpdatePresence>,
     dispatch: DispatchConfig,
     /// The client's cache backend worker, handed to the supervisor.
@@ -2395,23 +2428,16 @@ struct SpawnShardSupervisorConfig {
 struct AutoShardPlan {
     total_shards: u32,
     boot_window_size: u32,
-    initial_delay: Option<Duration>,
 }
 
+/// Shard count and identify wave size from `/gateway/bot`. An exhausted or
+/// short session-start budget is not handled here: the built-in IDENTIFY
+/// gate holds each IDENTIFY that does not fit until the reset.
 #[cfg(feature = "sharding")]
 fn auto_shard_plan(gateway_bot: &crate::model::GatewayBot) -> AutoShardPlan {
     AutoShardPlan {
         total_shards: gateway_bot.shards.max(1),
         boot_window_size: gateway_bot.session_start_limit.max_concurrency.max(1),
-        initial_delay: if gateway_bot.session_start_limit.remaining == 0
-            && gateway_bot.session_start_limit.reset_after > 0
-        {
-            Some(Duration::from_millis(
-                gateway_bot.session_start_limit.reset_after,
-            ))
-        } else {
-            None
-        },
     }
 }
 
@@ -2428,15 +2454,32 @@ async fn spawn_shard_supervisor(
         total_shards,
         boot_window_size,
         boot_delay,
-        initial_delay,
+        session_start_limit,
+        budget_refresher,
         presence,
         dispatch,
         background,
     } = config;
 
-    if let Some(initial_delay) = initial_delay {
-        sleep(initial_delay).await;
-    }
+    // Every shard of this client shares one IDENTIFY gate, so all of their
+    // IDENTIFYs (first connects and the gateway client's own re-IDENTIFYs
+    // after INVALID_SESSION, 4007/4009, or a reconnect before READY) are
+    // spaced per `shard_id % max_concurrency` bucket and counted against
+    // the session-start budget (see `InProcessIdentifyGate`). A gate the
+    // caller configured takes over both duties.
+    let gateway_config = if gateway_config.identify_gate_ref().is_some() {
+        gateway_config
+    } else {
+        let gate: Arc<dyn crate::ws::IdentifyGate> =
+            Arc::new(crate::sharding::process::InProcessIdentifyGate::new(
+                boot_window_size,
+                total_shards,
+                boot_delay,
+                session_start_limit.as_ref(),
+                budget_refresher,
+            ));
+        gateway_config.identify_gate(gate)
+    };
 
     let manager = Arc::new(StdMutex::new(ShardingManager::new(
         crate::sharding::ShardConfig::new(total_shards).gateway(gateway_config.clone()),

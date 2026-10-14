@@ -1077,6 +1077,93 @@ impl IdentifyScheduler {
     }
 }
 
+// [Decision Log] In-process IDENTIFY gate
+// - Purpose: the shards `ClientBuilder::spawn_shards` / `spawn_auto_shards`
+//   run in one process must keep the same two limits as process children:
+//   one IDENTIFY per `shard_id % max_concurrency` bucket per 5 seconds, and
+//   the daily session-start budget. That covers every IDENTIFY, including
+//   the gateway client's own re-IDENTIFYs after INVALID_SESSION, close codes
+//   4007/4009, or a reconnect before READY.
+// - Previous implementation and constraints: in-process shards had no gate.
+//   Only the first boot was staggered (waves of `max_concurrency`, 5 seconds
+//   apart), and the client spaced IDENTIFYs per shard, so two shards of one
+//   bucket that lost their sessions together identified at the same time.
+//   The budget was looked at once: `remaining == 0` delayed the whole boot,
+//   but `remaining = 1` with two shards identified both, manual
+//   `spawn_shards` ignored the budget, and re-IDENTIFYs were never counted.
+//   Exceeding the budget makes Discord reset the bot token.
+// - Alternatives considered: (1) a start-time check that refuses to start
+//   when `remaining` is below the shard count (discord.js
+//   `WebSocketManager`); (2) separate in-process bucket queues and budget
+//   code in bot.rs; (3) the `IdentifyScheduler` and `SessionBudget` above,
+//   behind an `IdentifyGate` that all shards of the client share.
+// - Chosen approach: (3). Shards that do not fit the budget at startup wait
+//   for the reset, where the budget re-reads `/gateway/bot`.
+// - Why: (1) cannot cover re-IDENTIFYs, which happen long after the start
+//   with no caller to return an error to, so the budget must be enforced per
+//   IDENTIFY anyway, and there waiting is the only option. (2) would repeat
+//   accounting (refunds, refresh races) that is already written and tested
+//   here. One mechanism gives the same behaviour at startup and later,
+//   matches `ProcessShardManager`, and generalizes the old
+//   `remaining == 0` wait.
+// - Trade-offs: with too few starts left, the bot runs partly until the
+//   reset (a warning says how many shards wait) instead of failing fast. A
+//   gate set by the user replaces this one, budget included. The budget is
+//   counted per client, so several clients or processes on one token must
+//   split it themselves.
+
+/// [`IdentifyGate`] shared by the shards of one in-process sharded client
+/// (`ClientBuilder::spawn_shards` / `spawn_auto_shards`). It grants from the
+/// same per-bucket queues and session-start budget as the multi-process
+/// manager, without IPC.
+pub(crate) struct InProcessIdentifyGate {
+    scheduler: IdentifyScheduler,
+}
+
+impl InProcessIdentifyGate {
+    /// `interval` spaces IDENTIFYs within a bucket (Discord's 5 seconds
+    /// outside tests). `session_start_limit` seeds the budget, and
+    /// `refresher` reads it again at the reset; without a refresher the
+    /// reset is assumed to restore `total`. Without a limit only bucket
+    /// pacing applies.
+    pub(crate) fn new(
+        max_concurrency: u32,
+        total_shards: u32,
+        interval: Duration,
+        session_start_limit: Option<&SessionStartLimit>,
+        refresher: Option<RestClient>,
+    ) -> Self {
+        let budget = session_start_limit.map(|limit| {
+            if limit.remaining < total_shards {
+                warn!(
+                    remaining = limit.remaining,
+                    total_shards,
+                    reset_after_ms = limit.reset_after,
+                    "the session start budget cannot start every shard; {} shard(s) wait \
+                     for the reset",
+                    total_shards - limit.remaining
+                );
+            }
+            Arc::new(SessionBudget::new(
+                BudgetState::from_limit(limit),
+                refresher,
+            ))
+        });
+        Self {
+            scheduler: IdentifyScheduler::new(max_concurrency, total_shards, interval, budget),
+        }
+    }
+}
+
+impl IdentifyGate for InProcessIdentifyGate {
+    fn acquire(&self, shard_id: u32, _shard_count: u32) -> IdentifyPermitFuture<'_> {
+        Box::pin(async move {
+            let lease = self.scheduler.acquire(shard_id).await;
+            Ok(IdentifyPermit::new(move |outcome| lease.finish(outcome)))
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Manager
 // ---------------------------------------------------------------------------
@@ -3715,6 +3802,72 @@ mod tests {
         let _third = timeout(Duration::from_secs(1), &mut third)
             .await
             .expect("third waiter follows");
+    }
+
+    // -- in-process IDENTIFY gate ---------------------------------------------
+
+    /// Asks `gate` for `shard_id`'s permit, reports the IDENTIFY as sent at
+    /// once, and returns when it was granted (relative to `start`).
+    async fn identify_now(gate: &InProcessIdentifyGate, shard_id: u32, start: Instant) -> Duration {
+        let permit = gate.acquire(shard_id, 4).await.unwrap();
+        let granted = start.elapsed();
+        permit.finish(IdentifyOutcome::Sent);
+        granted
+    }
+
+    /// Regression: in-process shards had no shared gate, only a 5 s spacing
+    /// per shard. Two shards of one bucket that lost their sessions together
+    /// (both closed with 4009) re-identified in the same instant, and
+    /// Discord rejects an IDENTIFY that breaks the bucket's 5 s window.
+    #[tokio::test(start_paused = true)]
+    async fn in_process_gate_spaces_simultaneous_reidentifies_per_bucket() {
+        let interval = Duration::from_secs(5);
+        let gate = InProcessIdentifyGate::new(1, 4, interval, None, None);
+        let start = Instant::now();
+        let (a, b) = tokio::join!(identify_now(&gate, 0, start), identify_now(&gate, 1, start));
+        let (first, second) = (a.min(b), a.max(b));
+        assert_eq!(first, Duration::ZERO);
+        assert!(second - first >= interval, "{first:?} then {second:?}");
+
+        // With `max_concurrency = 2` the two shards use different buckets
+        // and both go at once; a third shard waits for its bucket (0).
+        let gate = InProcessIdentifyGate::new(2, 4, interval, None, None);
+        let start = Instant::now();
+        let (a, b, c) = tokio::join!(
+            identify_now(&gate, 0, start),
+            identify_now(&gate, 1, start),
+            identify_now(&gate, 2, start),
+        );
+        assert_eq!((a, b), (Duration::ZERO, Duration::ZERO));
+        assert!(c >= interval, "{c:?}");
+    }
+
+    /// Regression: with `remaining = 1` and two shards, both identified, and
+    /// re-IDENTIFYs were never counted. Every grant takes a session start;
+    /// a shard that finds none left waits for the reset, even with a free
+    /// bucket, and an IDENTIFY that never went out gives its start back.
+    #[tokio::test(start_paused = true)]
+    async fn in_process_gate_holds_identifies_the_session_budget_cannot_cover() {
+        let limit = SessionStartLimit {
+            total: 1000,
+            remaining: 2,
+            reset_after: 60_000,
+            max_concurrency: 2,
+        };
+        let gate = InProcessIdentifyGate::new(2, 4, Duration::from_secs(5), Some(&limit), None);
+        let start = Instant::now();
+        // An attempt that failed before IDENTIFY (connect error) is refunded.
+        drop(gate.acquire(0, 4).await.unwrap());
+        // The first connect, then a fresh session after 4009: both count.
+        assert_eq!(identify_now(&gate, 0, start).await, Duration::ZERO);
+        assert_eq!(identify_now(&gate, 0, start).await, Duration::from_secs(5));
+
+        // Shard 1 has a bucket of its own but no start left.
+        let mut held = gate.acquire(1, 4);
+        assert!(timeout(Duration::from_secs(50), &mut held).await.is_err());
+        let permit = held.await.unwrap();
+        assert!(start.elapsed() >= Duration::from_secs(60));
+        permit.finish(IdentifyOutcome::Sent);
     }
 
     #[test]

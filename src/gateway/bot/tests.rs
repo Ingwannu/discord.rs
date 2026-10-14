@@ -2798,15 +2798,14 @@ fn auto_shard_plan_uses_gateway_bot_recommendations() {
 
     assert_eq!(plan.total_shards, 8);
     assert_eq!(plan.boot_window_size, 4);
-    assert_eq!(plan.initial_delay, None);
 }
 
 #[cfg(feature = "sharding")]
 #[test]
-fn auto_shard_plan_waits_for_reset_when_identify_budget_is_empty() {
+fn auto_shard_plan_never_uses_zero_shards_or_buckets() {
     let plan = auto_shard_plan(&GatewayBot {
         url: "wss://gateway.discord.gg".to_string(),
-        shards: 2,
+        shards: 0,
         session_start_limit: SessionStartLimit {
             total: 1000,
             remaining: 0,
@@ -2815,9 +2814,8 @@ fn auto_shard_plan_waits_for_reset_when_identify_budget_is_empty() {
         },
     });
 
-    assert_eq!(plan.total_shards, 2);
+    assert_eq!(plan.total_shards, 1);
     assert_eq!(plan.boot_window_size, 1);
-    assert_eq!(plan.initial_delay, Some(Duration::from_millis(1_500)));
 }
 
 #[cfg(feature = "sharding")]
@@ -5700,7 +5698,8 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
         total_shards: 2,
         boot_window_size: 2,
         boot_delay: super::SHARD_BOOT_DELAY,
-        initial_delay: None,
+        session_start_limit: None,
+        budget_refresher: None,
         presence: None,
         dispatch: super::DispatchConfig {
             shutdown_timeout: Duration::from_millis(50),
@@ -5722,6 +5721,169 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
         .expect("shard 0 was shut down")
         .expect("close observed");
     assert_eq!(reason.as_deref(), Some("supervisor shutdown"));
+    server.abort();
+}
+
+/// A gateway that records which shard identified and when. Every
+/// connection gets READY; with `close_first`, each shard's first connection
+/// is then closed with that code, and later connections stay open.
+#[cfg(feature = "sharding")]
+async fn spawn_timed_gateway(
+    close_first: Option<u16>,
+) -> (
+    String,
+    JoinHandleUnit,
+    Arc<std::sync::Mutex<Vec<(u64, std::time::Instant)>>>,
+) {
+    let identified = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&identified);
+    let (url, server) = spawn_fake_gateway(move |mut socket, identify| {
+        let seen = Arc::clone(&seen);
+        async move {
+            use futures_util::StreamExt;
+            let shard = identify["d"]["shard"][0].as_u64().unwrap_or(0);
+            let first = {
+                let mut seen = seen.lock().unwrap();
+                let first = !seen.iter().any(|(id, _)| *id == shard);
+                seen.push((shard, std::time::Instant::now()));
+                first
+            };
+            send_dispatch(&mut socket, 1, "READY", fake_ready_payload()).await;
+            if let (true, Some(code)) = (first, close_first) {
+                send_close(&mut socket, code).await;
+                return;
+            }
+            while let Some(Ok(message)) = socket.next().await {
+                if matches!(message, tokio_tungstenite::tungstenite::Message::Close(_)) {
+                    break;
+                }
+            }
+        }
+    })
+    .await;
+    (url, server, identified)
+}
+
+/// An in-process supervisor whose built-in IDENTIFY gate starts from a
+/// session-start budget of `remaining` starts that resets after
+/// `reset_after` (no refresher: the reset restores `total`).
+#[cfg(feature = "sharding")]
+async fn spawn_budgeted_supervisor(
+    url: String,
+    total_shards: u32,
+    max_concurrency: u32,
+    remaining: u32,
+    reset_after: Duration,
+) -> ShardSupervisor {
+    super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(NoopEventHandler),
+        runtime: super::SharedRuntime::new(
+            "token",
+            None,
+            super::TypeMap::new(),
+            CacheConfig::default(),
+            None,
+        ),
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards,
+        boot_window_size: max_concurrency,
+        boot_delay: Duration::from_millis(100),
+        session_start_limit: Some(SessionStartLimit {
+            total: 1000,
+            remaining,
+            reset_after: u64::try_from(reset_after.as_millis()).unwrap(),
+            max_concurrency,
+        }),
+        budget_refresher: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            shutdown_timeout: Duration::from_millis(50),
+            ..super::DispatchConfig::default()
+        },
+        background: None,
+    })
+    .await
+    .unwrap()
+}
+
+#[cfg(feature = "sharding")]
+async fn wait_for_identifies(
+    identified: &std::sync::Mutex<Vec<(u64, std::time::Instant)>>,
+    count: usize,
+) -> Vec<(u64, std::time::Instant)> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            {
+                let seen = identified.lock().unwrap();
+                if seen.len() >= count {
+                    return seen.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("expected {count} IDENTIFYs"))
+}
+
+/// Regression: in-process sharding waited only when `remaining` was 0, so
+/// with one session start left and two shards both identified (and manual
+/// `spawn_shards` ignored the budget). Each IDENTIFY now takes a start, and
+/// the shard that finds none waits for the reset although its bucket is
+/// free.
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn in_process_shards_identify_only_as_far_as_the_session_budget_reaches() {
+    let (url, server, identified) = spawn_timed_gateway(None).await;
+    let reset_after = Duration::from_millis(1_500);
+    let started = std::time::Instant::now();
+    let supervisor = spawn_budgeted_supervisor(url, 2, 2, 1, reset_after).await;
+
+    let seen = wait_for_identifies(&identified, 2).await;
+    assert!(
+        seen[0].1 - started < reset_after,
+        "first IDENTIFY is not held"
+    );
+    assert!(
+        seen[1].1 - started >= reset_after,
+        "second IDENTIFY came {:?} after the start, before the budget reset",
+        seen[1].1 - started
+    );
+    assert_ne!(seen[0].0, seen[1].0, "each shard identified once");
+
+    supervisor.shutdown_and_wait().await.unwrap();
+    server.abort();
+}
+
+/// Regression: re-IDENTIFYs (here after close code 4009) were not counted
+/// against the session-start budget. The first IDENTIFY uses the only
+/// start, so the fresh session waits for the reset.
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn in_process_reidentify_after_4009_waits_for_the_session_budget() {
+    let (url, server, identified) = spawn_timed_gateway(Some(4009)).await;
+    let reset_after = Duration::from_secs(2);
+    let started = std::time::Instant::now();
+    let supervisor = spawn_budgeted_supervisor(url, 1, 1, 1, reset_after).await;
+
+    let seen = wait_for_identifies(&identified, 2).await;
+    assert!(
+        seen[1].1 - started >= reset_after,
+        "the re-IDENTIFY came {:?} after the start, before the budget reset",
+        seen[1].1 - started
+    );
+    // Without the shared gate the client's own 5 s per-shard spacing would
+    // also have delayed it past the reset; this bound shows the delay came
+    // from the gate's budget, which replaces that spacing.
+    assert!(
+        seen[1].1 - seen[0].1 < Duration::from_millis(4_500),
+        "{:?}",
+        seen[1].1 - seen[0].1
+    );
+
+    supervisor.shutdown_and_wait().await.unwrap();
     server.abort();
 }
 
@@ -6965,7 +7127,8 @@ async fn spawn_test_supervisor(
         total_shards,
         boot_window_size: 1,
         boot_delay,
-        initial_delay: None,
+        session_start_limit: None,
+        budget_refresher: None,
         presence: None,
         dispatch: super::DispatchConfig {
             shutdown_timeout: Duration::from_millis(50),
@@ -7668,7 +7831,8 @@ async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
         total_shards: 3,
         boot_window_size: 1,
         boot_delay: Duration::from_millis(300),
-        initial_delay: None,
+        session_start_limit: None,
+        budget_refresher: None,
         presence: None,
         dispatch: super::DispatchConfig {
             // Shard 0's drain outlasts several boot delays.

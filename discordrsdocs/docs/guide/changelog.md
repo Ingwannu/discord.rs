@@ -7,6 +7,7 @@
 - Webhook and interaction tokens are kept out of REST route keys, rate-limit callbacks, transport/API errors, and logs.
 - Malformed wait headers are clamped instead of panicking.
 - Terminal gateway close codes (4004, 4010–4014), including closes before HELLO, stop the shard with an error; 4007/4009 start a fresh session.
+- In-process shards (`spawn_shards`/`spawn_auto_shards`) share one IDENTIFY gate: one IDENTIFY per `shard_id % max_concurrency` bucket every 5 seconds, re-IDENTIFYs included, each counted against the session-start budget; an IDENTIFY the budget cannot cover waits for the reset. `spawn_shards` fails when `/gateway/bot` cannot be read, unless you set your own gate.
 - DAVE receive passes the unencrypted Opus silence frame (`F8 FF FE`) through instead of failing with "DAVE frame is too short".
 - Presence activities decode the shape Discord sends (button labels as strings), so a guild with Rich Presence buttons no longer fails GUILD_CREATE and stays out of the cache; a member, presence, activity, or voice state that does not decode is dropped and logged instead of the whole dispatch. Bots set their activity with `BotActivity` (breaking: `UpdatePresence::activities`, `ActivityButton` removed).
 

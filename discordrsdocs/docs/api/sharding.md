@@ -7,7 +7,8 @@ Sharding is provided behind the `sharding` feature on top of the `gateway` runti
 - the base runtime tracks shard info in `Context`
 - `start_shards(count)` spawns shards in this process and waits for them (`spawn_shards(count)` + `ShardSupervisor::wait()`)
 - `spawn_shards(count)` returns a `ShardSupervisor` for status inspection and shard control; since 3.0 it returns as soon as the shard tasks exist, while later identify waves are still queued, so the supervisor owns and supervises every shard from the start
-- since `2.1`, `spawn_shards(...)` fetches `/gateway/bot` and uses the account's real `max_concurrency` for identify wave sizing (previously hardcoded to 1), and each shard's IDENTIFY is paced to Discord's 1-per-5s-per-shard limit
+- since `2.1`, `spawn_shards(...)` fetches `/gateway/bot` and uses the account's real `max_concurrency` for identify wave sizing (previously hardcoded to 1); since 3.0 it also takes the daily session-start budget from it, and a failed request is returned as an error instead of starting without budget protection (unless `ClientBuilder::identify_gate(...)` sets a gate of your own)
+- since 3.0 all shards of one client share a built-in IDENTIFY gate (bucket pacing and the session-start budget for every IDENTIFY, re-IDENTIFYs included); see [In-Process IDENTIFY Coordination](#in-process-identify-coordination-30)
 
 ## Primary Types
 
@@ -111,7 +112,7 @@ Discord allows one IDENTIFY per bucket every 5 seconds, where the bucket is `sha
   - The count is per manager: several managers sharing one token must split the budget themselves.
 - **Custom gateways** can use `IdentifyGate` directly. `child.acquire_identify(shard_id)` returns an `IdentifyPermit`: call `finish(IdentifyOutcome::Sent)` after writing IDENTIFY, and dropping it reports `Abandoned`.
 
-`ClientBuilder` has no dedicated setter yet; pass the gate through `ClientBuilder::gateway_config(...)` as shown above.
+`ClientBuilder::identify_gate(gate)` is a shorthand for setting the gate on `ClientBuilder::gateway_config(...)` as shown above.
 
 ### IPC framing
 
@@ -168,6 +169,18 @@ Children also receive `DISCORDRS_SHARD_IDS`, `DISCORDRS_SHARD_COUNT`, `DISCORDRS
 - reconnect backoff is interruptible, so shutdown does not wait for a long sleep to finish
 - supervisor events are a bounded history for observers (3.0). `publish` updates the shard's status at once, so `statuses()` is always current. Up to 256 events per shard then wait for `drain_events()` / `poll_event()`. When more arrive before they are drained, the oldest are dropped and the next drain starts with `ShardSupervisorEvent::Lagged { shard_id, missed }`. Draining no longer applies events a second time, so `statuses()` cannot roll back to an older state, and memory stays bounded when nothing drains. Runtimes registered with `attach_runtime` keep the caller's own channel, whose events update the status when they are received.
 - a shard whose runtime has ended (every publisher dropped, for example after it published `Stopped`) does not break `drain_events()` (3.0). Its remaining events are returned with everyone else's, it is skipped afterwards, and its last status stays in `statuses()`. `drain_events()` returns an error only when there is no event to return and every registered shard has ended, so a loop that drains until an error stops after the last shard's final events. `poll_event(shard_id)` / `ShardRuntimeHandle::try_recv_event()` still report "event channel disconnected" for an ended shard once its queue is empty. Before 3.0 the first ended shard made every `drain_events()` call fail and discard the events it had already taken, from that shard and from the others.
+
+### In-Process IDENTIFY Coordination (3.0)
+
+Shards started by `spawn_shards` / `spawn_auto_shards` (and `start_shards` / `start_auto_shards`) share one built-in `IdentifyGate`. It uses the same per-bucket queues and session-start budget accounting as `ProcessShardManager` (see [IDENTIFY coordination](#identify-coordination)), without IPC:
+
+- **One IDENTIFY per bucket every 5 seconds**, where the bucket is `shard_id % max_concurrency`, measured from the previous IDENTIFY in that bucket. This covers the first connect and every re-IDENTIFY after INVALID_SESSION, close codes 4007/4009, or a reconnect before READY. Shards in different buckets do not wait for each other.
+- **Every IDENTIFY takes one session start** from the budget read from `/gateway/bot`. An attempt that ends before IDENTIFY is written (connect failure, close before HELLO) gives its start back.
+- **An IDENTIFY the budget cannot cover waits for the reset.** At the reset, `/gateway/bot` is read again; a failed read keeps the wait going and retries with backoff. If the budget is below the shard count at startup, the shards that fit start right away, the rest wait for the reset, and a warning says how many. `Shutdown` ends a wait at once.
+- **The budget is counted per client.** Several clients or processes on one token must split it themselves; `ProcessShardManager` keeps one budget for all of its children.
+- **A gate of your own replaces the built-in one.** With `ClientBuilder::identify_gate(...)` (or a gate on `ClientBuilder::gateway_config(...)`), that gate is responsible for both limits.
+
+Before 3.0 only the first boot was staggered (waves of `max_concurrency`, 5 seconds apart) and each shard spaced only its own IDENTIFYs, so shards of one bucket that lost their sessions together identified at the same moment and Discord rejected them. The budget was looked at once: `remaining == 0` delayed the whole boot, but with one start left and two shards both identified, `spawn_shards` ignored the budget, and re-IDENTIFYs were never counted. Discord resets the bot token when the budget is exceeded.
 
 ### Waiting and Failures (3.0)
 
