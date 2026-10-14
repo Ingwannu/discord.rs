@@ -48,9 +48,11 @@
 //! ```
 //!
 //! - `auth`: `bot` (the client's bot token), `bearer` (an OAuth2 access token
-//!   the caller passes), `token` (the webhook or interaction token in the
-//!   path; no `Authorization` header), `none` (a public route), or `client`
-//!   (OAuth2 client credentials in a form body).
+//!   the caller passes), `token` (the webhook token in the path; no
+//!   `Authorization` header), `interaction` (the interaction token in the
+//!   path; no header, and not bound to the bot's global rate limit),
+//!   `none` (a public route), or `client` (OAuth2 client credentials in a
+//!   form body).
 //! - `query`: the query parameter names the crate can send; `[]` for none.
 //! - `body`: the request body type, `()` for none.
 //! - `api [..]` lists [`RestClient`](super::RestClient) methods,
@@ -68,8 +70,33 @@ pub(crate) enum RouteAuth {
     Bot,
     /// `Authorization: Bearer <access token>` supplied by the caller.
     Bearer,
-    /// The secret is the token segment of the path; no header.
+    /// The secret is the webhook token segment of the path; no header.
     Token,
+    /// The secret is the interaction token segment of the path; no header.
+    ///
+    /// Discord's docs list these routes (the initial callback, the
+    /// `@original` response, and the follow-ups) as not bound to the bot's
+    /// global rate limit, so the transport does not hold them behind a
+    /// global 429 another request received; their own route buckets still
+    /// apply (`RouteId::exempt_from_global_limit`).
+    ///
+    /// [Decision Log] Interaction auth kind
+    /// - Purpose: let the transport tell the routes exempt from the global
+    ///   limit apart without guessing from the request path.
+    /// - Before: interaction and webhook routes were both `token`, and the
+    ///   rate limiter held every request behind the global deadline.
+    /// - Alternatives: (1) match `/interactions/` and the interaction token
+    ///   in the formatted path; (2) a per-row flag, which changes the
+    ///   one-line row shape `ci/api_drift.py` parses; (3) a new auth kind.
+    /// - Chosen: (3). The rows already say which token authenticates the
+    ///   request, and "interaction token" is exactly the exempt set.
+    /// - Why: (1) cannot tell a follow-up (`/webhooks/{app}/{token}`) from
+    ///   Execute Webhook, which is bound to the global limit. (2) costs a
+    ///   parser change for one bit the auth slot already carries.
+    /// - Trade-offs: the drift script and every `match` on `RouteAuth` list
+    ///   one more kind. Raw requests have no row and stay under the global
+    ///   limit.
+    Interaction,
     /// A public route; no header.
     None,
     /// OAuth2 client credentials in the form body (`OAuth2Client`).
@@ -116,6 +143,13 @@ macro_rules! route_manifest {
                 match self {
                     $(RouteId::$id => route_auth!($auth),)+
                 }
+            }
+
+            /// Whether requests on this route ignore the bot's global
+            /// rate limit: the interaction-token routes
+            /// ([`RouteAuth::Interaction`]).
+            pub(crate) const fn exempt_from_global_limit(self) -> bool {
+                matches!(self.auth(), RouteAuth::Interaction)
             }
 
             /// The row's identifier.
@@ -191,6 +225,9 @@ macro_rules! route_auth {
     (token) => {
         RouteAuth::Token
     };
+    (interaction) => {
+        RouteAuth::Interaction
+    };
     (none) => {
         RouteAuth::None
     };
@@ -243,13 +280,13 @@ route_manifest! {
     BatchEditApplicationCommandPermissions: PUT "/applications/{application.id}/guilds/{guild.id}/commands/permissions" bearer, query [], body [GuildApplicationCommandPermissions] => Vec<GuildApplicationCommandPermissions>, api [batch_edit_application_command_permissions];
 
     // --- Interactions (worker C owns the methods) ----------------------------
-    CreateInteractionResponse: POST "/interactions/{interaction.id}/{interaction.token}/callback" token, query [with_response], body crate::request::InteractionResponse => Option<InteractionCallbackResult>, api [create_interaction_response, create_interaction_response_with_result, create_interaction_response_with_files, post_interaction_callback, post_interaction_callback_with_result], was [create_interaction_response_typed => create_interaction_response];
-    GetOriginalInteractionResponse: GET "/webhooks/{application.id}/{interaction.token}/messages/@original" token, query [], body () => Message, api [get_original_interaction_response, get_original_interaction_response_with_application_id];
-    EditOriginalInteractionResponse: PATCH "/webhooks/{application.id}/{interaction.token}/messages/@original" token, query [], body crate::request::EditInteractionResponse => Message, api [edit_original_interaction_response, edit_original_interaction_response_with_files, edit_original_interaction_response_with_application_id, edit_original_interaction_response_with_application_id_and_files];
-    DeleteOriginalInteractionResponse: DELETE "/webhooks/{application.id}/{interaction.token}/messages/@original" token, query [], body () => (), api [delete_original_interaction_response, delete_original_interaction_response_with_application_id];
-    CreateFollowupMessage: POST "/webhooks/{application.id}/{interaction.token}" token, query [], body crate::request::CreateFollowup => Message, api [create_followup_message, create_followup_message_with_files, create_followup_message_with_application_id, create_followup_message_with_application_id_and_files];
-    EditFollowupMessage: PATCH "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" token, query [], body crate::request::EditInteractionResponse => Message, api [edit_followup_message, edit_followup_message_with_files, edit_followup_message_with_application_id, edit_followup_message_with_application_id_and_files];
-    DeleteFollowupMessage: DELETE "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" token, query [], body () => (), api [delete_followup_message, delete_followup_message_with_application_id];
+    CreateInteractionResponse: POST "/interactions/{interaction.id}/{interaction.token}/callback" interaction, query [with_response], body crate::request::InteractionResponse => Option<InteractionCallbackResult>, api [create_interaction_response, create_interaction_response_with_result, create_interaction_response_with_files, post_interaction_callback, post_interaction_callback_with_result], was [create_interaction_response_typed => create_interaction_response];
+    GetOriginalInteractionResponse: GET "/webhooks/{application.id}/{interaction.token}/messages/@original" interaction, query [], body () => Message, api [get_original_interaction_response, get_original_interaction_response_with_application_id];
+    EditOriginalInteractionResponse: PATCH "/webhooks/{application.id}/{interaction.token}/messages/@original" interaction, query [], body crate::request::EditInteractionResponse => Message, api [edit_original_interaction_response, edit_original_interaction_response_with_files, edit_original_interaction_response_with_application_id, edit_original_interaction_response_with_application_id_and_files];
+    DeleteOriginalInteractionResponse: DELETE "/webhooks/{application.id}/{interaction.token}/messages/@original" interaction, query [], body () => (), api [delete_original_interaction_response, delete_original_interaction_response_with_application_id];
+    CreateFollowupMessage: POST "/webhooks/{application.id}/{interaction.token}" interaction, query [], body crate::request::CreateFollowup => Message, api [create_followup_message, create_followup_message_with_files, create_followup_message_with_application_id, create_followup_message_with_application_id_and_files];
+    EditFollowupMessage: PATCH "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" interaction, query [], body crate::request::EditInteractionResponse => Message, api [edit_followup_message, edit_followup_message_with_files, edit_followup_message_with_application_id, edit_followup_message_with_application_id_and_files];
+    DeleteFollowupMessage: DELETE "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" interaction, query [], body () => (), api [delete_followup_message, delete_followup_message_with_application_id];
 
     // --- Audit log and auto moderation ------------------------------------
     GetGuildAuditLog: GET "/guilds/{guild.id}/audit-logs" bot, query [user_id, action_type, before, after, limit], body () => AuditLog, api [get_guild_audit_log], was [get_guild_audit_log_typed => get_guild_audit_log];
@@ -646,7 +683,7 @@ mod tests {
                 RouteAuth::Bot | RouteAuth::Bearer => {
                     assert!(request_uses_bot_authorization(&path), "{path}");
                 }
-                RouteAuth::Token => {
+                RouteAuth::Token | RouteAuth::Interaction => {
                     assert!(!request_uses_bot_authorization(&path), "{path}");
                 }
                 RouteAuth::None | RouteAuth::Client => {}
@@ -657,7 +694,7 @@ mod tests {
     #[test]
     fn token_routes_keep_their_token_out_of_the_route_key() {
         for id in RouteId::ALL {
-            if id.auth() != RouteAuth::Token {
+            if !matches!(id.auth(), RouteAuth::Token | RouteAuth::Interaction) {
                 continue;
             }
             let path = instantiate(id.template(), "1", "secret-token");
@@ -670,6 +707,38 @@ mod tests {
                 route.major_scope
             );
             assert!(route.key.contains(":token-"), "{}", route.key);
+        }
+    }
+
+    #[test]
+    fn only_the_interaction_token_routes_skip_the_global_limit() {
+        // Discord lists these as "not bound to the application's Global Rate
+        // Limit" (Receiving and Responding, Endpoints); Get Followup Message,
+        // the eighth, is not in the manifest.
+        let exempt = RouteId::ALL
+            .iter()
+            .filter(|id| id.exempt_from_global_limit())
+            .map(|id| id.name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exempt,
+            [
+                "CreateInteractionResponse",
+                "GetOriginalInteractionResponse",
+                "EditOriginalInteractionResponse",
+                "DeleteOriginalInteractionResponse",
+                "CreateFollowupMessage",
+                "EditFollowupMessage",
+                "DeleteFollowupMessage",
+            ]
+        );
+        for id in RouteId::ALL {
+            assert_eq!(
+                id.template().contains("{interaction.token}"),
+                id.auth() == RouteAuth::Interaction,
+                "{}",
+                id.name()
+            );
         }
     }
 }

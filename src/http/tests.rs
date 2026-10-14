@@ -1604,6 +1604,141 @@ fn wait_conversion_clamps_instead_of_panicking() {
 }
 
 #[test]
+fn global_rate_limit_spares_the_interaction_token_routes() {
+    let state = RateLimitState::default();
+    let message = routed(RouteId::CreateMessage, "/channels/1/messages");
+    state.observe(
+        &message,
+        &HeaderMap::new(),
+        StatusCode::TOO_MANY_REQUESTS,
+        r#"{"retry_after":5,"global":true}"#,
+    );
+    assert!(state.wait_duration(&message).is_some());
+
+    let callback = routed(
+        RouteId::CreateInteractionResponse,
+        "/interactions/1/token-a/callback",
+    );
+    for route in [
+        &callback,
+        &routed(RouteId::CreateFollowupMessage, "/webhooks/2/token-a"),
+        &routed(
+            RouteId::EditOriginalInteractionResponse,
+            "/webhooks/2/token-a/messages/@original",
+        ),
+        &routed(
+            RouteId::DeleteFollowupMessage,
+            "/webhooks/2/token-a/messages/3",
+        ),
+    ] {
+        assert!(state.wait_duration(route).is_none(), "{}", route.key);
+    }
+    // Plain webhook-token routes are bound to the global limit, and a raw
+    // request carries no route ID to prove it is exempt.
+    assert!(state
+        .wait_duration(&routed(RouteId::ExecuteWebhook, "/webhooks/3/hook-token"))
+        .is_some());
+    assert!(state
+        .wait_duration(&route(Method::POST, "/interactions/1/token-a/callback"))
+        .is_some());
+
+    // The exempt routes still wait for their own bucket.
+    let mut headers = HeaderMap::new();
+    headers.insert("x-ratelimit-bucket", HeaderValue::from_static("callback"));
+    headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+    headers.insert("x-ratelimit-reset-after", HeaderValue::from_static("5"));
+    state.observe(&callback, &headers, StatusCode::OK, "");
+    assert!(state.wait_duration(&callback).is_some());
+}
+
+#[test]
+fn a_global_429_on_an_interaction_route_blocks_only_that_route() {
+    // Interaction routes are not bound to the bot's global limit, so a
+    // global 429 there (an IP-level limit) must not stall bot requests.
+    let state = RateLimitState::default();
+    let callback = routed(
+        RouteId::CreateInteractionResponse,
+        "/interactions/1/token-a/callback",
+    );
+    state.observe(
+        &callback,
+        &HeaderMap::new(),
+        StatusCode::TOO_MANY_REQUESTS,
+        r#"{"retry_after":5,"global":true}"#,
+    );
+    assert!(state.global_blocked_until.lock().unwrap().is_none());
+    assert!(state.wait_duration(&callback).is_some());
+    assert!(state
+        .wait_duration(&routed(RouteId::CreateMessage, "/channels/1/messages"))
+        .is_none());
+}
+
+/// Regression: every request waited out the shared global deadline, so a
+/// global 429 on any REST call delayed `defer()` and other initial
+/// callbacks by the whole retry-after, past Discord's three-second limit.
+///
+/// Real time, not paused time: with the clock paused, tokio advances it to
+/// the next timer whenever the runtime waits on the loopback socket (two
+/// requests showed 59.9 s of virtual time), so a virtual `elapsed` cannot
+/// tell a rate-limit wait from I/O. The 60 s block makes the old behaviour
+/// fail at the 3 s timeout instead of passing slowly.
+#[tokio::test]
+async fn interaction_callbacks_are_sent_during_a_global_rate_limit() {
+    let (base_url, captured, server) = spawn_test_server(vec![
+        PlannedResponse::empty(StatusCode::NO_CONTENT),
+        PlannedResponse::json(StatusCode::OK, message_payload("901", "100", "later")),
+    ])
+    .await;
+    let client = RestClient::new_with_base_url("bot-token", 123, base_url);
+    let message = routed(RouteId::CreateMessage, "/channels/100/messages");
+    client.rate_limits.observe(
+        &message,
+        &HeaderMap::new(),
+        StatusCode::TOO_MANY_REQUESTS,
+        r#"{"retry_after":60,"global":true}"#,
+    );
+
+    let responses = tokio::time::timeout(Duration::from_secs(3), async {
+        client
+            .create_interaction_response(
+                test_id(778),
+                "interaction-token",
+                &crate::request::InteractionResponse::defer(false),
+            )
+            .await
+            .expect("initial callback");
+        client
+            .create_followup_message(
+                "interaction-token",
+                &crate::request::CreateFollowup::from("later"),
+            )
+            .await
+            .expect("follow-up")
+    })
+    .await;
+    assert!(
+        responses.is_ok(),
+        "interaction routes waited for the bot's global rate limit"
+    );
+    server.await.expect("test server");
+    let paths = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paths,
+        [
+            "/interactions/778/interaction-token/callback",
+            "/webhooks/123/interaction-token",
+        ]
+    );
+    // Bot-token requests still wait for the global block.
+    assert!(client.rate_limits.wait_duration(&message).is_some());
+}
+
+#[test]
 fn rate_limit_state_ignores_expired_route_and_global_blocks() {
     let state = RateLimitState::default();
     state.blocked_until.lock().unwrap().insert(

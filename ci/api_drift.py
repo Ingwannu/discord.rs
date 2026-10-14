@@ -481,7 +481,7 @@ _MANIFEST_ROW = re.compile(
     r"(?P<client>api|oauth2)\s+\[(?P<api>[^\]]*)\]"
     r"(?:,\s+was\s+\[(?P<was>[^\]]*)\])?;\s*$"
 )
-MANIFEST_AUTH = ("bot", "bearer", "token", "none", "client")
+MANIFEST_AUTH = ("bot", "bearer", "token", "interaction", "none", "client")
 CLIENT_TYPES = {"api": "RestClient", "oauth2": "OAuth2Client"}
 
 

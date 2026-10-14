@@ -98,9 +98,11 @@ impl RequestAuthorization<'_> {
     fn for_route(route: RouteId) -> Self {
         match route.auth() {
             RouteAuth::Bot => Self::Bot,
-            RouteAuth::Bearer | RouteAuth::Token | RouteAuth::None | RouteAuth::Client => {
-                Self::None
-            }
+            RouteAuth::Bearer
+            | RouteAuth::Token
+            | RouteAuth::Interaction
+            | RouteAuth::None
+            | RouteAuth::Client => Self::None,
         }
     }
 }

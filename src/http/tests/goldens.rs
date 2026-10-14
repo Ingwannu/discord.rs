@@ -1962,7 +1962,7 @@ async fn every_route_matches_its_golden_request() {
         let expected = match case.route.auth() {
             RouteAuth::Bot => Some(format!("Bot {BOT_TOKEN}")),
             RouteAuth::Bearer => Some(format!("Bearer {BEARER}")),
-            RouteAuth::Token | RouteAuth::None | RouteAuth::Client => None,
+            RouteAuth::Token | RouteAuth::Interaction | RouteAuth::None | RouteAuth::Client => None,
         };
         if authorization != expected.as_deref() {
             problems.push(format!(

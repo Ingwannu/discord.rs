@@ -396,9 +396,9 @@ One row per line in `src/http/routes.rs`:
 GetGuild: GET "/guilds/{guild.id}" bot, query [with_counts], body () => Guild, api [get_guild, get_guild_with_query];
 ```
 
-`auth` is `bot`, `bearer` (caller-supplied OAuth2 token), `token` (webhook or interaction token in
-the path, no header), `none` (public route), or `client` (OAuth2 client credentials,
-`OAuth2Client`). `api [..]` lists `RestClient` methods and `oauth2 [..]` lists `OAuth2Client`
+`auth` is `bot`, `bearer` (caller-supplied OAuth2 token), `token` (webhook token in the path, no
+header), `interaction` (interaction token in the path, no header, not held behind the bot's global
+rate limit), `none` (public route), or `client` (OAuth2 client credentials, `OAuth2Client`). `api [..]` lists `RestClient` methods and `oauth2 [..]` lists `OAuth2Client`
 methods. An optional `was [old => new, ..]` records 3.0 renames; the REST migration table is built
 from it. A line inside the table that is not a row is an error, never a skipped route.
 

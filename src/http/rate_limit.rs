@@ -7,6 +7,7 @@ use reqwest::{header::HeaderMap, StatusCode};
 
 use super::body::{header_string, parse_body_value};
 use super::paths::RequestRoute;
+use super::RouteId;
 
 pub(crate) const RATE_LIMIT_BUCKET_RETENTION: Duration = Duration::from_secs(60 * 60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
@@ -82,6 +83,12 @@ fn extend_deadline(slot: &mut Option<Instant>, until: Instant) {
     }
 }
 
+/// Whether `route` is a manifest route that Discord does not bind to the
+/// bot's global rate limit.
+fn is_exempt_from_global_limit(route: &RequestRoute) -> bool {
+    route.id.is_some_and(RouteId::exempt_from_global_limit)
+}
+
 /// Returns true when a 429 applies to the global limit rather than a
 /// route bucket, checking the `x-ratelimit-global` and
 /// `x-ratelimit-scope: global` headers as well as the JSON body flag.
@@ -116,12 +123,24 @@ impl RateLimitState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// How long a request for `route` must wait: until the bot's global
+    /// block ends, then until its bucket's block ends.
+    ///
+    /// Routes exempt from the global limit (the interaction-token routes,
+    /// see [`RouteId::exempt_from_global_limit`]) skip the global block and
+    /// wait only for their own bucket. Without that, any REST call that got
+    /// a global 429 delayed `defer()` and every other initial callback by
+    /// the full retry-after, past Discord's three-second deadline for the
+    /// initial response. A raw request has no route ID and always honours
+    /// the global block.
     pub(crate) fn wait_duration(&self, route: &RequestRoute) -> Option<Duration> {
         let now = Instant::now();
         self.maybe_cleanup(now);
-        if let Some(global_until) = *Self::lock(&self.global_blocked_until) {
-            if global_until > now {
-                return Some(global_until.duration_since(now));
+        if !is_exempt_from_global_limit(route) {
+            if let Some(global_until) = *Self::lock(&self.global_blocked_until) {
+                if global_until > now {
+                    return Some(global_until.duration_since(now));
+                }
             }
         }
 
@@ -158,7 +177,12 @@ impl RateLimitState {
             let blocked_until =
                 now + wait_duration_from_seconds(retry_after).unwrap_or(MAX_SERVER_WAIT);
 
-            if is_global_rate_limit(headers, body) {
+            // A global 429 on an exempt route is not the bot's global
+            // limit (those routes are not bound to it; one sent without an
+            // `Authorization` header is limited per IP address), so it
+            // blocks only that route's own key and bot-token requests do
+            // not wait for it.
+            if is_global_rate_limit(headers, body) && !is_exempt_from_global_limit(route) {
                 extend_deadline(&mut Self::lock(&self.global_blocked_until), blocked_until);
             } else {
                 self.block_key(route, headers, blocked_until);
