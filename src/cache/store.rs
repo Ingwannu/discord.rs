@@ -249,6 +249,49 @@ pub(super) fn enforce_channel_limit(store: &mut CacheStore, config: &CacheConfig
     }
 }
 
+// The four guild-metadata caps below are store-wide (across every guild)
+// and evict the least recently inserted entry first. Every path that
+// inserts the entity calls its helper, GUILD_CREATE included, so a cap
+// holds no matter which event filled the store; a path that inserts
+// without calling it lets the store outgrow the cap until the next
+// single-item event for that entity.
+
+pub(super) fn enforce_emoji_limit(store: &mut CacheStore, config: &CacheConfig) {
+    let len = store.emojis.len();
+    for key in ordered_overflow_keys(&mut store.emoji_order, len, config.max_emojis) {
+        store.emojis.remove(&key);
+    }
+}
+
+pub(super) fn enforce_sticker_limit(store: &mut CacheStore, config: &CacheConfig) {
+    let len = store.stickers.len();
+    for key in ordered_overflow_keys(&mut store.sticker_order, len, config.max_stickers) {
+        store.stickers.remove(&key);
+    }
+}
+
+pub(super) fn enforce_stage_instance_limit(store: &mut CacheStore, config: &CacheConfig) {
+    let len = store.stage_instances.len();
+    for key in ordered_overflow_keys(
+        &mut store.stage_instance_order,
+        len,
+        config.max_stage_instances,
+    ) {
+        store.stage_instances.remove(&key);
+    }
+}
+
+pub(super) fn enforce_soundboard_sound_limit(store: &mut CacheStore, config: &CacheConfig) {
+    let len = store.soundboard_sounds.len();
+    for key in ordered_overflow_keys(
+        &mut store.soundboard_sound_order,
+        len,
+        config.max_soundboard_sounds,
+    ) {
+        store.soundboard_sounds.remove(&key);
+    }
+}
+
 pub(super) fn enforce_message_limits(
     store: &mut CacheStore,
     config: &CacheConfig,

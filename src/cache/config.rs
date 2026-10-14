@@ -31,10 +31,20 @@ pub struct CacheConfig {
     pub max_users: Option<usize>,
     pub max_roles: Option<usize>,
     pub max_voice_states: Option<usize>,
+    /// Soundboard sounds kept across all guilds together (not per guild);
+    /// the least recently inserted are evicted first. Like the emoji,
+    /// sticker, and stage instance caps, it is applied after GUILD_CREATE
+    /// as well as after the events for the entity itself.
     pub max_soundboard_sounds: Option<usize>,
+    /// Custom emojis kept across all guilds together; see
+    /// [`Self::max_soundboard_sounds`].
     pub max_emojis: Option<usize>,
+    /// Stickers kept across all guilds together; see
+    /// [`Self::max_soundboard_sounds`].
     pub max_stickers: Option<usize>,
     pub max_scheduled_events: Option<usize>,
+    /// Stage instances kept across all guilds together; see
+    /// [`Self::max_soundboard_sounds`].
     pub max_stage_instances: Option<usize>,
     pub message_ttl: Option<Duration>,
     pub presence_ttl: Option<Duration>,

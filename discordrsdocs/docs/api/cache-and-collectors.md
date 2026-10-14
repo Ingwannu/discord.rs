@@ -64,7 +64,9 @@ The `2.1` release rewrote the cache hot paths:
 - TTL sweeps are throttled to once per 5s
 - list reads filter expired entries per-entry under a read lock instead of upgrading to a write lock
 
-`ClientBuilder::cache_config(...)` and `CacheHandle::with_config(...)` let long-running bots tune message, presence, and member storage by size and TTL. Size limits are enforced on insert, and TTL limits are purged on insert, explicit `purge_expired()`, and cache reads for the affected entity type. Use `CacheConfig::unbounded()` only when retaining all cached gateway data is intentional.
+`ClientBuilder::cache_config(...)` and `CacheHandle::with_config(...)` let long-running bots tune message, presence, and member storage by size and TTL. Size limits are enforced on insert, on every path that inserts the entity (since 3.0 GUILD_CREATE too: it used to skip the emoji, sticker, stage instance, and soundboard caps), and TTL limits are purged on insert, explicit `purge_expired()`, and cache reads for the affected entity type. Use `CacheConfig::unbounded()` only when retaining all cached gateway data is intentional.
+
+The `max_*` limits count the whole store, not one guild, and evict the least recently inserted entries first; `max_members_per_guild` and `max_messages_per_channel` are the per-guild and per-channel exceptions their names say. With `max_emojis(1000)`, a new guild's emojis push out the emojis cached longest ago from any guild.
 
 Since `2.2.0`, `CacheConfig::sweep_interval(...)` controls how often TTL sweeps may run from the hot upsert paths (default 5s):
 

@@ -31,10 +31,12 @@ pub use backend::{CacheBackend, CacheClear, CacheClearId};
 mod store;
 #[cfg(feature = "cache")]
 use store::{
-    enforce_channel_limit, enforce_guild_limit, enforce_member_limit, enforce_message_limits,
-    evict_channel_entries, evict_guild_entries, evict_shard_entries, insert_member_entry,
-    insert_message_entry, maybe_prune_expired, ordered_overflow_keys, prune_expired, remember_key,
-    remove_member_key, remove_message_key, remove_presence_key, seen_expired, CacheStore,
+    enforce_channel_limit, enforce_emoji_limit, enforce_guild_limit, enforce_member_limit,
+    enforce_message_limits, enforce_soundboard_sound_limit, enforce_stage_instance_limit,
+    enforce_sticker_limit, evict_channel_entries, evict_guild_entries, evict_shard_entries,
+    insert_member_entry, insert_message_entry, maybe_prune_expired, ordered_overflow_keys,
+    prune_expired, remember_key, remove_member_key, remove_message_key, remove_presence_key,
+    seen_expired, CacheStore,
 };
 
 /// Discord's guild-to-shard formula, `(guild_id >> 22) % shard_count`.
@@ -463,7 +465,9 @@ impl CacheHandle {
     /// Distributes a GUILD_CREATE into the per-entity stores — guild, roles,
     /// channels, threads, members, users, voice states, presences, emojis,
     /// stickers, stage instances, and soundboard sounds — under a single
-    /// write lock.
+    /// write lock, then evicts down to every configured cap
+    /// ([`CacheConfig::max_emojis`] and the other `max_*` limits) the same
+    /// way the single-entity events do.
     ///
     /// The guild, its members, and its presences are stored as the `Arc`s
     /// the payload holds, shared with the event instead of copied; the other
@@ -561,6 +565,10 @@ impl CacheHandle {
 
         enforce_guild_limit(&mut store, &self.config);
         enforce_channel_limit(&mut store, &self.config);
+        enforce_emoji_limit(&mut store, &self.config);
+        enforce_sticker_limit(&mut store, &self.config);
+        enforce_stage_instance_limit(&mut store, &self.config);
+        enforce_soundboard_sound_limit(&mut store, &self.config);
         enforce_member_limit(&mut store, &self.config, guild_id);
         let user_len = store.users.len();
         for key in ordered_overflow_keys(&mut store.user_order, user_len, self.config.max_users) {
@@ -1503,14 +1511,7 @@ impl CacheHandle {
         let key = (guild_id, sound.sound_id);
         store.soundboard_sounds.insert(key, sound);
         remember_key(&mut store.soundboard_sound_order, key);
-        let len = store.soundboard_sounds.len();
-        for key in ordered_overflow_keys(
-            &mut store.soundboard_sound_order,
-            len,
-            self.config.max_soundboard_sounds,
-        ) {
-            store.soundboard_sounds.remove(&key);
-        }
+        enforce_soundboard_sound_limit(&mut store, &self.config);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1530,14 +1531,7 @@ impl CacheHandle {
             store.soundboard_sounds.insert(key, sound);
             remember_key(&mut store.soundboard_sound_order, key);
         }
-        let len = store.soundboard_sounds.len();
-        for key in ordered_overflow_keys(
-            &mut store.soundboard_sound_order,
-            len,
-            self.config.max_soundboard_sounds,
-        ) {
-            store.soundboard_sounds.remove(&key);
-        }
+        enforce_soundboard_sound_limit(&mut store, &self.config);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1637,10 +1631,7 @@ impl CacheHandle {
                 remember_key(&mut store.emoji_order, key);
             }
         }
-        let len = store.emojis.len();
-        for key in ordered_overflow_keys(&mut store.emoji_order, len, self.config.max_emojis) {
-            store.emojis.remove(&key);
-        }
+        enforce_emoji_limit(store, &self.config);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1711,10 +1702,7 @@ impl CacheHandle {
             store.stickers.insert(key, sticker);
             remember_key(&mut store.sticker_order, key);
         }
-        let len = store.stickers.len();
-        for key in ordered_overflow_keys(&mut store.sticker_order, len, self.config.max_stickers) {
-            store.stickers.remove(&key);
-        }
+        enforce_sticker_limit(store, &self.config);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -1837,14 +1825,7 @@ impl CacheHandle {
         let key = (stage_instance.guild_id, stage_instance.id);
         store.stage_instances.insert(key, stage_instance);
         remember_key(&mut store.stage_instance_order, key);
-        let len = store.stage_instances.len();
-        for key in ordered_overflow_keys(
-            &mut store.stage_instance_order,
-            len,
-            self.config.max_stage_instances,
-        ) {
-            store.stage_instances.remove(&key);
-        }
+        enforce_stage_instance_limit(&mut store, &self.config);
     }
 
     #[cfg(not(feature = "cache"))]
@@ -3648,6 +3629,91 @@ mod tests {
         assert!(cache.stage_instance(guild_id, test_id(90)).await.is_none());
         assert!(cache.stage_instance(guild_id, test_id(91)).await.is_some());
         assert_eq!(cache.stage_instances(guild_id).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn guild_create_enforces_metadata_caps_store_wide() {
+        // GUILD_CREATE fills the emoji, sticker, stage instance, and
+        // soundboard stores in one go; it used to skip their caps, so one
+        // large guild could hold far more than `max_*` allowed.
+        let cache = CacheHandle::with_config(
+            CacheConfig::unbounded()
+                .max_emojis(1)
+                .max_stickers(1)
+                .max_stage_instances(1)
+                .max_soundboard_sounds(1),
+        );
+        let guild_create = |guild: u64, first: u64| {
+            let guild_id = test_id(guild);
+            let mut create = crate::model::GuildCreate::from(Guild {
+                id: guild_id,
+                name: format!("guild-{guild}"),
+                ..Guild::fixture()
+            });
+            create.emojis = (first..first + 2)
+                .map(|id| Emoji::custom("emoji", test_id(id), false))
+                .collect();
+            create.stickers = (first..first + 2)
+                .map(|id| Sticker {
+                    id: test_id(id),
+                    name: "sticker".to_string(),
+                    ..Sticker::fixture()
+                })
+                .collect();
+            create.stage_instances = (first..first + 2)
+                .map(|id| StageInstance {
+                    id: test_id(id),
+                    guild_id,
+                    channel_id: test_id(5),
+                    topic: "stage".to_string(),
+                    privacy_level: StageInstancePrivacyLevel::GUILD_ONLY,
+                    ..StageInstance::fixture()
+                })
+                .collect();
+            create.soundboard_sounds = (first..first + 2)
+                .map(|id| SoundboardSound {
+                    name: "sound".to_string(),
+                    sound_id: test_id(id),
+                    volume: 1.0,
+                    ..SoundboardSound::fixture()
+                })
+                .collect();
+            create
+        };
+
+        // One guild with two of each keeps the later one of each.
+        cache.apply_guild_create(&guild_create(1, 10)).await;
+        let first = test_id(1);
+        assert_eq!(cache.emojis(first).await.len(), 1);
+        assert!(cache.emoji(first, test_id(11)).await.is_some());
+        assert_eq!(cache.stickers(first).await.len(), 1);
+        assert!(cache.sticker(first, test_id(11)).await.is_some());
+        assert_eq!(cache.stage_instances(first).await.len(), 1);
+        assert!(cache.stage_instance(first, test_id(11)).await.is_some());
+        assert_eq!(cache.soundboard_sounds(first).await.len(), 1);
+        assert!(cache.soundboard_sound(first, test_id(11)).await.is_some());
+
+        // The caps count every guild together: a second guild's entries
+        // evict the first guild's, oldest first.
+        cache.apply_guild_create(&guild_create(2, 20)).await;
+        let second = test_id(2);
+        assert!(cache.emojis(first).await.is_empty());
+        assert!(cache.stickers(first).await.is_empty());
+        assert!(cache.stage_instances(first).await.is_empty());
+        assert!(cache.soundboard_sounds(first).await.is_empty());
+        assert!(cache.emoji(second, test_id(21)).await.is_some());
+        assert!(cache.sticker(second, test_id(21)).await.is_some());
+        assert!(cache.stage_instance(second, test_id(21)).await.is_some());
+        assert!(cache.soundboard_sound(second, test_id(21)).await.is_some());
+        let store = cache.store.read().await;
+        assert_eq!(store.emojis.len(), 1);
+        assert_eq!(store.stickers.len(), 1);
+        assert_eq!(store.stage_instances.len(), 1);
+        assert_eq!(store.soundboard_sounds.len(), 1);
+        assert_eq!(store.emoji_order.len(), 1);
+        assert_eq!(store.sticker_order.len(), 1);
+        assert_eq!(store.stage_instance_order.len(), 1);
+        assert_eq!(store.soundboard_sound_order.len(), 1);
     }
 
     #[tokio::test]
