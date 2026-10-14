@@ -870,6 +870,25 @@ impl InteractionContextData {
         }
     }
 
+    /// Fetches a follow-up message sent for this interaction.
+    ///
+    /// Waits for an in-flight initial response, then errors with
+    /// `DiscordError::Model` when the interaction is not acknowledged (it
+    /// cannot have follow-ups before that).
+    pub async fn fetch_follow_up(
+        &self,
+        http: &RestClient,
+        message_id: MessageId,
+    ) -> Result<Message, DiscordError> {
+        self.response_state.require_acknowledged().await?;
+        http.get_followup_message_with_application_id(
+            self.application_id,
+            &self.token,
+            &message_id.to_string(),
+        )
+        .await
+    }
+
     /// Edits a follow-up message sent for this interaction.
     ///
     /// Waits for an in-flight initial response, then errors with
@@ -1108,6 +1127,15 @@ pub trait InteractionResponder {
     ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
         self.responder_context()
             .follow_up_with_files(http, data.into(), files)
+    }
+
+    /// Fetches a follow-up message sent for this interaction.
+    fn fetch_follow_up(
+        &self,
+        http: &RestClient,
+        message_id: MessageId,
+    ) -> impl Future<Output = Result<Message, DiscordError>> + Send {
+        self.responder_context().fetch_follow_up(http, message_id)
     }
 
     /// Edits a follow-up message sent for this interaction.
@@ -2814,6 +2842,7 @@ pub(crate) mod tests {
             mock::Reply::Now(204, ""),
             mock::Reply::Now(200, MESSAGE_JSON),
             mock::Reply::Now(200, MESSAGE_JSON),
+            mock::Reply::Now(200, MESSAGE_JSON),
             mock::Reply::Now(204, ""),
             mock::Reply::Now(204, ""),
         ])
@@ -2828,6 +2857,7 @@ pub(crate) mod tests {
         assert!(component.is_deferred());
         component.fetch_reply(&http).await.unwrap();
         assert!(component.is_deferred());
+        component.fetch_follow_up(&http, test_id(30)).await.unwrap();
         component
             .edit_follow_up(&http, test_id(30), "edited")
             .await
@@ -2839,7 +2869,7 @@ pub(crate) mod tests {
         component.delete_reply(&http).await.unwrap();
 
         let mut requests = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..6 {
             requests.push(server.next_request().await);
         }
         assert_eq!(
@@ -2847,6 +2877,7 @@ pub(crate) mod tests {
             [
                 "POST /interactions/1/token/callback",
                 "GET /webhooks/2/token/messages/@original",
+                "GET /webhooks/2/token/messages/30",
                 "PATCH /webhooks/2/token/messages/30",
                 "DELETE /webhooks/2/token/messages/30",
                 "DELETE /webhooks/2/token/messages/@original",
@@ -2908,6 +2939,11 @@ pub(crate) mod tests {
                 .map(drop)
                 .unwrap_err(),
             context.delete_reply(&http).await.unwrap_err(),
+            context
+                .fetch_follow_up(&http, test_id(30))
+                .await
+                .map(drop)
+                .unwrap_err(),
             context
                 .edit_follow_up(&http, test_id(30), "edited")
                 .await
@@ -2979,6 +3015,10 @@ pub(crate) mod tests {
                 responder.follow_up(&http, "a").await.unwrap_err(),
                 responder.follow_up_ephemeral(&http, "a").await.unwrap_err(),
                 responder
+                    .fetch_follow_up(&http, test_id(30))
+                    .await
+                    .unwrap_err(),
+                responder
                     .edit_follow_up(&http, test_id(30), "a")
                     .await
                     .unwrap_err(),
@@ -3002,7 +3042,7 @@ pub(crate) mod tests {
         let errors = spawn_responder_calls(interaction, offline_client())
             .await
             .unwrap();
-        assert_eq!(errors.len(), 13);
+        assert_eq!(errors.len(), 14);
         for error in &errors {
             assert_model_error(error, "interaction_token");
         }

@@ -284,6 +284,30 @@ impl RestClient {
             .await
     }
 
+    /// Fetches a follow-up message sent for an interaction
+    /// (`GET /webhooks/{application.id}/{token}/messages/{message.id}`) with
+    /// the application ID configured on the client.
+    pub async fn get_followup_message(
+        &self,
+        interaction_token: &str,
+        message_id: &str,
+    ) -> Result<Message, DiscordError> {
+        let application_id = configured_application_id(self.application_id())?;
+        self.get_followup_message_with_application_id(application_id, interaction_token, message_id)
+            .await
+    }
+
+    /// [`Self::get_followup_message`] for an explicit application ID.
+    pub async fn get_followup_message_with_application_id(
+        &self,
+        application_id: ApplicationId,
+        interaction_token: &str,
+        message_id: &str,
+    ) -> Result<Message, DiscordError> {
+        let path = followup_webhook_path(application_id, interaction_token, Some(message_id))?;
+        self.send(RouteId::GetFollowupMessage, &path, NO_BODY).await
+    }
+
     pub async fn edit_followup_message(
         &self,
         interaction_token: &str,

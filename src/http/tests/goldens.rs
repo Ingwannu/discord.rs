@@ -316,6 +316,8 @@ fn cases() -> Vec<Case> {
             create_followup_message_with_files,
             |c| c.create_followup_message_with_files(INTERACTION_TOKEN, &followup(), &files())
         ),
+        case!(GetFollowupMessage, get_followup_message, |c| c
+            .get_followup_message(INTERACTION_TOKEN, "903")),
         case!(EditFollowupMessage, edit_followup_message, |c| c
             .edit_followup_message(
                 INTERACTION_TOKEN,
@@ -425,6 +427,11 @@ fn cases() -> Vec<Case> {
                 &interaction_edit(),
                 &files()
             )
+        ),
+        case!(
+            GetFollowupMessage,
+            get_followup_message_with_application_id,
+            |c| c.get_followup_message_with_application_id(test_id(556), INTERACTION_TOKEN, "903")
         ),
         case!(
             DeleteFollowupMessage,

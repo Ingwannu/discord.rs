@@ -287,6 +287,7 @@ route_manifest! {
     EditOriginalInteractionResponse: PATCH "/webhooks/{application.id}/{interaction.token}/messages/@original" interaction, query [], body crate::request::EditInteractionResponse => Message, api [edit_original_interaction_response, edit_original_interaction_response_with_files, edit_original_interaction_response_with_application_id, edit_original_interaction_response_with_application_id_and_files];
     DeleteOriginalInteractionResponse: DELETE "/webhooks/{application.id}/{interaction.token}/messages/@original" interaction, query [], body () => (), api [delete_original_interaction_response, delete_original_interaction_response_with_application_id];
     CreateFollowupMessage: POST "/webhooks/{application.id}/{interaction.token}" interaction, query [], body crate::request::CreateFollowup => Message, api [create_followup_message, create_followup_message_with_files, create_followup_message_with_application_id, create_followup_message_with_application_id_and_files];
+    GetFollowupMessage: GET "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" interaction, query [], body () => Message, api [get_followup_message, get_followup_message_with_application_id];
     EditFollowupMessage: PATCH "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" interaction, query [], body crate::request::EditInteractionResponse => Message, api [edit_followup_message, edit_followup_message_with_files, edit_followup_message_with_application_id, edit_followup_message_with_application_id_and_files];
     DeleteFollowupMessage: DELETE "/webhooks/{application.id}/{interaction.token}/messages/{message.id}" interaction, query [], body () => (), api [delete_followup_message, delete_followup_message_with_application_id];
 
@@ -714,9 +715,9 @@ mod tests {
 
     #[test]
     fn only_the_interaction_token_routes_skip_the_global_limit() {
-        // Discord lists these as "not bound to the application's Global Rate
-        // Limit" (Receiving and Responding, Endpoints); Get Followup Message,
-        // the eighth, is not in the manifest.
+        // Discord lists exactly these eight as "not bound to the
+        // application's Global Rate Limit" (Receiving and Responding,
+        // Endpoints).
         let exempt = RouteId::ALL
             .iter()
             .filter(|id| id.exempt_from_global_limit())
@@ -730,6 +731,7 @@ mod tests {
                 "EditOriginalInteractionResponse",
                 "DeleteOriginalInteractionResponse",
                 "CreateFollowupMessage",
+                "GetFollowupMessage",
                 "EditFollowupMessage",
                 "DeleteFollowupMessage",
             ]

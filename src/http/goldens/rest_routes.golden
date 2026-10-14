@@ -237,6 +237,12 @@ Content-Type: text/plain
 golden file
 --BOUNDARY--
 
+### GetFollowupMessage · get_followup_message
+GET /webhooks/555/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body: -
+
 ### EditFollowupMessage · edit_followup_message
 PATCH /webhooks/555/golden-interaction-token/messages/903
 authorization: -
@@ -369,6 +375,12 @@ Content-Type: text/plain
 
 golden file
 --BOUNDARY--
+
+### GetFollowupMessage · get_followup_message_with_application_id
+GET /webhooks/556/golden-interaction-token/messages/903
+authorization: -
+content-type: application/json
+body: -
 
 ### DeleteFollowupMessage · delete_followup_message_with_application_id
 DELETE /webhooks/556/golden-interaction-token/messages/903
