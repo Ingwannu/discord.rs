@@ -27,6 +27,7 @@ use crate::error::DiscordError;
 use crate::model::Lenient;
 use crate::model::{GuildId, UserId};
 use crate::types::invalid_data_error;
+use crate::voice::player::OPUS_SILENCE_FRAME;
 use crate::voice::{
     VoiceEncryptionMode, VoiceGatewayCommand, VoiceGatewayOpcode, VoiceGatewayReady,
     VoiceSelectProtocolCommand, VoiceSpeakingCommand, VoiceSpeakingFlags, VoiceUdpDiscoveryPacket,
@@ -1223,6 +1224,12 @@ impl VoiceRuntimeHandle {
         })
     }
 
+    /// Receives one packet and removes transport encryption and, on a DAVE
+    /// session, DAVE encryption through `dave_decryptor`.
+    ///
+    /// A payload that is exactly the Opus silence frame (`F8 FF FE`) is
+    /// returned unchanged without calling `dave_decryptor`: Discord sends it
+    /// unencrypted for muted users, as the DAVE protocol allows.
     pub async fn recv_voice_packet_with_dave<D>(
         &self,
         max_len: usize,
@@ -1245,7 +1252,20 @@ impl VoiceRuntimeHandle {
             &session_description.secret_key,
         )?;
         let user_id = state.ssrc_users.get(&rtp.ssrc).cloned();
-        let opus_frame = if session_description.dave_protocol_version.unwrap_or(0) > 0 {
+        // Why the silence check: Discord's SFU sends the 3-byte Opus silence
+        // packet for a muted sender without DAVE encryption, even inside an
+        // E2EE session, and the DAVE decrypting transform must let a frame
+        // that is exactly those bytes through (DAVE protocol, "Silence
+        // packets": <https://daveprotocol.com/#silence-packets>; discord.js
+        // `DAVESession.decrypt` does the same). Parsing it as a DAVE frame
+        // failed with "too short" and ended every receive loop that used `?`.
+        // Only the exact frame passes, as the spec requires. The spec notes
+        // that whoever can inject packets could inject silence; here that
+        // means the SFU, because transport AEAD already rejected anything
+        // sealed without the session key.
+        let opus_frame = if session_description.dave_protocol_version.unwrap_or(0) > 0
+            && transport_frame.as_slice() != OPUS_SILENCE_FRAME
+        {
             let dave_frame = parse_dave_frame(&transport_frame)?;
             dave_decryptor.decrypt_frame(&rtp, user_id, &dave_frame)?
         } else {
@@ -3414,6 +3434,75 @@ mod tests {
         assert_eq!(received.rtp.ssrc, 0x63);
         assert_eq!(received.opus_frame, vec![1, 2, 3]);
         assert_eq!(decryptor.0.unwrap().bytes, DAVE_FRAME);
+
+        handle.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    /// Regression: the SFU's unencrypted silence packet for a muted user
+    /// went through DAVE frame parsing, failed with "DAVE frame is too
+    /// short", and ended `recv_decoded_voice_packet_with_dave(..).await?`
+    /// loops. It must pass through, and only the exact 3-byte frame may.
+    #[tokio::test]
+    async fn voice_runtime_passes_dave_silence_packets_through() {
+        /// Counts DAVE decrypt calls and returns the ciphertext.
+        struct CountingDecryptor(usize);
+
+        impl super::VoiceDaveFrameDecryptor for CountingDecryptor {
+            fn decrypt_frame(
+                &mut self,
+                _rtp: &super::VoiceRtpHeader,
+                _user_id: Option<crate::model::UserId>,
+                frame: &super::VoiceDaveFrame,
+            ) -> Result<Vec<u8>, crate::error::DiscordError> {
+                self.0 += 1;
+                Ok(frame.ciphertext.clone())
+            }
+        }
+
+        let (handle, media, server) = connect_mock_voice_session(1).await;
+        let mut client = handle.udp_socket().local_addr().unwrap();
+        client.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+        let mode = VoiceEncryptionMode::aead_aes256_gcm_rtpsize();
+        let seal = |sequence: u8, media: &[u8]| {
+            let cleartext = vec![
+                0x80, 0x78, 0x00, sequence, 0x00, 0x00, 0x03, 0xc0, 0x00, 0x00, 0x00, 0x63,
+            ];
+            seal_rtpsize_packet(cleartext, media, [0, 0, 0, sequence], &mode, &[7_u8; 32]).unwrap()
+        };
+
+        let mut decoder = VoiceOpusDecoder::discord_default().unwrap();
+        let mut decryptor = CountingDecryptor(0);
+        media
+            .send_to(&seal(1, &[0xf8, 0xff, 0xfe]), client)
+            .await
+            .unwrap();
+        let silence = handle
+            .recv_decoded_voice_packet_with_dave(&mut decoder, 128, &mut decryptor)
+            .await
+            .expect("a silence packet is not a DAVE error");
+        assert!(!silence.pcm.is_empty());
+        assert_eq!(decryptor.0, 0, "silence must bypass the DAVE decryptor");
+
+        // The receive loop goes on: the next DAVE frame is decrypted.
+        media.send_to(&seal(2, &DAVE_FRAME), client).await.unwrap();
+        let received = handle
+            .recv_voice_packet_with_dave(128, &mut decryptor)
+            .await
+            .unwrap();
+        assert_eq!(received.opus_frame, vec![1, 2, 3]);
+        assert_eq!(decryptor.0, 1);
+
+        // Anything but the exact silence frame is still parsed as DAVE.
+        for not_silence in [&[0xf8, 0xff][..], &[0xf8, 0xff, 0xfe, 0x00][..]] {
+            media.send_to(&seal(3, not_silence), client).await.unwrap();
+            let error = handle
+                .recv_voice_packet_with_dave(128, &mut decryptor)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("DAVE frame"), "{error}");
+        }
+        assert_eq!(decryptor.0, 1);
 
         handle.close().await.unwrap();
         server.await.unwrap();
