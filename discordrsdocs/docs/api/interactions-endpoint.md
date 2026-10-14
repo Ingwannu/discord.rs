@@ -34,6 +34,8 @@ let router = InteractionsEndpointBuilder::new(public_key)
 
 The documentation of `DEFAULT_INTERACTION_BODY_LIMIT` gives the size estimate behind 1 MiB. A reverse proxy in front of the endpoint must allow at least the same size.
 
+The limit is per request, not a total for all requests. The body is read in full before the signature can be checked (Ed25519 signs the timestamp and the whole body as one message), and verification copies it once more behind the timestamp, so each request holds about twice its body until verification ends, and the decoded interaction after that. Unauthenticated clients can send many requests at once, each up to the limit; bound concurrency in front of the endpoint (a proxy's connection or request limits) when that matters.
+
 ## Typical Flow
 
 1. Receive `/interactions` HTTP request

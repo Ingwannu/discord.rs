@@ -123,9 +123,15 @@ const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
 /// - Chosen: 1 MiB, about ten times the largest payload observed and above
 ///   every all-ASCII bound above, and half of axum's default, with
 ///   [`InteractionsEndpointBuilder::body_limit`] for apps that expect more.
-/// - Trade-offs: each in-flight unauthenticated request can hold up to
-///   1 MiB; a reverse proxy in front of the endpoint should allow at least
-///   the same size, or it rejects these requests before this limit does.
+/// - Trade-offs: the limit is per request, not for all requests together.
+///   The whole body is read into memory before the signature is checked,
+///   and verification copies it once more behind the timestamp (Ed25519
+///   signs `timestamp + body` as one message), so a request holds about
+///   twice its body until verification ends, and the decoded interaction
+///   after that. `n` concurrent unauthenticated requests can hold about
+///   `2 × n ×` the limit; bound concurrency in front of the endpoint when
+///   that matters. A reverse proxy in front should allow at least the same
+///   size, or it rejects these requests before this limit does.
 pub const DEFAULT_INTERACTION_BODY_LIMIT: usize = 1024 * 1024;
 
 fn decode_verifying_key(public_key: &str) -> Result<VerifyingKey, DiscordError> {
@@ -424,6 +430,11 @@ impl InteractionsEndpointBuilder {
     /// the handler never sees it and Discord reports the interaction as
     /// failed. See the default's documentation for how large real
     /// interactions get.
+    ///
+    /// The limit applies to each request separately. The body is read in
+    /// full before the signature is checked and copied once more for the
+    /// check, so a request holds about twice its body while it is verified;
+    /// concurrent requests add up.
     pub fn body_limit(mut self, bytes: usize) -> Self {
         self.body_limit = bytes;
         self
