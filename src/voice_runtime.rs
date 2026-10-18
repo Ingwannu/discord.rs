@@ -1224,6 +1224,11 @@ fn parse_dave_frame(frame: &[u8]) -> Result<VoiceDaveFrame, DiscordError> {
 /// ([`Self::recv_voice_packet`], [`Self::recv_decoded_voice_packet`])
 /// decrypt each sender's frames. [`Self::dave_status`] shows where the
 /// session is. From [`connect`], DAVE is left to the caller as in 3.0.0.
+///
+/// The runtime does not resume: when the voice websocket closes, its gateway
+/// task ends ([`Self::is_playable`] turns `false` for a
+/// [`connect_with_options`] runtime). Connecting again is a fresh IDENTIFY
+/// and, with DAVE, a fresh MLS join.
 pub struct VoiceRuntimeHandle {
     state_rx: watch::Receiver<VoiceRuntimeState>,
     command_tx: mpsc::UnboundedSender<VoiceGatewayCommand>,

@@ -147,6 +147,9 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
   합니다.
 - **핸드셰이크 중 4017 닫힘**(Discord가 DAVE를 요구)은 연결이 무엇을 광고했는지 알려 주는 오류가 되고,
   `connect_voice_runtime`이었다면 `connect_voice_runtime_with_options`를 안내합니다.
+- **재개(RESUME) 없음.** 음성 런타임에는 RESUME 루프가 없습니다. 음성 웹소켓이 닫히면 핸들의 게이트웨이
+  태스크가 끝나고(`is_playable()`이 `false`, `wait_until_playable()`은 실패), 다시 연결하면 새 IDENTIFY와
+  함께 DAVE 세션도 새로 만들어 새 키 패키지로 MLS 그룹에 다시 들어갑니다.
 
 ```rust
 use discordrs::VoiceRuntimeHandle;
@@ -180,6 +183,10 @@ fn describe(handle: &VoiceRuntimeHandle) {
 `connect_voice_runtime(config)`을 쓰는 코드는 전과 같이 동작합니다. DAVE 채널에서 소리를 내려면
 `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.
 `Context::connect_voice_runtime`을 쓰는 코드는 그대로 두어도 됩니다.
+
+**한계.** `davey` 0.1.x는 웰컴에 담긴 사용자 목록을 통화 멤버와 아직 대조하지 않습니다(상류의 TODO).
+커밋과 제안은 대조합니다. 런타임의 프레임 카운터는 MLS 에포크 하나에 2^32 - 1프레임(연속 오디오로 약
+2.7년)까지이고, 그 뒤에는 nonce를 다시 쓰는 대신 다음 에포크까지 송신이 실패합니다.
 
 **검증 상태.** 독립된 두 `davey` 세션과 테스트용 음성 게이트웨이(OpenMLS 외부 발신자)로 웰컴 참여, 혼자인
 멤버의 커밋, 양방향 오디오(실제 Opus를 쓰는 `AudioPlayer` 포함), 다운그레이드·업그레이드, 잘못된

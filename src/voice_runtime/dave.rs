@@ -696,6 +696,9 @@ impl DaveController {
             tracing::debug!(%kind, transition_id, "DAVE: MLS message without a session");
             return Vec::new();
         };
+        // davey 0.1.x checks commits against the group but does not yet
+        // check a welcome's members against the recognized users (an
+        // upstream TODO; libdave does). docs/design/dave-voice.md, section 10.
         let result = match kind {
             TransitionMessage::Commit => session.process_commit(message).map_err(|e| e.to_string()),
             TransitionMessage::Welcome => {
