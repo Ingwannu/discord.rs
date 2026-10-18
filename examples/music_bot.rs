@@ -13,13 +13,12 @@
 //!
 //! Works in DAVE (end-to-end encrypted) channels, which is every voice
 //! channel except Stage channels: it connects with
-//! `connect_voice_runtime_with_options` and the channel ID (what
-//! `Context::connect_voice_runtime_with_dave` does from the context's tracked
-//! voice state; this bot builds the configuration from its own voice events
-//! instead, so another member's voice update cannot replace the session), so
-//! the voice runtime joins the call's MLS group and the player's frames are
-//! encrypted before they leave. The player waits in `AutoPaused` until the runtime has
-//! a key in use, which needs another member in the channel.
+//! `Context::connect_voice_runtime_with_dave`, which takes the session,
+//! token, endpoint, and channel from the voice state the context tracks for
+//! the bot, so the voice runtime joins the call's MLS group and the player's
+//! frames are encrypted before they leave. The player waits in `AutoPaused`
+//! until the runtime has a key in use, which needs another member in the
+//! channel.
 //!
 //! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a
 //! stalled stream), the bot stops the track instead of waiting forever. This
@@ -46,8 +45,7 @@ mod bot {
     };
     use discordrs::{
         gateway_intents, ChannelId, Client, Context, DiscordError, EventHandler, GuildId,
-        ReadyPayload, UserId, VoiceConnectOptions, VoiceRuntimeConfig, VoiceServerUpdate,
-        VoiceState,
+        ReadyPayload, UserId, VoiceConnectionConfig, VoiceServerUpdate, VoiceState,
     };
 
     /// How long FFmpeg may take to produce the first frame before the bot
@@ -57,8 +55,6 @@ mod bot {
     #[derive(Default)]
     struct SessionState {
         user_id: Option<UserId>,
-        session_id: Option<String>,
-        server: Option<VoiceServerUpdate>,
         started: bool,
     }
 
@@ -79,41 +75,38 @@ mod bot {
             }
         }
 
-        /// Starts playback once the voice session id and server token are both
-        /// known.
-        fn try_start_playback(&self) {
-            let config = {
+        /// Starts playback once the context tracks a complete voice session
+        /// for the bot: its own VOICE_STATE_UPDATE and the
+        /// VOICE_SERVER_UPDATE, which arrive in either order.
+        async fn try_start_playback(&self, ctx: &Context) {
+            let Some(user_id) = self
+                .state
+                .lock()
+                .expect("session state mutex poisoned")
+                .user_id
+            else {
+                return;
+            };
+            if ctx
+                .voice_runtime_config(self.guild_id, user_id)
+                .await
+                .is_none()
+            {
+                return;
+            }
+            {
                 let mut state = self.state.lock().expect("session state mutex poisoned");
                 if state.started {
                     return;
                 }
-                let (Some(user_id), Some(session_id), Some(server)) = (
-                    state.user_id,
-                    state.session_id.as_ref(),
-                    state.server.as_ref(),
-                ) else {
-                    return;
-                };
-                let Some(endpoint) = server.endpoint.as_ref() else {
-                    return;
-                };
-                let config = VoiceRuntimeConfig::new(
-                    self.guild_id,
-                    user_id,
-                    session_id.as_str(),
-                    server.token.as_str(),
-                    endpoint.as_str(),
-                );
                 state.started = true;
-                config
-            };
+            }
 
-            // The channel is what lets the runtime take part in DAVE (its MLS
-            // group); `connect_voice_runtime` alone would leave DAVE to us.
-            let options = VoiceConnectOptions::new(self.channel_id);
+            let ctx = ctx.clone();
+            let guild_id = self.guild_id;
             let input = self.input.clone();
             tokio::spawn(async move {
-                if let Err(error) = play(config, options, input).await {
+                if let Err(error) = play(&ctx, guild_id, user_id, input).await {
                     eprintln!("playback failed: {error}");
                 }
                 std::process::exit(0);
@@ -122,13 +115,18 @@ mod bot {
     }
 
     async fn play(
-        config: VoiceRuntimeConfig,
-        options: VoiceConnectOptions,
+        ctx: &Context,
+        guild_id: GuildId,
+        user_id: UserId,
         input: String,
     ) -> Result<(), DiscordError> {
-        println!("connecting voice runtime to {}", config.endpoint);
-        let handle =
-            Arc::new(discordrs::connect_voice_runtime_with_options(config, options).await?);
+        println!("connecting the voice runtime for guild {guild_id}");
+        // The runtime runs DAVE itself; `connect_voice_runtime` would leave it
+        // to us, as in 3.0.0.
+        let handle = Arc::new(
+            ctx.connect_voice_runtime_with_dave(guild_id, user_id)
+                .await?,
+        );
         let dave = handle.dave_status();
         if dave.protocol_version > 0 && !dave.can_send_audio() {
             println!(
@@ -220,6 +218,10 @@ mod bot {
                 "ready as {}; joining voice channel {} in guild {}",
                 ready.user.username, self.channel_id, self.guild_id
             );
+            // Track the connection before joining, so the VOICE_SERVER_UPDATE
+            // is kept even if it arrives before the bot's VOICE_STATE_UPDATE.
+            ctx.connect_voice(VoiceConnectionConfig::new(self.guild_id, self.channel_id))
+                .await;
             if let Err(error) = ctx
                 .join_voice(self.guild_id, self.channel_id, false, true)
                 .await
@@ -228,30 +230,18 @@ mod bot {
             }
         }
 
-        async fn voice_state_update(&self, _ctx: Context, voice_state: &VoiceState) {
-            let expected_user = {
-                let state = self.state.lock().expect("session state mutex poisoned");
-                state.user_id
-            };
-            if voice_state.guild_id != Some(self.guild_id) || voice_state.user_id != expected_user {
-                return;
-            }
-            if let Some(session_id) = voice_state.session_id.clone() {
-                let mut state = self.state.lock().expect("session state mutex poisoned");
-                state.session_id = Some(session_id);
-                drop(state);
-                self.try_start_playback();
+        // The context has already applied these events to its tracked voice
+        // state (the bot's own voice states only) when the hooks run.
+        async fn voice_state_update(&self, ctx: Context, voice_state: &VoiceState) {
+            if voice_state.guild_id == Some(self.guild_id) {
+                self.try_start_playback(&ctx).await;
             }
         }
 
-        async fn voice_server_update(&self, _ctx: Context, server: &VoiceServerUpdate) {
-            if server.guild_id != self.guild_id {
-                return;
+        async fn voice_server_update(&self, ctx: Context, server: &VoiceServerUpdate) {
+            if server.guild_id == self.guild_id {
+                self.try_start_playback(&ctx).await;
             }
-            let mut state = self.state.lock().expect("session state mutex poisoned");
-            state.server = Some(server.clone());
-            drop(state);
-            self.try_start_playback();
         }
     }
 

@@ -663,12 +663,12 @@ impl Context {
     /// `info` or coarser): at trace level it writes DAVE media key secrets to
     /// the log. See `connect_voice_runtime_with_options`.
     ///
-    /// `user_id` must be the bot's own user. The tracked state is updated by
-    /// every VOICE_STATE_UPDATE of the guild, other members' included, so
-    /// call this right after the bot's own VOICE_STATE_UPDATE and
-    /// VOICE_SERVER_UPDATE, or build the configuration from those events and
-    /// call `connect_voice_runtime_with_options` yourself, as
-    /// `examples/music_bot.rs` does.
+    /// `user_id` must be the bot's own user. The context tracks only the
+    /// bot's own voice state (the user from READY), so other members joining,
+    /// moving, or leaving do not change the session ID and channel used
+    /// here. Call [`Context::connect_voice`] before [`Context::join_voice`]:
+    /// a VOICE_SERVER_UPDATE that arrives before the bot's VOICE_STATE_UPDATE
+    /// is only kept for a connection that is already tracked.
     ///
     /// [Decision Log]
     /// - Purpose: one call that gives a working voice handle in DAVE
@@ -3105,9 +3105,16 @@ async fn apply_voice_updates(voice: &Arc<RwLock<VoiceManager>>, event: &Event) {
     // Only voice events need the manager; taking the write lock for every
     // dispatch would contend with user tasks holding `ctx.voice()`.
     match event.kind() {
+        // The bot's own user, so that other members' voice states do not
+        // replace or clear the bot's tracked connection (its session ID and
+        // channel are what `connect_voice_runtime*` authenticates with).
+        EventKind::Ready(ready) => {
+            let mut voice = voice.write().await;
+            voice.set_current_user(ready.user.id);
+        }
         EventKind::VoiceStateUpdate(state) => {
             let mut voice = voice.write().await;
-            voice.update_voice_state(state);
+            voice.update_own_voice_state(state);
         }
         EventKind::VoiceServerUpdate(data) => {
             let mut voice = voice.write().await;

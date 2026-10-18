@@ -8435,3 +8435,105 @@ async fn context_connect_voice_runtime_with_dave_runs_the_session() {
     assert!(call.handle.dave_status().can_send_audio());
     call.close().await;
 }
+
+/// Other members' VOICE_STATE_UPDATEs in the bot's guild used to replace the
+/// bot's tracked channel and session ID (join, move) or clear its connection
+/// (leave), so `connect_voice_runtime*` authenticated with someone else's
+/// session or found no configuration. Only the bot's own (user from READY)
+/// now reach the tracked connection.
+#[cfg(feature = "voice")]
+#[tokio::test]
+async fn apply_voice_updates_track_only_the_bots_own_voice_state() {
+    let context = super::Context::new(
+        Arc::new(DiscordHttpClient::new("token", None)),
+        Arc::new(RwLock::new(super::TypeMap::new())),
+    );
+    let guild_id = test_id(701);
+    let bot_id = test_id(702);
+    let other_id = test_id(703);
+    let state = |user_id, channel_id: Option<u64>, session_id: &str| {
+        Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
+                guild_id: Some(guild_id),
+                channel_id: channel_id.map(test_id),
+                user_id: Some(user_id),
+                session_id: Some(session_id.to_string()),
+                ..VoiceState::default()
+            })),
+        )
+    };
+    let tracked = || async {
+        let voice = context.voice();
+        let voice = voice.read().await;
+        let connection = voice.connection(guild_id)?;
+        Some((connection.channel_id, connection.session_id.clone()))
+    };
+
+    super::apply_voice_updates(
+        &context.voice(),
+        &Event::from_kind(
+            "READY",
+            EventKind::Ready(Box::new(ReadyPayload {
+                user: User {
+                    id: bot_id,
+                    username: "bot".to_string(),
+                    ..User::fixture()
+                },
+                session_id: "gateway-session".to_string(),
+                application: None,
+                resume_gateway_url: None,
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(context.voice().read().await.current_user(), Some(bot_id));
+    super::apply_voice_updates(&context.voice(), &state(bot_id, Some(710), "bot-session")).await;
+    super::apply_voice_updates(
+        &context.voice(),
+        &Event::from_kind(
+            "VOICE_SERVER_UPDATE",
+            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
+                guild_id,
+                token: "voice-token".to_string(),
+                endpoint: Some("voice.discord.media".to_string()),
+            })),
+        ),
+    )
+    .await;
+    let bot_connection = Some((test_id(710), Some("bot-session".to_string())));
+    assert_eq!(tracked().await, bot_connection);
+
+    // Another member joins, moves, and leaves: the bot's connection stays.
+    for event in [
+        state(other_id, Some(710), "other-session"),
+        state(other_id, Some(720), "other-session"),
+        state(other_id, None, "other-session"),
+    ] {
+        super::apply_voice_updates(&context.voice(), &event).await;
+        assert_eq!(tracked().await, bot_connection);
+    }
+    let config = context
+        .voice_runtime_config(guild_id, bot_id)
+        .await
+        .expect("the bot's connection is still complete");
+    assert_eq!(config.session_id, "bot-session");
+    let options = context.voice().read().await.runtime_options(guild_id);
+    assert_eq!(
+        options.map(|options| options.channel_id),
+        Some(test_id(710))
+    );
+
+    // The bot's own move and leave still apply.
+    super::apply_voice_updates(&context.voice(), &state(bot_id, Some(711), "bot-session")).await;
+    assert_eq!(
+        tracked().await,
+        Some((test_id(711), Some("bot-session".to_string())))
+    );
+    super::apply_voice_updates(&context.voice(), &state(bot_id, None, "bot-session")).await;
+    assert_eq!(tracked().await.and_then(|(_, session)| session), None);
+    assert!(context
+        .voice_runtime_config(guild_id, bot_id)
+        .await
+        .is_none());
+}

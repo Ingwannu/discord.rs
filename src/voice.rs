@@ -870,6 +870,9 @@ pub struct VoiceManager {
     connections: HashMap<GuildId, VoiceConnectionState>,
     players: HashMap<GuildId, AudioPlayer>,
     events: Vec<VoiceEvent>,
+    /// The bot's own user (from READY in a gateway client), whose voice
+    /// states alone [`Self::update_own_voice_state`] applies.
+    current_user_id: Option<UserId>,
 }
 
 impl VoiceManager {
@@ -921,6 +924,47 @@ impl VoiceManager {
             self.events.push(VoiceEvent::Connected(state.clone()));
         }
         Some(state.clone())
+    }
+
+    /// Sets the bot's own user, so [`Self::update_own_voice_state`] ignores
+    /// other members' voice states. A gateway client sets it from READY.
+    pub fn set_current_user(&mut self, user_id: UserId) {
+        self.current_user_id = Some(user_id);
+    }
+
+    /// The bot's own user, if known.
+    pub fn current_user(&self) -> Option<UserId> {
+        self.current_user_id
+    }
+
+    /// Like [`Self::update_voice_state`], for the bot's own voice state only.
+    ///
+    /// VOICE_STATE_UPDATE arrives for every member of a guild, and a
+    /// connection is tracked per guild, so another member joining or moving
+    /// would replace the bot's channel and session ID, and another member
+    /// leaving would clear the bot's connection. This applies `update` only
+    /// when it is the [current user](Self::set_current_user)'s, and returns
+    /// `None` otherwise. Without a current user it applies every update, as
+    /// `update_voice_state` does.
+    ///
+    /// [Decision Log]
+    /// - Purpose: keep the session ID, channel, and token the voice runtime
+    ///   authenticates with the bot's own (`Context::connect_voice_runtime*`).
+    /// - Constraint: `update_voice_state` is public and applies any member's
+    ///   state; 3.0.0 code may call it that way.
+    /// - Alternatives: change `update_voice_state` (changes a public method's
+    ///   behaviour); filter in the gateway pipeline only (manual
+    ///   `VoiceManager` users keep the problem); a filtering method next to
+    ///   it.
+    /// - Chosen: this method plus `set_current_user`; the gateway pipeline
+    ///   sets the user from READY and uses it.
+    /// - Trade-offs: before READY (or without `set_current_user`) every
+    ///   update still applies.
+    pub fn update_own_voice_state(&mut self, update: &VoiceState) -> Option<VoiceConnectionState> {
+        match self.current_user_id {
+            Some(current) if update.user_id != Some(current) => None,
+            _ => self.update_voice_state(update),
+        }
     }
 
     pub fn update_voice_state(&mut self, update: &VoiceState) -> Option<VoiceConnectionState> {
@@ -1752,5 +1796,38 @@ mod tests {
                 "heartbeat_interval_ms": 250,
             })
         );
+    }
+
+    #[test]
+    fn voice_manager_update_own_voice_state_ignores_other_members() {
+        let mut manager = VoiceManager::new();
+        let guild_id: crate::model::GuildId = test_id(1);
+        let state = |user: u64, channel: Option<u64>, session: &str| VoiceState {
+            guild_id: Some(guild_id),
+            channel_id: channel.map(test_id),
+            user_id: Some(test_id(user)),
+            session_id: Some(session.to_string()),
+            ..VoiceState::default()
+        };
+
+        // Without a current user every state applies, as before.
+        assert!(manager
+            .update_own_voice_state(&state(9, Some(2), "nine"))
+            .is_some());
+        assert_eq!(manager.current_user(), None);
+
+        manager.set_current_user(test_id(3));
+        assert!(manager
+            .update_own_voice_state(&state(3, Some(2), "mine"))
+            .is_some());
+        assert!(manager
+            .update_own_voice_state(&state(9, Some(4), "other"))
+            .is_none());
+        assert!(manager
+            .update_own_voice_state(&state(9, None, "other"))
+            .is_none());
+        let connection = manager.connection(guild_id).unwrap();
+        assert_eq!(connection.channel_id, test_id(2));
+        assert_eq!(connection.session_id.as_deref(), Some("mine"));
     }
 }
