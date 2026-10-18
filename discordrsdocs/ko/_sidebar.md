@@ -14,6 +14,7 @@
   - [파서](#/ko/api/parsers)
   - [HTTP 및 헬퍼](#/ko/api/http-and-helpers)
   - [인터랙션 엔드포인트](#/ko/api/interactions-endpoint)
+  - [음성과 DAVE](#/ko/api/voice)
   - [핵심 타입 및 상수](#/ko/api/core-types-and-constants)
 - 원문 문서
   - [Crate README (EN)](#/docs/guide/crate-readme)

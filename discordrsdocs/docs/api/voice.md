@@ -10,25 +10,24 @@ discordrs = { version = "3.0.0", features = ["voice"] }
 
 # PCM -> Opus encode/playback helpers
 discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
-
-# DAVE/MLS hook
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
+
+`voice` includes DAVE end-to-end encryption (`davey`/OpenMLS), which Discord requires in every voice channel except Stage channels. The `dave` feature still exists as an alias of `voice`, so `features = ["voice", "dave"]` keeps building. See [DAVE](#dave-end-to-end-encryption) for why it is no longer optional.
 
 ## Surfaces
 
 - `VoiceManager`: tracks gateway voice state/server updates and local queue state.
-- `connect_voice_runtime(...)`: connects the voice websocket, performs UDP discovery, selects protocol, and waits for session description.
+- `connect_voice_runtime(...)`: connects the voice websocket, performs UDP discovery, selects protocol, and waits for session description. With `VoiceRuntimeConfig::channel_id(..)` set it advertises DAVE support and then runs the call's MLS group itself.
 - `recv_raw_udp_packet(...)`: receives raw UDP packets with parsed RTP metadata.
-- `recv_voice_packet(...)`: returns transport-decrypted Opus frames for non-DAVE sessions.
-- `send_opus_frame(...)`: sends an already-encoded Opus frame as an encrypted RTP-size packet with managed sequence, timestamp, and nonce state. The sequence number and timestamp advance only once the datagram is sent, so a failed or cancelled send leaves no hole; every attempt uses a fresh nonce.
-- `send_opus_frame_after_gap(...)`: the same for a frame that follows media that was never transmitted (for example frames a player dropped while the connection lagged); the RTP timestamp moves across the gap while the sequence stays contiguous. Behind `dave`, `send_opus_frame_with_dave_after_gap(...)` is the DAVE counterpart.
+- `recv_voice_packet(...)`: returns the next Opus frame with transport encryption and, in a DAVE call, the speaker's DAVE encryption removed.
+- `send_opus_frame(...)`: sends an already-encoded Opus frame (DAVE-encrypted in a DAVE call) as an encrypted RTP-size packet with managed sequence, timestamp, and nonce state. The sequence number and timestamp advance only once the datagram is sent, so a failed or cancelled send leaves no hole; every attempt uses a fresh nonce.
+- `send_opus_frame_after_gap(...)`: the same for a frame that follows media that was never transmitted (for example frames a player dropped while the connection lagged); the RTP timestamp moves across the gap while the sequence stays contiguous. `send_opus_frame_with_dave_after_gap(...)` does the same with your own DAVE encryptor.
+- `dave_status()`, `subscribe_dave_status()`, `is_playable()`, `wait_until_playable()`, `dave_verification_code(user_id)`: the DAVE session's state (`VoiceDaveStatus`), see [DAVE](#dave-end-to-end-encryption).
 - `play_opus_frames(...)`: sends a small iterator of encoded Opus frames with simple duration pacing and speaking on/off commands.
 - `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`: behind `voice-encode`, encode 48 kHz stereo 20 ms PCM frames with `opus-rs` Audio mode before calling the existing Opus playback path.
 - `VoiceOpusDecoder`: decodes Opus frames to interleaved `i16` PCM, using 48 kHz stereo by default for Discord voice.
-- `VoiceDaveFrameDecryptor`: trait for DAVE frame decryptors.
-- `VoiceDaveFrameEncryptor` and `send_opus_frame_with_dave(...)`: behind `dave`, encrypt Opus with DAVE before RTP packetization.
-- `VoiceDaveySession`: experimental `dave` feature wrapper over `davey` / OpenMLS. `VoiceDaveyDecryptor` remains as a compatibility alias.
+- `VoiceDaveFrameDecryptor`, `VoiceDaveFrameEncryptor`, `send_opus_frame_with_dave(...)`, `recv_voice_packet_with_dave(...)`: low-level hooks for bringing your own DAVE encryption instead of the runtime's.
+- `VoiceDaveySession`: a wrapper over a `davey` / OpenMLS session for such custom setups. `VoiceDaveyDecryptor` remains as a compatibility alias.
 - `get_current_user_voice_state(...)`, `get_user_voice_state(...)`, `modify_current_user_voice_state(...)`, and `modify_user_voice_state(...)`: typed Voice Resource REST helpers for stage voice-state reads and moderation updates.
 - `discordrs::voice::player::{AudioPlayer, AudioResource, AudioInput, NoSubscriberBehavior}`: the `2.2.0` discord.js-style playback pipeline (see below).
 
@@ -85,7 +84,9 @@ async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::
 - `AudioResource::volume()` returns a live `VolumeControl`. The volume is applied when the player encodes a frame, so a change affects the next frame encoded; up to three frames already queued for a lagging connection keep their old volume. `AudioInput::file(...)`, `raw_pcm(...)`, `ffmpeg_with_binary(...)`, and `ffmpeg_with_args(...)` cover non-URL sources.
 - Subscriptions are drop-safe: dropping the `PlayerSubscription` (or calling `unsubscribe()`) detaches the connection (see below).
 - `AudioResource::next_pcm_frame()` is cancel safe: dropping the future mid-frame (for example as a losing `tokio::select!` branch) keeps the PCM already read, and the next call completes the same frame.
-- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`). It also shows a start watchdog that calls `stop()` when FFmpeg produces no audio in time, and a clean `shutdown()`.
+- A connection counts as subscribed only while it is *playable* (`VoiceFrameSink::is_playable`, as `AudioPlayer.playable` in discord.js). A `VoiceRuntimeHandle` in a DAVE call becomes playable once it holds the MLS group's keys; until then the player applies `NoSubscriberBehavior` (by default it waits in `AutoPaused` and then plays the track from its first frame). Alone in a DAVE channel, that is when someone joins. With `NoSubscriberBehavior::Stop`, wait for `handle.wait_until_playable()` before calling `play`.
+- `player.connection_events()` reports `PlayerConnectionEvent::SendFailed { subscription, error }` when sends to a connection start failing and `Recovered { subscription, failed }` when they work again: once per stretch, not per frame (also logged). `PlayerSubscription::id()` matches `subscription`. Frames that were not sent still become an RTP timestamp gap.
+- Full gateway-integrated example: `examples/music_bot.rs` (`cargo run --example music_bot --features gateway,voice,voice-encode`). It also shows a start watchdog that calls `stop()` when FFmpeg produces no audio in time (paused while the player waits for the DAVE group), connection events, and a clean `shutdown()`.
 
 ### Real-Time Delivery, Stalls, and Shutdown (3.0)
 
@@ -133,6 +134,7 @@ A player is one control task, plus one reader task per loaded resource and one t
 - The send future may be dropped before it completes: after 60 ms (stalled), when playback is stopped, paused, or replaced, when new audio supersedes a pending silence frame, and when the close grace period ends. A dropped send must leave the sink usable.
 - Polls must not block. The player polls the send while holding the subscription's internal lock; that is what guarantees a superseded send is never polled again.
 - `update_speaking(false)` is also called from a destructor when a subscription's task is cancelled, so it must not block or panic.
+- `is_playable()` (default `true`) is called by the player's control task on every 20 ms tick, so it must be cheap and must not block. A sink that is not playable gets no audio, only its silence tail and speaking off.
 
 ### Without `voice-encode`
 
@@ -146,15 +148,21 @@ use std::time::Duration;
 use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig};
 
 async fn receive_voice() -> Result<(), discordrs::DiscordError> {
-    let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
-        "guild_id",
-        "bot_user_id",
-        "voice_session_id",
-        "voice_token",
-        "wss://voice.discord.media/?v=8",
-    ))
+    let handle = connect_voice_runtime(
+        VoiceRuntimeConfig::new(
+            "guild_id".parse()?,
+            "bot_user_id".parse()?,
+            "voice_session_id",
+            "voice_token",
+            "wss://voice.discord.media/?v=8",
+        )
+        // The voice channel: DAVE uses it as the MLS group.
+        .channel_id("voice_channel_id".parse()?),
+    )
     .await?;
 
+    // In a DAVE call: once this client holds the group's keys.
+    handle.wait_until_playable().await?;
     handle
         .send_opus_frame(&[0xf8, 0xff, 0xfe], Duration::from_millis(20))
         .await?;
@@ -212,17 +220,43 @@ rest.modify_user_voice_state(
 - **Cleartext and AAD.** The fixed RTP header, the CSRCs and, when the X bit is set, only the 4-byte extension preamble are sent in the clear and authenticated as additional data. The extension body is encrypted together with the payload. After decrypting, the runtime strips the extension body, so `VoiceReceivedPacket::opus_frame` holds only the Opus (or DAVE) frame; `VoiceRtpHeader::header_len` is the media offset after decryption, not where the ciphertext starts.
 - **Padding.** When the P bit is set, the payload ends with RTP padding whose last octet counts the padding octets, itself included (RFC 3550 §5.1). The padding is encrypted too, so the runtime removes it after decrypting, before Opus decoding or DAVE frame parsing. A count of zero or one longer than the payload (it would reach into the extension body) is an error; a count equal to the payload length is a padding-only packet with an empty payload.
 
-Before 3.0 the counter went into the last four nonce bytes and received extension bodies were treated as AAD, so packets sent to or received from real Discord voice servers failed authentication; padding was also left on the media payload. Known-answer vectors from `ci/voice_transport_kat.py`, generated outside the crate and cross-checked against Node's AES-256-GCM and libsodium, now pin both directions. The live DAVE harness below checks MLS transitions, not transport media.
+Before 3.0 the counter went into the last four nonce bytes and received extension bodies were treated as AAD, so packets sent to or received from real Discord voice servers failed authentication; padding was also left on the media payload. Known-answer vectors from `ci/voice_transport_kat.py`, generated outside the crate and cross-checked against Node's AES-256-GCM and libsodium, now pin both directions.
 
-## DAVE Boundary
+## DAVE (End-to-End Encryption)
 
-Default `voice` can send already-encoded Opus frames, decrypt Discord voice transport encryption, and decode received Opus to PCM. It does not claim full DAVE/MLS interoperability by itself.
+Since 2026-03-01 Discord requires [DAVE](https://daveprotocol.com/), its MLS-based end-to-end encryption, in every voice channel except Stage channels, and closes connections from clients that do not support it with code 4017 ([Discord: Indicating DAVE Protocol Support](https://docs.discord.com/developers/topics/voice-connections#indicating-dave-protocol-support)). The voice runtime runs DAVE itself, the way @discordjs/voice and Songbird do:
 
-For active DAVE sessions, use `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`. A received payload that is exactly the Opus silence frame (`F8 FF FE`) is returned unchanged without calling the decryptor: Discord's SFU sends it unencrypted for muted users, and the DAVE protocol lets exactly that frame through ([silence packets](https://daveprotocol.com/#silence-packets)). Before 3.0 it failed with "DAVE frame is too short" and ended receive loops that used `?`. The `dave` feature provides `VoiceDaveySession` for MLS lifecycle entry points and `send_opus_frame_with_dave(...)` for the outbound media insertion point. Plain `send_opus_frame(...)` and `play_opus_frames(...)` intentionally reject active DAVE sessions so callers do not accidentally bypass end-to-end media encryption.
+- **Joining.** With `VoiceRuntimeConfig::channel_id(..)` set (`Context::connect_voice_runtime` and `VoiceManager::runtime_config` set it), IDENTIFY advertises `max_dave_protocol_version` 1. When `SESSION_DESCRIPTION` negotiates DAVE, the runtime sends an MLS key package, applies the voice gateway's external sender, commits proposals for members who join (checked against `CLIENTS_CONNECT`), processes commits and welcomes, reports `transition_ready`, and switches keys on `execute_transition`. Messages that arrive during the handshake (`CLIENTS_CONNECT`, the external sender) are kept and handled once the session starts.
+- **Sending.** `send_opus_frame(...)`, `send_opus_frame_after_gap(...)`, `play_opus_frames(...)`, and an `AudioPlayer` subscribed with `subscribe_runtime` encrypt each Opus frame with DAVE, then with transport encryption. The Opus silence frame goes out unencrypted, as the protocol allows. Until this client holds the group's keys, these sends return a `DiscordError::Voice` explaining why, and transmit nothing (no sequence number, timestamp, or nonce is used up) rather than leaking audio unencrypted into an end-to-end encrypted call; `is_playable()` is `false` meanwhile, so an `AudioPlayer` waits in `AutoPaused`. A client alone in a DAVE channel has no group yet; it forms when someone joins (this client then commits them).
+- **Receiving.** `recv_voice_packet(...)` and `recv_decoded_voice_packet(...)` decrypt each speaker's frames with that user's key (the SSRC → user mapping comes from `SPEAKING`). A few frames always fail around MLS transitions; such packets, and DAVE frames from an SSRC with no known user yet, are skipped rather than returned as errors (which would end receive loops that use `?`) and counted in `VoiceDaveStatus::undecryptable_packets`. The Opus silence frame (`F8 FF FE`), which Discord's SFU sends unencrypted for muted users, is returned as is.
+- **Transitions.** A downgrade to version 0 (a client without DAVE joined) accepts unencrypted frames as soon as it is prepared and sends them after it executes; an upgrade (`prepare_epoch` with epoch 1) creates a new group and keeps sending unencrypted frames until it can encrypt. An invalid commit or welcome is reported with `dave_mls_invalid_commit_welcome` and the runtime rejoins with a new key package; so does a stream of more than 36 undecryptable frames outside any transition.
+- **Without a channel ID** the runtime cannot build the MLS group, so it advertises version 0 (with a warning). Stage channels work; anywhere else Discord closes the connection with 4017, and `connect_voice_runtime` returns an error that says so and names the missing setting.
 
-Current support level: DAVE hooks with unit, mocked gateway, and live Discord MLS transition validation coverage. The ignored live MLS transition harness below is the release gate for future changes that touch DAVE interop.
+```rust
+use discordrs::{VoiceDaveStatus, VoiceRuntimeHandle};
 
-The live transition harness is `tests/live_voice_dave.rs` and is ignored by default. When explicitly run with `--ignored`, it fails fast if the required live session variables are missing so a green result cannot be mistaken for live DAVE validation. Run it only against a prepared Discord voice session:
+fn describe(handle: &VoiceRuntimeHandle) {
+    let dave: VoiceDaveStatus = handle.dave_status();
+    if dave.protocol_version == 0 {
+        println!("transport encryption only (Stage channel or downgraded call)");
+    } else if dave.can_send_audio() {
+        println!(
+            "end-to-end encrypted, epoch {:?}, privacy code {:?}",
+            dave.epoch, dave.voice_privacy_code
+        );
+    } else {
+        println!("waiting for the MLS group; last error: {:?}", dave.last_error);
+    }
+}
+```
+
+`subscribe_dave_status()` returns a watch receiver for the same status, and `dave_verification_code(user_id)` the pairwise code Discord clients show when verifying a member.
+
+**Bringing your own DAVE.** `send_opus_frame_with_dave(...)` / `recv_voice_packet_with_dave(...)` with a `VoiceDaveFrameEncryptor` / `VoiceDaveFrameDecryptor` still work for custom encryption. Driving MLS by hand with `VoiceDaveySession` and the raw `send_dave_*` commands on a runtime that already runs its own session is not supported: the voice gateway would see two key packages for one connection. `VoiceRuntimeState::dave` (`VoiceDaveState`) still mirrors the raw DAVE messages for diagnostics.
+
+**Upgrading from 3.0.0.** 3.0.0 advertised DAVE without running it, so in DAVE channels `AudioPlayer` played nothing (the player only logged a warning per frame) and the plain send and receive methods returned errors. Set `VoiceRuntimeConfig::channel_id(..)` if you build the config yourself. Code that spelled out every field of `VoiceRuntimeConfig` in a struct literal must add `channel_id`; `VoiceRuntimeConfig::new(..)` and `..VoiceRuntimeConfig::new(..)` are unaffected.
+
+**Verification status.** Hermetic tests run two independent `davey` sessions and a test-only voice gateway (an OpenMLS external sender) through joining by welcome, committing as the only member, audio both ways (including `AudioPlayer` with real Opus), downgrade and upgrade, invalid commit/welcome recovery, and the 4017 close. The runtime-managed path has **not** been run against live Discord yet; the ignored live harness is the gate:
 
 ```powershell
 $env:DISCORDRS_LIVE_VOICE_SERVER_ID="..."
@@ -231,7 +265,7 @@ $env:DISCORDRS_LIVE_VOICE_SESSION_ID="..."
 $env:DISCORDRS_LIVE_VOICE_TOKEN="..."
 $env:DISCORDRS_LIVE_VOICE_ENDPOINT="..."
 $env:DISCORDRS_LIVE_VOICE_CHANNEL_ID="..."
-cargo test --all-features --test live_voice_dave -- --ignored
+cargo test --all-features --test live_voice_dave -- --ignored --nocapture
 ```
 
 For the full capture procedure and release evidence checklist, see [Live DAVE Validation](live-dave-validation.md).

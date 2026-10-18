@@ -22,7 +22,7 @@
 - `AppFramework`: slash command, component, modal submit을 라우팅하는 고수준 앱 프레임워크
 - 명령 빌더, Components V2 빌더, 캐시 매니저, 컬렉터, 샤딩 supervisor
 - `discordrs::sharding::process`의 `ProcessShardManager`: discord.js `ShardingManager`에 해당하는 멀티 프로세스 샤딩
-- `connect_voice_runtime(...)`, `VoiceOpusDecoder`, `voice-encode`, `AudioPlayer` 재생 파이프라인, live 검증된 DAVE/MLS hook
+- `connect_voice_runtime(...)`, `VoiceOpusDecoder`, `voice-encode`, `AudioPlayer` 재생 파이프라인, 런타임이 직접 운영하는 DAVE 종단 간 암호화
 - 2026-05-02 기준 공식 Discord REST route shape 223개 전체 매핑 audit, 그리고 Webhook Events, Lobby, Poll, Subscription, Entitlement, Soundboard, Thread, Forum, Invite, Integration 등 Discord API 표면의 타입드 모델과 래퍼
 - 2.1 추가 사항: `RestClient::with_reason(...)` 감사 로그 사유, 길드 생성/삭제/템플릿/MFA 라우트, `with_response=true` 인터랙션 콜백, 메시지 전달(`forward_message`) 헬퍼, Poll 인텐트, IDENTIFY 초기 presence, `Context::fetch_members(...)` 멤버 청크 수집, 동시(Concurrent) 이벤트 디스패치 모드, GUILD_CREATE 캐시 반영, 재시도 강화된 REST 전송 계층
 - 2.2.0 추가 사항: discord.js 스타일 사용성 계층 — `discordrs::response::InteractionResponder`의 `interaction.reply(...)` 계열 응답 메서드(중복 응답은 로컬에서 원자적으로 실패), `discordrs::model_ext` 엔티티 편의 메서드(`message.reply`, `member.timeout`, `guild.create_channel`, `channel.send`, `user.dm` 등), `ProcessShardManager` 멀티 프로세스 샤딩과 `broadcast(...)`, `AudioPlayer`/`AudioResource` 오디오 재생 파이프라인, 컬렉터 stop 핸들/idle 타임아웃/종료 사유, 빌더 `validate()`/`try_build()` 검증, `RestClient::builder()` 구성, 기본 allowed mentions, 외부 `CacheBackend` 연동과 `sweep_interval` 설정, 타입드 `Message.components`/`ResolvedData`/`MessageInteractionMetadata`
@@ -44,19 +44,16 @@ discordrs = { version = "3.0.0", features = ["interactions"] }
 discordrs = { version = "3.0.0", features = ["gateway", "cache"] }
 discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
 
-# Voice receive / Opus decode
+# Voice receive / Opus decode, DAVE 종단 간 암호화 포함
 discordrs = { version = "3.0.0", features = ["voice"] }
 
 # PCM to Opus encode
 discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
-
-# DAVE/MLS hook
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## DAVE 상태
 
-`voice` 기능은 Discord voice handshake, UDP/RTP transport, Opus frame 송수신, transport 암호화 처리, Opus PCM decode를 제공합니다. `dave` 기능은 DAVE/MLS 명령과 frame decrypt/encrypt hook을 노출하며, 2.0.0 릴리스에서 실제 Discord voice gateway MLS transition 검증을 통과했습니다. DAVE 세션에서 받은 페이로드가 정확히 Opus 무음 프레임(`F8 FF FE`)이면 복호화기를 거치지 않고 그대로 돌려줍니다. 음소거된 사용자에 대해 Discord SFU가 DAVE 암호화 없이 보내는 프레임이며, DAVE 프로토콜도 이 프레임만 통과시킵니다. 3.0 이전에는 "DAVE frame is too short" 오류로 `?`를 쓰는 수신 루프가 끊겼습니다.
+`voice` 기능은 Discord voice handshake, UDP/RTP transport, Opus frame 송수신, transport 암호화 처리, Opus PCM decode, 그리고 DAVE 종단 간 암호화를 제공합니다. Discord는 Stage가 아닌 모든 음성 채널에 DAVE를 요구하므로(닫힘 코드 4017), 음성 런타임이 MLS 그룹에 직접 참여해 `AudioPlayer`와 일반 송신 메서드의 프레임을 암호화하고 받은 프레임을 화자별로 복호화합니다. `VoiceRuntimeConfig::channel_id(..)`가 필요합니다(`Context::connect_voice_runtime`은 자동으로 채움). `dave` 기능은 `voice`의 별칭입니다. 받은 페이로드가 정확히 Opus 무음 프레임(`F8 FF FE`)이면 그대로 돌려줍니다. 런타임이 운영하는 DAVE 경로는 아직 실제 Discord에서 검증하지 않았습니다(2.0.0의 라이브 검증은 MLS를 손수 진행한 전환만 다룸). 자세한 내용은 [음성과 DAVE](api/voice.md)에 있습니다.
 
 ## 언어 전환
 

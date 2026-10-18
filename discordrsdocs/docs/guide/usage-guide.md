@@ -23,14 +23,11 @@ discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
 # HTTP interactions endpoint
 discordrs = { version = "3.0.0", features = ["interactions"] }
 
-# Voice receive and Opus decode
+# Voice receive and Opus decode, including DAVE end-to-end encryption
 discordrs = { version = "3.0.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
 discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
-
-# DAVE/MLS receive and outbound media hook
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## 2. Start a typed Gateway client
@@ -180,15 +177,21 @@ Hot member, message, and presence cache lookups have `Arc` variants such as `mem
 use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig};
 
 async fn receive_pcm() -> Result<(), discordrs::DiscordError> {
-    let handle = connect_voice_runtime(VoiceRuntimeConfig::new(
-        "guild_id",
-        "bot_user_id",
-        "voice_session_id",
-        "voice_token",
-        "wss://voice.discord.media/?v=8",
-    ))
+    let handle = connect_voice_runtime(
+        VoiceRuntimeConfig::new(
+            "guild_id".parse()?,
+            "bot_user_id".parse()?,
+            "voice_session_id",
+            "voice_token",
+            "wss://voice.discord.media/?v=8",
+        )
+        // DAVE end-to-end encryption uses the channel as its MLS group.
+        .channel_id("voice_channel_id".parse()?),
+    )
     .await?;
 
+    // Decrypts transport encryption and, in a DAVE call, each speaker's
+    // DAVE frames.
     let mut decoder = VoiceOpusDecoder::discord_default()?;
     let decoded = handle.recv_decoded_voice_packet(&mut decoder, 2048).await?;
     println!("{} PCM samples/channel", decoded.samples_per_channel);
@@ -196,7 +199,7 @@ async fn receive_pcm() -> Result<(), discordrs::DiscordError> {
 }
 ```
 
-Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Since `2.2.0`, `discordrs::voice::player` adds the discord.js-style playback pipeline — `AudioInput::ffmpeg(url)`, `AudioResource`, and `AudioPlayer` with `TrackStart`/`TrackEnd` events (see the [Voice API](../api/voice.md) and `examples/music_bot.rs`). Active DAVE sessions require `recv_voice_packet_with_dave(...)` or `recv_decoded_voice_packet_with_dave(...)` with a `VoiceDaveFrameDecryptor`; the `dave` feature exposes `VoiceDaveySession` and outbound DAVE media helpers. The ignored live MLS transition harness is the release gate for Discord interop evidence.
+Default `voice` covers raw UDP receive, RTP header parsing, RTP-size transport decrypt, Opus-frame send, and Opus PCM decode. Enable `voice-encode` for `PcmFrame`, `AudioSource`, `AudioMixer`, and `VoiceOpusEncoder`. Since `2.2.0`, `discordrs::voice::player` adds the discord.js-style playback pipeline — `AudioInput::ffmpeg(url)`, `AudioResource`, and `AudioPlayer` with `TrackStart`/`TrackEnd` events (see the [Voice API](../api/voice.md) and `examples/music_bot.rs`). In DAVE (end-to-end encrypted) calls, which is every voice channel except Stage channels, the runtime joins the MLS group on its own: the plain receive methods decrypt each speaker and the plain send methods and `AudioPlayer` encrypt; see [DAVE](../api/voice.md#dave-end-to-end-encryption). The ignored live harness `tests/live_voice_dave.rs` is the release gate for Discord interop evidence.
 
 ## 8. Keep old raw helpers only for migration
 

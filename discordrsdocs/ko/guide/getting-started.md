@@ -22,11 +22,9 @@ discordrs = "3.0.0"
 # Interactions Endpoint와 앱 프레임워크
 discordrs = { version = "3.0.0", features = ["interactions"] }
 
-# Voice receive와 Opus PCM decode
+# Voice receive와 Opus PCM decode, DAVE 종단 간 암호화 포함
+# (`dave` 기능은 `voice`의 별칭)
 discordrs = { version = "3.0.0", features = ["voice"] }
-
-# DAVE/MLS hook
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## 최소 Typed Gateway Bot

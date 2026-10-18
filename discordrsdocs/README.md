@@ -24,7 +24,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - `CacheHandle` plus manager types, with bounded in-memory cache storage enabled by default
 - collector types behind the `collectors` feature, with stop handles, idle timeouts, and end reasons
 - `ProcessShardManager` multi-process sharding behind `sharding` (the discord.js `ShardingManager` equivalent)
-- `connect_voice_runtime(...)`, `VoiceOpusDecoder`, the `AudioPlayer` playback pipeline, and live-validated DAVE hooks behind `voice` / `voice-encode` / `dave`
+- `connect_voice_runtime(...)`, `VoiceOpusDecoder`, the `AudioPlayer` playback pipeline, and DAVE end-to-end encryption run by the runtime, behind `voice` / `voice-encode` (`dave` is an alias of `voice`)
 - typed REST/event coverage for all 223 official Discord REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, Activity instances, Gateway rate-limit, reaction metadata, presence metadata dispatches, polls, subscriptions, entitlements, soundboard, thread details, forum fields, invite target-user flows, integrations, OAuth2 metadata/user connections, application command permissions, and channel-info dispatches
 - `AppFramework` routing for HTTP interactions
 - `2.1` additions: audit-log reasons via `RestClient::with_reason(...)`, guild create/delete/template/MFA routes, `with_response=true` interaction callbacks, message forwarding helpers, poll intents, initial IDENTIFY presence, `Context::fetch_members(...)` chunk collection, concurrent event dispatch mode, GUILD_CREATE cache population, and a retry-hardened REST transport
@@ -47,9 +47,8 @@ discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
 # interactions endpoint
 discordrs = { version = "3.0.0", features = ["interactions"] }
 
-# voice receive, Opus decode, and DAVE hook
+# voice receive, Opus decode, and DAVE end-to-end encryption
 discordrs = { version = "3.0.0", features = ["voice"] }
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## Runtime Extensions

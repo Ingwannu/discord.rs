@@ -33,7 +33,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, terminal close-code handling (4004/4010–4014 stop the shard with an error instead of reconnecting; 4007/4009 start a fresh session), and fixed compressed binary frame decoding for explicit `zlib-stream` connections; IDENTIFY is paced to Discord's 1-per-5s-per-shard limit and short-lived sessions reconnect with escalating backoff
 - Shard supervisor and shard messenger control paths for queued shard boot, reconnect, shutdown, presence, and voice state updates; `spawn_shards(...)` uses the account's real `max_concurrency` from `/gateway/bot` for identify wave sizing
 - Voice manager plus voice runtime support for websocket hello/identify, UDP discovery, select-protocol, speaking updates, raw UDP receive, AES-GCM/XChaCha RTP-size Opus packet decrypt, pure-Rust Opus PCM decode, and Opus-frame RTP send helpers
-- Live-validated `dave` feature with DAVE opcode state tracking, `davey`/OpenMLS-backed MLS lifecycle helpers, receive decryptor hooks, and outbound media encryption hooks
+- DAVE end-to-end encryption, which Discord requires in every voice channel except Stage channels, run by the voice runtime itself: it joins the call's MLS group (`davey`/OpenMLS), encrypts what `AudioPlayer` and the plain send methods transmit, and decrypts each speaker on receive (part of `voice`; the `dave` feature is a compatibility alias)
 - Optional OAuth2 backend helpers for authorization URLs, authorization-code exchange, refresh-token exchange, and token revocation via `OAuth2Client::revoke_token(...)`
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
 - Application framework routing for slash commands, components, and modals behind the `interactions` feature
@@ -72,14 +72,12 @@ discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
 # Sharding foundations
 discordrs = { version = "3.0.0", features = ["gateway", "sharding"] }
 
-# Voice foundations
+# Voice foundations, including DAVE end-to-end encryption (`dave` is now an
+# alias of `voice`)
 discordrs = { version = "3.0.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
 discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
-
-# DAVE receive/outbound media integration
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 
 # Gateway runtime with zstd-stream transport compression
 discordrs = { version = "3.0.0", features = ["gateway", "zstd-stream"] }
@@ -321,9 +319,9 @@ fn app(public_key: &str) -> Router {
 | `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio |
 | `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
 | `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
-| `voice` | Voice connection/player skeletons, the `AudioPlayer`/`AudioResource` playback pipeline, plus voice gateway/UDP receive, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `voice` | Voice gateway/UDP runtime, the `AudioPlayer` playback pipeline, Opus-frame send, transport encryption, Opus PCM decode, and DAVE end-to-end encryption run by the runtime itself (required outside Stage channels) | tokio, aes-gcm, chacha20poly1305, opus-decoder, davey |
 | `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
-| `dave` | DAVE/MLS receive and outbound media hooks backed by `davey`, with live Discord MLS transition validation coverage | voice, davey |
+| `dave` | Compatibility alias for `voice`, which now includes DAVE | voice |
 
 ## Notes
 
@@ -346,6 +344,7 @@ fn app(public_key: &str) -> Router {
 - Use `Client` for new gateway code. `BotClient` remains available as a compatibility alias.
 - Use `EventHandler::handle_event(...)` when you want one entry point for every gateway event: it receives the shared `Arc<Event>`; match on `event.kind()`. The per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive the payload without a copy (`Arc<Message>` for `message_create`, references for most others). The raw JSON payload is kept only with `ClientBuilder::keep_raw_events(true)` (always for unknown or undecodable dispatches).
 - Use `Context::new(...)` when tests or helper crates need a standalone context outside the live gateway runtime.
+- Give `VoiceRuntimeConfig` the voice channel (`.channel_id(..)`; `Context::connect_voice_runtime` and `VoiceManager::runtime_config` do it): DAVE uses it as the MLS group, and without it Discord refuses the connection outside Stage channels (close code 4017).
 - Use `examples/live_dave_capture_bot.rs` to capture matching bot `VOICE_STATE_UPDATE` and `VOICE_SERVER_UPDATE` values before running the ignored live DAVE validation test.
 - Prefer builder imports from `discordrs::builders::{...}` or the crate root re-exports. Deeper implementation submodules are private.
 - Use `ApplicationCommand::id_opt()` until Discord has assigned an ID. Unsaved commands are no longer treated as generic `DiscordModel`s.

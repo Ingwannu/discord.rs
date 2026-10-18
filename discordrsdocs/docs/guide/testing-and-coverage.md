@@ -243,9 +243,9 @@ candidate toolchain with `--ignore-rust-version`:
 | --- | --- | --- |
 | default (`cache`) | 1.83 | `icu_*` 2.1 (via `url` → `idna`) declare 1.83; 1.82 is refused |
 | `gateway`, `collectors`, `sharding`, `zstd-stream`, `interactions` | 1.85 | `base64ct` 1.8 (via `ed25519-dalek`) is edition 2024 |
-| `voice` | 1.88 | `slice::as_chunks` in `src/voice/player.rs` (fails on 1.87) |
+| `voice` | 1.88 | `slice::as_chunks` in `src/voice/player.rs` (fails on 1.87); `davey`, which `voice` includes since DAVE became runtime-managed, uses let chains |
 | `voice-encode` | 1.87 | `opus-rs` uses `is_multiple_of` |
-| `dave` | 1.88 | `davey` uses let chains (fails on 1.87); `openmls` uses `is_multiple_of` |
+| `dave` | 1.88 | an alias of `voice`; `davey` uses let chains (fails on 1.87), `openmls` uses `is_multiple_of` |
 | **all features (declared)** | **1.88** | 1.88.0 passed `check --all-targets` and the full test suites for default and all features |
 
 CI's `msrv` job reads `rust-version` from `Cargo.toml`, installs that toolchain, and runs

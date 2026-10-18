@@ -19,7 +19,7 @@ Audit source:
 | Official object headings | 90 / 90 mapped or intentionally dynamic | Non-example official `Object` headings map to public typed structs/enums or documented `serde_json::Value` extension points for highly variable interaction/audit metadata objects. |
 | Code coverage | 91.2% line coverage (CI gate: 90%) | `cargo llvm-cov --all-features --locked --summary-only` on main after phase 1.5 and the phase 8 tooling (2026-10-10). The 93.50% figure recorded for 2.0 predates the 2.1/2.2 additions. |
 | Coveralls upload scope | Guarded | CI validates LCOV includes at least 30 `src` files, at least 20,000 line records, and required core files before Coveralls upload. |
-| Live DAVE/MLS smoke | Verified | The ignored live Discord voice test passed against a real voice session before this audit was recorded. |
+| Live DAVE/MLS smoke | Verified for 2.0.0 only | The ignored live harness passed against a real voice session on 2026-05-02, driving MLS by hand (transitions only, no media). The runtime-managed DAVE path added after 3.0.0 is covered by hermetic two-member MLS tests and has not been run against live Discord yet. |
 | Public docs coverage | Complete for crate public API | Rustdoc public-item coverage was previously driven to 100%; REST additions are documented through API guide and examples. |
 
 ## Method

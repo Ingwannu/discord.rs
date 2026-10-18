@@ -17,13 +17,13 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 - V2 modal submission parser that preserves all V2 component types that serenity drops
 - Interaction routing helpers: `parse_interaction`, `parse_raw_interaction`, `parse_interaction_context`, and `try_interactions_endpoint`
 - Cache-backed manager reads with in-memory storage enabled by default, optional `CacheConfig` size limits, and cheap `Arc` read APIs for hot member/message/presence paths
-- Voice runtime helpers for UDP packet receive, Opus-frame RTP send, PCM-to-Opus encode, RTP-size decrypt, Opus PCM decode, and live-validated DAVE hooks
+- Voice runtime helpers for UDP packet receive, Opus-frame RTP send, PCM-to-Opus encode, RTP-size decrypt, Opus PCM decode, and DAVE end-to-end encryption run by the runtime
 - OAuth2 backend helpers for authorization URLs, code exchange, and refresh-token exchange
 - Typed Discord coverage for all official REST route shapes audited on 2026-05-02, plus Webhook Events, lobbies, guild incident actions, audit logs, guild count fetches, guild modifications, guild channel creation and reordering, guild ban pagination, single-member ban bodies, guild member profile fields and search/list pagination, current-user guild pagination/counts, guild/member/current-member edits, guild role create/update/reordering bodies, guild widget/welcome/onboarding writes, guild prune count/result including the current JSON-body begin route, guild-member join, role member-count, public widget, Stage Instance writes, sticker pack fetches, typed guild sticker writes, voice-state REST reads/writes, current-application and OAuth2 metadata reads, Create Group DM and Group DM recipient routes, channel invite/target-user and permission routes, voice-channel status updates, guild message search, current and legacy channel-pin routes, forwarded message snapshots, shared client themes, Gateway rate-limit, reaction metadata, and presence metadata events, Activity instances, polls, subscriptions, entitlements, soundboard, threads, forum channel fields, invites, integrations, Auto Moderation, guild preview/vanity, voice regions, OAuth2 user connections, application command permissions, and bulk bans
 - `AppFramework` routing for command, component, and modal interactions
 - `2.1` additions: `RestClient::with_reason(...)` audit-log reasons, guild create/delete/template/MFA routes, `with_response=true` interaction callbacks returning `InteractionCallbackResult`, `MessageReference::reply(...)`/`forward(...)` plus `forward_message(...)`, `GUILD_MESSAGE_POLLS`/`DIRECT_MESSAGE_POLLS` intents, `ClientBuilder::presence(...)` and `event_dispatch(...)`, `Context::fetch_members(...)`, GUILD_CREATE cache population, IDENTIFY pacing, and a retry-hardened `Clone` REST transport
 - `2.2.0` additions: the discord.js-style ergonomics layer — `interaction.reply(...)` and friends via `discordrs::response::InteractionResponder` with atomic already-acknowledged errors, entity convenience methods in `discordrs::model_ext` (`message.reply`, `member.timeout`, `guild.create_channel`, `channel.send`, `user.dm`, ...), multi-process sharding with `ProcessShardManager`/`ShardChildProcess` and `broadcast(...)`, the `AudioPlayer`/`AudioResource`/`AudioInput` playback pipeline, collector `stop`/`end_reason`/`idle`/`reset_timer`/uniform `filter`, builder `validate()`/`try_build()`, `RestClient::builder()` configuration, default allowed mentions on `RestClient` and `ClientBuilder`, `ClientBuilder::cache_backend(...)` with a configurable `CacheConfig::sweep_interval(...)`, and typed `Message.components`/`ResolvedData`/`MessageInteractionMetadata`
-- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, and `dave`; `cache` is included in the default feature set
+- Feature-gated runtime and storage layers: `gateway`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, and `dave` (an alias of `voice`); `cache` is included in the default feature set
 
 ## Install
 
@@ -43,10 +43,9 @@ discordrs = { version = "3.0.0", features = ["interactions"] }
 # Both runtime modes
 discordrs = { version = "3.0.0", features = ["gateway", "interactions"] }
 
-# Voice playback/receive and DAVE hook
+# Voice playback/receive, including DAVE end-to-end encryption
 discordrs = { version = "3.0.0", features = ["voice"] }
 discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
-discordrs = { version = "3.0.0", features = ["voice", "dave"] }
 ```
 
 ## Quick Example
@@ -156,16 +155,16 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 | `cache` | Enables the in-memory cache storage and `CacheBackend` extension trait used by gateway cache managers; included in default features | tokio |
 | `collectors` | Async collectors for messages, interactions, components, and modals, with stop handles, idle timeouts, and end reasons | tokio |
 | `sharding` | Sharding manager, reusable gateway config abstractions, and the multi-process `ProcessShardManager` | tokio |
-| `voice` | Voice gateway/UDP runtime receive, the `AudioPlayer` playback pipeline, Opus-frame send, transport decrypt, and Opus PCM decode helpers | tokio, aes-gcm, chacha20poly1305, opus-decoder |
+| `voice` | Voice gateway/UDP runtime, the `AudioPlayer` playback pipeline, Opus-frame send, transport encryption, Opus PCM decode, and DAVE end-to-end encryption run by the runtime itself (required outside Stage channels) | tokio, aes-gcm, chacha20poly1305, opus-decoder, davey |
 | `voice-encode` | PCM source/mixer and `opus-rs` encoder helpers for 48 kHz stereo 20 ms voice playback through the existing Opus frame path | voice, opus-rs |
-| `dave` | DAVE/MLS receive and outbound media hooks backed by `davey`, with live Discord MLS transition validation coverage | voice, davey |
+| `dave` | Compatibility alias for `voice`, which now includes DAVE | voice |
 
 ## Notes
 
 - `discord.rs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
 - `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>`; the per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive their payload without a copy.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
-- Default `voice` provides Opus-frame RTP send, transport-decrypted received Opus frames, and PCM decode. `voice-encode` adds PCM-to-Opus playback. DAVE/MLS is exposed through the `dave` feature with live gateway MLS transition validation recorded for 2.0.0.
+- Default `voice` provides Opus-frame RTP send, transport-decrypted received Opus frames, PCM decode, and DAVE end-to-end encryption (set `VoiceRuntimeConfig::channel_id`). `voice-encode` adds PCM-to-Opus playback.
 
 ## License
 
