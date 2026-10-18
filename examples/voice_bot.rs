@@ -65,15 +65,18 @@ fn main() -> Result<(), discordrs::DiscordError> {
         .speaking_command(guild_id, VoiceSpeakingFlags::MICROPHONE, 0)
         .expect("voice manager should build a speaking command after transport setup")
         .payload();
-    let runtime_url = voice
+    // The runtime config carries the voice channel, which DAVE end-to-end
+    // encryption (required outside Stage channels) uses as its MLS group;
+    // `connect_voice_runtime(config)` then joins the group on its own.
+    let runtime_config = voice
         .runtime_config(guild_id, user_id)
-        .expect("voice manager should derive a runtime config after session setup")
-        .websocket_url();
+        .expect("voice manager should derive a runtime config after session setup");
     println!(
-        "playing={} speaking_op={} runtime_url={} queue_events={}",
+        "playing={} speaking_op={} runtime_url={} dave_channel={:?} queue_events={}",
         current_id,
         speaking["op"],
-        runtime_url,
+        runtime_config.websocket_url(),
+        runtime_config.channel_id,
         voice.events().len()
     );
     let _ = voice.stop(guild_id);

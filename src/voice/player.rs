@@ -482,6 +482,23 @@ pub trait VoiceFrameSink: Send + Sync {
 
     /// Updates the speaking indicator for this connection.
     fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError>;
+
+    /// Whether this sink can transmit audio right now.
+    ///
+    /// The player counts only playable sinks as subscribed, like
+    /// `@discordjs/voice`'s `AudioPlayer.playable`: while none is, it applies
+    /// [`AudioPlayerOptions::no_subscriber_behavior`] (by default it waits in
+    /// [`AudioPlayerState::AutoPaused`] instead of running through the track
+    /// while nothing can be heard). A sink that stops being playable gets
+    /// its silence tail and speaking off, and no audio until it is playable
+    /// again. [`VoiceRuntimeHandle`] is playable while its gateway connection
+    /// runs and, in a DAVE call, once it holds the group's media keys.
+    ///
+    /// Called by the player's control task on every 20 ms tick, so it must
+    /// be cheap and must not block. The default is always `true`.
+    fn is_playable(&self) -> bool {
+        true
+    }
 }
 
 impl VoiceFrameSink for VoiceRuntimeHandle {
@@ -504,6 +521,12 @@ impl VoiceFrameSink for VoiceRuntimeHandle {
             VoiceSpeakingFlags::default()
         };
         VoiceRuntimeHandle::set_speaking(self, flags, 0)
+    }
+
+    /// The connection is running and can send audio: in a DAVE call, once
+    /// this client holds the MLS group's media keys.
+    fn is_playable(&self) -> bool {
+        VoiceRuntimeHandle::is_playable(self)
     }
 }
 
@@ -568,6 +591,33 @@ pub enum NoSubscriberBehavior {
     Play,
     /// Stop the current resource with [`TrackEndReason::Stopped`].
     Stop,
+}
+
+/// How one subscribed connection is taking audio, from
+/// [`AudioPlayer::connection_events`].
+///
+/// Each stretch of failed sends is reported once, when it starts, and once
+/// when it ends, rather than per frame. Frames that are not sent are never
+/// silently lost from the timeline: the next frame the connection does send
+/// carries them as [`VoiceFrameTiming::gap`].
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum PlayerConnectionEvent {
+    /// A send to the connection failed. Until one succeeds again, its audio
+    /// is not transmitted.
+    SendFailed {
+        /// The subscription ([`PlayerSubscription::id`]).
+        subscription: u64,
+        /// The error of the first failed send.
+        error: DiscordError,
+    },
+    /// Sends to the connection succeed again.
+    Recovered {
+        /// The subscription ([`PlayerSubscription::id`]).
+        subscription: u64,
+        /// How many sends failed in a row before this.
+        failed: u64,
+    },
 }
 
 /// Configuration for an [`AudioPlayer`].
@@ -652,6 +702,11 @@ impl fmt::Debug for PlayerSubscription {
 }
 
 impl PlayerSubscription {
+    /// The ID [`PlayerConnectionEvent`]s carry for this subscription.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// Detaches this connection from the player.
     ///
     /// When the player handles the request, audio queued for the connection
@@ -747,6 +802,7 @@ pub struct AudioPlayer {
     command_tx: mpsc::UnboundedSender<PlayerCommand>,
     state_rx: watch::Receiver<AudioPlayerState>,
     events_tx: broadcast::Sender<AudioPlayerEvent>,
+    connection_events_tx: broadcast::Sender<PlayerConnectionEvent>,
     // Shared by every clone so `subscribe()` ids stay unique.
     next_subscriber_id: Arc<AtomicU64>,
     encoder: Option<EncoderFactory>,
@@ -774,12 +830,14 @@ impl AudioPlayer {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (state_tx, state_rx) = watch::channel(AudioPlayerState::Idle);
         let (events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (connection_events_tx, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
         let task = PlayerTask {
             options,
             subscribers: HashMap::new(),
             state_tx,
             events_tx: events_tx.clone(),
+            connection_events_tx: connection_events_tx.clone(),
             track: None,
             position: 0,
             retiring: Vec::new(),
@@ -791,6 +849,7 @@ impl AudioPlayer {
             command_tx,
             state_rx,
             events_tx,
+            connection_events_tx,
             next_subscriber_id: Arc::new(AtomicU64::new(0)),
             encoder,
         }
@@ -883,6 +942,16 @@ impl AudioPlayer {
         self.events_tx.subscribe()
     }
 
+    /// Returns a new receiver on the per-connection delivery events: a
+    /// subscribed connection whose sends start failing, and its recovery.
+    ///
+    /// A separate stream from [`Self::events`] so that matching on
+    /// [`AudioPlayerEvent`] stays exhaustive. A failed send is also logged
+    /// (once per stretch of failures).
+    pub fn connection_events(&self) -> broadcast::Receiver<PlayerConnectionEvent> {
+        self.connection_events_tx.subscribe()
+    }
+
     /// Subscribes a frame sink (e.g. a voice connection) to this player.
     ///
     /// The player transmits encoded audio to every subscribed sink and
@@ -907,6 +976,13 @@ impl AudioPlayer {
     }
 
     /// Subscribes a [`VoiceRuntimeHandle`] to this player.
+    ///
+    /// The handle encrypts with DAVE on its own when the call is end-to-end
+    /// encrypted. Until it holds the call's media keys it is not
+    /// [playable](VoiceFrameSink::is_playable), so with the default
+    /// [`NoSubscriberBehavior::Pause`] the player waits in
+    /// [`AudioPlayerState::AutoPaused`] and starts the track once the keys
+    /// arrive. Alone in a DAVE call that is when someone joins.
     pub fn subscribe_runtime(
         &self,
         handle: Arc<VoiceRuntimeHandle>,
@@ -1221,6 +1297,8 @@ fn connection_key(sink: &Arc<dyn VoiceFrameSink>) -> usize {
 /// The control task's side of one subscribed connection.
 struct Subscriber {
     key: usize,
+    /// Asked on every tick whether the connection can take audio.
+    sink: Arc<dyn VoiceFrameSink>,
     shared: Arc<SinkShared>,
     worker: TaskGuard,
     /// Closes when the connection's task has finished with the sink.
@@ -1236,6 +1314,7 @@ impl Subscriber {
         id: u64,
         sink: Arc<dyn VoiceFrameSink>,
         predecessor: Option<watch::Receiver<()>>,
+        events: broadcast::Sender<PlayerConnectionEvent>,
     ) -> Self {
         let key = connection_key(&sink);
         let shared = Arc::new(SinkShared {
@@ -1252,12 +1331,38 @@ impl Subscriber {
             wake: Notify::new(),
         });
         let (done_tx, done) = watch::channel(());
-        let worker = TaskGuard::spawn(drive_sink(sink, Arc::clone(&shared), predecessor, done_tx));
+        let worker = TaskGuard::spawn(drive_sink(
+            SinkIdentity {
+                id,
+                sink: Arc::clone(&sink),
+                events,
+            },
+            Arc::clone(&shared),
+            predecessor,
+            done_tx,
+        ));
         Self {
             key,
+            sink,
             shared,
             worker,
             done,
+        }
+    }
+
+    fn is_playable(&self) -> bool {
+        self.sink.is_playable()
+    }
+
+    /// Ends the connection's audio (discarding what is queued) when it has
+    /// any, without waking its task otherwise: called on every tick while
+    /// the connection is not playable.
+    fn end_audio(&self, position: u64) {
+        let mut state = self.shared.lock();
+        if state.talkspurt == Talkspurt::Active || !state.frames.is_empty() {
+            state.end_talkspurt(true, position);
+            drop(state);
+            self.shared.wake.notify_one();
         }
     }
 
@@ -1299,7 +1404,13 @@ enum SinkStep {
 /// the task can end (normal close, the close deadline, abort) leaves a
 /// still-live connection not speaking.
 struct SinkWorker {
+    /// The subscription ID, for events and logs.
+    id: u64,
     sink: Arc<dyn VoiceFrameSink>,
+    events: broadcast::Sender<PlayerConnectionEvent>,
+    /// Sends (audio or silence) that failed in a row; the first one of a
+    /// stretch is reported, and the stretch's end.
+    failed_sends: u64,
     shared: Arc<SinkShared>,
     speaking: bool,
     /// Position of the last audio frame transmitted in the current media
@@ -1312,6 +1423,13 @@ struct SinkWorker {
     /// Released after `Drop` has cleared speaking (fields drop after the
     /// destructor runs), which lets a successor on the same connection start.
     _done: watch::Sender<()>,
+}
+
+/// Who a connection's task works for.
+struct SinkIdentity {
+    id: u64,
+    sink: Arc<dyn VoiceFrameSink>,
+    events: broadcast::Sender<PlayerConnectionEvent>,
 }
 
 /// Converts a number of 20 ms frames into a timeline gap.
@@ -1338,7 +1456,7 @@ async fn sleep_until_opt(at: Option<Instant>) {
 /// when the task ends, however it ends, which releases a successor waiting
 /// on the same connection.
 async fn drive_sink(
-    sink: Arc<dyn VoiceFrameSink>,
+    identity: SinkIdentity,
     shared: Arc<SinkShared>,
     predecessor: Option<watch::Receiver<()>>,
     done: watch::Sender<()>,
@@ -1347,8 +1465,12 @@ async fn drive_sink(
         // The predecessor's close deadline bounds this wait.
         while predecessor.changed().await.is_ok() {}
     }
+    let SinkIdentity { id, sink, events } = identity;
     let mut worker = SinkWorker {
+        id,
         sink,
+        events,
+        failed_sends: 0,
         shared,
         speaking: false,
         last_position: None,
@@ -1500,13 +1622,57 @@ impl SinkWorker {
                 self.last_position = Some(frame.position);
                 self.last_sent_at = Some(Instant::now());
                 self.shared.lock().note_delivered();
+                self.note_send_succeeded();
             }
             Some(Err(error)) => {
                 self.last_sent_at = Some(Instant::now());
-                tracing::warn!(%error, "failed to send opus frame to subscribed connection");
+                self.note_send_failed(error, "an Opus frame");
             }
             None => tracing::trace!("cancelled a stalled or superseded opus frame send"),
         }
+    }
+
+    /// Reports the first failure of a stretch (log and event); the rest go
+    /// to debug, so a connection that keeps failing does not log 50 times a
+    /// second.
+    fn note_send_failed(&mut self, error: DiscordError, what: &str) {
+        if self.failed_sends == 0 {
+            tracing::warn!(
+                subscriber = self.id,
+                %error,
+                "failed to send {what} to a subscribed connection; its audio is not transmitted \
+                 until a send succeeds"
+            );
+            // Fails only when nobody listens for connection events.
+            self.events
+                .send(PlayerConnectionEvent::SendFailed {
+                    subscription: self.id,
+                    error,
+                })
+                .ok();
+        } else {
+            tracing::debug!(subscriber = self.id, %error, "failed to send {what} again");
+        }
+        self.failed_sends = self.failed_sends.saturating_add(1);
+    }
+
+    fn note_send_succeeded(&mut self) {
+        if self.failed_sends == 0 {
+            return;
+        }
+        tracing::info!(
+            subscriber = self.id,
+            failed = self.failed_sends,
+            "sends to a subscribed connection succeed again"
+        );
+        // Fails only when nobody listens for connection events.
+        self.events
+            .send(PlayerConnectionEvent::Recovered {
+                subscription: self.id,
+                failed: self.failed_sends,
+            })
+            .ok();
+        self.failed_sends = 0;
     }
 
     async fn send_silence(&mut self, gap: Duration) {
@@ -1529,10 +1695,11 @@ impl SinkWorker {
                 // which the next audio frame follows without a gap.
                 self.last_position = None;
                 self.silence_failures = 0;
+                self.note_send_succeeded();
                 1
             }
             Err(error) => {
-                tracing::warn!(%error, "failed to send silence frame to subscribed connection");
+                self.note_send_failed(error, "a silence frame");
                 // Not sent, so not counted. A connection that keeps failing
                 // gets no tail rather than retries forever; speaking off is
                 // still sent.
@@ -1611,6 +1778,7 @@ struct PlayerTask {
     subscribers: HashMap<u64, Subscriber>,
     state_tx: watch::Sender<AudioPlayerState>,
     events_tx: broadcast::Sender<AudioPlayerEvent>,
+    connection_events_tx: broadcast::Sender<PlayerConnectionEvent>,
     track: Option<ActiveTrack>,
     /// The media clock: advances once per playing tick.
     position: u64,
@@ -1701,12 +1869,37 @@ impl PlayerTask {
         }
     }
 
+    /// Queues `frame` for every playable connection. A connection that is
+    /// not playable gets no audio; if it had some, its stretch ends (silence
+    /// tail, speaking off), since it cannot send it now.
     fn send_to_all(&self, position: u64, frame: &Arc<[u8]>) {
         let now = Instant::now();
         for subscriber in self.subscribers.values() {
-            subscriber
-                .shared
-                .update(|state| state.push(position, frame, now));
+            if subscriber.is_playable() {
+                subscriber
+                    .shared
+                    .update(|state| state.push(position, frame, now));
+            } else {
+                subscriber.end_audio(self.position);
+            }
+        }
+    }
+
+    /// Whether any subscribed connection can take audio now (discord.js
+    /// `AudioPlayer.playable`); the no-subscriber behavior applies while
+    /// none can. Without this a DAVE connection that has no keys yet would
+    /// fail every frame while the track ran on unheard
+    /// (docs/design/dave-voice.md, section 5).
+    fn has_playable(&self) -> bool {
+        self.subscribers.values().any(Subscriber::is_playable)
+    }
+
+    /// Ends the audio of every connection that is not playable.
+    fn end_unplayable_audio(&self) {
+        for subscriber in self.subscribers.values() {
+            if !subscriber.is_playable() {
+                subscriber.end_audio(self.position);
+            }
         }
     }
 
@@ -1767,7 +1960,7 @@ impl PlayerTask {
     /// `REBUFFER_FRAMES` are buffered (or the input has ended), otherwise
     /// `Buffering` until they are.
     fn resume_playback(&mut self) {
-        if self.subscribers.is_empty()
+        if !self.has_playable()
             && self.options.no_subscriber_behavior == NoSubscriberBehavior::Pause
         {
             self.set_state(AudioPlayerState::AutoPaused);
@@ -1829,8 +2022,9 @@ impl PlayerTask {
             }
             PlayerCommand::Subscribe { id, sink } => {
                 let predecessor = self.take_over(connection_key(&sink));
+                let events = self.connection_events_tx.clone();
                 self.subscribers
-                    .insert(id, Subscriber::spawn(id, sink, predecessor));
+                    .insert(id, Subscriber::spawn(id, sink, predecessor, events));
                 tracing::debug!(
                     subscribers = self.subscribers.len(),
                     "connection subscribed"
@@ -1874,9 +2068,12 @@ impl PlayerTask {
         self.reap();
         match self.current_state() {
             state @ (AudioPlayerState::Buffering | AudioPlayerState::Playing { .. }) => {
-                if self.subscribers.is_empty() {
+                if !self.has_playable() {
                     match self.options.no_subscriber_behavior {
                         NoSubscriberBehavior::Pause => {
+                            // Subscribed connections that cannot take audio
+                            // now get their silence tail.
+                            self.end_unplayable_audio();
                             self.set_state(AudioPlayerState::AutoPaused);
                             return;
                         }
@@ -1894,7 +2091,7 @@ impl PlayerTask {
                 }
             }
             AudioPlayerState::AutoPaused => {
-                if !self.subscribers.is_empty() {
+                if self.has_playable() {
                     self.resume_playback();
                 }
             }
@@ -1930,6 +2127,7 @@ impl PlayerTask {
     }
 
     fn play_tick(&mut self) {
+        let playable = self.has_playable();
         let Some(track) = self.track.as_mut() else {
             self.set_state(AudioPlayerState::Idle);
             return;
@@ -1953,17 +2151,16 @@ impl PlayerTask {
             }
         };
         track.missed = 0;
-        // With nobody subscribed (NoSubscriberBehavior::Play) the frame is
-        // consumed in real time but not encoded.
-        let encoded = (!self.subscribers.is_empty())
-            .then(|| track.encode(pcm_s16le_to_f32(&bytes, track.volume.get())));
+        // With no playable connection (NoSubscriberBehavior::Play) the frame
+        // is consumed in real time but not encoded.
+        let encoded = playable.then(|| track.encode(pcm_s16le_to_f32(&bytes, track.volume.get())));
         match encoded {
             Some(Ok(opus)) => self.send_to_all(self.position, &opus.into()),
             Some(Err(error)) => {
                 tracing::warn!(%error, "failed to encode PCM frame to Opus");
                 self.finish_playback(TrackEndReason::Error(error.to_string()), false);
             }
-            None => {}
+            None => self.end_unplayable_audio(),
         }
     }
 }
@@ -2757,6 +2954,223 @@ mod tests {
             })
         );
         assert_eq!(sink.audio_frames().len(), 3);
+    }
+
+    /// A connection that is playable only while the test says so, like a
+    /// voice runtime waiting for its DAVE keys.
+    struct SwitchableSink {
+        playable: std::sync::atomic::AtomicBool,
+        inner: RecordingSink,
+    }
+
+    impl SwitchableSink {
+        fn new(playable: bool) -> Arc<Self> {
+            Arc::new(Self {
+                playable: std::sync::atomic::AtomicBool::new(playable),
+                inner: RecordingSink::default(),
+            })
+        }
+
+        fn set_playable(&self, playable: bool) {
+            self.playable.store(playable, Ordering::SeqCst);
+        }
+    }
+
+    impl VoiceFrameSink for SwitchableSink {
+        fn send_opus_packet<'a>(
+            &'a self,
+            opus_frame: &'a [u8],
+            timing: VoiceFrameTiming,
+        ) -> VoiceSinkFuture<'a> {
+            self.inner.send_opus_packet(opus_frame, timing)
+        }
+
+        fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError> {
+            self.inner.update_speaking(speaking)
+        }
+
+        fn is_playable(&self) -> bool {
+            self.playable.load(Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_waits_until_a_subscribed_connection_is_playable() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let mut events = player.events();
+        let mut state = player.state_watch();
+        let sink = SwitchableSink::new(false);
+        let _subscription = subscribe(&player, sink.clone());
+
+        // Subscribed but not playable (a DAVE call without keys yet): the
+        // track waits instead of running through while nothing is heard.
+        player.play(pcm_resource(numbered_pcm(0..5))).expect("play");
+        wait_for_state(&mut state, FRAME * 5, "auto-pause", |state| {
+            *state == AudioPlayerState::AutoPaused
+        })
+        .await;
+        sleep(FRAME * 10).await;
+        assert!(sink.inner.frames().is_empty());
+        assert!(sink.inner.speaking().is_empty());
+
+        // Keys arrived: the track starts from its first frame.
+        sink.set_playable(true);
+        let seen = within(
+            FRAME * 20,
+            "the track finishing",
+            events_until_track_end(&mut events),
+        )
+        .await;
+        assert!(seen.contains(&AudioPlayerEvent::TrackStart));
+        assert_eq!(sink.inner.audio_frames(), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_feeds_only_playable_connections_and_pauses_when_none_is() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let mut events = player.events();
+        let mut state = player.state_watch();
+        let first = SwitchableSink::new(true);
+        let second = SwitchableSink::new(false);
+        let _first = subscribe(&player, first.clone());
+        let _second = subscribe(&player, second.clone());
+
+        player
+            .play(pcm_resource(numbered_pcm(0..40)))
+            .expect("play");
+        wait_until(FRAME * 10, "audio on the playable connection", || {
+            first.inner.audio_frames().len() >= 2
+        })
+        .await;
+
+        // The only playable connection stops being playable (its group is
+        // re-forming): it gets its silence tail and speaking off, and the
+        // player pauses.
+        first.set_playable(false);
+        wait_for_state(&mut state, FRAME * 3, "auto-pause", |state| {
+            *state == AudioPlayerState::AutoPaused
+        })
+        .await;
+        wait_until(FRAME * 10, "the silence tail", || {
+            first.inner.speaking().last() == Some(&false)
+        })
+        .await;
+        assert_eq!(
+            first.inner.silence_frames(),
+            usize::from(SILENCE_FRAME_COUNT)
+        );
+        let first_audio = first.inner.audio_frames();
+        assert!(second.inner.frames().is_empty());
+
+        // The other connection becomes playable: playback resumes there,
+        // and the first one gets nothing more.
+        second.set_playable(true);
+        let reason = within(
+            FRAME * 60,
+            "the track finishing",
+            wait_for_track_end(&mut events),
+        )
+        .await;
+        assert_eq!(reason, TrackEndReason::Finished);
+        assert_eq!(second.inner.audio_frames().last(), Some(&39));
+        assert_eq!(first.inner.audio_frames(), first_audio);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_stop_behavior_counts_unplayable_connections_as_absent() {
+        let player = test_player(NoSubscriberBehavior::Stop);
+        let mut events = player.events();
+        let _subscription = subscribe(&player, SwitchableSink::new(false));
+
+        player.play(silent_pcm_resource(10)).expect("play");
+        assert_eq!(
+            within(
+                FRAME * 2,
+                "the track ending",
+                wait_for_track_end(&mut events)
+            )
+            .await,
+            TrackEndReason::Stopped
+        );
+    }
+
+    /// A connection whose sends fail while `failing` is set.
+    struct FlakySink {
+        failing: std::sync::atomic::AtomicBool,
+        inner: RecordingSink,
+    }
+
+    impl VoiceFrameSink for FlakySink {
+        fn send_opus_packet<'a>(
+            &'a self,
+            opus_frame: &'a [u8],
+            timing: VoiceFrameTiming,
+        ) -> VoiceSinkFuture<'a> {
+            Box::pin(async move {
+                if self.failing.load(Ordering::SeqCst) {
+                    return Err(voice_error("synthetic DAVE failure"));
+                }
+                self.inner.record(opus_frame, timing);
+                Ok(())
+            })
+        }
+
+        fn update_speaking(&self, speaking: bool) -> Result<(), DiscordError> {
+            self.inner.update_speaking(speaking)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn player_reports_a_failing_connection_once_and_its_recovery() {
+        let player = test_player(NoSubscriberBehavior::Pause);
+        let mut connection_events = player.connection_events();
+        let sink = Arc::new(FlakySink {
+            failing: std::sync::atomic::AtomicBool::new(true),
+            inner: RecordingSink::default(),
+        });
+        let subscription = subscribe(&player, sink.clone());
+
+        player
+            .play(pcm_resource(numbered_pcm(0..60)))
+            .expect("play");
+        let event = within(FRAME * 10, "a send failure", connection_events.recv())
+            .await
+            .expect("connection events closed");
+        let PlayerConnectionEvent::SendFailed {
+            subscription: id,
+            error,
+        } = event
+        else {
+            panic!("expected SendFailed, got {event:?}");
+        };
+        assert_eq!(id, subscription.id());
+        assert!(error.to_string().contains("synthetic DAVE failure"));
+
+        // Later failures of the same stretch are not reported again.
+        sleep(FRAME * 10).await;
+        assert!(matches!(
+            connection_events.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+
+        sink.failing.store(false, Ordering::SeqCst);
+        let event = within(FRAME * 10, "the recovery", connection_events.recv())
+            .await
+            .expect("connection events closed");
+        let PlayerConnectionEvent::Recovered {
+            subscription: id,
+            failed,
+        } = event
+        else {
+            panic!("expected Recovered, got {event:?}");
+        };
+        assert_eq!(id, subscription.id());
+        assert!(failed >= 10, "{failed}");
+        // Nothing went out before, so the stream simply starts at the first
+        // frame that did; from there it is contiguous.
+        let audio = sink.inner.audio();
+        assert_eq!(audio[0].timing.gap, Duration::ZERO);
+        assert_gaps_match_skipped_frames(&audio);
     }
 
     #[tokio::test(start_paused = true)]

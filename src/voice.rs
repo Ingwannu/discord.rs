@@ -991,15 +991,21 @@ impl VoiceManager {
         })
     }
 
+    /// The runtime configuration for the guild's voice connection, once its
+    /// session ID, token, and endpoint are known. It carries the connection's
+    /// channel, which DAVE end-to-end encryption needs.
     pub fn runtime_config(&self, guild_id: GuildId, user_id: UserId) -> Option<VoiceRuntimeConfig> {
         let connection = self.connections.get(&guild_id)?;
-        Some(VoiceRuntimeConfig::new(
-            guild_id,
-            user_id,
-            connection.session_id.clone()?,
-            connection.token.clone()?,
-            connection.endpoint.clone()?,
-        ))
+        Some(
+            VoiceRuntimeConfig::new(
+                guild_id,
+                user_id,
+                connection.session_id.clone()?,
+                connection.token.clone()?,
+                connection.endpoint.clone()?,
+            )
+            .channel_id(connection.channel_id),
+        )
     }
 
     pub fn resume_command(&self, guild_id: GuildId) -> Option<VoiceGatewayCommand> {

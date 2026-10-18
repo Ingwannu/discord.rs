@@ -48,15 +48,23 @@ cache = []
 collectors = ["gateway"]
 sharding = ["gateway"]
 zstd-stream = ["gateway", "dep:zstd"]
+# `voice` includes DAVE (`davey`): Discord rejects clients without DAVE
+# support from every non-Stage voice channel since 2026-03-01 (close code
+# 4017), so a voice build without it can only join Stage channels. The cost
+# is about 100 pure-Rust crates (OpenMLS and its crypto) and ~6 s on a clean
+# build; see docs/design/dave-voice.md.
 voice = [
     "dep:tokio-tungstenite",
     "dep:futures-util",
     "dep:aes-gcm",
     "dep:chacha20poly1305",
     "dep:opus-decoder",
+    "dep:davey",
 ]
 voice-encode = ["voice", "dep:opus-rs"]
-dave = ["voice", "dep:davey"]
+# Kept so existing `features = ["voice", "dave"]` lines still build; `voice`
+# alone now enables everything it used to add.
+dave = ["voice"]
 interactions = [
     "dep:axum",
     "dep:ed25519-dalek",
@@ -120,6 +128,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 # target, so a later trybuild that raises its rust-version must be a
 # deliberate bump.
 trybuild = "=1.0.122"
+# The DAVE tests (src/voice_runtime/dave.rs) play the voice gateway's part:
+# an MLS external sender that signs Add proposals. `davey` already depends on
+# these exact versions, so they add no packages to the lock file.
+openmls = "0.8.1"
+openmls_basic_credential = "0.5.0"
+openmls_rust_crypto = "0.5.1"
 
 [[example]]
 name = "cache_bot"

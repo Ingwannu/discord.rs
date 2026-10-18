@@ -267,14 +267,15 @@ pub use voice::{
 #[cfg(feature = "voice")]
 pub use voice_runtime::{
     connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveState,
-    VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame,
-    VoiceOutboundPacket, VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket,
-    VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
+    VoiceDaveStatus, VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder,
+    VoiceOpusFrame, VoiceOutboundPacket, VoiceOutboundRtpState, VoiceRawUdpPacket,
+    VoiceReceivedPacket, VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
     VoiceSessionDescription, VoiceSpeakingUpdate,
 };
 #[cfg(all(feature = "voice", feature = "voice-encode"))]
 pub use voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
-#[cfg(all(feature = "voice", feature = "dave"))]
+// DAVE ships with `voice` (the `dave` feature is a compatibility alias).
+#[cfg(feature = "voice")]
 pub use voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
 pub use webhook_events::{
     parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,

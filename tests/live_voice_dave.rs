@@ -1,4 +1,13 @@
-#![cfg(all(feature = "voice", feature = "dave", feature = "voice-encode"))]
+//! Live check of the runtime's own DAVE (end-to-end encryption) path against
+//! a real Discord voice call: join, become a member of the call's MLS group,
+//! play a tone through `AudioPlayer`, and decrypt what another member says.
+//!
+//! Ignored by default; see `discordrsdocs/docs/api/live-dave-validation.md`.
+//! It needs a prepared voice session (`examples/live_dave_capture_bot.rs`
+//! prints the variables) and at least one other DAVE-capable member in the
+//! channel who speaks during the receive window.
+
+#![cfg(all(feature = "voice", feature = "voice-encode"))]
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -7,13 +16,24 @@
     reason = "a manual live test: a failed expectation fails the test"
 )]
 
+use std::collections::HashMap;
 use std::env;
-use std::num::NonZeroU16;
+use std::sync::Arc;
 use std::time::Duration;
 
-use discordrs::{connect_voice_runtime, VoiceDaveySession, VoiceRuntimeConfig, VoiceRuntimeState};
-use tokio::sync::watch;
+use discordrs::voice::player::{
+    AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
+    PlayerConnectionEvent, TrackEndReason,
+};
+use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig};
 use tokio::time::{timeout, Instant};
+
+/// How long to wait for the MLS group (another member must be present).
+const PLAYABLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Length of the tone played into the call.
+const TONE: Duration = Duration::from_secs(3);
+/// Default receive window; `DISCORDRS_LIVE_VOICE_RECEIVE_SECS` overrides it.
+const DEFAULT_RECEIVE_SECS: u64 = 15;
 
 struct LiveDaveConfig {
     server_id: String,
@@ -21,7 +41,8 @@ struct LiveDaveConfig {
     session_id: String,
     token: String,
     endpoint: String,
-    channel_id: u64,
+    channel_id: String,
+    receive: Duration,
 }
 
 impl LiveDaveConfig {
@@ -45,11 +66,12 @@ impl LiveDaveConfig {
                 missing.join(", ")
             ));
         }
-
-        let channel_id = env_value("DISCORDRS_LIVE_VOICE_CHANNEL_ID")
-            .expect("validated above")
-            .parse()
-            .map_err(|error| format!("DISCORDRS_LIVE_VOICE_CHANNEL_ID must be numeric: {error}"))?;
+        let receive = match env_value("DISCORDRS_LIVE_VOICE_RECEIVE_SECS") {
+            Some(seconds) => seconds
+                .parse()
+                .map_err(|error| format!("DISCORDRS_LIVE_VOICE_RECEIVE_SECS: {error}"))?,
+            None => DEFAULT_RECEIVE_SECS,
+        };
 
         Ok(Self {
             server_id: env_value("DISCORDRS_LIVE_VOICE_SERVER_ID").expect("validated above"),
@@ -57,7 +79,8 @@ impl LiveDaveConfig {
             session_id: env_value("DISCORDRS_LIVE_VOICE_SESSION_ID").expect("validated above"),
             token: env_value("DISCORDRS_LIVE_VOICE_TOKEN").expect("validated above"),
             endpoint: env_value("DISCORDRS_LIVE_VOICE_ENDPOINT").expect("validated above"),
-            channel_id,
+            channel_id: env_value("DISCORDRS_LIVE_VOICE_CHANNEL_ID").expect("validated above"),
+            receive: Duration::from_secs(receive),
         })
     }
 }
@@ -66,163 +89,142 @@ fn env_value(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
-async fn wait_for_state<F>(
-    state_rx: &mut watch::Receiver<VoiceRuntimeState>,
-    stage: &str,
-    mut predicate: F,
-) -> VoiceRuntimeState
-where
-    F: FnMut(&VoiceRuntimeState) -> bool,
-{
-    let deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        let state = state_rx.borrow().clone();
-        if predicate(&state) {
-            return state;
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            panic!(
-                "timed out waiting for live voice DAVE state during {stage}; last state: {:?}",
-                state
-            );
-        }
-
-        match timeout(remaining, state_rx.changed()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => panic!("voice state channel closed"),
-            Err(_) => {
-                let state = state_rx.borrow().clone();
-                if predicate(&state) {
-                    return state;
-                }
-                panic!(
-                    "timed out waiting for live voice DAVE state during {stage}; last state: {:?}",
-                    state
-                );
-            }
-        }
-    }
+/// 48 kHz stereo s16le PCM of a 440 Hz tone at about -8 dBFS.
+fn tone_pcm(length: Duration) -> Vec<u8> {
+    let samples = (48_000.0 * length.as_secs_f64()) as usize;
+    (0..samples)
+        .flat_map(|index| {
+            let phase = index as f64 * 440.0 / 48_000.0;
+            let sample = ((phase * std::f64::consts::TAU).sin() * 13_000.0) as i16;
+            let bytes = sample.to_le_bytes();
+            [bytes[0], bytes[1], bytes[0], bytes[1]]
+        })
+        .collect()
 }
 
 #[tokio::test]
-#[ignore = "requires live Discord voice session env vars; see docs/api/voice.md"]
-async fn live_voice_gateway_dave_mls_transition_smoke() {
+#[ignore = "requires a live Discord voice session; see docs/api/live-dave-validation.md"]
+async fn live_voice_dave_plays_a_tone_and_decrypts_other_members() {
     let config = LiveDaveConfig::from_env().expect(
         "live DAVE validation was explicitly requested with --ignored but is not configured",
     );
 
-    let user_id = config
-        .user_id
-        .parse::<u64>()
-        .expect("DISCORDRS_LIVE_VOICE_USER_ID must be a numeric snowflake");
-    let mut dave = VoiceDaveySession::new(
-        NonZeroU16::new(davey::DAVE_PROTOCOL_VERSION).unwrap(),
-        user_id,
-        config.channel_id,
-    )
-    .expect("failed to create DAVE session");
-
-    let handle = connect_voice_runtime(
-        VoiceRuntimeConfig::new(
-            config
-                .server_id
-                .parse()
-                .expect("DISCORDRS_LIVE_VOICE_SERVER_ID must be a numeric snowflake"),
-            config
-                .user_id
-                .parse()
-                .expect("DISCORDRS_LIVE_VOICE_USER_ID must be a numeric snowflake"),
-            config.session_id,
-            config.token,
-            config.endpoint,
+    // The default configuration: DAVE is advertised because the channel is
+    // known, and the runtime runs the MLS group itself.
+    let handle = Arc::new(
+        connect_voice_runtime(
+            VoiceRuntimeConfig::new(
+                config.server_id.parse().expect("server id"),
+                config.user_id.parse().expect("user id"),
+                config.session_id,
+                config.token,
+                config.endpoint,
+            )
+            .channel_id(config.channel_id.parse().expect("channel id")),
         )
-        .max_dave_protocol_version(davey::DAVE_PROTOCOL_VERSION as u8),
-    )
-    .await
-    .expect("failed to connect live voice runtime");
+        .await
+        .expect("failed to connect the live voice runtime"),
+    );
+    let status = handle.dave_status();
+    println!(
+        "negotiated DAVE protocol version {}",
+        status.protocol_version
+    );
+    assert!(
+        status.protocol_version > 0,
+        "the call did not negotiate DAVE; use a non-Stage voice channel"
+    );
 
-    let mut state_rx = handle.subscribe();
-    let state = wait_for_state(&mut state_rx, "initial DAVE negotiation", |state| {
-        state.dave.protocol_version.is_some() && state.dave.external_sender.is_some()
+    timeout(PLAYABLE_TIMEOUT, handle.wait_until_playable())
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "no MLS group after {PLAYABLE_TIMEOUT:?}; is another DAVE-capable member in the \
+                 channel? last status: {:?}",
+                handle.dave_status()
+            )
+        })
+        .expect("the voice connection closed");
+    let status = handle.dave_status();
+    println!(
+        "joined the MLS group: epoch {:?}, last transition {:?}, voice privacy code {:?}",
+        status.epoch, status.last_transition_id, status.voice_privacy_code
+    );
+    assert!(status.ready, "{status:?}");
+
+    // Send: the default AudioPlayer path. Listen in the channel: a 440 Hz
+    // tone means the other clients decrypted our DAVE frames.
+    let player = AudioPlayer::new(AudioPlayerOptions::default());
+    let mut events = player.events();
+    let mut connection_events = player.connection_events();
+    let subscription = player
+        .subscribe_runtime(Arc::clone(&handle))
+        .expect("subscribe");
+    player
+        .play(AudioResource::new(AudioInput::raw_pcm(
+            std::io::Cursor::new(tone_pcm(TONE)),
+        )))
+        .expect("play");
+    let deadline = TONE + Duration::from_secs(10);
+    let reason = timeout(deadline, async {
+        loop {
+            if let AudioPlayerEvent::TrackEnd { reason } = events.recv().await.expect("events") {
+                return reason;
+            }
+        }
     })
-    .await;
+    .await
+    .expect("the tone did not finish");
+    assert_eq!(reason, TrackEndReason::Finished);
+    while let Ok(event) = connection_events.try_recv() {
+        if let PlayerConnectionEvent::SendFailed { error, .. } = event {
+            panic!("a send to the DAVE call failed: {error}");
+        }
+    }
+    player.shutdown().await;
+    drop(subscription);
+    println!("played {TONE:?} of a 440 Hz tone; check that the channel heard it");
 
-    let external_sender = state
-        .dave
-        .external_sender
-        .as_deref()
-        .expect("DAVE external sender should be present");
-    dave.set_external_sender(external_sender)
-        .expect("failed to apply DAVE external sender");
-    let key_package = dave
-        .create_key_package()
-        .expect("failed to create DAVE key package");
-    handle
-        .send_dave_mls_key_package(key_package)
-        .expect("failed to send DAVE key package");
-
-    let state = wait_for_state(
-        &mut state_rx,
-        "post-key-package MLS proposal or welcome",
-        |state| {
-            !state.dave.proposals.is_empty()
-                || state.dave.pending_commit.is_some()
-                || state.dave.pending_welcome.is_some()
-        },
-    )
-    .await;
-
-    if let Some(proposals) = state.dave.proposals.last() {
-        let Some((&operation, proposal_bytes)) = proposals.split_first() else {
-            panic!("live DAVE proposals payload was empty");
+    // Receive: decrypt what the other members send. Speak (unmuted) now.
+    println!(
+        "receiving for {:?}; speak in the channel now",
+        config.receive
+    );
+    let mut decoders: HashMap<u32, VoiceOpusDecoder> = HashMap::new();
+    let mut speech_frames: HashMap<String, usize> = HashMap::new();
+    let end = Instant::now() + config.receive;
+    while let Some(remaining) = end.checked_duration_since(Instant::now()) {
+        let Ok(packet) = timeout(remaining, handle.recv_voice_packet(4096)).await else {
+            break;
         };
-        let operation = match operation {
-            0 => davey::ProposalsOperationType::APPEND,
-            1 => davey::ProposalsOperationType::REVOKE,
-            other => panic!("unknown DAVE proposals operation type {other}"),
-        };
-        if let Some(commit_welcome) = dave
-            .process_proposals(operation, proposal_bytes, None)
-            .expect("failed to process live DAVE proposals")
-        {
-            handle
-                .send_dave_mls_commit_welcome(commit_welcome.commit, commit_welcome.welcome)
-                .expect("failed to send DAVE commit/welcome");
+        let packet = packet.expect("receive failed");
+        if packet.opus_frame == [0xf8, 0xff, 0xfe] {
+            continue;
         }
+        let decoder = decoders
+            .entry(packet.rtp.ssrc)
+            .or_insert_with(|| VoiceOpusDecoder::discord_default().expect("decoder"));
+        decoder
+            .decode_opus_frame(&packet.opus_frame, false)
+            .expect("a decrypted frame is valid Opus");
+        let user = packet
+            .user_id
+            .map_or_else(|| format!("ssrc {}", packet.rtp.ssrc), |id| id.to_string());
+        *speech_frames.entry(user).or_default() += 1;
     }
+    let status = handle.dave_status();
+    println!(
+        "decrypted speech frames per user: {speech_frames:?}; undecryptable packets: {}; \
+         recoveries: {}",
+        status.undecryptable_packets, status.recoveries
+    );
+    assert!(
+        !speech_frames.is_empty(),
+        "no decrypted speech from another member; did anyone speak during the receive window?"
+    );
 
-    let state = wait_for_state(
-        &mut state_rx,
-        "commit or welcome transition payload",
-        |state| state.dave.pending_commit.is_some() || state.dave.pending_welcome.is_some(),
-    )
-    .await;
-    let transition_id = state
-        .dave
-        .transition_id
-        .expect("DAVE transition id should be present during live transition");
-
-    if let Some(commit) = state.dave.pending_commit.as_deref() {
-        if dave.process_commit(commit).is_err() {
-            handle
-                .send_dave_mls_invalid_commit_welcome(transition_id)
-                .expect("failed to send DAVE invalid commit/welcome");
-            return;
-        }
+    match Arc::try_unwrap(handle) {
+        Ok(handle) => handle.close().await.expect("failed to close voice runtime"),
+        Err(_) => panic!("the voice handle is still shared"),
     }
-    if let Some(welcome) = state.dave.pending_welcome.as_deref() {
-        if dave.process_welcome(welcome).is_err() {
-            handle
-                .send_dave_mls_invalid_commit_welcome(transition_id)
-                .expect("failed to send DAVE invalid commit/welcome");
-            return;
-        }
-    }
-
-    handle
-        .send_dave_transition_ready(transition_id)
-        .expect("failed to send DAVE transition ready");
-    handle.close().await.expect("failed to close voice runtime");
 }

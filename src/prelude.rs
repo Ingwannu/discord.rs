@@ -105,13 +105,14 @@ pub use crate::voice::{
 };
 #[cfg(feature = "voice")]
 pub use crate::voice_runtime::{
-    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDecodedPacket,
-    VoiceOpusDecoder, VoiceOpusFrame, VoiceOutboundPacket, VoiceOutboundRtpState,
-    VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig, VoiceRuntimeHandle,
+    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveStatus,
+    VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame, VoiceOutboundPacket,
+    VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig,
+    VoiceRuntimeHandle,
 };
 #[cfg(all(feature = "voice", feature = "voice-encode"))]
 pub use crate::voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
-#[cfg(all(feature = "voice", feature = "dave"))]
+#[cfg(feature = "voice")]
 pub use crate::voice_runtime::{VoiceDaveFrameEncryptor, VoiceDaveyDecryptor, VoiceDaveySession};
 pub use crate::webhook_events::{
     parse_webhook_event_payload, ApplicationAuthorizedWebhookEvent,

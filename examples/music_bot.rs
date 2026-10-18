@@ -11,6 +11,12 @@
 //!
 //! Requires an `ffmpeg` binary on `PATH`.
 //!
+//! Works in DAVE (end-to-end encrypted) channels, which is every voice
+//! channel except Stage channels: the runtime config carries the channel ID,
+//! so the voice runtime joins the call's MLS group and the player's frames
+//! are encrypted before they leave. The player waits in `AutoPaused` until
+//! the group's keys arrive, which needs another member in the channel.
+//!
 //! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a
 //! stalled stream), the bot stops the track instead of waiting forever. This
 //! works even while FFmpeg is stuck mid-read, because the player reads its
@@ -28,8 +34,11 @@ mod bot {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use tokio::sync::broadcast::error::RecvError;
+
     use discordrs::voice::player::{
-        AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
+        AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioPlayerState,
+        AudioResource, PlayerConnectionEvent,
     };
     use discordrs::{
         gateway_intents, ChannelId, Client, Context, DiscordError, EventHandler, GuildId,
@@ -83,13 +92,16 @@ mod bot {
                 let Some(endpoint) = server.endpoint.as_ref() else {
                     return;
                 };
+                // The channel ID is what lets the runtime take part in DAVE;
+                // without it Discord refuses the connection (close 4017).
                 let config = VoiceRuntimeConfig::new(
                     self.guild_id,
                     user_id,
                     session_id.as_str(),
                     server.token.as_str(),
                     endpoint.as_str(),
-                );
+                )
+                .channel_id(self.channel_id);
                 state.started = true;
                 config
             };
@@ -107,8 +119,16 @@ mod bot {
     async fn play(config: VoiceRuntimeConfig, input: String) -> Result<(), DiscordError> {
         println!("connecting voice runtime to {}", config.endpoint);
         let handle = Arc::new(discordrs::connect_voice_runtime(config).await?);
+        let dave = handle.dave_status();
+        if dave.protocol_version > 0 && !dave.can_send_audio() {
+            println!(
+                "end-to-end encrypted call (DAVE v{}); playback starts once the MLS group forms",
+                dave.protocol_version
+            );
+        }
 
         let player = AudioPlayer::new(AudioPlayerOptions::default());
+        let mut connection_events = player.connection_events();
         let subscription = player.subscribe_runtime(Arc::clone(&handle))?;
 
         let resource = AudioResource::new(AudioInput::ffmpeg(&input)?).with_title(input.clone());
@@ -120,15 +140,24 @@ mod bot {
 
         // A watchdog for inputs that never start. `stop()` takes effect even
         // while the player's read from FFmpeg is stalled, and dropping the
-        // resource kills the FFmpeg process.
+        // resource kills the FFmpeg process. It does not run while the
+        // player waits in `AutoPaused` for the DAVE group: that is not the
+        // input's fault.
         let mut start_timeout = std::pin::pin!(tokio::time::sleep(START_TIMEOUT));
         let mut started = false;
+        let mut waiting_for_listeners = false;
 
         loop {
             tokio::select! {
                 event = events.recv() => match event {
                     Ok(AudioPlayerEvent::StateChange { old, new }) => {
                         println!("player state: {old:?} -> {new:?}");
+                        waiting_for_listeners = new == AudioPlayerState::AutoPaused;
+                        if old == AudioPlayerState::AutoPaused {
+                            start_timeout
+                                .as_mut()
+                                .reset(tokio::time::Instant::now() + START_TIMEOUT);
+                        }
                     }
                     Ok(AudioPlayerEvent::TrackStart) => {
                         started = true;
@@ -140,7 +169,18 @@ mod bot {
                     }
                     Err(_) => break,
                 },
-                () = &mut start_timeout, if !started => {
+                // Sends that fail are reported once per stretch, not per frame.
+                event = connection_events.recv() => match event {
+                    Ok(PlayerConnectionEvent::SendFailed { error, .. }) => {
+                        eprintln!("audio is not reaching the voice connection: {error}");
+                    }
+                    Ok(PlayerConnectionEvent::Recovered { failed, .. }) => {
+                        println!("audio flows again after {failed} failed frames");
+                    }
+                    Err(RecvError::Closed) => break,
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                },
+                () = &mut start_timeout, if !started && !waiting_for_listeners => {
                     eprintln!("no audio from {input} after {START_TIMEOUT:?}; stopping");
                     started = true;
                     player.stop()?;
