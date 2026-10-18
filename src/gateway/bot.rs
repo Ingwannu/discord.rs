@@ -657,8 +657,11 @@ impl Context {
     /// Do not drive MLS by hand (`VoiceDaveySession`, `send_dave_*`) on the
     /// returned handle: the runtime sends its own key package.
     ///
-    /// Keep the `davey` crate's trace logging off: at trace level it writes
-    /// DAVE media key secrets to the log (see `connect_voice_runtime_with_options`).
+    /// # Security
+    ///
+    /// Keep the `davey` crate's trace logging off (its `tracing` target at
+    /// `info` or coarser): at trace level it writes DAVE media key secrets to
+    /// the log. See `connect_voice_runtime_with_options`.
     ///
     /// `user_id` must be the bot's own user. The tracked state is updated by
     /// every VOICE_STATE_UPDATE of the guild, other members' included, so

@@ -84,6 +84,32 @@ const FRAME_NONCE_OFFSET: usize = FRAME_NONCE_LEN - 4;
 /// from davey's public truncated-tag AES-GCM.
 type FrameCipher = davey::AesGcm<davey::aes::Aes128, U12, U8>;
 
+/// A `tracing` target davey writes key material under at trace level (it
+/// logs with its module paths: `davey::session`, `davey::cryptor::*`).
+const DAVEY_TRACE_TARGET: &str = "davey::session";
+
+/// Warns when the current subscriber records davey's trace events, and
+/// reports whether it does.
+///
+/// davey 0.1.5 (the latest release) logs MLS-exported sender secrets and
+/// ratchet keys at trace level (`session.rs` "Got base secret for user",
+/// `cryptor/hash_ratchet.rs`, `cryptor/mlspp_crypto.rs`). A dependency
+/// cannot be patched from a published crate, so the runtime checks the
+/// subscriber when it starts a DAVE session and says so once per session;
+/// docs/design/dave-voice.md, section 10, has the details and the upstream
+/// issue draft.
+pub(crate) fn warn_if_davey_traces() -> bool {
+    let enabled = tracing::enabled!(target: DAVEY_TRACE_TARGET, tracing::Level::TRACE);
+    if enabled {
+        tracing::warn!(
+            "trace logging is enabled for the `davey` crate, which writes DAVE media key \
+             secrets to the log; set the `davey` target to `info` or coarser (for example \
+             RUST_LOG=info,davey=info)"
+        );
+    }
+    enabled
+}
+
 /// What the voice runtime's DAVE layer is doing, from
 /// [`VoiceRuntimeHandle::dave_status`](crate::VoiceRuntimeHandle::dave_status).
 ///
@@ -811,6 +837,7 @@ impl DaveController {
                 .reinit(version, self.user_id, channel_id, None)
                 .map_err(|error| error.to_string())?;
         } else {
+            warn_if_davey_traces();
             let mut session = davey::DaveSession::new(version, self.user_id, channel_id, None)
                 .map_err(|error| error.to_string())?;
             if let Some(external_sender) = self.external_sender.as_deref() {
@@ -1703,6 +1730,63 @@ mod tests {
         assert_eq!(status.protocol_version, 1);
         assert!(!status.ready && !status.can_send_audio());
         assert!(super::VoiceDaveStatus::manual(0).can_send_audio());
+    }
+
+    /// Records warnings; records trace events only when `trace` is set.
+    struct WarningCounter {
+        trace: bool,
+        warnings: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl tracing::Subscriber for WarningCounter {
+        fn register_callsite(
+            &self,
+            _metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            self.trace || *metadata.level() != tracing::Level::TRACE
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                self.warnings
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn dave_warns_when_davey_trace_logging_would_record_key_material() {
+        for trace in [true, false] {
+            let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let subscriber = WarningCounter {
+                trace,
+                warnings: std::sync::Arc::clone(&warnings),
+            };
+            let warned = tracing::subscriber::with_default(subscriber, || {
+                // Starting a session checks too.
+                controller(BOT).on_session_description(1);
+                super::warn_if_davey_traces()
+            });
+            assert_eq!(warned, trace);
+            let expected = if trace { 2 } else { 0 };
+            assert_eq!(warnings.load(std::sync::atomic::Ordering::SeqCst), expected);
+        }
     }
 
     #[test]

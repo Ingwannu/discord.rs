@@ -230,6 +230,40 @@ openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이
 - **웰컴 사용자 검증.** `davey` 0.1.x의 `process_welcome`은 웰컴의 사용자 목록을 인식된 사용자와
   대조하지 않는다(소스의 TODO, libdave는 대조한다). 제안(Add)과 커밋은 대조한다. 웰컴은 게이트웨이가
   보낸 외부 발신자와 같은 그룹에만 들어가므로, 남는 위험은 게이트웨이가 모르는 멤버를 넣은 그룹이다.
+- **davey trace 로그의 키 노출.** `davey` 0.1.5(최신)는 trace 수준에서 키 비밀값을 기록한다:
+  `session.rs:799` `trace!("Got base secret for user {:?}: {:?}", user_id, base_secret)`(모든 멤버의
+  에포크별 송신 기반 비밀), `cryptor/hash_ratchet.rs:17`("Creating hash ratchet with secret"),
+  `cryptor/mlspp_crypto.rs:74,89,91`(래칫 입력·유도 비밀, 세대별 키). debug 수준에는 키 재료가 없다
+  (개인정보 코드, 제안 참조, 세대 번호뿐). 3.0.0의 `dave` 기능(`VoiceDaveySession`) 때부터 있던
+  문제다. 게시된 크레이트에서 의존성을 고칠 수 없으므로: 안내서(영·한), 진입점 rustdoc, CHANGELOG
+  "Security"에 `davey` 대상을 `info` 이하로 두라고 적고, 런타임과 `VoiceDaveySession::new`가 세션을
+  시작할 때 `tracing::enabled!(target: "davey::session", TRACE)`이면 경고를 남긴다. 런타임 자체 송신
+  키(5.1절)는 키를 로그에 쓰지 않는다. 아래는 상류 이슈 초안이다(제출하지 않음, 사용자 확인 후).
+
+  ```text
+  Title: Trace-level logs contain media key secrets (MLS-exported sender secrets, ratchet keys)
+
+  davey 0.1.5 logs key material through `tracing` at trace level:
+
+  - src/session.rs:799   trace!("Got base secret for user {:?}: {:?}", user_id, base_secret)
+    -> the MLS-exported "Discord Secure Frames v0" secret of every group member, per epoch
+  - src/cryptor/hash_ratchet.rs:17   trace!("Creating hash ratchet with secret: {:x?}", secret)
+  - src/cryptor/mlspp_crypto.rs:74, 89, 91   the ratchet's input secret and derived secrets
+    (per-generation AES-128-GCM keys and nonces)
+
+  Anyone who enables trace logging to debug a voice issue (RUST_LOG=trace, or a davey=trace
+  directive) writes these keys to their log, and logs are routinely shipped to aggregators and
+  kept. With them, captured call audio of that epoch can be decrypted, which defeats DAVE's
+  end-to-end guarantee for that call. Downstream crates cannot patch this; they can only tell
+  users to keep the davey target at info or coarser.
+
+  Suggestion: drop the secret values from these messages (keep the events, log the user ID,
+  generation, and lengths), or at most log a short non-reversible fingerprint. libdave does not
+  log key material. A test that runs a session under a trace-level subscriber and checks that no
+  logged field contains exported secrets would keep it from coming back.
+
+  Found while integrating davey into discord.rs (Rust crate `discordrs`); happy to send a PR.
+  ```
 - **프레임 카운터.** 런타임 송신 키는 에포크마다 2^32 - 1프레임까지 쓰고 그 뒤에는 오류를 낸다(5.1절).
   `davey` 0.1.5의 자체 암호화기는 같은 지점에서 `u32 += 1`이 넘치며(디버그 빌드 패닉), 런타임은 그
   경로를 쓰지 않는다. 저수준 `VoiceDaveySession::encrypt_opus`는 여전히 `davey` 암호화기를 쓴다.

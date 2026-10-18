@@ -210,7 +210,8 @@ impl VoiceRuntimeConfig {
 }
 
 /// How [`connect_with_options`] connects: the voice runtime then takes part
-/// in DAVE, Discord's end-to-end encryption, on its own.
+/// in DAVE, Discord's end-to-end encryption, on its own. Keep the `davey`
+/// crate's trace logging off (see [`connect_with_options`], "Security").
 ///
 /// Discord requires DAVE in every voice channel except Stage channels.
 /// DAVE uses the voice channel as its MLS group, which is why the channel is
@@ -971,11 +972,19 @@ pub type VoiceDaveyDecryptor = VoiceDaveySession;
 
 impl VoiceDaveySession {
     /// Creates a `new` value.
+    ///
+    /// # Security
+    ///
+    /// Keep the `davey` crate's trace logging off (its `tracing` target at
+    /// `info` or coarser): at trace level davey writes DAVE media key
+    /// secrets to the log. That has been so since this wrapper appeared, and
+    /// davey 0.1.5 still does; a warning is logged here when it is enabled.
     pub fn new(
         protocol_version: NonZeroU16,
         user_id: u64,
         channel_id: u64,
     ) -> Result<Self, DiscordError> {
+        dave::warn_if_davey_traces();
         let session = davey::DaveSession::new(protocol_version, user_id, channel_id, None)
             .map_err(|error| {
                 invalid_data_error(format!("failed to create DAVE session: {error:?}"))
@@ -1840,6 +1849,15 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
 /// [`AudioPlayer`](crate::voice::player::AudioPlayer) encrypt with it, and
 /// the plain receive methods decrypt each speaker (see
 /// [`VoiceRuntimeHandle`]).
+///
+/// # Security
+///
+/// Keep the `davey` crate's trace logging off (its `tracing` target at
+/// `info` or coarser, for example `RUST_LOG=info,davey=info`): at trace
+/// level davey, which this runtime uses for MLS and decryption, writes DAVE
+/// media key secrets (MLS-exported sender secrets, ratchet keys) to the
+/// log. The runtime logs a warning when it starts a DAVE session while that
+/// level is enabled.
 ///
 /// # Errors
 ///
