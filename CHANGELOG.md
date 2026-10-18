@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **Keep the `davey` crate's trace logging off.** davey, the DAVE library behind the voice runtime, writes media key secrets (every member's MLS-exported sender secret, ratchet keys) to `tracing` at trace level, so a `RUST_LOG=trace` or `davey=trace` log holds keys that decrypt captured call audio. This has been so since 3.0.0's `dave` feature (`VoiceDaveySession`); davey 0.1.5, the latest release, still does it, and a dependency cannot be patched from here. Keep the `davey` target at `info` or coarser (for example `RUST_LOG=info,davey=info`). The runtime and `VoiceDaveySession::new` now log a warning when a DAVE session starts while davey's trace level is enabled. An upstream issue is drafted in `docs/design/dave-voice.md`.
+- The runtime's own DAVE key material (exported sender secrets, pending per-transition secrets, ratchet secrets, derived keys, HKDF intermediates) is cleared when replaced or dropped (`zeroize`, already part of the `voice` build) and is not reachable through `Debug`. The AES key schedule inside the frame cipher and HMAC's internal state are not cleared by those crates on every target.
 
 ### Added
 - `InteractionsEndpointBuilder::default_allowed_mentions(AllowedMentions)` (see Fixed).

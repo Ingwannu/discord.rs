@@ -20,6 +20,7 @@ use hmac::{Hmac, Mac};
 use openmls_rust_crypto::RustCrypto;
 use sha2::Sha256;
 use tokio::sync::watch;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{DAVE_AUTH_TAG_LEN, DAVE_FOOTER_LEN, DAVE_MAGIC_MARKER};
 use crate::error::DiscordError;
@@ -251,9 +252,15 @@ fn dave_error(message: impl Into<String>) -> DiscordError {
 ///   is checked, so after 2^32 - 1 frames in one epoch (about 2.7 years of
 ///   audio) sends fail instead of reusing a nonce; davey's own encryptor
 ///   would overflow there (a panic in debug builds).
+///
+/// Key material lives in [`Zeroizing`] buffers, cleared when replaced or
+/// dropped, and the type has no `Debug`. Two copies are outside its reach:
+/// the AES key schedule inside the cipher (aes 0.8 clears it only with a
+/// feature that is not available on every target) and HMAC's internal state
+/// during derivation (hmac 0.12 does not clear it).
 struct SenderKey {
     /// The ratchet secret for `next_generation`.
-    next_secret: Vec<u8>,
+    next_secret: Zeroizing<Vec<u8>>,
     next_generation: u32,
     /// The cipher for one generation, derived when first needed.
     cipher: Option<(u32, FrameCipher)>,
@@ -263,7 +270,7 @@ struct SenderKey {
 }
 
 impl SenderKey {
-    fn new(secret: Vec<u8>) -> Self {
+    fn new(secret: Zeroizing<Vec<u8>>) -> Self {
         Self {
             next_secret: secret,
             next_generation: 0,
@@ -337,7 +344,10 @@ impl SenderKey {
 
 /// Exports `user_id`'s sending secret for the epoch `session`'s MLS group is
 /// in, as davey does for its own encryptor and decryptors.
-fn export_sender_secret(session: &davey::DaveSession, user_id: u64) -> Result<Vec<u8>, String> {
+fn export_sender_secret(
+    session: &davey::DaveSession,
+    user_id: u64,
+) -> Result<Zeroizing<Vec<u8>>, String> {
     let group = session.group().ok_or("the DAVE session has no MLS group")?;
     group
         .export_secret(
@@ -346,6 +356,7 @@ fn export_sender_secret(session: &davey::DaveSession, user_id: u64) -> Result<Ve
             &user_id.to_le_bytes(),
             SENDER_KEY_LEN,
         )
+        .map(Zeroizing::new)
         .map_err(|error| format!("could not export the DAVE sender secret: {error}"))
 }
 
@@ -360,7 +371,7 @@ fn derive_tree_secret(
     label: &str,
     generation: u32,
     length: usize,
-) -> Result<Vec<u8>, DiscordError> {
+) -> Result<Zeroizing<Vec<u8>>, DiscordError> {
     // KDFLabel { uint16 length; opaque label<V>; opaque context<V> }, with
     // the "MLS 1.0 " label prefix and the generation as the context.
     let label = format!("MLS 1.0 {label}");
@@ -386,10 +397,20 @@ fn push_short_vl_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), DiscordErr
     Ok(())
 }
 
+/// HMAC-SHA256 output length.
+const SHA256_LEN: usize = 32;
+
 /// HKDF-Expand (RFC 5869 §2.3) with HMAC-SHA256.
-fn hkdf_expand_sha256(prk: &[u8], info: &[u8], length: usize) -> Result<Vec<u8>, DiscordError> {
-    let mut okm = Vec::with_capacity(length + 32);
-    let mut previous: Vec<u8> = Vec::new();
+///
+/// Every intermediate block is cleared, and the buffers are sized up front so
+/// that no reallocation leaves an uncleared copy behind.
+fn hkdf_expand_sha256(
+    prk: &[u8],
+    info: &[u8],
+    length: usize,
+) -> Result<Zeroizing<Vec<u8>>, DiscordError> {
+    let mut okm = Zeroizing::new(Vec::with_capacity(length + SHA256_LEN));
+    let mut previous = Zeroizing::new(Vec::with_capacity(SHA256_LEN));
     let mut counter: u8 = 0;
     while okm.len() < length {
         counter = counter
@@ -400,7 +421,10 @@ fn hkdf_expand_sha256(prk: &[u8], info: &[u8], length: usize) -> Result<Vec<u8>,
         mac.update(&previous);
         mac.update(info);
         mac.update(&[counter]);
-        previous = mac.finalize().into_bytes().to_vec();
+        let mut block = mac.finalize().into_bytes();
+        previous.clear();
+        previous.extend_from_slice(&block);
+        block.as_mut_slice().zeroize();
         okm.extend_from_slice(&previous);
     }
     okm.truncate(length);
@@ -448,8 +472,8 @@ pub(crate) struct DaveController {
     /// The key frames are sent with: the last executed epoch's.
     send_key: Option<SenderKey>,
     /// Sending secrets of epochs whose commit or welcome was processed,
-    /// activated when their transition executes.
-    pending_send_keys: HashMap<u64, Vec<u8>>,
+    /// activated when their transition executes. Cleared when dropped.
+    pending_send_keys: HashMap<u64, Zeroizing<Vec<u8>>>,
     /// The latest external sender package, applied again to a session that
     /// is created after it arrived (a call upgraded from version 0).
     external_sender: Option<Vec<u8>>,
@@ -1577,18 +1601,31 @@ mod tests {
             206, 221, 97, 177, 184, 161, 202, 105, 4, 101, 84, 40, 44, 247, 11, 123,
         ];
         assert_eq!(
-            super::derive_tree_secret(&secret, "key", 0, 16).unwrap(),
+            super::derive_tree_secret(&secret, "key", 0, 16)
+                .unwrap()
+                .as_slice(),
             [117, 48, 249, 169, 148, 94, 45, 46, 6, 208, 101, 31, 123, 42, 134, 75]
         );
         assert_eq!(
-            super::derive_tree_secret(&secret, "nonce", 0, 12).unwrap(),
+            super::derive_tree_secret(&secret, "nonce", 0, 12)
+                .unwrap()
+                .as_slice(),
             [48, 30, 95, 75, 116, 9, 15, 152, 94, 114, 107, 178]
         );
+        // HKDF output longer than one HMAC block, sized without reallocation.
+        let long = super::hkdf_expand_sha256(&secret, b"info", 40).unwrap();
+        assert_eq!(long.len(), 40);
+        assert!(long.capacity() <= 40 + super::SHA256_LEN);
+
+        // Key material stays out of `Debug`.
+        let debug = format!("{bot:?}");
+        assert!(debug.contains("has_send_key: true"), "{debug}");
+        assert!(!debug.contains('['), "{debug}");
     }
 
     #[test]
     fn dave_sender_key_moves_to_the_next_generation_and_never_reuses_a_nonce() {
-        let mut key = super::SenderKey::new(vec![7; 16]);
+        let mut key = super::SenderKey::new(zeroize::Zeroizing::new(vec![7; 16]));
         let first = key.encrypt_opus(&OPUS).unwrap();
         let parsed = super::super::parse_dave_frame(&first).unwrap();
         assert_eq!(parsed.nonce, 1);

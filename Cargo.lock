@@ -425,6 +425,7 @@ dependencies = [
  "tracing",
  "trybuild",
  "url",
+ "zeroize",
  "zstd",
 ]
 
