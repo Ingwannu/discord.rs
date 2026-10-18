@@ -128,12 +128,16 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
 유지합니다.
 
 > **보안: `davey` trace 로그를 끄십시오.** 런타임이 MLS와 복호화에 쓰는 DAVE 라이브러리 `davey`는
-> **trace** 수준에서 미디어 키 비밀값(모든 멤버의 MLS 내보내기 송신 비밀, 래칫 키)을 `tracing`에
-> 씁니다. `RUST_LOG=trace`나 `davey=trace`로 실행하면 에포크별 키가 로그에 남고, 그 로그를 가진 사람은
-> 녹화한 통화 음성을 복호화할 수 있습니다. `davey` 대상은 `info` 이하로 두십시오(예:
+> **trace** 수준에서 미디어 키 비밀값(모든 멤버의 MLS 내보내기 송신 비밀, 래칫 키)을 `davey::session`,
+> `davey::cryptor::hash_ratchet`, `davey::cryptor::mlspp_crypto` 대상으로 `tracing`에 씁니다. 그 키가
+> 남은 로그로는 녹화한 통화 음성을 복호화할 수 있습니다. `davey` 대상은 `info` 이하로 두십시오(예:
 > `RUST_LOG=info,davey=info`, 나머지를 trace로 둘 때도 `davey=info`를 더함). 3.0.0의 `dave`
-> 기능(`VoiceDaveySession`) 때부터 그랬고 최신판 davey 0.1.5도 같습니다. 런타임은 davey trace가 켜진
-> 상태에서 DAVE 세션을 시작하면 경고를 남깁니다.
+> 기능(`VoiceDaveySession`) 때부터 그랬고 최신판 davey 0.1.5도 같습니다. **런타임은 이를 완화할 뿐
+> 고치지 못합니다.** 자신의 davey 호출을 `tracing` 필터 아래에서 실행해 davey의 trace 이벤트(키 재료
+> 포함)가 구독자에 닿기 전에 버리고, 그 모듈 중 하나라도 trace인 상태로 DAVE 세션을 시작하면 경고를
+> 남깁니다. 다루지 못하는 것: 런타임 밖의 davey 호출(`VoiceDaveySession`, davey 직접 호출), 그리고
+> `tracing` 구독자가 없을 때 `tracing`이 `log` 크레이트로 넘기는 davey 이벤트(이 경로는 경고도 보지
+> 못합니다). 근본 수정은 davey에서 해야 하며, 상류 이슈는 초안만 있고 제출하지 않았습니다.
 
 - **참여.** IDENTIFY에 `max_dave_protocol_version`을 광고합니다(기본 1, 최대 1). SESSION_DESCRIPTION이
   DAVE를 정하면 MLS 키 패키지를 보내고, 게이트웨이의 외부 발신자를 적용하고, 새로 들어온 멤버의 제안을

@@ -979,12 +979,14 @@ impl VoiceDaveySession {
     /// `info` or coarser): at trace level davey writes DAVE media key
     /// secrets to the log. That has been so since this wrapper appeared, and
     /// davey 0.1.5 still does; a warning is logged here when it is enabled.
+    /// Unlike the voice runtime's own session, calls through this wrapper are
+    /// not filtered.
     pub fn new(
         protocol_version: NonZeroU16,
         user_id: u64,
         channel_id: u64,
     ) -> Result<Self, DiscordError> {
-        dave::warn_if_davey_traces();
+        dave::warn_if_davey_traces(false);
         let session = davey::DaveSession::new(protocol_version, user_id, channel_id, None)
             .map_err(|error| {
                 invalid_data_error(format!("failed to create DAVE session: {error:?}"))
@@ -1375,7 +1377,7 @@ impl VoiceRuntimeHandle {
                  connect_voice_runtime_with_options",
             )
         })?;
-        lock_dave(dave).verification_code(user_id)
+        lock_dave(dave).filtered(|dave| dave.verification_code(user_id))
     }
 
     /// Whether frames inside transport encryption are DAVE frames: the
@@ -1468,7 +1470,7 @@ impl VoiceRuntimeHandle {
                 return self.recv_plain(raw);
             };
             let (rtp, frame, user_id, _) = self.open_transport(&raw)?;
-            let inbound = lock_dave(dave).decrypt_inbound(user_id, frame);
+            let inbound = lock_dave(dave).filtered(|dave| dave.decrypt_inbound(user_id, frame));
             self.send_dave_commands(inbound.commands);
             if let Some(opus_frame) = inbound.media {
                 return Ok(VoiceReceivedPacket {
@@ -1856,8 +1858,13 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
 /// `info` or coarser, for example `RUST_LOG=info,davey=info`): at trace
 /// level davey, which this runtime uses for MLS and decryption, writes DAVE
 /// media key secrets (MLS-exported sender secrets, ratchet keys) to the
-/// log. The runtime logs a warning when it starts a DAVE session while that
-/// level is enabled.
+/// log. As a mitigation, not a fix, the runtime runs its own davey calls
+/// under a `tracing` filter that drops davey's trace-level events before
+/// they reach your subscriber, and warns when it starts a DAVE session while
+/// any of davey's key-logging modules is at trace level. Not covered:
+/// davey calls made elsewhere (`VoiceDaveySession`, davey directly), and
+/// davey's events that tracing hands to the `log` crate when no `tracing`
+/// subscriber is installed.
 ///
 /// # Errors
 ///
@@ -1966,7 +1973,8 @@ async fn connect_runtime(
                 options.channel_id,
                 u16::from(advertised_dave.unwrap_or(0)),
             );
-            let commands = controller.on_session_description(negotiated_dave);
+            let commands = controller
+                .filtered(|controller| controller.on_session_description(negotiated_dave));
             let status = controller.subscribe();
             (
                 Some(Arc::new(StdMutex::new(controller))),
@@ -2160,7 +2168,9 @@ impl GatewayLoop {
         step: impl FnOnce(&mut DaveController) -> Vec<VoiceGatewayCommand>,
     ) -> Vec<VoiceGatewayCommand> {
         match &self.dave {
-            Some(dave) => step(&mut lock_dave(dave)),
+            // davey's trace events carry key material; see
+            // `DaveController::filtered`.
+            Some(dave) => lock_dave(dave).filtered(step),
             None => Vec::new(),
         }
     }

@@ -8,7 +8,7 @@
 - `connect_voice_runtime(config)` keeps 3.0.0's behaviour (DAVE left to the caller), so nothing breaks; a 4017 close now returns an error that explains it.
 - Until the runtime holds the group's keys, sends return an error instead of leaking audio unencrypted, and `AudioPlayer` waits in `AutoPaused` (connections count only while playable). `AudioPlayer::connection_events()` reports failing connections once per stretch.
 - The gateway context tracks only the bot's own voice state (user from READY): other members joining, moving, or leaving no longer replace or clear the session that `Context::connect_voice_runtime*` uses.
-- Security: keep the `davey` crate's trace logging off (`RUST_LOG=info,davey=info`): at trace level davey writes DAVE media key secrets to the log (since 3.0.0's `dave` feature; davey 0.1.5 still does). The runtime warns when it starts a DAVE session with that level enabled.
+- Security: keep the `davey` crate's trace logging off (`RUST_LOG=info,davey=info`): at trace level davey writes DAVE media key secrets to the log (since 3.0.0's `dave` feature; davey 0.1.5 still does). As a mitigation, the runtime filters davey's trace events out of its own davey calls and warns when a DAVE session starts with any key-logging davey module at trace level; davey calls outside the runtime and tracing's `log` fallback are not covered.
 - `voice` includes DAVE (`davey`); `dave` is an alias. New: `Context::connect_voice_runtime_with_dave`, `VoiceConnectOptions`, `VoiceManager::runtime_options`, `VoiceDaveStatus`, `dave_status`, `wait_until_playable`, `dave_verification_code`, `VoiceFrameSink::is_playable`.
 
 ## 3.0.0 - 2026-10-18

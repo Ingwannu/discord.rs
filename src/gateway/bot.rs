@@ -661,7 +661,9 @@ impl Context {
     ///
     /// Keep the `davey` crate's trace logging off (its `tracing` target at
     /// `info` or coarser): at trace level it writes DAVE media key secrets to
-    /// the log. See `connect_voice_runtime_with_options`.
+    /// the log. The runtime filters davey's trace events out of its own davey
+    /// calls as a mitigation; see `connect_voice_runtime_with_options` for
+    /// what that does not cover.
     ///
     /// `user_id` must be the bot's own user. The context tracks only the
     /// bot's own voice state (the user from READY), so other members joining,

@@ -85,30 +85,177 @@ const FRAME_NONCE_OFFSET: usize = FRAME_NONCE_LEN - 4;
 /// from davey's public truncated-tag AES-GCM.
 type FrameCipher = davey::AesGcm<davey::aes::Aes128, U12, U8>;
 
-/// A `tracing` target davey writes key material under at trace level (it
-/// logs with its module paths: `davey::session`, `davey::cryptor::*`).
-const DAVEY_TRACE_TARGET: &str = "davey::session";
+/// Whether the current `tracing` subscriber records davey's trace events
+/// from any of the modules that write key material at that level (davey
+/// 0.1.5, the latest release): `session.rs` (every member's MLS-exported
+/// sender secret, "Got base secret for user"), `cryptor/hash_ratchet.rs`
+/// (the ratchet secret), and `cryptor/mlspp_crypto.rs` (derived secrets and
+/// per-generation keys). Checked per module, so a filter such as
+/// `davey::cryptor=trace,davey::session=info` is caught too.
+fn davey_trace_enabled() -> bool {
+    tracing::enabled!(target: "davey::session", tracing::Level::TRACE)
+        || tracing::enabled!(target: "davey::cryptor::hash_ratchet", tracing::Level::TRACE)
+        || tracing::enabled!(target: "davey::cryptor::mlspp_crypto", tracing::Level::TRACE)
+}
 
-/// Warns when the current subscriber records davey's trace events, and
-/// reports whether it does.
+/// Warns, and reports whether it did, when davey's trace events that carry
+/// key material would be recorded. `filtered` says whether the caller's
+/// davey calls run under [`DaveyTraceFilter`].
 ///
-/// davey 0.1.5 (the latest release) logs MLS-exported sender secrets and
-/// ratchet keys at trace level (`session.rs` "Got base secret for user",
-/// `cryptor/hash_ratchet.rs`, `cryptor/mlspp_crypto.rs`). A dependency
-/// cannot be patched from a published crate, so the runtime checks the
-/// subscriber when it starts a DAVE session and says so once per session;
-/// docs/design/dave-voice.md, section 10, has the details and the upstream
-/// issue draft.
-pub(crate) fn warn_if_davey_traces() -> bool {
-    let enabled = tracing::enabled!(target: DAVEY_TRACE_TARGET, tracing::Level::TRACE);
+/// A dependency cannot be patched from a published crate, so this is a
+/// mitigation: the runtime's own davey calls are filtered, but davey calls
+/// made elsewhere (`VoiceDaveySession`, or davey directly) and tracing's
+/// `log` fallback are not (docs/design/dave-voice.md, section 10).
+pub(crate) fn warn_if_davey_traces(filtered: bool) -> bool {
+    let enabled = davey_trace_enabled();
     if enabled {
+        warn_about_davey_traces(filtered);
+    }
+    enabled
+}
+
+/// The warning [`warn_if_davey_traces`] logs.
+fn warn_about_davey_traces(filtered: bool) {
+    if filtered {
+        tracing::warn!(
+            "trace logging is enabled for the `davey` crate, which writes DAVE media key \
+             secrets at that level; the voice runtime drops davey's trace events from its own \
+             DAVE calls, but davey calls made elsewhere (VoiceDaveySession) and tracing's `log` \
+             fallback are not filtered: set the `davey` target to `info` or coarser (for \
+             example RUST_LOG=info,davey=info)"
+        );
+    } else {
         tracing::warn!(
             "trace logging is enabled for the `davey` crate, which writes DAVE media key \
              secrets to the log; set the `davey` target to `info` or coarser (for example \
              RUST_LOG=info,davey=info)"
         );
     }
-    enabled
+}
+
+/// Whether `metadata` is one of davey's trace-level callsites, where all of
+/// davey's key material is logged. davey logs with its module paths as
+/// targets.
+fn is_davey_trace(metadata: &tracing::Metadata<'_>) -> bool {
+    *metadata.level() == tracing::Level::TRACE
+        && (metadata.target() == "davey" || metadata.target().starts_with("davey::"))
+}
+
+/// A `tracing` subscriber for the runtime's davey calls: drops davey's
+/// trace-level events and forwards everything else to the dispatcher that
+/// was the default when the DAVE session was set up.
+///
+/// [Decision Log]
+/// - Purpose: keep davey's key material (docs/design/dave-voice.md,
+///   section 10) out of the application's logs even when someone turns on
+///   trace logging, instead of only warning about it.
+/// - Constraint: davey 0.1.5 logs the secrets itself, inside the MLS calls
+///   the runtime must make (`process_commit`/`process_welcome` run
+///   `update_ratchets`, which logs every member's base secret), and in its
+///   decryptor's key derivation. A published crate cannot patch it.
+/// - Alternatives: (1) warn only; (2) decrypt with our own implementation,
+///   as the send side does: removes only the per-generation derivation logs,
+///   since the base secrets are logged by the MLS calls themselves, for a
+///   second copy of davey's decryptor (generation windows, replay tracking,
+///   expiry); (3) run every davey call under a scoped dispatcher that drops
+///   davey's trace events before they reach the application's subscriber.
+/// - Chosen: (3), plus the per-module warning.
+/// - Trade-offs: davey's non-secret trace events from those calls are lost
+///   too (its debug and coarser events still pass). The forwarding target is
+///   captured when the session is set up. It needs a dispatcher to protect:
+///   without one, davey's events go nowhere, or to `log` through tracing's
+///   fallback, which installing a scoped dispatcher would switch off for the
+///   whole process, so then nothing is filtered (and the warning cannot see
+///   it either). davey calls made outside the runtime are not covered.
+///   Registering the filter rebuilds tracing's callsite interest once per
+///   connection; davey's trace callsites become "sometimes" where the
+///   application records them, every other callsite keeps the
+///   application's interest.
+struct DaveyTraceFilter {
+    inner: tracing::Dispatch,
+    /// The process's maximum level when the filter was made. A dispatcher's
+    /// own hint is not public, and a filter without one would raise the
+    /// global maximum to trace.
+    max_level: tracing::level_filters::LevelFilter,
+}
+
+impl tracing::Subscriber for DaveyTraceFilter {
+    fn register_callsite(
+        &self,
+        metadata: &'static tracing::Metadata<'static>,
+    ) -> tracing::subscriber::Interest {
+        if is_davey_trace(metadata) {
+            tracing::subscriber::Interest::never()
+        } else {
+            self.inner.register_callsite(metadata)
+        }
+    }
+
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(self.max_level)
+    }
+
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        !is_davey_trace(metadata) && self.inner.enabled(metadata)
+    }
+
+    fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        self.inner.new_span(span)
+    }
+
+    fn record(&self, span: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+        self.inner.record(span, values);
+    }
+
+    fn record_follows_from(&self, span: &tracing::span::Id, follows: &tracing::span::Id) {
+        self.inner.record_follows_from(span, follows);
+    }
+
+    fn event_enabled(&self, event: &tracing::Event<'_>) -> bool {
+        !is_davey_trace(event.metadata())
+    }
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        // Also checked here: when the application records davey's trace
+        // callsites, their cached interest can skip `enabled`.
+        if !is_davey_trace(event.metadata()) {
+            self.inner.event(event);
+        }
+    }
+
+    fn enter(&self, span: &tracing::span::Id) {
+        self.inner.enter(span);
+    }
+
+    fn exit(&self, span: &tracing::span::Id) {
+        self.inner.exit(span);
+    }
+
+    fn clone_span(&self, id: &tracing::span::Id) -> tracing::span::Id {
+        self.inner.clone_span(id)
+    }
+
+    fn try_close(&self, id: tracing::span::Id) -> bool {
+        self.inner.try_close(id)
+    }
+
+    // `current_span` keeps its default: `tracing` does not re-export the
+    // return type. The application's subscriber still tracks the current
+    // span itself, through the forwarded `enter` and `exit`, for the events
+    // forwarded to it.
+}
+
+/// The filter for one DAVE session's davey calls, or `None` when the
+/// process has no `tracing` dispatcher to protect (see [`DaveyTraceFilter`]).
+fn davey_log_filter() -> Option<tracing::Dispatch> {
+    if !tracing::dispatcher::has_been_set() {
+        return None;
+    }
+    let inner = tracing::dispatcher::get_default(tracing::Dispatch::clone);
+    Some(tracing::Dispatch::new(DaveyTraceFilter {
+        inner,
+        max_level: tracing::level_filters::LevelFilter::current(),
+    }))
 }
 
 /// What the voice runtime's DAVE layer is doing, from
@@ -492,6 +639,12 @@ pub(crate) struct DaveController {
     undecryptable_packets: u64,
     recoveries: u64,
     status_tx: watch::Sender<VoiceDaveStatus>,
+    /// Drops davey's trace events (key material) from this session's davey
+    /// calls; see [`DaveyTraceFilter`] and [`Self::filtered`].
+    log_filter: Option<tracing::Dispatch>,
+    /// Whether davey's key-material trace events were recordable when the
+    /// session was set up; warned about when the first davey session starts.
+    davey_traces: Option<bool>,
 }
 
 impl fmt::Debug for DaveController {
@@ -541,6 +694,20 @@ impl DaveController {
             undecryptable_packets: 0,
             recoveries: 0,
             status_tx,
+            log_filter: davey_log_filter(),
+            // Checked here, outside the filter, which hides davey's trace
+            // callsites from `tracing::enabled!`.
+            davey_traces: Some(davey_trace_enabled()),
+        }
+    }
+
+    /// Runs `step` with davey's trace-level events dropped before they reach
+    /// the application's subscriber (see [`DaveyTraceFilter`]). Every call
+    /// that reaches davey goes through this.
+    pub(crate) fn filtered<R>(&mut self, step: impl FnOnce(&mut Self) -> R) -> R {
+        match self.log_filter.clone() {
+            Some(filter) => tracing::dispatcher::with_default(&filter, || step(self)),
+            None => step(self),
         }
     }
 
@@ -861,7 +1028,10 @@ impl DaveController {
                 .reinit(version, self.user_id, channel_id, None)
                 .map_err(|error| error.to_string())?;
         } else {
-            warn_if_davey_traces();
+            // Once per controller, from the check made outside the filter.
+            if self.davey_traces.take() == Some(true) {
+                warn_about_davey_traces(self.log_filter.is_some());
+            }
             let mut session = davey::DaveSession::new(version, self.user_id, channel_id, None)
                 .map_err(|error| error.to_string())?;
             if let Some(external_sender) = self.external_sender.as_deref() {
@@ -1769,13 +1939,41 @@ mod tests {
         assert!(super::VoiceDaveStatus::manual(0).can_send_audio());
     }
 
-    /// Records warnings; records trace events only when `trace` is set.
-    struct WarningCounter {
-        trace: bool,
-        warnings: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Events a [`Recorder`] saw, as (target, level, message).
+    type Recorded = std::sync::Arc<std::sync::Mutex<Vec<(String, tracing::Level, String)>>>;
+
+    /// Records every event it is shown, and shows trace-level events only
+    /// for targets under `trace_prefix`.
+    struct Recorder {
+        trace_prefix: &'static str,
+        events: Recorded,
     }
 
-    impl tracing::Subscriber for WarningCounter {
+    impl Recorder {
+        fn new(trace_prefix: &'static str) -> (Self, Recorded) {
+            let events = std::sync::Arc::default();
+            (
+                Self {
+                    trace_prefix,
+                    events: std::sync::Arc::clone(&events),
+                },
+                events,
+            )
+        }
+    }
+
+    /// Takes an event's `message` field.
+    struct Message(String);
+
+    impl tracing::field::Visit for Message {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = format!("{value:?}");
+            }
+        }
+    }
+
+    impl tracing::Subscriber for Recorder {
         fn register_callsite(
             &self,
             _metadata: &'static tracing::Metadata<'static>,
@@ -1784,7 +1982,8 @@ mod tests {
         }
 
         fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-            self.trace || *metadata.level() != tracing::Level::TRACE
+            *metadata.level() != tracing::Level::TRACE
+                || metadata.target().starts_with(self.trace_prefix)
         }
 
         fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
@@ -1796,10 +1995,13 @@ mod tests {
         fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
 
         fn event(&self, event: &tracing::Event<'_>) {
-            if *event.metadata().level() == tracing::Level::WARN {
-                self.warnings
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
+            let mut message = Message(String::new());
+            event.record(&mut message);
+            self.events.lock().unwrap().push((
+                event.metadata().target().to_owned(),
+                *event.metadata().level(),
+                message.0,
+            ));
         }
 
         fn enter(&self, _span: &tracing::span::Id) {}
@@ -1807,29 +2009,134 @@ mod tests {
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
+    fn warnings(events: &std::sync::Mutex<Vec<(String, tracing::Level, String)>>) -> usize {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, level, _)| *level == tracing::Level::WARN)
+            .count()
+    }
+
     #[test]
     fn dave_warns_when_davey_trace_logging_would_record_key_material() {
         // tracing caches each callsite's interest globally, and a parallel
         // test without a subscriber may register these callsites as never
         // interesting. Register them here, then rebuild the cache under the
-        // counting subscriber below.
-        super::warn_if_davey_traces();
-        for trace in [true, false] {
-            let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let subscriber = WarningCounter {
-                trace,
-                warnings: std::sync::Arc::clone(&warnings),
-            };
-            let warned = tracing::subscriber::with_default(subscriber, || {
+        // recording subscriber below.
+        super::warn_if_davey_traces(false);
+        // Every davey module, one secret-logging module only (as with
+        // `davey::cryptor=trace,davey::session=info`), and none.
+        for (prefix, warns) in [
+            ("davey", true),
+            ("davey::cryptor", true),
+            ("nothing", false),
+        ] {
+            let (recorder, events) = Recorder::new(prefix);
+            let warned = tracing::subscriber::with_default(recorder, || {
                 tracing::callsite::rebuild_interest_cache();
-                // Starting a session checks too.
+                // Starting a session warns too (the check is made when the
+                // controller is set up, outside its filter).
                 controller(BOT).on_session_description(1);
-                super::warn_if_davey_traces()
+                super::warn_if_davey_traces(false)
             });
-            assert_eq!(warned, trace);
-            let expected = if trace { 2 } else { 0 };
-            assert_eq!(warnings.load(std::sync::atomic::Ordering::SeqCst), expected);
+            assert_eq!(warned, warns, "{prefix}");
+            assert_eq!(warnings(&events), if warns { 2 } else { 0 }, "{prefix}");
         }
+        assert!(super::is_davey_trace(&TRACE_IN_DAVEY));
+    }
+
+    /// Metadata for `is_davey_trace`: a trace event in a davey module.
+    static TRACE_IN_DAVEY: tracing::Metadata<'static> = tracing::Metadata::new(
+        "event",
+        "davey::session",
+        tracing::Level::TRACE,
+        None,
+        None,
+        None,
+        tracing::field::FieldSet::new(&[], tracing::callsite::Identifier(&TRACE_CALLSITE)),
+        tracing::metadata::Kind::EVENT,
+    );
+
+    struct TraceCallsite;
+
+    impl tracing::callsite::Callsite for TraceCallsite {
+        fn set_interest(&self, _interest: tracing::subscriber::Interest) {}
+
+        fn metadata(&self) -> &tracing::Metadata<'_> {
+            &TRACE_IN_DAVEY
+        }
+    }
+
+    static TRACE_CALLSITE: TraceCallsite = TraceCallsite;
+
+    /// davey writes key material at trace level from inside the MLS calls
+    /// the runtime makes. Called directly, a trace-level subscriber records
+    /// it; through the runtime's filter, none of davey's trace events reach
+    /// the subscriber, while its debug events and the runtime's own still do.
+    #[test]
+    fn dave_runtime_davey_calls_keep_key_material_out_of_the_log() {
+        let (recorder, events) = Recorder::new("");
+        tracing::subscriber::with_default(recorder, || {
+            tracing::callsite::rebuild_interest_cache();
+            let davey_trace = |events: &std::sync::Mutex<Vec<(String, tracing::Level, String)>>| {
+                events
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(target, level, _)| {
+                        target.starts_with("davey") && *level == tracing::Level::TRACE
+                    })
+                    .map(|(target, _, message)| format!("{target}: {message}"))
+                    .collect::<Vec<_>>()
+            };
+
+            // Unfiltered: davey's own calls log every member's secret.
+            established_call();
+            let leaked = davey_trace(&events);
+            assert!(
+                leaked
+                    .iter()
+                    .any(|line| line.starts_with("davey::session: Got base secret")),
+                "{leaked:?}"
+            );
+            events.lock().unwrap().clear();
+
+            // The runtime's way: every call that reaches davey is filtered.
+            let gateway = MockDaveGateway::new(CHANNEL);
+            let mut bot = controller(BOT);
+            bot.filtered(|bot| bot.on_session_description(1));
+            bot.filtered(|bot| bot.on_external_sender(gateway.external_sender()));
+            let mut peer = controller(PEER);
+            let peer_key_package =
+                key_package(&peer.filtered(|peer| peer.on_session_description(1)));
+            peer.filtered(|peer| peer.on_external_sender(gateway.external_sender()));
+            bot.on_clients_connect([test_id(PEER)]);
+            let proposals = gateway.add_proposal(&peer_key_package, 0);
+            let (commit, welcome) =
+                commit_welcome(&bot.filtered(|bot| bot.on_proposals(&proposals)));
+            bot.filtered(|bot| bot.on_announce_commit(&transition(7, &commit)));
+            peer.filtered(|peer| peer.on_welcome(&transition(7, &welcome.unwrap())));
+            bot.filtered(|bot| bot.on_execute_transition(7));
+            peer.filtered(|peer| peer.on_execute_transition(7));
+            let frame = encrypt(&mut bot, &OPUS);
+            let inbound = peer.filtered(|peer| peer.decrypt_inbound(user(BOT), frame));
+            assert_eq!(inbound.media, Some(OPUS.to_vec()));
+            assert!(peer
+                .filtered(|peer| peer.verification_code(test_id(BOT)))
+                .is_ok());
+
+            let recorded = events.lock().unwrap().clone();
+            assert_eq!(davey_trace(&events), Vec::<String>::new());
+            // Everything else still reaches the application's subscriber.
+            assert!(recorded
+                .iter()
+                .any(|(target, level, _)| target.starts_with("davey")
+                    && *level == tracing::Level::DEBUG));
+            assert!(recorded
+                .iter()
+                .any(|(target, _, _)| target.starts_with("discordrs")));
+        });
     }
 
     #[test]

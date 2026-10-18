@@ -241,10 +241,28 @@ openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이
   에포크별 송신 기반 비밀), `cryptor/hash_ratchet.rs:17`("Creating hash ratchet with secret"),
   `cryptor/mlspp_crypto.rs:74,89,91`(래칫 입력·유도 비밀, 세대별 키). debug 수준에는 키 재료가 없다
   (개인정보 코드, 제안 참조, 세대 번호뿐). 3.0.0의 `dave` 기능(`VoiceDaveySession`) 때부터 있던
-  문제다. 게시된 크레이트에서 의존성을 고칠 수 없으므로: 안내서(영·한), 진입점 rustdoc, CHANGELOG
-  "Security"에 `davey` 대상을 `info` 이하로 두라고 적고, 런타임과 `VoiceDaveySession::new`가 세션을
-  시작할 때 `tracing::enabled!(target: "davey::session", TRACE)`이면 경고를 남긴다. 런타임 자체 송신
-  키(5.1절)는 키를 로그에 쓰지 않는다. 아래는 상류 이슈 초안이다(제출하지 않음, 사용자 확인 후).
+  문제다. 게시된 크레이트에서 의존성을 고칠 수 없으므로 **완화**만 한다(수정이 아니다):
+  - 안내서(영·한), 진입점 rustdoc, CHANGELOG "Security"에 `davey` 대상을 `info` 이하로 두라고 적는다.
+  - 경고: 키를 쓰는 세 모듈(`davey::session`, `davey::cryptor::hash_ratchet`,
+    `davey::cryptor::mlspp_crypto`) 각각에 `tracing::enabled!`를 확인한다(첫 판은 `davey::session`
+    하나만 봐서 `davey::cryptor=trace,davey::session=info`를 놓쳤다). 확인은 컨트롤러를 만들 때 필터
+    밖에서 하고, 첫 davey 세션을 만들 때 경고한다. `VoiceDaveySession::new`도 경고한다.
+  - 필터(`DaveyTraceFilter`): 런타임이 davey를 부르는 모든 지점(세션 설명, 게이트웨이 메시지 처리,
+    수신 복호화, 검증 코드)을 범위 디스패처 아래에서 실행해, davey 대상의 trace 이벤트는 버리고
+    나머지는 세션을 만들 때의 기본 디스패처로 넘긴다. 콜사이트 관심도는 davey trace 콜사이트만
+    "never"로 답하고 나머지는 원래 디스패처의 답을 그대로 전한다. 최대 수준은 만들 때의
+    `LevelFilter::current()`로 답해 전역 최대를 올리지 않는다. 연결마다 디스패처를 한 번 등록한다.
+  - 다루지 못하는 것: 런타임 밖의 davey 호출(`VoiceDaveySession`, `session_mut`, davey 직접 호출),
+    그리고 `tracing` 디스패처가 하나도 없을 때 `tracing`의 `log` 대체 경로. 범위 디스패처를 설치하면
+    `dispatcher::has_been_set()`이 프로세스 전체에서 참이 되어 다른 크레이트의 `log` 대체 출력까지
+    꺼지므로, 디스패처가 없을 때는 필터를 설치하지 않는다(그 경로는 경고도 보지 못한다).
+  - 수신 복호화를 런타임 자체 구현으로 옮기는 안(송신처럼)은 하지 않았다. 가장 위험한 기반 비밀은
+    런타임이 반드시 부르는 MLS 처리(`process_commit`/`process_welcome` 안의 `update_ratchets`)가
+    모든 멤버에 대해 기록하므로, 자체 복호화로 없어지는 것은 세대별 유도 로그뿐이다. 그 대가로 davey
+    복호화기(세대 창, nonce 재사용 추적, 이전 래칫 만료)를 하나 더 갖게 된다. 필터는 MLS 경로까지
+    포함해 런타임의 모든 davey 호출을 덮으므로 그쪽을 택했다.
+  런타임 자체 송신 키(5.1절)는 키를 로그에 쓰지 않는다. 아래는 상류 이슈 초안이다(제출하지 않음,
+  사용자 확인 후).
 
   ```text
   Title: Trace-level logs contain media key secrets (MLS-exported sender secrets, ratchet keys)
