@@ -13,9 +13,12 @@
 //!
 //! Works in DAVE (end-to-end encrypted) channels, which is every voice
 //! channel except Stage channels: it connects with
-//! `connect_voice_runtime_with_options` and the channel ID, so the voice
-//! runtime joins the call's MLS group and the player's frames are encrypted
-//! before they leave. The player waits in `AutoPaused` until the runtime has
+//! `connect_voice_runtime_with_options` and the channel ID (what
+//! `Context::connect_voice_runtime_with_dave` does from the context's tracked
+//! voice state; this bot builds the configuration from its own voice events
+//! instead, so another member's voice update cannot replace the session), so
+//! the voice runtime joins the call's MLS group and the player's frames are
+//! encrypted before they leave. The player waits in `AutoPaused` until the runtime has
 //! a key in use, which needs another member in the channel.
 //!
 //! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a

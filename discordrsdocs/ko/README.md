@@ -53,7 +53,7 @@ discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
 
 ## DAVE 상태
 
-`voice` 기능은 Discord voice handshake, UDP/RTP transport, Opus frame 송수신, transport 암호화 처리, Opus PCM decode, 그리고 DAVE 종단 간 암호화를 제공합니다. Discord는 Stage가 아닌 모든 음성 채널에 DAVE를 요구하므로(닫힘 코드 4017), 음성 런타임이 MLS 그룹에 직접 참여해 `AudioPlayer`와 일반 송신 메서드의 프레임을 암호화하고 받은 프레임을 화자별로 복호화합니다. `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결하면 그렇게 동작하고(`Context::connect_voice_runtime`도 이 방식), 옵션 없는 `connect_voice_runtime`은 3.0.0처럼 DAVE를 호출자에게 맡깁니다. `dave` 기능은 `voice`의 별칭입니다. 받은 페이로드가 정확히 Opus 무음 프레임(`F8 FF FE`)이면 그대로 돌려줍니다. 런타임이 운영하는 DAVE 경로는 아직 실제 Discord에서 검증하지 않았습니다(2.0.0의 라이브 검증은 MLS를 손수 진행한 전환만 다룸). 자세한 내용은 [음성과 DAVE](api/voice.md)에 있습니다.
+`voice` 기능은 Discord voice handshake, UDP/RTP transport, Opus frame 송수신, transport 암호화 처리, Opus PCM decode, 그리고 DAVE 종단 간 암호화를 제공합니다. Discord는 Stage가 아닌 모든 음성 채널에 DAVE를 요구하므로(닫힘 코드 4017), 음성 런타임이 MLS 그룹에 직접 참여해 `AudioPlayer`와 일반 송신 메서드의 프레임을 암호화하고 받은 프레임을 화자별로 복호화합니다. `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결하면 그렇게 동작하고(`Context::connect_voice_runtime_with_dave`도 이 방식), 옵션 없는 `connect_voice_runtime`은 3.0.0처럼 DAVE를 호출자에게 맡깁니다. `dave` 기능은 `voice`의 별칭입니다. 받은 페이로드가 정확히 Opus 무음 프레임(`F8 FF FE`)이면 그대로 돌려줍니다. 런타임이 운영하는 DAVE 경로는 아직 실제 Discord에서 검증하지 않았습니다(2.0.0의 라이브 검증은 MLS를 손수 진행한 전환만 다룸). 자세한 내용은 [음성과 DAVE](api/voice.md)에 있습니다.
 
 ## 언어 전환
 

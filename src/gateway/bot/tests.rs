@@ -8339,3 +8339,99 @@ fn client_builder_identify_gate_reaches_the_connection_config() {
         super::Client::builder("token", Intents::from_bits(0)).identify_gate(Arc::new(NeverGate));
     assert!(builder.gateway_config.identify_gate_ref().is_some());
 }
+
+/// A context whose tracked voice state points at a mock voice gateway:
+/// guild 1, channel and user of the mock DAVE call.
+#[cfg(feature = "voice")]
+async fn context_in_mock_voice_call(endpoint: String) -> super::Context {
+    use crate::voice_runtime::test_call::{BOT, CHANNEL};
+
+    let context = super::Context::new(
+        Arc::new(DiscordHttpClient::new("token", None)),
+        Arc::new(RwLock::new(super::TypeMap::new())),
+    );
+    context
+        .connect_voice(VoiceConnectionConfig::new(test_id(1), test_id(CHANNEL)))
+        .await;
+    for event in [
+        Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
+                guild_id: Some(test_id(1)),
+                channel_id: Some(test_id(CHANNEL)),
+                user_id: Some(test_id(BOT)),
+                session_id: Some("session".to_string()),
+                ..VoiceState::default()
+            })),
+        ),
+        Event::from_kind(
+            "VOICE_SERVER_UPDATE",
+            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
+                guild_id: test_id(1),
+                token: "token".to_string(),
+                endpoint: Some(endpoint),
+            })),
+        ),
+    ] {
+        super::apply_voice_updates(&context.voice(), &event).await;
+    }
+    context
+}
+
+/// `Context::connect_voice_runtime` keeps 3.0.0's behaviour: no DAVE session
+/// of its own, so callers that drive MLS on its handle keep working.
+#[cfg(feature = "voice")]
+#[tokio::test]
+async fn context_connect_voice_runtime_leaves_dave_to_the_caller() {
+    use crate::voice_runtime::test_call::{DaveCall, BOT};
+
+    let mut call = DaveCall::with_connector(|endpoint| async move {
+        context_in_mock_voice_call(endpoint)
+            .await
+            .connect_voice_runtime(test_id(1), test_id(BOT))
+            .await
+            .unwrap()
+    })
+    .await;
+    assert_eq!(call.identify["d"]["max_dave_protocol_version"], 1);
+    assert!(call.handle.is_playable());
+    assert!(!call.handle.dave_status().ready);
+    let error = call
+        .handle
+        .send_opus_frame(&[0x78, 1], Duration::from_millis(20))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("not supported by send_opus_frame"),
+        "{error}"
+    );
+    // No key package went out on the caller's behalf: the first message the
+    // gateway sees is the caller's own.
+    call.handle
+        .set_speaking(crate::voice::VoiceSpeakingFlags::MICROPHONE, 0)
+        .unwrap();
+    assert_eq!(call.next_json().await["op"], 5);
+    call.close().await;
+}
+
+#[cfg(feature = "voice")]
+#[tokio::test]
+async fn context_connect_voice_runtime_with_dave_runs_the_session() {
+    use crate::voice_runtime::test_call::{expect_key_package, DaveCall, BOT};
+
+    let mut call = DaveCall::with_connector(|endpoint| async move {
+        context_in_mock_voice_call(endpoint)
+            .await
+            .connect_voice_runtime_with_dave(test_id(1), test_id(BOT))
+            .await
+            .unwrap()
+    })
+    .await;
+    let key_package = expect_key_package(call.next_binary().await);
+    assert!(!call.handle.is_playable());
+    call.welcome_runtime(&key_package, 5).await;
+    assert!(call.handle.dave_status().can_send_audio());
+    call.close().await;
+}

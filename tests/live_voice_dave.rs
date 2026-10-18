@@ -112,8 +112,8 @@ async fn live_voice_dave_plays_a_tone_and_decrypts_other_members() {
         "live DAVE validation was explicitly requested with --ignored but is not configured",
     );
 
-    // The entry point that runs DAVE (the one `Context::connect_voice_runtime`
-    // uses), with the default configuration otherwise.
+    // The entry point that runs DAVE (the one
+    // `Context::connect_voice_runtime_with_dave` uses), with the default configuration otherwise.
     let handle = Arc::new(
         connect_voice_runtime_with_options(
             VoiceRuntimeConfig::new(

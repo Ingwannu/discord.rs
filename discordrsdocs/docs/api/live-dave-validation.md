@@ -2,7 +2,7 @@
 
 `tests/live_voice_dave.rs` is the release gate for claiming live DAVE/MLS interoperability. It is ignored by default because it requires a real Discord voice session and secret voice credentials.
 
-It exercises the default path: `connect_voice_runtime_with_options` with the channel ID (what `Context::connect_voice_runtime` uses), the runtime's own MLS session, a tone played through `AudioPlayer` (needs `voice-encode`), and `recv_voice_packet` decrypting what another member says.
+It exercises the default path: `connect_voice_runtime_with_options` with the channel ID (what `Context::connect_voice_runtime_with_dave` uses), the runtime's own MLS session, a tone played through `AudioPlayer` (needs `voice-encode`), and `recv_voice_packet` decrypting what another member says.
 
 Do not treat a normal `cargo test --all-features` run as live DAVE validation. The ignored test intentionally fails fast when required values are missing.
 

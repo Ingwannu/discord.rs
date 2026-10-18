@@ -235,8 +235,9 @@ impl VoiceRuntimeConfig {
 ///   key package goes out right after SESSION_DESCRIPTION); (3) a new entry
 ///   point with its own options type.
 /// - Chosen: (3). `connect` keeps 3.0.0's behaviour; `connect_with_options`
-///   runs DAVE; `Context::connect_voice_runtime`, which knows the channel,
-///   uses the new one.
+///   runs DAVE; `Context::connect_voice_runtime_with_dave`, which knows the
+///   channel, uses the new one (`Context::connect_voice_runtime` stays as in
+///   3.0.0, since its callers may drive MLS themselves).
 /// - Trade-offs: two entry points to document; the options type is
 ///   `#[non_exhaustive]` with a constructor, so it can grow without another
 ///   one.
@@ -1818,7 +1819,8 @@ impl VoiceRuntimeHandle {
 /// [`VoiceDaveState`] mirror, and the `*_with_dave` methods.
 ///
 /// Use [`connect_with_options`] (`connect_voice_runtime_with_options`) to
-/// have the runtime run DAVE; `Context::connect_voice_runtime` does.
+/// have the runtime run DAVE; `Context::connect_voice_runtime_with_dave`
+/// does.
 ///
 /// # Errors
 ///
@@ -2462,7 +2464,8 @@ impl Handshake {
                 message.push_str(
                     ". connect_voice_runtime leaves DAVE to the caller; connect with \
                      connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id)) \
-                     (as Context::connect_voice_runtime does) to have the runtime run it",
+                     (as Context::connect_voice_runtime_with_dave does) to have the runtime \
+                     run it",
                 );
             }
         }
@@ -4553,6 +4556,32 @@ pub(crate) mod test_call {
             runtime_dave: bool,
             configure: impl FnOnce(VoiceRuntimeConfig) -> VoiceRuntimeConfig,
         ) -> Self {
+            Self::with_connector(|endpoint| async move {
+                let config = configure(VoiceRuntimeConfig::new(
+                    test_id(1),
+                    test_id(BOT),
+                    "session",
+                    "token",
+                    endpoint,
+                ));
+                if runtime_dave {
+                    connect_with_options(config, VoiceConnectOptions::new(test_id(CHANNEL))).await
+                } else {
+                    connect(config).await
+                }
+                .unwrap()
+            })
+            .await
+        }
+
+        /// Runs the mock call and connects to it with `connect_to`, which
+        /// gets the voice endpoint (guild 1, user [`BOT`], channel
+        /// [`CHANNEL`], session `session`, token `token`).
+        pub(crate) async fn with_connector<F, Fut>(connect_to: F) -> Self
+        where
+            F: FnOnce(String) -> Fut,
+            Fut: std::future::Future<Output = VoiceRuntimeHandle>,
+        {
             let gateway = MockDaveGateway::new(CHANNEL);
             let external_sender = gateway.external_sender().to_vec();
             let media = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
@@ -4645,19 +4674,7 @@ pub(crate) mod test_call {
                 }
             });
 
-            let config = configure(VoiceRuntimeConfig::new(
-                test_id(1),
-                test_id(BOT),
-                "session",
-                "token",
-                format!("ws://127.0.0.1:{ws_port}"),
-            ));
-            let handle = if runtime_dave {
-                connect_with_options(config, VoiceConnectOptions::new(test_id(CHANNEL))).await
-            } else {
-                connect(config).await
-            }
-            .unwrap();
+            let handle = connect_to(format!("ws://127.0.0.1:{ws_port}")).await;
             let mut client = handle.udp_socket().local_addr().unwrap();
             client.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
 

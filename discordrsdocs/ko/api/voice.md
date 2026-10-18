@@ -25,8 +25,9 @@ DAVE가 선택 사항이 아니게 된 이유는 아래 [DAVE](#dave-종단-간-
    순서는 정해져 있지 않습니다.
 3. **`connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.**
    그러면 런타임이 DAVE를 직접 운영합니다. DAVE가 채널을 MLS 그룹 id로 쓰기 때문에 채널이 필요합니다.
-   `Context::connect_voice_runtime`은 이 방식으로 연결하고, `VoiceManager::runtime_options(guild_id)`가
-   옵션을 만들어 줍니다. 옵션 없는 `connect_voice_runtime(config)`은 3.0.0과 같이 DAVE를 호출자에게
+   게이트웨이 봇에서는 `Context::connect_voice_runtime_with_dave(guild_id, user_id)`가 추적한 음성 상태로 이렇게 연결하고,
+   `VoiceManager::runtime_options(guild_id)`가 옵션을 만들어 줍니다. 3.0.0의
+   `Context::connect_voice_runtime`은 그대로입니다. 옵션 없는 `connect_voice_runtime(config)`은 3.0.0과 같이 DAVE를 호출자에게
    맡깁니다(아래 참고).
 4. `AudioPlayer`로 재생하거나 Opus 프레임을 직접 보내고, `recv_voice_packet*`로 받습니다.
 
@@ -118,9 +119,10 @@ async fn receive(handle: &VoiceRuntimeHandle) -> Result<(), discordrs::DiscordEr
 Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https://daveprotocol.com/)(MLS 기반
 종단 간 암호화)를 요구하고, 지원하지 않는 클라이언트를 닫힘 코드 4017로 거절합니다.
 `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결한 런타임은
-(`Context::connect_voice_runtime`이 이렇게 연결) @discordjs/voice·Songbird처럼 DAVE를 직접 운영합니다.
+(`Context::connect_voice_runtime_with_dave`가 이렇게 연결) @discordjs/voice·Songbird처럼 DAVE를 직접 운영합니다.
 음성 게이트웨이는 세션이 어느 채널인지 알려 주지 않으므로 채널(MLS 그룹)을 옵션으로 받습니다. 옵션 없는
-`connect_voice_runtime(config)`은 이 절 끝에 적은 3.0.0 동작을 그대로 유지합니다.
+`connect_voice_runtime(config)`과 `Context::connect_voice_runtime`은 이 절 끝에 적은 3.0.0 동작을 그대로
+유지합니다.
 
 - **참여.** IDENTIFY에 `max_dave_protocol_version`을 광고합니다(기본 1, 최대 1). SESSION_DESCRIPTION이
   DAVE를 정하면 MLS 키 패키지를 보내고, 게이트웨이의 외부 발신자를 적용하고, 새로 들어온 멤버의 제안을
@@ -182,7 +184,7 @@ fn describe(handle: &VoiceRuntimeHandle) {
 `AudioPlayer`는 아무 소리도 내지 못했습니다(프레임마다 경고만 남김). 깨지는 변경은 없습니다.
 `connect_voice_runtime(config)`을 쓰는 코드는 전과 같이 동작합니다. DAVE 채널에서 소리를 내려면
 `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.
-`Context::connect_voice_runtime`을 쓰는 코드는 그대로 두어도 됩니다.
+게이트웨이 봇이라면 `Context::connect_voice_runtime` 대신 `Context::connect_voice_runtime_with_dave`를 씁니다.
 
 **한계.** `davey` 0.1.x는 웰컴에 담긴 사용자 목록을 통화 멤버와 아직 대조하지 않습니다(상류의 TODO).
 커밋과 제안은 대조합니다. 런타임의 프레임 카운터는 MLS 에포크 하나에 2^32 - 1프레임(연속 오디오로 약

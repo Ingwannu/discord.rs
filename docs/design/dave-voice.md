@@ -173,9 +173,11 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 - `connect(config)`는 3.0.0 동작을 그대로 지킨다: 설정한 버전을 광고하고, DAVE 세션을 운영하지 않고,
   일반 송수신은 DAVE 세션에서 3.0.0과 같은 오류를 내고, `VoiceDaveySession`·`send_dave_*`로 MLS를
   손수 진행할 수 있다. `is_playable()`은 늘 `true`라서 `AudioPlayer`도 3.0.0처럼 동작한다.
-- 채널을 이미 아는 고수준 경로 `Context::connect_voice_runtime`은 새 진입점을 쓴다. 기본 경험이
-  동작하게 하려는 의도이며, 이 메서드의 DAVE 동작은 바뀐다(3.0.0에서는 DAVE 채널에서 소리가 나지
-  않았다).
+- 채널을 이미 아는 고수준 경로에는 새 메서드 `Context::connect_voice_runtime_with_dave`를 더한다. 첫 판은
+  `Context::connect_voice_runtime` 자체를 새 진입점으로 바꿨으나, 그 핸들에서 MLS를 손수 진행하던
+  3.0.0 사용자는 한 연결에 키가 다른 세션 둘을 갖게 되어(웰컴 실패, 재합류 반복) 깨진다(2차 리뷰).
+  그래서 `Context::connect_voice_runtime`은 3.0.0 그대로 두고, 예제·안내서·라이브 테스트는 새 메서드를
+  가리킨다.
 
 나머지 추가는 모두 하위 호환이다: `VoiceDaveStatus`(non_exhaustive), `VoiceRuntimeHandle::{dave_status,
 subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}`, 기본 구현이 있는
@@ -256,7 +258,7 @@ openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이
   버리는 평문을 SFU에 노출하고 트랙 앞부분이 사라진다. (b)는 discord.js의 `playable` 의미와 같고
   혼자 있는 채널에서는 아무도 듣지 않으므로 기다리는 편이 맞다. (i)은 망라형 열거형을 깨므로 3.x에서
   불가하다.
-- 장점, 단점 및 영향 (Pros, cons, and impact): `Context::connect_voice_runtime`과 새 진입점이 DAVE
+- 장점, 단점 및 영향 (Pros, cons, and impact): `Context::connect_voice_runtime_with_dave`와 `connect_with_options`가 DAVE
   채널에서 동작하고 E2EE가 유지되며, 3.0.0 코드는 그대로 컴파일·동작한다(3.1.0 가능). 단점: `voice`
   빌드가 무거워지고, 진입점이 둘이라 문서로 구분해야 하며, 새 경로에서 `NoSubscriberBehavior::Stop`은
   DAVE 키 전 구독을 "없음"으로 보아 트랙을 멈춘다(문서화, `wait_until_playable`). 송신 키 유도와 Opus

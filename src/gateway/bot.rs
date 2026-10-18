@@ -40,7 +40,8 @@ use crate::types::invalid_data_error;
 use crate::voice::{AudioTrack, VoiceConnectionConfig, VoiceConnectionState, VoiceManager};
 #[cfg(feature = "voice")]
 use crate::voice_runtime::{
-    connect_with_options as connect_voice_runtime_impl, VoiceRuntimeConfig, VoiceRuntimeHandle,
+    connect as connect_voice_runtime_impl, connect_with_options as connect_voice_runtime_with_dave,
+    VoiceRuntimeConfig, VoiceRuntimeHandle,
 };
 use crate::ws::GatewayConnectionConfig;
 
@@ -623,16 +624,62 @@ impl Context {
     }
 
     /// Connects the voice runtime for `guild_id` from the voice state this
-    /// context tracked (session ID, token, endpoint, and channel), with the
-    /// runtime running DAVE end-to-end encryption itself
-    /// (`connect_voice_runtime_with_options`): Discord requires DAVE in every
-    /// voice channel except Stage channels.
+    /// context tracked, leaving DAVE end-to-end encryption to the caller, as
+    /// in 3.0.0 (`connect_voice_runtime`).
     ///
-    /// `user_id` must be the bot's own user. The voice state is recorded for
-    /// any member of the guild, so filter VOICE_STATE_UPDATE by the bot's
-    /// user before relying on it.
+    /// In a DAVE call (every voice channel except Stage channels) the
+    /// handle's plain sends and receives refuse it; audio needs your own MLS
+    /// handling. Use [`Context::connect_voice_runtime_with_dave`] to have the
+    /// runtime run DAVE.
     #[cfg(feature = "voice")]
     pub async fn connect_voice_runtime(
+        &self,
+        guild_id: GuildId,
+        user_id: UserId,
+    ) -> Result<VoiceRuntimeHandle, DiscordError> {
+        let config = self
+            .voice_runtime_config(guild_id, user_id)
+            .await
+            .ok_or_else(|| {
+                invalid_data_error("voice runtime requires endpoint, session_id, and token")
+            })?;
+        connect_voice_runtime_impl(config).await
+    }
+
+    /// Connects the voice runtime for `guild_id` from the voice state this
+    /// context tracked (session ID, token, endpoint, and channel), with the
+    /// runtime running DAVE end-to-end encryption itself
+    /// (`connect_voice_runtime_with_options`). Discord requires DAVE in
+    /// every voice channel except Stage channels, so this is the method to
+    /// use for audio there: an `AudioPlayer` subscribed to the handle and its
+    /// plain send and receive methods encrypt and decrypt on their own.
+    ///
+    /// Do not drive MLS by hand (`VoiceDaveySession`, `send_dave_*`) on the
+    /// returned handle: the runtime sends its own key package.
+    ///
+    /// Keep the `davey` crate's trace logging off: at trace level it writes
+    /// DAVE media key secrets to the log (see `connect_voice_runtime_with_options`).
+    ///
+    /// `user_id` must be the bot's own user. The tracked state is updated by
+    /// every VOICE_STATE_UPDATE of the guild, other members' included, so
+    /// call this right after the bot's own VOICE_STATE_UPDATE and
+    /// VOICE_SERVER_UPDATE, or build the configuration from those events and
+    /// call `connect_voice_runtime_with_options` yourself, as
+    /// `examples/music_bot.rs` does.
+    ///
+    /// [Decision Log]
+    /// - Purpose: one call that gives a working voice handle in DAVE
+    ///   channels, from the state the context already tracks.
+    /// - Constraint: `connect_voice_runtime` existed in 3.0.0, and callers
+    ///   may drive MLS themselves on its handle; giving it a runtime session
+    ///   would put two sessions with different keys on one connection.
+    /// - Alternatives: change `connect_voice_runtime` (breaks those callers);
+    ///   a flag argument (changes its signature); a second method.
+    /// - Chosen: a second method, named after what it adds.
+    /// - Trade-offs: two similar methods; the docs and examples point to this
+    ///   one.
+    #[cfg(feature = "voice")]
+    pub async fn connect_voice_runtime_with_dave(
         &self,
         guild_id: GuildId,
         user_id: UserId,
@@ -649,7 +696,7 @@ impl Context {
                 "voice runtime requires endpoint, session_id, and token",
             ));
         };
-        connect_voice_runtime_impl(config, options).await
+        connect_voice_runtime_with_dave(config, options).await
     }
 
     /// The runtime's collector hub. Collectors created from it directly
