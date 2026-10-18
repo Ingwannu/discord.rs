@@ -38,6 +38,7 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 - `DaveController`는 네트워크를 모르는 동기 상태 기계다. 게이트웨이 이벤트를 받아 보낼 명령
   목록을 돌려주고, 송신 프레임을 암호화하고, 수신 프레임을 사용자별로 복호화한다. 그래서 MLS
   전환 시나리오를 소켓 없이 단위 테스트할 수 있다.
+- MLS와 수신 복호화는 `davey::DaveSession`이 하고, **송신 키는 런타임이 따로 가진다**(5.1절).
 - 잠금은 std `Mutex`다. MLS 처리와 프레임 암복호화는 모두 동기 계산이고 `.await`를 가로지르지
   않는다(`await_holding_lock` 린트로 강제). 송신 경로는 RTP tokio 잠금을 잡은 채 DAVE 잠금을
   잠깐 잡는다(순서: RTP → DAVE, 다른 곳은 DAVE만 잡으므로 교착 없음). DAVE 프레임 nonce가
@@ -94,13 +95,34 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 |---|---|
 | Opus 무음 프레임 `F8 FF FE` | 그대로 보냄(명세 "Silence packets", discord.js `encrypt`) |
 | `protocol_version == 0` | 그대로 보냄(전송 암호화만, Stage·다운그레이드) |
-| 세션 준비됨(키 있음) | `davey` `encrypt_opus` 후 전송 암호화 |
-| 준비 안 됨, `active_version == 0`(0 → 1 업그레이드 진행 중) | 그대로 보냄. 명세: 송신자는 전환이 실행될 때까지 이전 에포크(여기서는 패스스루)를 쓴다 |
-| 준비 안 됨, `active_version > 0`(E2EE 통화에 새로 들어옴, 재초기화 중, 혼자 남음) | **보내지 않고 오류**. 아무것도 소비하지 않음(RTP 순번·타임스탬프·전송 nonce) |
+| 실행된 전환의 송신 키가 있음 | 그 키로 DAVE 암호화(5.1절) 후 전송 암호화 |
+| 송신 키 없음, `active_version == 0`(0 → 1 업그레이드가 아직 실행 전) | 그대로 보냄. 명세: 송신자는 전환이 실행될 때까지 이전 에포크(여기서는 패스스루)를 쓴다 |
+| 송신 키 없음, `active_version > 0`(E2EE 통화에 새로 들어와 실행 전, 재초기화 중, 혼자 남음) | **보내지 않고 오류**. 아무것도 소비하지 않음(RTP 순번·타임스탬프·전송 nonce) |
 
 마지막 줄이 discord.js·Songbird와 다르다. 둘은 키가 없으면 평문을 보내지만 상대는 그 평문을
 버리고(패스스루 창이 닫혀 있음) SFU는 E2EE 통화의 평문을 보게 된다. libdave(공식 클라이언트)의
 암호화기도 키가 없으면 실패한다.
+
+### 5.1 송신 키는 EXECUTE에서 바뀐다
+
+명세("Group Transitions")는 송신자가 전환이 실행될 때까지 이전 에포크의 키로 보내라고 한다. 커밋을
+아직 처리하지 않은 멤버는 이전 키만 갖고 있기 때문이다. 그런데 `davey`의 `process_commit`/
+`process_welcome`은 내부 `update_ratchets()`에서 세션 안의 암호화기 키를 즉시 새 에포크로 바꾸고,
+이를 미루거나 이전 키를 꺼낼 API가 없다(0.1.5 기준). libdave는 암호화기를 세션과 분리해
+(`Encryptor::SetKeyRatchet`) 전환 시점을 호출자에게 맡긴다.
+
+그래서 런타임은 송신 키를 직접 가진다(`SenderKey`). 커밋·웰컴을 처리한 직후 `davey`의 MLS 그룹에서
+그 에포크의 송신 비밀을 `export_secret("Discord Secure Frames v0", user_id(LE), 16)`으로 꺼내
+(`davey`가 자기 암호화기에 쓰는 것과 같은 호출) 대기 전환 id에 묶어 두고, EXECUTE가 오면 그것으로
+바꾼다. 전환 0은 즉시 바꾼다. 키 래칫(MLS++식 `DeriveTreeSecret`, HKDF-SHA256)과 Opus 프레임
+암호화(전체 암호화, AES-128-GCM 8바이트 태그, ULEB128 nonce, 꼬리 표식)는 `davey`·libdave와 같은
+방식으로 직접 쓴다. 수신은 계속 `davey` 복호화기가 하며, 이전 에포크 키를 10초 동안 유지한다.
+
+검증: 같은 에포크의 첫 프레임이 `davey` 자체 암호화기 출력과 바이트 단위로 같고, 래칫이 `davey`의
+테스트 벡터를 재현하며, 세 멤버 테스트에서 커밋을 먼저 처리한 멤버의 프레임을 아직 처리하지 않은
+멤버가 복호화한다. 프레임 카운터는 검사하므로 한 에포크에 2^32 - 1프레임(약 2.7년)을 넘기면 nonce를
+재사용하는 대신 오류를 낸다(`davey` 자체 암호화기는 여기서 `u32 += 1`로 넘쳐 디버그 빌드에서
+패닉하지만 런타임은 그 경로를 쓰지 않는다).
 
 **재생기.** `VoiceFrameSink`에 기본 구현이 있는 `is_playable()`을 더한다(기본 `true`).
 `VoiceRuntimeHandle`은 "런타임 태스크가 살아 있고 지금 오디오를 보낼 수 있다"를 돌려준다.

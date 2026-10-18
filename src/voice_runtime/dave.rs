@@ -13,9 +13,15 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroU16;
 
+use davey::aead::consts::{U12, U8};
+use davey::aead::generic_array::GenericArray;
+use davey::{AeadInPlace, KeyInit};
+use hmac::{Hmac, Mac};
+use openmls_rust_crypto::RustCrypto;
+use sha2::Sha256;
 use tokio::sync::watch;
 
-use super::DAVE_MAGIC_MARKER;
+use super::{DAVE_AUTH_TAG_LEN, DAVE_FOOTER_LEN, DAVE_MAGIC_MARKER};
 use crate::error::DiscordError;
 use crate::model::{ChannelId, UserId};
 use crate::voice::player::OPUS_SILENCE_FRAME;
@@ -55,6 +61,28 @@ const DECRYPTION_FAILURE_TOLERANCE: u32 = 36;
 /// `dave_mls_proposals` operation types (DAVE protocol, opcode 27).
 const PROPOSALS_APPEND: u8 = 0;
 const PROPOSALS_REVOKE: u8 = 1;
+
+/// The MLS exporter label each member's media key derives from, with the
+/// member's user ID (little-endian) as context (DAVE protocol, "Sender Key
+/// Derivation"; davey `USER_MEDIA_KEY_BASE_LABEL`).
+const SENDER_KEY_LABEL: &str = "Discord Secure Frames v0";
+/// AES-128-GCM key length, which is also the exported secret's length.
+const SENDER_KEY_LEN: usize = 16;
+/// Length of the ratchet's chaining secret: the SHA-256 output length of
+/// DAVE v1's ciphersuite.
+const RATCHET_SECRET_LEN: usize = 32;
+/// The 32-bit truncated frame nonce carries the key generation in its top
+/// byte (DAVE protocol, "Frame Encryption"; davey
+/// `RATCHET_GENERATION_SHIFT_BITS`).
+const GENERATION_SHIFT: u32 = 24;
+/// The AES-GCM nonce is 12 bytes: zeros, then the truncated nonce
+/// little-endian in the last four.
+const FRAME_NONCE_LEN: usize = 12;
+const FRAME_NONCE_OFFSET: usize = FRAME_NONCE_LEN - 4;
+
+/// DAVE frame encryption: AES-128-GCM with the tag truncated to 8 bytes,
+/// from davey's public truncated-tag AES-GCM.
+type FrameCipher = davey::AesGcm<davey::aes::Aes128, U12, U8>;
 
 /// What the voice runtime's DAVE layer is doing, from
 /// [`VoiceRuntimeHandle::dave_status`](crate::VoiceRuntimeHandle::dave_status).
@@ -140,6 +168,208 @@ fn dave_error(message: impl Into<String>) -> DiscordError {
     DiscordError::voice(message)
 }
 
+/// This member's sending key for one MLS epoch: DAVE's hash ratchet over
+/// the exported secret, and the frame counter.
+///
+/// [Decision Log]
+/// - Purpose: frames must keep the previous epoch's key until the
+///   transition executes (DAVE protocol, "Group Transitions": "media senders
+///   will continue to use key ratchets from the previous epoch until the
+///   transition is executed"); members that have not processed the commit
+///   yet can only decrypt that.
+/// - Constraint: `davey::DaveSession::process_commit` / `process_welcome`
+///   replace the session's internal encryptor key at once
+///   (`update_ratchets`), and davey has no API to defer that or to keep the
+///   old key. libdave keeps the encryptor separate (`Encryptor::
+///   SetKeyRatchet`) and leaves the switch to its caller.
+/// - Alternatives: (1) process commits only on execute: receive keys come
+///   late, and `transition_ready` would go out before the commit was
+///   validated; (2) stop sending between commit and execute: audio stalls
+///   whenever someone joins or leaves; (3) keep our own sending key, derived
+///   the way davey and libdave derive it, and switch it on execute.
+/// - Chosen: (3). After each commit or welcome the runtime exports the new
+///   epoch's secret from davey's MLS group (the same `export_secret` call
+///   davey makes) and keeps it until the transition executes; frames are
+///   encrypted here. davey still runs MLS and decryption, whose decryptors
+///   keep the previous epoch's keys for ten seconds.
+/// - Trade-offs: about a hundred lines of key derivation and Opus frame
+///   encryption mirror davey's; a test checks them byte for byte against
+///   davey's own encryptor and against davey's ratchet test vector. Only Opus
+///   is handled (it is encrypted whole: no unencrypted ranges). The counter
+///   is checked, so after 2^32 - 1 frames in one epoch (about 2.7 years of
+///   audio) sends fail instead of reusing a nonce; davey's own encryptor
+///   would overflow there (a panic in debug builds).
+struct SenderKey {
+    /// The ratchet secret for `next_generation`.
+    next_secret: Vec<u8>,
+    next_generation: u32,
+    /// The cipher for one generation, derived when first needed.
+    cipher: Option<(u32, FrameCipher)>,
+    /// The last truncated nonce used. Frames use 1, 2, ..., as davey's and
+    /// libdave's encryptors do.
+    nonce: u32,
+}
+
+impl SenderKey {
+    fn new(secret: Vec<u8>) -> Self {
+        Self {
+            next_secret: secret,
+            next_generation: 0,
+            cipher: None,
+            nonce: 0,
+        }
+    }
+
+    /// Encrypts an Opus frame into a DAVE frame: ciphertext, 8-byte tag,
+    /// ULEB128 nonce, supplemental size, magic marker (DAVE protocol, "Frame
+    /// Format").
+    fn encrypt_opus(&mut self, opus_frame: &[u8]) -> Result<Vec<u8>, DiscordError> {
+        let nonce = self.nonce.checked_add(1).ok_or_else(|| {
+            dave_error(
+                "this epoch's DAVE frame counter is used up (2^32 - 1 frames); it starts over \
+                 with the next MLS epoch",
+            )
+        })?;
+        // Used up before encrypting, so a nonce is never used twice even if
+        // this attempt fails.
+        self.nonce = nonce;
+        let cipher = self.cipher(nonce >> GENERATION_SHIFT)?;
+        let mut frame_nonce = [0_u8; FRAME_NONCE_LEN];
+        frame_nonce[FRAME_NONCE_OFFSET..].copy_from_slice(&nonce.to_le_bytes());
+
+        let mut frame = Vec::with_capacity(opus_frame.len() + 16);
+        frame.extend_from_slice(opus_frame);
+        let tag = cipher
+            .encrypt_in_place_detached(GenericArray::from_slice(&frame_nonce), &[], &mut frame)
+            .map_err(|_| dave_error("DAVE could not encrypt an Opus frame"))?;
+        frame.extend_from_slice(&tag);
+        let nonce_len = write_uleb128(u64::from(nonce), &mut frame);
+        let supplemental = u8::try_from(DAVE_AUTH_TAG_LEN + nonce_len + DAVE_FOOTER_LEN)
+            .map_err(|_| dave_error("DAVE supplemental data does not fit its size byte"))?;
+        frame.push(supplemental);
+        frame.extend_from_slice(&DAVE_MAGIC_MARKER);
+        Ok(frame)
+    }
+
+    /// The cipher for `generation`, advancing the ratchet to it. Generations
+    /// only grow, since the nonce only grows.
+    fn cipher(&mut self, generation: u32) -> Result<&FrameCipher, DiscordError> {
+        if self
+            .cipher
+            .as_ref()
+            .is_none_or(|(current, _)| *current != generation)
+        {
+            let mut key = None;
+            while self.next_generation <= generation {
+                let current = self.next_generation;
+                let derived =
+                    derive_tree_secret(&self.next_secret, "key", current, SENDER_KEY_LEN)?;
+                self.next_secret =
+                    derive_tree_secret(&self.next_secret, "secret", current, RATCHET_SECRET_LEN)?;
+                self.next_generation = current.saturating_add(1);
+                if current == generation {
+                    key = Some(derived);
+                }
+            }
+            let key = key.ok_or_else(|| dave_error("DAVE key generation went backwards"))?;
+            let cipher = FrameCipher::new_from_slice(&key)
+                .map_err(|_| dave_error("invalid DAVE frame key length"))?;
+            self.cipher = Some((generation, cipher));
+        }
+        self.cipher
+            .as_ref()
+            .map(|(_, cipher)| cipher)
+            .ok_or_else(|| dave_error("no DAVE frame cipher"))
+    }
+}
+
+/// Exports `user_id`'s sending secret for the epoch `session`'s MLS group is
+/// in, as davey does for its own encryptor and decryptors.
+fn export_sender_secret(session: &davey::DaveSession, user_id: u64) -> Result<Vec<u8>, String> {
+    let group = session.group().ok_or("the DAVE session has no MLS group")?;
+    group
+        .export_secret(
+            &RustCrypto::default(),
+            SENDER_KEY_LABEL,
+            &user_id.to_le_bytes(),
+            SENDER_KEY_LEN,
+        )
+        .map_err(|error| format!("could not export the DAVE sender secret: {error}"))
+}
+
+/// MLS `DeriveTreeSecret` (RFC 9420 §8): `ExpandWithLabel(secret, label,
+/// generation, length)` with HKDF-SHA256, as MLS++ computes it for DAVE's
+/// sender ratchet (davey `mlspp_crypto`, libdave).
+///
+/// Written out because OpenMLS's HKDF refuses the 16-byte exported secret as
+/// a pseudorandom key, which MLS++ accepts.
+fn derive_tree_secret(
+    secret: &[u8],
+    label: &str,
+    generation: u32,
+    length: usize,
+) -> Result<Vec<u8>, DiscordError> {
+    // KDFLabel { uint16 length; opaque label<V>; opaque context<V> }, with
+    // the "MLS 1.0 " label prefix and the generation as the context.
+    let label = format!("MLS 1.0 {label}");
+    let mut info = Vec::with_capacity(2 + 1 + label.len() + 1 + 4);
+    let length_field =
+        u16::try_from(length).map_err(|_| dave_error("DAVE derived key is too long"))?;
+    info.extend_from_slice(&length_field.to_be_bytes());
+    push_short_vl_bytes(&mut info, label.as_bytes())?;
+    push_short_vl_bytes(&mut info, &generation.to_be_bytes())?;
+    hkdf_expand_sha256(secret, &info, length)
+}
+
+/// Appends `bytes` as an MLS variable-length vector. Only the one-byte
+/// length form (under 64 bytes, RFC 9420 §2.1.2) is needed for the fixed
+/// labels and contexts here.
+fn push_short_vl_bytes(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), DiscordError> {
+    let len = u8::try_from(bytes.len())
+        .ok()
+        .filter(|len| *len < 64)
+        .ok_or_else(|| dave_error("DAVE key label is too long"))?;
+    out.push(len);
+    out.extend_from_slice(bytes);
+    Ok(())
+}
+
+/// HKDF-Expand (RFC 5869 §2.3) with HMAC-SHA256.
+fn hkdf_expand_sha256(prk: &[u8], info: &[u8], length: usize) -> Result<Vec<u8>, DiscordError> {
+    let mut okm = Vec::with_capacity(length + 32);
+    let mut previous: Vec<u8> = Vec::new();
+    let mut counter: u8 = 0;
+    while okm.len() < length {
+        counter = counter
+            .checked_add(1)
+            .ok_or_else(|| dave_error("DAVE derived key is too long"))?;
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(prk)
+            .map_err(|_| dave_error("invalid DAVE ratchet secret"))?;
+        mac.update(&previous);
+        mac.update(info);
+        mac.update(&[counter]);
+        previous = mac.finalize().into_bytes().to_vec();
+        okm.extend_from_slice(&previous);
+    }
+    okm.truncate(length);
+    Ok(okm)
+}
+
+/// Appends `value` as unsigned LEB128 and returns how many bytes it took.
+fn write_uleb128(mut value: u64, out: &mut Vec<u8>) -> usize {
+    let mut written = 0;
+    loop {
+        let low = value.to_le_bytes()[0] & 0x7f;
+        value >>= 7;
+        written += 1;
+        if value == 0 {
+            out.push(low);
+            return written;
+        }
+        out.push(low | 0x80);
+    }
+}
+
 /// The runtime's DAVE state for one voice connection.
 ///
 /// Mirrors discord.js `DAVESession` (transitions, recovery, decryption
@@ -163,6 +393,11 @@ pub(crate) struct DaveController {
     /// unencrypted frames while the new group forms.
     active_version: u16,
     session: Option<davey::DaveSession>,
+    /// The key frames are sent with: the last executed epoch's.
+    send_key: Option<SenderKey>,
+    /// Sending secrets of epochs whose commit or welcome was processed,
+    /// activated when their transition executes.
+    pending_send_keys: HashMap<u64, Vec<u8>>,
     /// The latest external sender package, applied again to a session that
     /// is created after it arrived (a call upgraded from version 0).
     external_sender: Option<Vec<u8>>,
@@ -189,6 +424,7 @@ impl fmt::Debug for DaveController {
             .field("protocol_version", &self.protocol_version)
             .field("active_version", &self.active_version)
             .field("has_session", &self.session.is_some())
+            .field("has_send_key", &self.send_key.is_some())
             .field("pending_transitions", &self.pending_transitions.len())
             .field("last_transition_id", &self.last_transition_id)
             .finish_non_exhaustive()
@@ -221,6 +457,8 @@ impl DaveController {
             protocol_version: 0,
             active_version: 0,
             session: None,
+            send_key: None,
+            pending_send_keys: HashMap::new(),
             external_sender: None,
             pending_transitions: HashMap::new(),
             last_transition_id: None,
@@ -305,6 +543,13 @@ impl DaveController {
         let previous = self.active_version;
         self.protocol_version = version;
         self.active_version = version;
+        // Senders switch keys here, not when the commit was processed.
+        let new_key = self.pending_send_keys.remove(&transition_id);
+        if version == 0 {
+            self.send_key = None;
+        } else if let Some(secret) = new_key {
+            self.send_key = Some(SenderKey::new(secret));
+        }
         if previous == 0 && version > 0 {
             // The upgrade is done: peers encrypt from now on. Unencrypted
             // frames already in flight are accepted for the expiry, then
@@ -443,6 +688,19 @@ impl DaveController {
             return self.recover(transition_id);
         }
         tracing::debug!(%kind, transition_id, "DAVE: MLS message processed");
+        let secret = self
+            .session
+            .as_ref()
+            .ok_or_else(|| "the DAVE session is gone".to_owned())
+            .and_then(|session| export_sender_secret(session, self.user_id));
+        let secret = match secret {
+            Ok(secret) => Some(secret),
+            Err(error) => {
+                // Receiving still works; sending waits for the next epoch.
+                self.fail(format!("transition {transition_id}"), error);
+                None
+            }
+        };
         if self.active_version == 0 && self.protocol_version > 0 {
             // Upgrading: until the transition executes, peers still send
             // unencrypted frames, which the new group's receivers must take.
@@ -455,10 +713,14 @@ impl DaveController {
             self.reinitializing = false;
             self.active_version = self.protocol_version;
             self.last_transition_id = Some(transition_id);
+            self.send_key = secret.map(SenderKey::new);
             Vec::new()
         } else {
             self.pending_transitions
                 .insert(transition_id, self.protocol_version);
+            if let Some(secret) = secret {
+                self.pending_send_keys.insert(transition_id, secret);
+            }
             vec![VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id }]
         }
     }
@@ -486,6 +748,9 @@ impl DaveController {
     /// Starts over for `protocol_version`: a fresh session and key package
     /// for a DAVE version, or no group and open passthrough for version 0.
     fn reinit(&mut self) -> Vec<VoiceGatewayCommand> {
+        // The group is left behind, and with it every key to send with.
+        self.send_key = None;
+        self.pending_send_keys.clear();
         let Some(version) = NonZeroU16::new(self.protocol_version) else {
             let reset = self.session.as_mut().map(|session| {
                 let reset = session.reset();
@@ -557,7 +822,7 @@ impl DaveController {
     }
 
     fn can_send_audio(&self) -> bool {
-        self.protocol_version == 0 || self.active_version == 0 || self.is_ready()
+        self.protocol_version == 0 || self.active_version == 0 || self.send_key.is_some()
     }
 
     /// Prepares an outbound Opus frame: DAVE-encrypted when the call is end
@@ -577,13 +842,8 @@ impl DaveController {
         if opus_frame == OPUS_SILENCE_FRAME || self.protocol_version == 0 {
             return Ok(Cow::Borrowed(opus_frame));
         }
-        if let Some(session) = self.session.as_mut().filter(|session| session.is_ready()) {
-            return session
-                .encrypt_opus(opus_frame)
-                .map(|frame| Cow::Owned(frame.into_owned()))
-                .map_err(|error| {
-                    dave_error(format!("DAVE could not encrypt an Opus frame: {error}"))
-                });
+        if let Some(key) = self.send_key.as_mut() {
+            return key.encrypt_opus(opus_frame).map(Cow::Owned);
         }
         if self.active_version == 0 {
             // Still upgrading from transport-only encryption: the previous
@@ -599,6 +859,9 @@ impl DaveController {
              max_dave_protocol_version at its default)"
         } else if self.reinitializing {
             "it is rejoining the MLS group after an invalid transition"
+        } else if !self.pending_send_keys.is_empty() {
+            "it joined the MLS group, and the transition that puts its key in use has not \
+             executed yet"
         } else {
             "the MLS group is not established yet; it forms once another member is in the call"
         };
@@ -1167,14 +1430,151 @@ mod tests {
             peer.on_welcome(&transition(13, &welcome.unwrap())),
             vec![ready(13)]
         );
-        // Keys exist now: encrypted from here, while a peer that has not
-        // switched yet may still send plaintext until the upgrade executes.
-        let frame = encrypt(&mut bot, &OPUS);
-        assert_eq!(decrypt(&mut peer, BOT, frame), Some(OPUS.to_vec()));
+        // Both hold the new group's keys, but the upgrade has not executed:
+        // senders keep the previous rules (unencrypted) until it does, and
+        // receivers accept those frames.
+        assert!(bot.status().ready);
+        assert!(matches!(bot.encrypt_outbound(&OPUS), Ok(Cow::Borrowed(_))));
+        assert!(matches!(peer.encrypt_outbound(&OPUS), Ok(Cow::Borrowed(_))));
         assert_eq!(decrypt(&mut bot, PEER, OPUS.to_vec()), Some(OPUS.to_vec()));
+        assert_eq!(decrypt(&mut peer, BOT, OPUS.to_vec()), Some(OPUS.to_vec()));
+
+        // From the execute on, frames are encrypted with the new group's keys.
         bot.on_execute_transition(13);
+        peer.on_execute_transition(13);
         assert_eq!(bot.status().protocol_version, 1);
         assert_eq!(bot.status().last_transition_id, Some(13));
+        let frame = encrypt(&mut bot, &OPUS);
+        assert!(frame.ends_with(&super::DAVE_MAGIC_MARKER));
+        assert_eq!(decrypt(&mut peer, BOT, frame), Some(OPUS.to_vec()));
+        let frame = encrypt(&mut peer, &OPUS);
+        assert_eq!(decrypt(&mut bot, PEER, frame), Some(OPUS.to_vec()));
+    }
+
+    /// The case group transitions exist for: a member that processed a commit
+    /// must keep sending with the previous epoch's key until the transition
+    /// executes, because the others may not have processed it yet.
+    #[test]
+    fn dave_keeps_sending_with_the_previous_epoch_until_the_transition_executes() {
+        const CAROL: u64 = 30;
+        let (mut bot, mut peer, gateway) = established_call();
+        let mut carol = controller(CAROL);
+        let carol_key_package = key_package(&carol.on_session_description(1));
+        carol.on_external_sender(gateway.external_sender());
+        bot.on_clients_connect([test_id(CAROL)]);
+        peer.on_clients_connect([test_id(CAROL)]);
+
+        // Both members get the proposal; the gateway announces the bot's
+        // commit.
+        let proposals = gateway.add_proposal(&carol_key_package, 1);
+        let (commit, welcome) = commit_welcome(&bot.on_proposals(&proposals));
+        commit_welcome(&peer.on_proposals(&proposals));
+        assert_eq!(
+            bot.on_announce_commit(&transition(21, &commit)),
+            vec![ready(21)]
+        );
+        // The bot's group moved to epoch 2 (receive keys), but the peer has
+        // not processed the commit: the bot's audio must still decrypt there.
+        assert_eq!(bot.status().epoch, Some(2));
+        let frame = encrypt(&mut bot, &OPUS);
+        assert_eq!(decrypt(&mut peer, BOT, frame), Some(OPUS.to_vec()));
+
+        assert_eq!(
+            peer.on_announce_commit(&transition(21, &commit)),
+            vec![ready(21)]
+        );
+        assert_eq!(
+            carol.on_welcome(&transition(21, &welcome.unwrap())),
+            vec![ready(21)]
+        );
+        // Everyone processed it; still the old key until execute. Carol was
+        // not in that epoch, and has no key to send with yet herself.
+        let frame = encrypt(&mut bot, &OPUS);
+        assert_eq!(decrypt(&mut peer, BOT, frame.clone()), Some(OPUS.to_vec()));
+        assert_eq!(decrypt(&mut carol, BOT, frame), None);
+        let status = carol.status();
+        assert!(status.ready && !status.can_send_audio(), "{status:?}");
+        let error = carol.encrypt_outbound(&OPUS).unwrap_err().to_string();
+        assert!(error.contains("has not executed yet"), "{error}");
+
+        for member in [&mut bot, &mut peer, &mut carol] {
+            member.on_execute_transition(21);
+        }
+        let frame = encrypt(&mut bot, &OPUS);
+        assert_eq!(decrypt(&mut peer, BOT, frame.clone()), Some(OPUS.to_vec()));
+        assert_eq!(decrypt(&mut carol, BOT, frame), Some(OPUS.to_vec()));
+        let frame = encrypt(&mut carol, &OPUS);
+        assert_eq!(decrypt(&mut bot, CAROL, frame.clone()), Some(OPUS.to_vec()));
+        assert_eq!(decrypt(&mut peer, CAROL, frame), Some(OPUS.to_vec()));
+    }
+
+    /// The runtime's own sending key against davey's: the same epoch's first
+    /// frame must come out byte for byte the same (AES-GCM is deterministic
+    /// for one key and nonce), and the ratchet must reproduce davey's test
+    /// vector.
+    #[test]
+    fn dave_sender_key_matches_davey_byte_for_byte() {
+        let (mut bot, _peer, _gateway) = established_call();
+        let ours = encrypt(&mut bot, &OPUS);
+        // davey's own encryptor got the same epoch's key when it processed
+        // the commit and has not been used: its first frame has nonce 1 too.
+        let theirs = bot
+            .session
+            .as_mut()
+            .unwrap()
+            .encrypt_opus(&OPUS)
+            .unwrap()
+            .into_owned();
+        assert_eq!(ours, theirs);
+
+        // davey `hash_ratchet::tests::expected_result`.
+        let secret = [
+            206, 221, 97, 177, 184, 161, 202, 105, 4, 101, 84, 40, 44, 247, 11, 123,
+        ];
+        assert_eq!(
+            super::derive_tree_secret(&secret, "key", 0, 16).unwrap(),
+            [117, 48, 249, 169, 148, 94, 45, 46, 6, 208, 101, 31, 123, 42, 134, 75]
+        );
+        assert_eq!(
+            super::derive_tree_secret(&secret, "nonce", 0, 12).unwrap(),
+            [48, 30, 95, 75, 116, 9, 15, 152, 94, 114, 107, 178]
+        );
+    }
+
+    #[test]
+    fn dave_sender_key_moves_to_the_next_generation_and_never_reuses_a_nonce() {
+        let mut key = super::SenderKey::new(vec![7; 16]);
+        let first = key.encrypt_opus(&OPUS).unwrap();
+        let parsed = super::super::parse_dave_frame(&first).unwrap();
+        assert_eq!(parsed.nonce, 1);
+        assert_eq!(parsed.ciphertext.len(), OPUS.len());
+
+        // The top byte of the nonce is the key generation.
+        key.nonce = (1 << 24) - 1;
+        let next_generation = key.encrypt_opus(&OPUS).unwrap();
+        assert_eq!(
+            super::super::parse_dave_frame(&next_generation)
+                .unwrap()
+                .nonce,
+            1 << 24
+        );
+        assert_eq!(
+            key.cipher.as_ref().map(|(generation, _)| *generation),
+            Some(1)
+        );
+        assert_eq!(key.next_generation, 2);
+
+        // The last nonce of the epoch, then an error instead of a wrap.
+        key.nonce = u32::MAX - 1;
+        key.encrypt_opus(&OPUS).unwrap();
+        let error = key.encrypt_opus(&OPUS).unwrap_err().to_string();
+        assert!(error.contains("used up"), "{error}");
+        assert_eq!(key.nonce, u32::MAX);
+
+        let mut written = Vec::new();
+        assert_eq!(super::write_uleb128(300, &mut written), 2);
+        assert_eq!(written, [0xac, 0x02]);
+        assert!(super::push_short_vl_bytes(&mut written, &[0; 64]).is_err());
     }
 
     #[test]

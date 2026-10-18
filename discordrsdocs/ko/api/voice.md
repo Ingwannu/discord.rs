@@ -121,7 +121,10 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
   버리지 않고 세션이 시작될 때 처리합니다.
 - **송신.** `send_opus_frame(...)`, `send_opus_frame_after_gap(...)`, `play_opus_frames(...)`, 그리고
   `subscribe_runtime`으로 구독한 `AudioPlayer`는 Opus 프레임을 DAVE로, 이어서 전송 암호화로 감쌉니다.
-  Opus 무음 프레임은 프로토콜이 허용하는 대로 DAVE 없이 나갑니다. 그룹 키가 없을 때는 오디오를 평문으로
+  Opus 무음 프레임은 프로토콜이 허용하는 대로 DAVE 없이 나갑니다. 프로토콜대로 키는 전환이 실행될
+  때만 바뀝니다. 커밋을 처리한 뒤에도 아직 그 커밋을 처리하지 않은 멤버가 가진 이전 에포크 키로 계속
+  보냅니다(이를 위해 런타임이 송신 키를 `davey`와 같은 방식으로 직접 유도해 가지고, MLS와 복호화는
+  `davey`가 합니다). 쓸 키가 없을 때는 오디오를 평문으로
   내보내는 대신 이유를 설명하는 `DiscordError::Voice`를 돌려주고 아무것도 소비하지 않습니다(순번,
   타임스탬프, nonce). 그동안 `is_playable()`은 `false`입니다.
 - **수신.** `recv_voice_packet(...)`과 `recv_decoded_voice_packet(...)`이 화자의 키로 복호화합니다. MLS
@@ -131,7 +134,7 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
   무음 프레임(`F8 FF FE`)은 그대로 돌려줍니다.
 - **전환.** 버전 0으로 내려가는 전환(DAVE를 지원하지 않는 클라이언트가 들어옴)은 준비되자마자 평문을
   받아들이고 실행된 뒤 평문을 보냅니다. 다시 올라가는 전환(epoch 1의 `prepare_epoch`)은 새 그룹을 만들고,
-  암호화할 수 있을 때까지 평문을 계속 보냅니다. 잘못된 커밋·웰컴은 `dave_mls_invalid_commit_welcome`으로
+  그 전환이 실행될 때까지 평문을 계속 보냅니다. 잘못된 커밋·웰컴은 `dave_mls_invalid_commit_welcome`으로
   알리고 새 키 패키지로 다시 들어갑니다. 전환이 없는데 복호화가 36번 넘게 연속 실패해도 같은 복구를
   합니다.
 - **채널 id가 없으면** MLS 그룹을 만들 수 없어 버전 0을 광고합니다(경고 로그). Stage 채널은 동작하고,
