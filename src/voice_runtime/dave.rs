@@ -1809,6 +1809,11 @@ mod tests {
 
     #[test]
     fn dave_warns_when_davey_trace_logging_would_record_key_material() {
+        // tracing caches each callsite's interest globally, and a parallel
+        // test without a subscriber may register these callsites as never
+        // interesting. Register them here, then rebuild the cache under the
+        // counting subscriber below.
+        super::warn_if_davey_traces();
         for trace in [true, false] {
             let warnings = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let subscriber = WarningCounter {
@@ -1816,6 +1821,7 @@ mod tests {
                 warnings: std::sync::Arc::clone(&warnings),
             };
             let warned = tracing::subscriber::with_default(subscriber, || {
+                tracing::callsite::rebuild_interest_cache();
                 // Starting a session checks too.
                 controller(BOT).on_session_description(1);
                 super::warn_if_davey_traces()
