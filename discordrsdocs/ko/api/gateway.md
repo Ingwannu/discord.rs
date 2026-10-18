@@ -4,8 +4,7 @@
 
 ## 핵심 타입
 
-- `GatewayClient`: identify/heartbeat/resume/reconnect 처리
-- `Client`: 고수준 타입드 런타임 (`BotClient`는 호환 별칭)
+- `Client`: 고수준 타입드 런타임 (`BotClient`는 호환 별칭). identify/heartbeat/resume/reconnect는 내부에서 처리합니다
 - `Event`: 받은 디스패치 하나. `Arc<Event>`로 공유하며 디코딩된 `EventKind`, `EventMetadata`, 선택적 원본 payload를 담습니다([이벤트와 핸들러](#이벤트와-핸들러-30) 참고)
 - `Context`: 핸들러 공유 컨텍스트(`http`, 캐시, typemap, 샤드 정보)
 - `EventHandler`: 이벤트 콜백 트레잇(일반 `async fn`으로 구현)

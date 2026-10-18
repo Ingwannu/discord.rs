@@ -9,12 +9,14 @@ use axum::{
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, warn};
 
 use crate::error::DiscordError;
 use crate::model::{
-    Interaction, InteractionContextData, InteractionId, InteractionResponseState, InteractionType,
+    AllowedMentions, Interaction, InteractionContextData, InteractionId, InteractionResponseState,
+    InteractionType,
 };
 use crate::parsers::{
     decode_interaction, parse_interaction_context, parse_raw_interaction, value_to_u8,
@@ -66,9 +68,12 @@ pub trait InteractionHandler: Send + Sync {
 /// one transport owns the initial response:
 ///
 /// - The handler returns an initial response: the endpoint claims the state
-///   for it and answers Discord with `200` and that response, so a clone kept
-///   by a spawned task sees the interaction as acknowledged and can call
-///   `follow_up` or `edit_reply` over REST afterwards.
+///   for it and answers Discord with `200` and that response, so a clone
+///   kept past the handler sees the interaction as acknowledged once the
+///   endpoint has answered and can call `follow_up` or `edit_reply` over
+///   REST. A task the handler spawns can run before that; when it is going
+///   to call those, acknowledge over REST (`defer`) before spawning it and
+///   return [`EndpointReply::Accepted`].
 /// - The handler sent (or started sending) the initial response over REST,
 ///   or returns [`EndpointReply::Accepted`]: the endpoint answers
 ///   `202 Accepted` with no body, as Discord specifies, and any inline
@@ -90,6 +95,9 @@ pub trait TypedInteractionHandler: Send + Sync {
 struct InteractionsState<H> {
     verifying_key: VerifyingKey,
     handler: H,
+    /// [`InteractionsEndpointBuilder::default_allowed_mentions`]. Behind an
+    /// `Arc` because axum clones the state for every request.
+    default_allowed_mentions: Option<Arc<AllowedMentions>>,
 }
 
 const SIGNATURE_TIMESTAMP_TOLERANCE_SECS: i64 = 60 * 5;
@@ -286,17 +294,18 @@ impl IntoResponse for EndpointAnswer {
 }
 
 impl EndpointAnswer {
-    /// Encodes an inline answer with the same encoder the REST callback
-    /// uses, so both transports send identical bytes for one response.
-    fn from_reply(reply: EndpointReply) -> Self {
+    /// Encodes an inline answer with the same encoder and the same default
+    /// `allowed_mentions` rule the REST callback uses, so both transports
+    /// send identical bytes for one response and one policy.
+    fn from_reply(reply: EndpointReply, default_mentions: Option<&AllowedMentions>) -> Self {
         match reply {
             EndpointReply::Accepted => Self::Accepted,
-            EndpointReply::Inline(response) => Self::encode(&response),
+            EndpointReply::Inline(response) => Self::encode(&response, default_mentions),
         }
     }
 
-    fn encode(response: &InteractionResponse) -> Self {
-        match encode_interaction_response(response, None) {
+    fn encode(response: &InteractionResponse, default_mentions: Option<&AllowedMentions>) -> Self {
+        match encode_interaction_response(response, default_mentions) {
             Ok(body) => Self::Inline(body),
             Err(encode_error) => {
                 error!(
@@ -380,7 +389,7 @@ where
 
     // Raw handlers have no shared response state: they own the answer.
     let reply = state.handler.handle(context, interaction).await;
-    EndpointAnswer::from_reply(reply).into_response()
+    EndpointAnswer::from_reply(reply, state.default_allowed_mentions.as_deref()).into_response()
 }
 
 /// Builds the signed `/interactions` route with settings other than the
@@ -391,6 +400,7 @@ where
 /// # use discordrs::request::{EndpointReply, InteractionResponse};
 /// # use discordrs::model::{Interaction, InteractionContextData};
 /// # use discordrs::interactions::InteractionsEndpointBuilder;
+/// # use discordrs::model::AllowedMentions;
 /// # use discordrs::TypedInteractionHandler;
 /// # #[derive(Clone)]
 /// # struct Handler;
@@ -403,6 +413,7 @@ where
 /// # let public_key = "0000000000000000000000000000000000000000000000000000000000000000";
 /// let router = InteractionsEndpointBuilder::new(public_key)
 ///     .body_limit(4 * 1024 * 1024)
+///     .default_allowed_mentions(AllowedMentions::default())
 ///     .build_typed(Handler)?;
 /// # let _ = router;
 /// # Ok(())
@@ -412,6 +423,7 @@ where
 pub struct InteractionsEndpointBuilder {
     public_key: String,
     body_limit: usize,
+    default_allowed_mentions: Option<AllowedMentions>,
 }
 
 impl InteractionsEndpointBuilder {
@@ -421,6 +433,7 @@ impl InteractionsEndpointBuilder {
         Self {
             public_key: public_key.into(),
             body_limit: DEFAULT_INTERACTION_BODY_LIMIT,
+            default_allowed_mentions: None,
         }
     }
 
@@ -440,6 +453,47 @@ impl InteractionsEndpointBuilder {
         self
     }
 
+    /// Sets the `allowed_mentions` written into inline message responses
+    /// that do not set one themselves, for raw and typed handlers (and
+    /// [`AppFramework`](crate::AppFramework) routes) alike.
+    ///
+    /// The rule is the one the REST callback applies with
+    /// [`RestClientBuilder::default_allowed_mentions`](crate::http::RestClientBuilder::default_allowed_mentions):
+    /// only `CHANNEL_MESSAGE_WITH_SOURCE` and `UPDATE_MESSAGE` (types 4 and
+    /// 7) carry a message and get the default; a value the response sets
+    /// itself (on an update, an explicit clear too) wins; and
+    /// [`InteractionResponse::Raw`] is sent exactly as written. The endpoint
+    /// has no [`RestClient`](crate::RestClient), so it does not see a
+    /// client's default: give both the same value to answer the same way
+    /// inline and over REST.
+    ///
+    /// [Decision Log] Default mentions on the inline transport
+    /// - Purpose: an app that sets a mention policy once (for example "never
+    ///   ping `@everyone`") gets it on every message it sends, whichever
+    ///   transport carries the initial response.
+    /// - Before: the endpoint encoded inline responses with no default, so a
+    ///   `ChannelMessage` returned from a handler pinged what its content
+    ///   mentioned while the same response sent with
+    ///   `RestClient::create_interaction_response` did not; nothing could
+    ///   configure the endpoint, which takes no `RestClient`.
+    /// - Alternatives: (1) take a `RestClient` (or its default) in the
+    ///   builder; (2) have handlers set `allowed_mentions` on each response;
+    ///   (3) a builder setting passed to the encoder REST already uses.
+    /// - Chosen: (3). The value goes to `encode_interaction_response`, the
+    ///   function the REST callback calls with the client's default, so one
+    ///   response and one policy encode to the same bytes either way.
+    /// - Why: (1) ties an inbound-only endpoint to an outbound client it may
+    ///   not otherwise need, and a later
+    ///   [`RestClient::with_default_allowed_mentions`](crate::RestClient::with_default_allowed_mentions)
+    ///   scope would not follow it anyway. (2) is what the missing default
+    ///   forced, and one forgotten route pings.
+    /// - Trade-offs: the policy is set in two places when an app also
+    ///   responds over REST. Unset (the default) keeps the 3.0.0 bytes.
+    pub fn default_allowed_mentions(mut self, allowed_mentions: AllowedMentions) -> Self {
+        self.default_allowed_mentions = Some(allowed_mentions);
+        self
+    }
+
     /// Builds the route for a raw [`InteractionHandler`]. Fails when the
     /// public key is not a hex-encoded Ed25519 public key.
     pub fn build<H>(self, handler: H) -> Result<Router, DiscordError>
@@ -454,6 +508,7 @@ impl InteractionsEndpointBuilder {
             .with_state(InteractionsState {
                 verifying_key,
                 handler,
+                default_allowed_mentions: self.default_allowed_mentions.map(Arc::new),
             }))
     }
 
@@ -475,6 +530,7 @@ impl InteractionsEndpointBuilder {
             .with_state(InteractionsState {
                 verifying_key,
                 handler,
+                default_allowed_mentions: self.default_allowed_mentions.map(Arc::new),
             }))
     }
 }
@@ -552,7 +608,13 @@ where
     let response_state = context.response_state.clone();
 
     let reply = state.handler.handle_typed(context, interaction).await;
-    typed_endpoint_answer(&response_state, interaction_id, reply).into_response()
+    typed_endpoint_answer(
+        &response_state,
+        interaction_id,
+        reply,
+        state.default_allowed_mentions.as_deref(),
+    )
+    .into_response()
 }
 
 /// Answers a PING.
@@ -602,11 +664,12 @@ fn typed_endpoint_answer(
     state: &InteractionResponseState,
     interaction_id: InteractionId,
     reply: EndpointReply,
+    default_mentions: Option<&AllowedMentions>,
 ) -> EndpointAnswer {
     let EndpointReply::Inline(response) = reply else {
         return EndpointAnswer::Accepted;
     };
-    let answer = EndpointAnswer::encode(&response);
+    let answer = EndpointAnswer::encode(&response, default_mentions);
     if !matches!(answer, EndpointAnswer::Inline(_)) {
         return answer;
     }
@@ -685,12 +748,13 @@ mod tests {
     use crate::framework::{AppContext, AppFramework};
     use crate::http::RestClient;
     use crate::model::{
-        test_id, ApplicationCommandOptionChoice, Interaction, InteractionContextData,
-        InteractionResponseState, InteractionResponseType,
+        test_id, AllowedMentions, ApplicationCommandOptionChoice, Interaction,
+        InteractionContextData, InteractionResponseState, InteractionResponseType,
     };
     use crate::parsers::{InteractionContext, RawInteraction};
     use crate::request::{
-        encode_interaction_response, EndpointReply, InteractionResponse, RawInteractionResponse,
+        encode_interaction_response, EndpointReply, InteractionMessage, InteractionResponse,
+        RawInteractionResponse, UpdateMessage,
     };
     use crate::response::{
         AckKind, CallbackOutcome, InteractionResponder, InteractionResponsePhase,
@@ -1172,6 +1236,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             HeaderMap::new(),
             Bytes::from_static(br#"{"type":1}"#),
@@ -1185,6 +1250,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&bad_json_body),
             Bytes::from(bad_json_body),
@@ -1203,6 +1269,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&bad_type_body),
             Bytes::from(bad_type_body),
@@ -1224,6 +1291,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&bad_context_body),
             Bytes::from(bad_context_body),
@@ -1248,6 +1316,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&bad_parse_body),
             Bytes::from(bad_parse_body),
@@ -1285,6 +1354,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&ping_body),
             Bytes::from(ping_body),
@@ -1318,6 +1388,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&command_body),
             Bytes::from(command_body),
@@ -1361,6 +1432,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&ping_body),
             Bytes::from(ping_body),
@@ -1383,6 +1455,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&parse_error_body),
             Bytes::from(parse_error_body),
@@ -1402,6 +1475,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&bare_ping),
             Bytes::from(bare_ping),
@@ -1443,6 +1517,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&component_body),
             Bytes::from(component_body),
@@ -1471,6 +1546,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key,
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&unknown_body),
             Bytes::from(unknown_body),
@@ -1491,7 +1567,7 @@ mod tests {
     }
 
     fn answer(state: &InteractionResponseState, reply: impl Into<EndpointReply>) -> EndpointAnswer {
-        typed_endpoint_answer(state, test_id(1), reply.into())
+        typed_endpoint_answer(state, test_id(1), reply.into(), None)
     }
 
     #[test]
@@ -1637,6 +1713,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key: test_signing_key().verifying_key(),
                 handler: framework,
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&body),
             Bytes::from(body),
@@ -1687,6 +1764,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key: test_signing_key().verifying_key(),
                 handler: RestThenInlineHandler,
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&body),
             Bytes::from(body),
@@ -1741,6 +1819,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key: test_signing_key().verifying_key(),
                 handler: LocalRestFailureHandler { http },
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&body),
             Bytes::from(body),
@@ -1775,6 +1854,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key: test_signing_key().verifying_key(),
                 handler: AcceptedRawHandler,
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&body),
             Bytes::from(body),
@@ -1797,6 +1877,7 @@ mod tests {
             State(InteractionsState {
                 verifying_key: test_signing_key().verifying_key(),
                 handler: handler.clone(),
+                default_allowed_mentions: None,
             }),
             signed_headers_for_body(&body),
             Bytes::from(body),
@@ -1859,13 +1940,16 @@ mod tests {
         crate::hex::encode(test_signing_key().verifying_key().as_bytes())
     }
 
-    /// Serves `router` on a loopback port, POSTs `body` to `/interactions`
-    /// with a valid signature, and returns the status.
-    ///
-    /// A rejected body is sent with exactly one byte over the limit: the
-    /// server then has read all of it when it answers 413, so it closes the
-    /// connection cleanly and the client always reads the answer.
-    async fn post_signed(router: axum::Router, body: Vec<u8>) -> StatusCode {
+    /// Serves `router` on a loopback port and POSTs `body` to
+    /// `/interactions` with a valid signature. The caller aborts the
+    /// returned server task once it has read what it needs.
+    async fn send_signed(
+        router: axum::Router,
+        body: Vec<u8>,
+    ) -> (
+        reqwest::Response,
+        tokio::task::JoinHandle<std::io::Result<()>>,
+    ) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/interactions", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, router).await });
@@ -1874,9 +1958,27 @@ mod tests {
         for (name, value) in &headers {
             request = request.header(name.as_str(), value.to_str().unwrap());
         }
-        let status = request.send().await.unwrap().status();
+        (request.send().await.unwrap(), server)
+    }
+
+    /// [`send_signed`], returning the status only.
+    ///
+    /// A rejected body is sent with exactly one byte over the limit: the
+    /// server then has read all of it when it answers 413, so it closes the
+    /// connection cleanly and the client always reads the answer.
+    async fn post_signed(router: axum::Router, body: Vec<u8>) -> StatusCode {
+        let (response, server) = send_signed(router, body).await;
         server.abort();
-        StatusCode::from_u16(status.as_u16()).unwrap()
+        StatusCode::from_u16(response.status().as_u16()).unwrap()
+    }
+
+    /// The body of the endpoint's `200` answer to a signed command.
+    async fn inline_answer(router: axum::Router) -> Vec<u8> {
+        let (response, server) = send_signed(router, command_body("token")).await;
+        assert_eq!(response.status().as_u16(), 200);
+        let body = response.bytes().await.unwrap().to_vec();
+        server.abort();
+        body
     }
 
     #[tokio::test]
@@ -1942,5 +2044,230 @@ mod tests {
         assert!(InteractionsEndpointBuilder::new("bad-key")
             .build(TestHandler)
             .is_err());
+    }
+
+    /// The policy the mention tests configure.
+    fn quiet_mentions() -> AllowedMentions {
+        AllowedMentions {
+            replied_user: Some(false),
+            ..AllowedMentions::default()
+        }
+    }
+
+    /// A per-response policy that differs from [`quiet_mentions`].
+    fn role_mentions() -> AllowedMentions {
+        AllowedMentions {
+            parse: vec!["roles".to_owned()],
+            ..AllowedMentions::default()
+        }
+    }
+
+    /// Answers every interaction inline with a clone of its response.
+    #[derive(Clone)]
+    struct FixedTypedHandler(InteractionResponse);
+
+    impl TypedInteractionHandler for FixedTypedHandler {
+        async fn handle_typed(
+            &self,
+            _ctx: InteractionContextData,
+            _interaction: Interaction,
+        ) -> EndpointReply {
+            self.0.clone().into()
+        }
+    }
+
+    /// [`FixedTypedHandler`] for the raw endpoint.
+    #[derive(Clone)]
+    struct FixedRawHandler(InteractionResponse);
+
+    impl InteractionHandler for FixedRawHandler {
+        async fn handle(
+            &self,
+            _ctx: InteractionContext,
+            _interaction: RawInteraction,
+        ) -> EndpointReply {
+            self.0.clone().into()
+        }
+    }
+
+    /// The endpoint's answer to `response`, through the typed or the raw
+    /// route, with `policy` as the builder's default.
+    async fn answer_with_policy(
+        typed: bool,
+        response: InteractionResponse,
+        policy: Option<AllowedMentions>,
+    ) -> Vec<u8> {
+        let mut builder = InteractionsEndpointBuilder::new(test_public_key());
+        if let Some(policy) = policy {
+            builder = builder.default_allowed_mentions(policy);
+        }
+        let router = if typed {
+            builder.build_typed(FixedTypedHandler(response)).unwrap()
+        } else {
+            builder.build(FixedRawHandler(response)).unwrap()
+        };
+        inline_answer(router).await
+    }
+
+    fn parse(body: &[u8]) -> Value {
+        serde_json::from_slice(body).unwrap()
+    }
+
+    /// Regression: the endpoint encoded inline responses with no default
+    /// `allowed_mentions`, unlike the REST callback, and could not be
+    /// configured with one.
+    #[tokio::test]
+    async fn inline_message_responses_get_the_endpoint_default_mentions() {
+        for typed in [true, false] {
+            let reply = answer_with_policy(
+                typed,
+                InteractionResponse::reply("hi <@1>"),
+                Some(quiet_mentions()),
+            )
+            .await;
+            assert_eq!(
+                parse(&reply),
+                json!({
+                    "type": 4,
+                    "data": {
+                        "content": "hi <@1>",
+                        "allowed_mentions": { "replied_user": false }
+                    }
+                }),
+                "typed: {typed}"
+            );
+
+            let update = answer_with_policy(
+                typed,
+                InteractionResponse::update("edited <@1>"),
+                Some(quiet_mentions()),
+            )
+            .await;
+            assert_eq!(
+                parse(&update),
+                json!({
+                    "type": 7,
+                    "data": {
+                        "content": "edited <@1>",
+                        "allowed_mentions": { "replied_user": false }
+                    }
+                }),
+                "typed: {typed}"
+            );
+        }
+
+        // Only message callbacks (4 and 7) carry `allowed_mentions`.
+        let defer = answer_with_policy(
+            true,
+            InteractionResponse::defer(false),
+            Some(quiet_mentions()),
+        )
+        .await;
+        assert_eq!(parse(&defer), json!({ "type": 5, "data": { "flags": 0 } }));
+        let modal = answer_with_policy(
+            true,
+            InteractionResponse::modal(ModalBuilder::new("m", "M")),
+            Some(quiet_mentions()),
+        )
+        .await;
+        assert!(parse(&modal)["data"].get("allowed_mentions").is_none());
+
+        // Without a default the answer stays as 3.0.0 sent it.
+        let unset = answer_with_policy(true, InteractionResponse::reply("hi"), None).await;
+        assert_eq!(unset, br#"{"type":4,"data":{"content":"hi"}}"#);
+    }
+
+    #[tokio::test]
+    async fn explicit_response_mentions_win_over_the_endpoint_default() {
+        for typed in [true, false] {
+            let reply = answer_with_policy(
+                typed,
+                InteractionResponse::reply(
+                    InteractionMessage::new()
+                        .content("explicit")
+                        .allowed_mentions(role_mentions()),
+                ),
+                Some(quiet_mentions()),
+            )
+            .await;
+            assert_eq!(
+                parse(&reply)["data"]["allowed_mentions"],
+                json!({ "parse": ["roles"] }),
+                "typed: {typed}"
+            );
+
+            let update = answer_with_policy(
+                typed,
+                InteractionResponse::update(
+                    UpdateMessage::new()
+                        .content("explicit")
+                        .allowed_mentions(role_mentions()),
+                ),
+                Some(quiet_mentions()),
+            )
+            .await;
+            assert_eq!(
+                parse(&update)["data"]["allowed_mentions"],
+                json!({ "parse": ["roles"] }),
+                "typed: {typed}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_responses_are_sent_as_written_despite_the_endpoint_default() {
+        for typed in [true, false] {
+            let body = answer_with_policy(
+                typed,
+                raw(&json!({ "type": 4, "data": { "content": "raw <@1>" } })),
+                Some(quiet_mentions()),
+            )
+            .await;
+            assert_eq!(
+                body, br#"{"type":4,"data":{"content":"raw <@1>"}}"#,
+                "typed: {typed}"
+            );
+        }
+    }
+
+    /// One response and one policy encode to the same bytes whether the
+    /// endpoint answers inline or a `RestClient` sends the callback.
+    #[tokio::test]
+    async fn rest_and_inline_send_identical_bytes_for_one_policy() {
+        use crate::response::tests::mock::{self, Reply};
+
+        let responses = [
+            InteractionResponse::reply("hi <@1>"),
+            InteractionResponse::reply(
+                InteractionMessage::new()
+                    .content("explicit")
+                    .allowed_mentions(role_mentions()),
+            ),
+            InteractionResponse::update("edited"),
+            InteractionResponse::defer(true),
+            raw(&json!({ "type": 4, "data": { "content": "raw" } })),
+        ];
+        for policy in [Some(quiet_mentions()), None] {
+            let mut server =
+                mock::spawn(responses.iter().map(|_| Reply::Now(204, "")).collect()).await;
+            let mut http = RestClient::builder("bot-token", Some(test_id(200)))
+                .api_base(server.base_url.clone());
+            if let Some(policy) = policy.clone() {
+                http = http.default_allowed_mentions(policy);
+            }
+            let http = http.build().unwrap();
+            for response in &responses {
+                http.create_interaction_response(test_id(100), "token", response)
+                    .await
+                    .unwrap();
+                let (_, rest_body) = server.next_request_with_body().await;
+                let inline_body = answer_with_policy(true, response.clone(), policy.clone()).await;
+                assert_eq!(
+                    String::from_utf8(inline_body).unwrap(),
+                    String::from_utf8(rest_body).unwrap(),
+                    "{response:?} with {policy:?}"
+                );
+            }
+        }
     }
 }

@@ -2,10 +2,10 @@
 
 ## `src/types.rs`
 
-- `Error`, `invalid_data_error`
 - `ButtonConfig`, `SelectOption`, `Emoji`
 - `MediaGalleryItem`, `MediaInfo`
-- 런타임 공유 상태용 `TypeMap`
+
+`Error` 별칭(`discordrs::Error`, `types::Error`)은 3.0에서 삭제했습니다. `DiscordError`를 씁니다. 런타임 공유 상태용 `TypeMap`은 `gateway` 모듈에 있습니다.
 
 ## `src/constants.rs`
 

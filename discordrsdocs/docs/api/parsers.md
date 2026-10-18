@@ -6,10 +6,10 @@ Parsers now serve two roles: migration-friendly raw helpers and typed interactio
 
 Functions:
 
-- `decode_interaction(&str) -> Result<Interaction, Error>` (3.0): decodes the interaction object straight from its JSON text, the gateway `INTERACTION_CREATE` `d` or an interactions-endpoint body. This is the path the gateway and the typed endpoint use.
-- `parse_interaction(&Value) -> Result<Interaction, Error>`: the same decoder on a `serde_json::Value` you already hold.
-- `parse_raw_interaction(&Value) -> Result<RawInteraction, Error>`
-- `parse_interaction_context(&Value) -> Result<InteractionContext, Error>`
+- `decode_interaction(&str) -> Result<Interaction, DiscordError>` (3.0): decodes the interaction object straight from its JSON text, the gateway `INTERACTION_CREATE` `d` or an interactions-endpoint body. This is the path the gateway and the typed endpoint use.
+- `parse_interaction(&Value) -> Result<Interaction, DiscordError>`: the same decoder on a `serde_json::Value` you already hold.
+- `parse_raw_interaction(&Value) -> Result<RawInteraction, DiscordError>`
+- `parse_interaction_context(&Value) -> Result<InteractionContext, DiscordError>`
 
 `Interaction` implements `Serialize`/`Deserialize` in Discord's wire format (3.0; 2.x derived an externally tagged `{"ChatInputCommand": {...}}` form), so `serde_json::from_str::<Interaction>(text)` and `Interaction::deserialize(&*raw_value)` work too. The gateway, the interactions endpoint, and REST all decode from text; another reader (`from_slice`, a `Value`) works but compiles a second copy of every model decoder, which is why `parse_interaction(&Value)` writes the value back to text first. The decoder reads the payload once: no `Value` tree and no copy of `data`, `resolved`, or `member`. On a 3.9 KB chat-input payload with resolved users, members, channels, roles, and attachments it makes 60 allocations, where 2.x's `decode_event` made 652.
 
@@ -79,7 +79,7 @@ Resolved members are partial (no `user`, `deaf`, or `mute` fields) and resolved 
 
 Function:
 
-- `parse_modal_submission(&Value) -> Result<V2ModalSubmission, Error>`
+- `parse_modal_submission(&Value) -> Result<V2ModalSubmission, DiscordError>`
 
 `V2ModalSubmission` and `V2ModalComponent` also implement `Deserialize`/`Serialize` in Discord's wire format (3.0), so `serde_json::from_str::<V2ModalSubmission>(data)` reads a modal submit `data` object without a `Value` tree. A submission is written back as its inputs without their label wrappers, which reads back to the same value.
 

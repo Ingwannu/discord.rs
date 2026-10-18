@@ -4,10 +4,9 @@ Gateway runtime is provided behind the `gateway` feature.
 
 ## Primary Types
 
-- `Client`: high-level typed runtime surface for Gateway bots
+- `Client`: high-level typed runtime surface for Gateway bots; it runs the websocket lifecycle (identify, heartbeat, resume, reconnect) internally
 - `ClientBuilder`: runtime configuration + startup
 - `Event`: one received dispatch, shared as `Arc<Event>`: its decoded `EventKind`, `EventMetadata`, and optional raw payload (see [Events and Handlers](#events-and-handlers-30))
-- `GatewayClient`: raw websocket lifecycle management (identify, heartbeat, resume, reconnect)
 - `Context`: shared runtime handles (`http`, cache, typemap, shard info)
 - `EventHandler`: handler trait with `handle_event(ctx, event)` and typed hooks, implemented with plain `async fn`
 - `EventDispatchMode`: serial (default) or concurrent handler scheduling

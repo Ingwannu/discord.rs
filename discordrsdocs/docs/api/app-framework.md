@@ -33,7 +33,7 @@ let app = AppFramework::builder()
 
 ## Responding Later from a Route (3.0)
 
-`AppContext` implements `InteractionResponder`, and its context shares one response state with the interaction. When the typed endpoint answers with the route's inline response, it records that response in the shared state, so a clone moved into a spawned task can call `edit_reply`, `follow_up`, or `delete_reply` over REST afterwards:
+`AppContext` implements `InteractionResponder`, and its context shares one response state with the interaction, so a clone moved into a spawned task can call `edit_reply`, `follow_up`, or `delete_reply` over REST once the interaction is acknowledged. For work that outlives the route, acknowledge over REST first (`ctx.defer(&rest)`), then spawn the task and return `EndpointReply::Accepted`:
 
 ```rust
 use discordrs::prelude::*;
@@ -43,15 +43,24 @@ let app = AppFramework::builder()
     .command("export", move |ctx: AppContext| {
         let rest = rest.clone();
         async move {
+            // Acknowledge over REST before the task starts: once `defer` returns,
+            // Discord holds the deferral and the task may edit it at any time.
+            if ctx.defer(&rest).await.is_err() {
+                // The endpoint sends this only if Discord cannot have applied the
+                // deferral; otherwise it answers 202.
+                return InteractionResponse::reply("Could not start the export.").into();
+            }
             tokio::spawn(async move {
                 let file_url = run_export().await;
                 let _ = ctx.edit_reply(&rest, format!("Export ready: {file_url}")).await;
             });
-            InteractionResponse::defer(false)
+            EndpointReply::Accepted
         }
     })
     .build();
 ```
+
+Do not spawn the task and return an inline `InteractionResponse::defer(..)` instead. The endpoint records the route's inline response only after the route has returned, and Discord gets it only after that, so a task that reaches `edit_reply` first fails locally with "interaction has not been acknowledged" or is rejected by Discord. When the work fits in Discord's 3-second window, skip the task and return the inline reply.
 
 Send the initial response either inline (the return value) or over REST (`ctx.reply(...)`), not both. A route returns anything that converts into an `EndpointReply`: an `InteractionResponse` (answered inline with `200`), or `EndpointReply::Accepted`. A route that responds over REST should return `EndpointReply::Accepted`: the endpoint then answers Discord with `202` and no body, as Discord specifies. If a route responded over REST but returned another response anyway, the endpoint still answers `202`, discards that response, and logs a warning. `AppContext`'s `Debug` output shows `[redacted]` instead of the interaction token.
 

@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+- **The HTTP interactions endpoint can apply a default `allowed_mentions`.** The endpoint encoded inline responses with no default, while `RestClient::create_interaction_response` fills in the client's (`RestClientBuilder::default_allowed_mentions`), so the same reply pinged differently depending on the transport, and the endpoint, which takes no `RestClient`, had no way to be configured. `InteractionsEndpointBuilder::default_allowed_mentions` now sets it for raw and typed handlers and `AppFramework` routes, with the REST rule: only message callbacks (types 4 and 7) get it, a value set on the response wins, and `InteractionResponse::Raw` is sent as written. One response and one policy encode to the same bytes on both transports. Without the setting the endpoint answers as 3.0.0 did.
+- **Docs no longer show a racy "respond later" pattern.** The `AppFramework` and interactions-endpoint pages (English and Korean) spawned a task that calls `edit_reply` while the route returned an inline `defer`; the task can run before the endpoint records the deferral (and before Discord receives it) and then fails with "interaction has not been acknowledged". The examples now defer over REST, spawn the task, and return `EndpointReply::Accepted`, and the `AppContext` and `TypedInteractionHandler` docs say so.
+- **Docs describe the 3.0 API.** Text left over from 2.x is corrected in the README, `USAGE.md`, and the docs site (English and Korean): gateway dispatch described as an "`Event` enum" (3.0 shares one `Event` envelope as `Arc<Event>` and matches on `EventKind`); `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands` called "no longer public" (they are the 3.0 typed methods); "raw `serde_json::Value` methods" and a generic `edit_current_application` as the escape hatch (now `RestClient::request(RawRequest)`); `message.id.as_str()`, `&ctx.id`, and the removed `Error` alias in examples and signatures; deprecated helpers (`followup_message`, `defer_interaction`, `update_interaction_message`) recommended over `InteractionResponder`; the wrong error text for an early follow-up; `GatewayClient` listed as public; a `RawInteraction` match without the `Autocomplete` arm; the Korean docs' "2.2.0" version line and `BotClient`/`DiscordHttpClient` diagram; and the full manual's 2.x gateway hooks and export list, endpoint response variants, and crate-private parser helpers. `RestClientBuilder::default_allowed_mentions` named the 2.x `update_message` instead of `edit_message`.
+
+### Added
+- `InteractionsEndpointBuilder::default_allowed_mentions(AllowedMentions)` (see Fixed).
+
 ## 3.0.0 - 2026-10-18
 
 2.1.0 and 2.2.0 were never published to crates.io and already change public types relative to 2.0.2, so the next release is 3.0.0. The phased plan is in `ROADMAP.md`.

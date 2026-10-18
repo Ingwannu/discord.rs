@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `InteractionsEndpointBuilder::default_allowed_mentions` gives the HTTP interactions endpoint the default `allowed_mentions` the REST client already applies: inline message responses (types 4 and 7) that leave it unset get the default, an explicit value wins, and `InteractionResponse::Raw` is sent as written, so one response and one policy produce the same bytes on both transports.
+- Docs: the "respond later" examples defer over REST and return `EndpointReply::Accepted` instead of spawning a task beside an inline defer (the task could call `edit_reply` before the deferral was recorded), and leftover 2.x wording in the README, `USAGE.md`, and the docs site is corrected.
+
 ## 3.0.0 - 2026-10-18
 
 - REST 5xx/timeout retries are limited to requests that are safe to repeat (GET/HEAD/OPTIONS/PUT/DELETE, and nonce-enforced channel message creates within 60 seconds); `RestClientBuilder::retry_non_idempotent_requests(true)` opts POST/PATCH back in. The managed transport no longer follows redirects.

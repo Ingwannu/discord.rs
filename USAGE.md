@@ -54,7 +54,7 @@ use discordrs::prelude::*;
 
 The public API was tightened to make the typed surface the default:
 
-- `RestClient` no longer exposes the old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands`.
+- `RestClient` no longer exposes the old raw `serde_json::Value` convenience methods. Their names (`edit_message`, `create_dm_channel`, `create_interaction_response`, `bulk_overwrite_global_commands`) are the typed methods in 3.0, and `send_message` is the `helpers::send_message` function.
 - Builder implementation submodules are private. Import from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel`; use `id_opt()` and `created_at()` directly on the command value.
 - `1.2.2` fixes Gateway compression handling so default connections no longer request payload compression without a decoder, and explicit `zlib-stream` connections decode compressed `HELLO` frames before Identify.
@@ -624,7 +624,7 @@ async fn sticker_admin(http: &DiscordHttpClient) -> Result<(), discordrs::Discor
 
 ## 5.5 Application Resource Helpers
 
-Current application reads and edits are typed through `Application`, `ModifyCurrentApplication`, `ApplicationInstallParams`, and `ApplicationIntegrationTypeConfig`. The existing generic `edit_current_application(...)` helper is still available for newly released Discord fields.
+Current application reads and edits are typed through `Application`, `ModifyCurrentApplication`, `ApplicationInstallParams`, and `ApplicationIntegrationTypeConfig`. `edit_current_application(...)` takes a `ModifyCurrentApplication`; a field Discord adds before the crate models it can be sent with `RestClient::request(RawRequest::patch("/applications/@me").json(&body))`.
 
 ```rust
 use discordrs::{ApplicationInstallParams, DiscordHttpClient, ModifyCurrentApplication, Permissions};
@@ -1132,7 +1132,7 @@ For hot member, message, and presence reads, use the `Arc` variants to avoid dee
 ```rust
 async fn inspect_hot_cache(ctx: &discordrs::Context, guild_id: discordrs::GuildId, user_id: discordrs::UserId) {
     if let Some(member) = ctx.members().cached_arc(guild_id, user_id).await {
-        println!("Cached member: {}", member.user.id);
+        println!("Cached member: {:?}", member.user.as_ref().map(|user| user.id));
     }
 }
 ```
@@ -1423,7 +1423,7 @@ fn build_rest(token: &str) -> Result<RestClient, discordrs::DiscordError> {
 - `use_client(reqwest::Client)` is the escape hatch for a fully custom client; it supersedes `connect_timeout`, `request_timeout`, and `proxy`.
 - `rate_limit_callback(...)` fires on every 429 with a `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
 - `retry_non_idempotent_requests(true)` (default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. By default only GET/HEAD/OPTIONS/PUT/DELETE and `POST /channels/{id}/messages` with `nonce` + `enforce_nonce: true` (within 60 seconds of the first attempt) are replayed, because Discord may already have applied an ambiguous failure; 429s are always retried, and connection failures are retried for every method unless `use_client(...)` supplied the client (its redirect policy is unknown).
-- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)`.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself — the `ClientOptions#allowedMentions` equivalent. The same option exists on the gateway side as `ClientBuilder::default_allowed_mentions(...)` and, for inline answers of the HTTP interactions endpoint, as `InteractionsEndpointBuilder::default_allowed_mentions(...)`.
 
 ## 8.8 Prepare for Channel Obfuscation (mandatory 2026-11-16)
 
@@ -1838,7 +1838,7 @@ async fn handle_modal(http: &DiscordHttpClient, payload: &Value) -> Result<(), d
     if let RawInteraction::ModalSubmit(submission) = parse_raw_interaction(payload)? {
         let result = summarize(&submission);
         let container = create_container("Modal Processed", &result, vec![], None);
-        respond_modal_with_container(http, &ctx.id, &ctx.token, container, true).await?;
+        respond_modal_with_container(http, ctx.id, &ctx.token, container, true).await?;
     }
 
     Ok(())
@@ -1950,9 +1950,7 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 - `send_message(...)`
 - `respond_to_interaction(...)`
 - `respond_with_message(...)`
-- `followup_message(...)`
-- `defer_interaction(...)`
-- `update_interaction_message(...)`
+- `InteractionResponder` methods: `reply(...)`, `defer(...)`, `update_message(...)`, `follow_up(...)`, `edit_reply(...)` (they replace the deprecated `followup_message`, `defer_interaction`, and `update_interaction_message` helpers)
 - `parse_interaction(...)`
 - `parse_raw_interaction(...)`
 - `try_interactions_endpoint(...)`
@@ -1973,7 +1971,7 @@ fn find_custom_ids(message: &Message) -> Vec<String> {
 
 - `Client` is the main gateway runtime surface. `BotClient` is kept as an alias for compatibility.
 - Import `discordrs::response::InteractionResponder` wherever you call `interaction.reply(...)` and the other responder methods — they are trait methods and do not resolve without the import. The `model_ext` entity methods are inherent impls and need no import.
-- Double acknowledgements fail locally: the interaction response state is shared across clones, so a second `reply(...)` or an early `follow_up(...)` returns an "already acknowledged" error without hitting Discord.
+- Double acknowledgements fail locally: the interaction response state is shared across clones, so a second `reply(...)` fails with "interaction was already acknowledged" and an early `follow_up(...)` with "interaction has not been acknowledged", without hitting Discord.
 - Prefer `try_build()` over `build()` on builders when you want Discord's documented limits enforced before the HTTP call.
 - `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>`; the per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive their payload without a copy (an `Arc` where the cache shares it, a reference otherwise).
 - `RestClient` is the preferred REST-facing name. `DiscordHttpClient` remains available.

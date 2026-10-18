@@ -1,6 +1,6 @@
 # HTTP 및 헬퍼 API
 
-## DiscordHttpClient
+## RestClient
 
 - Discord REST v10 래퍼 (`RestClient`가 기본 명칭, `DiscordHttpClient`는 호환 별칭)
 - `429 Too Many Requests` 자동 재시도
@@ -21,7 +21,7 @@
 - **구체 요청 본문.** 메시지 엔드포인트는 `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`를 받습니다. 다른 도메인의 새 본문도 `discordrs::request`에 있습니다: `ModifyChannel`(`update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage`(새 `create_forum_thread(_with_files)`), `CreateAutoModerationRule`/`ModifyAutoModerationRule`, 이모지 4종, 사운드보드 3종, `CreateGuildTemplate`/`ModifyGuildTemplate`, `CreateGuildScheduledEvent`/`ModifyGuildScheduledEvent`, `EditApplicationCommand`. 생성 본문은 `Option` 필드, 수정 본문은 `Patch`/`NullablePatch` 필드이고 `clear_*` setter는 `null`을 보냅니다. 아직 `discordrs::model`에 있는 2.x 본문(`ModifyGuild`, `CreateGuildRole`, `CreateWebhook` 등)은 그대로 쓰고, 나중에 `request`로 옮깁니다. 포럼·미디어 채널의 `available_tags`(`ModifyChannel`, `CreateGuildChannel`)는 `request::AvailableForumTag` 목록입니다. `AvailableForumTag::from(&tag)`는 기존 태그를 id로 유지하고, `AvailableForumTag::new("이름")`은 새 태그를 만들며, 빠진 태그는 삭제됩니다(2.x는 id를 생략할 수 없는 응답 타입 `ForumTag`를 받았습니다).
 - **문서화된 예외.** `execute_slack_compatible_webhook`/`execute_github_compatible_webhook`은 Slack·GitHub 형식 본문이라 `&Value`를 받고, `update_lobby_message_moderation_metadata`는 애플리케이션이 정의하는 `HashMap<String, String>`을 받습니다.
 - **본문은 한 번만 인코딩합니다.** 본문은 `serde_json::to_vec`으로 바로 바이트가 되고(`serde_json::Value` 트리 없음), 재시도를 포함한 모든 시도가 같은 바이트를 보냅니다. 객체 키는 요청 타입의 필드 순서를 따릅니다.
-- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, Components V2 채널 헬퍼(`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), 그리고 인터랙션 쪽의 메시지 콜백(타입 4·7, `RawInteractionResponse` 제외), follow-up, `@original`·follow-up 수정. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 2.x는 `edit_webhook_message`와 채널 헬퍼에 적용하지 않았습니다.
+- **기본 `allowed_mentions`**(`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`)는 본문이 지정하지 않은 모든 메시지 본문에 인코딩하면서 들어갑니다: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, `create_forum_thread`의 첫 메시지, Components V2 채널 헬퍼(`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), 그리고 인터랙션 쪽의 메시지 콜백(타입 4·7, `RawInteractionResponse` 제외), follow-up, `@original`·follow-up 수정. 명시한 값, 그리고 수정 본문의 명시적 `null`이 우선합니다. 2.x는 `edit_webhook_message`와 채널 헬퍼에 적용하지 않았습니다. HTTP 인터랙션 엔드포인트의 인라인 응답은 클라이언트를 거치지 않으므로 `InteractionsEndpointBuilder::default_allowed_mentions`에 같은 값을 줍니다([인터랙션 엔드포인트](./interactions-endpoint.md#기본-allowed_mentions) 참고).
 - **nonce 재전송**은 JSON을 다시 읽지 않고 타입 요청(`CreateMessage::nonce_replay()`, `.enforce_nonce("...")`로 설정)에서 판정하며, Create Message에만 해당합니다.
 - **음성 메시지**(`IS_VOICE_MESSAGE`)는 업로드 전에 로컬에서 확인합니다: `audio/*` 파일이 정확히 하나여야 합니다.
 - `modify_guild_member`는 `()` 대신 갱신된 `Member`(Discord의 200 본문)를 돌려줍니다. `Member::edit`/`timeout`/`remove_timeout`도 같습니다.
@@ -82,7 +82,7 @@ let rest = RestClient::builder("bot-token", None)
 - `use_client(reqwest::Client)`는 완전 커스텀 클라이언트를 사용하는 escape hatch로, `connect_timeout`/`request_timeout`/`proxy`보다 우선합니다.
 - `rate_limit_callback(...)`은 모든 429마다 `RateLimitInfo { route, retry_after, global }`와 함께 호출됩니다 — discord.js의 `rateLimited` 이벤트에 해당합니다. `route`에는 웹훅·인터랙션 토큰이 들어가지 않습니다.
 - `retry_non_idempotent_requests(true)`(3.0, 기본값 `false`)는 5xx·타임아웃·응답 유실 뒤에도 POST·PATCH를 다시 보내게 합니다. 이 클라이언트로 보내는 모든 요청이 중복되어도 괜찮을 때만 켭니다.
-- `default_allowed_mentions(...)`는 페이로드가 `allowed_mentions`를 직접 지정하지 않은 경우에만 발신 메시지 페이로드에 주입됩니다. 게이트웨이 쪽에는 `ClientBuilder::default_allowed_mentions(...)`가 있습니다.
+- `default_allowed_mentions(...)`는 페이로드가 `allowed_mentions`를 직접 지정하지 않은 경우에만 발신 메시지 페이로드에 주입됩니다. 게이트웨이 쪽에는 `ClientBuilder::default_allowed_mentions(...)`, HTTP 인터랙션 엔드포인트 쪽에는 `InteractionsEndpointBuilder::default_allowed_mentions(...)`가 있습니다.
 
 ## 인터랙션 응답 API (`InteractionResponder`, 2.2.0; 응답 상태 3.0)
 

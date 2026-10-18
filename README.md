@@ -8,7 +8,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ## Features
 
-- Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
+- Typed `Client` runtime: each gateway event is decoded once into an `Event` envelope (`EventKind`, `EventMetadata`, optional raw payload) and shared as `Arc<Event>` by the cache, collectors, and your `EventHandler`, whose typed hooks (`message_create(ctx, Arc<Message>)`, ...) or `handle_event` override (matching on `event.kind()`) receive it without copying; `BotClient` remains as a compatibility alias
 - Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias; the client is `Clone`, and the transport serializes requests per Discord bucket scoped by major parameter, honors `Retry-After` and global-scope rate-limit headers, retries 429s and connection failures, replays 5xx/timeout failures only for requests that are safe to repeat (opt in for POST/PATCH with `retry_non_idempotent_requests`), does not follow redirects, and keeps webhook/interaction tokens out of REST logs and errors
 - `RestClient::with_reason(...)` scoped clones that send `X-Audit-Log-Reason` on every mutating request so bans, kicks, and edits show up with a reason in the guild audit log
 - Guild lifecycle routes: `create_guild(...)`, `delete_guild(...)`, `create_guild_from_template(...)`, and `modify_guild_mfa_level(...)` with typed `CreateGuild`, `CreateGuildFromTemplate`, and `GuildMfaLevel` bodies
@@ -88,7 +88,7 @@ discordrs = { version = "3.0.0", features = ["gateway", "zstd-stream"] }
 discordrs = { version = "3.0.0", features = ["gateway", "interactions"] }
 ```
 
-## Quick Taste: 2.2.0 Ergonomics
+## Quick Taste
 
 ```rust
 use discordrs::response::InteractionResponder;
@@ -122,10 +122,10 @@ async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordE
 
 Recent API cleanup tightened the public surface:
 
-- `RestClient` now exposes the typed REST methods as the supported public path. The old raw convenience methods such as `send_message`, `edit_message`, `create_dm_channel`, `create_interaction_response`, and `bulk_overwrite_global_commands` are no longer public.
+- `RestClient` exposes typed REST methods only. The 1.x `serde_json::Value` convenience methods are gone; their names (`edit_message`, `create_dm_channel`, `create_interaction_response`, `bulk_overwrite_global_commands`) are now the typed methods in the table below, and `send_message` is the `helpers::send_message` function.
 - Builder implementation submodules are private. Import builders from `discordrs::builders::{...}` or use the crate root re-exports.
 - `ApplicationCommand` no longer implements `DiscordModel` because its ID is optional until Discord assigns one. Use `ApplicationCommand::id_opt()` and `ApplicationCommand::created_at()` instead.
-- 3.0 (unreleased): REST methods take concrete request types and return typed models. The 2.x `_typed` / `_from_request` / `_config` pairs collapse into one canonical method (`update_channel(&ModifyChannel)`, `modify_guild`, `create_guild_role`, `get_guild_emojis() -> Vec<Emoji>`, ...); the 1:1 renames remain as deprecated forwards for one release. Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. Routes without a typed method go through `RestClient::request(RawRequest)`. The full old → new table is "Migrating REST names from 2.x" in [HTTP and Helpers](discordrsdocs/docs/api/http-and-helpers.md).
+- 3.0: REST methods take concrete request types and return typed models. The 2.x `_typed` / `_from_request` / `_config` pairs collapse into one canonical method (`update_channel(&ModifyChannel)`, `modify_guild`, `create_guild_role`, `get_guild_emojis() -> Vec<Emoji>`, ...); the 1:1 renames remain as deprecated forwards for one release. Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. Routes without a typed method go through `RestClient::request(RawRequest)`. The full old → new table is "Migrating REST names from 2.x" in [HTTP and Helpers](discordrsdocs/docs/api/http-and-helpers.md).
 - 3.0 (unreleased): integer discriminants are open newtypes (`ChannelType`, `ButtonStyle`, `CommandOptionType`, `InteractionResponseType`, ...) with named constants, the 2.x `u8` constant modules (`button_style`, `option_type`, ...) are gone, and permission sets are `Permissions` (`PermissionsBitField` is a deprecated alias). See "Migrating from 2.x discriminants" in [Models and Constants](discordrsdocs/docs/api/core-types-and-constants.md).
 
 If you are upgrading existing code, the common replacements are:
@@ -330,9 +330,9 @@ fn app(public_key: &str) -> Router {
 - `discord.rs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release with the typed runtime surface.
 - Use `try_interactions_endpoint()` when you want invalid public keys to fail at startup instead of during requests.
 - Use `discordrs::prelude::*` when you want the shortest path to the main runtime, command, helper, and response APIs.
-- Use `DiscordHttpClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
+- Use `RestClient::create_followup_message_with_application_id()` when you already have `InteractionContext.application_id` and the client was not initialized with an application id.
 - Prefer the typed `RestClient` methods such as `create_message`, `edit_message`, `create_interaction_response`, and `bulk_overwrite_global_commands`.
-- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log`, `get_auto_moderation_rules`, `get_guild_preview`, `get_guild_vanity_url`, `get_voice_regions`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to raw `serde_json::Value` methods.
+- Prefer typed REST wrappers such as `bulk_guild_ban`, `get_guild_role`, `get_guild_audit_log`, `get_auto_moderation_rules`, `get_guild_preview`, `get_guild_vanity_url`, `get_voice_regions`, `get_guild_voice_regions`, `get_current_application`, and `get_application_role_connection_metadata_records` before falling back to `RestClient::request(RawRequest)` for a route without a typed method.
 - `CacheHandle::new()` uses bounded cache defaults so normal gateway builds do not retain every gateway entity forever.
 - Use `Client::builder(...).cache_config(...)` or `CacheHandle::with_config(...)` to tune cache limits, and use `CacheConfig::unbounded()` only when unbounded retention is intentional.
 - Use `CacheHandle::is_enabled()` when code may be compiled with `default-features = false`; cache storage is enabled in the default feature set.

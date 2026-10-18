@@ -293,14 +293,13 @@ Also changed:
 
 `src/types.rs` still contains:
 
-- `Error`
 - `ButtonConfig`
 - `Emoji`
 - `SelectOption`
 - `MediaGalleryItem`
 - `MediaInfo`
 
-These stay relevant for builders and compatibility helpers.
+These stay relevant for builders and compatibility helpers. The `Error` alias (`discordrs::Error`, `types::Error`) was removed in 3.0; use `DiscordError`.
 
 ## Constants
 

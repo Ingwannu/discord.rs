@@ -155,10 +155,15 @@ impl RestClientBuilder {
     }
 
     /// Sets allowed-mentions injected into outgoing message payloads
-    /// (`create_message`, `update_message`, `execute_webhook`, interaction
-    /// responses) whenever the payload does not set `allowed_mentions`
-    /// itself — the equivalent of discord.js's
+    /// (`create_message`, `edit_message`, `execute_webhook`, interaction
+    /// callbacks and follow-ups) whenever the payload does not set
+    /// `allowed_mentions` itself — the equivalent of discord.js's
     /// `ClientOptions#allowedMentions`.
+    ///
+    /// Inline answers of the HTTP interactions endpoint do not go through a
+    /// client; set the same value with
+    /// `InteractionsEndpointBuilder::default_allowed_mentions` (feature
+    /// `interactions`) to answer the same way on both transports.
     pub fn default_allowed_mentions(mut self, allowed_mentions: AllowedMentions) -> Self {
         self.default_allowed_mentions = Some(allowed_mentions);
         self

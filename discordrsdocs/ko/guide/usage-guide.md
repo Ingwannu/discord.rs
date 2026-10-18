@@ -10,19 +10,18 @@
 
 ## 2. 기본 패턴
 
-1. Gateway 또는 Endpoint로 이벤트 수신
-2. `parse_raw_interaction`, `parse_interaction_context`로 파싱
-3. `create_container` 등 빌더로 응답 페이로드 생성
-4. `respond_with_container` 계열 헬퍼로 응답
+1. Gateway(`EventHandler::interaction_create`) 또는 타입드 엔드포인트(`TypedInteractionHandler`, `AppFramework`)로 타입 인터랙션(`Interaction`)을 받습니다.
+2. 인터랙션의 응답 메서드(`InteractionResponder`의 `reply`, `defer`, `update_message`, `follow_up` 등)로 응답합니다. 엔드포인트에서는 `InteractionResponse`를 반환해 인라인으로 응답할 수도 있습니다.
+3. JSON 페이로드를 직접 다루는 raw 경로에서는 `parse_raw_interaction`, `parse_interaction_context`로 파싱하고 `respond_with_container` 계열 헬퍼로 응답합니다(아래 예시). 이 헬퍼는 ID와 토큰만 받으므로 공유 응답 상태를 보지 못합니다.
 
-## 3. Slash Command 응답 예시
+## 3. Slash Command 응답 예시 (raw 경로)
 
 ```rust
 let ctx = parse_interaction_context(payload)?;
 if let RawInteraction::Command { name, .. } = parse_raw_interaction(payload)? {
     if name.as_deref() == Some("hello") {
         let container = create_container("알림", "명령이 처리되었습니다.", vec![], None);
-        respond_with_container(http, &ctx.id, &ctx.token, container, true).await?;
+        respond_with_container(http, ctx.id, &ctx.token, container, true).await?;
     }
 }
 ```

@@ -10,12 +10,12 @@ flowchart LR
   end
 
   subgraph Runtime[Gateway 런타임]
-    BC[BotClient]
+    BC[Client]
     GC[GatewayClient]
   end
 
   subgraph Transport[HTTP 레이어]
-    HC[DiscordHttpClient]
+    HC[RestClient]
     HP[Helpers]
   end
 

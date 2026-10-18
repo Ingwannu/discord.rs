@@ -14,6 +14,7 @@ discordrs = { version = "3.0.0", features = ["interactions"] }
 - Ed25519 request signature verification
 - Axum routing helpers
 - 1 MiB request body cap on generated `/interactions` routes, configurable with `InteractionsEndpointBuilder::body_limit` (64 KiB before 3.0)
+- Default `allowed_mentions` for inline message responses with `InteractionsEndpointBuilder::default_allowed_mentions`, the same rule the REST client applies
 - Typed interaction parsing
 - Typed response encoding: handlers return an `EndpointReply`, inline callbacks are `request::InteractionResponse` values encoded once to the response bytes
 - Optional `AppFramework` routing for commands, components, and modals
@@ -36,6 +37,22 @@ The documentation of `DEFAULT_INTERACTION_BODY_LIMIT` gives the size estimate be
 
 The limit is per request, not a total for all requests. The body is read in full before the signature can be checked (Ed25519 signs the timestamp and the whole body as one message), and verification copies it once more behind the timestamp, so each request holds about twice its body until verification ends, and the decoded interaction after that. Unauthenticated clients can send many requests at once, each up to the limit; bound concurrency in front of the endpoint (a proxy's connection or request limits) when that matters.
 
+### Default `allowed_mentions`
+
+The endpoint takes no `RestClient`, so it does not see `RestClientBuilder::default_allowed_mentions`. Give the builder the same policy to answer the same way inline and over REST:
+
+```rust
+use discordrs::model::AllowedMentions;
+use discordrs::InteractionsEndpointBuilder;
+
+let no_pings = AllowedMentions::default(); // `{}`: nothing in the content pings
+let router = InteractionsEndpointBuilder::new(public_key)
+    .default_allowed_mentions(no_pings)
+    .build_typed(handler)?;
+```
+
+The rule is the REST callback's: only message callbacks (`reply`, `update`; types 4 and 7) get the default, a value the response sets itself wins (on an update, an explicit clear too), and `InteractionResponse::Raw` is sent exactly as written. It applies to raw handlers, typed handlers, and `AppFramework` routes. Without the setting, inline responses carry only what they set (as in 3.0.0).
+
 ## Typical Flow
 
 1. Receive `/interactions` HTTP request
@@ -54,7 +71,7 @@ Handlers (`InteractionHandler::handle`, `TypedInteractionHandler::handle_typed`,
 | `Inline(response)` (usually `InteractionResponse::...into()`) | `200 OK`, `Content-Type: application/json`, the callback as the body |
 | `Accepted` | `202 Accepted` with no body: the initial response goes over REST |
 
-`InteractionResponse` is the same type the REST callback (`RestClient::create_interaction_response`) and the responder methods send, and both transports encode it with one encoder, so the inline body and the REST body are byte for byte the same (the REST client additionally fills its default `allowed_mentions` into message callbacks). Its variants are the Discord callback types:
+`InteractionResponse` is the same type the REST callback (`RestClient::create_interaction_response`) and the responder methods send, and both transports encode it with one encoder, so the inline body and the REST body are byte for byte the same. Each transport fills in its own default `allowed_mentions` with the same rule: the REST client's `RestClientBuilder::default_allowed_mentions`, and the endpoint's `InteractionsEndpointBuilder::default_allowed_mentions` (see [above](#default-allowed_mentions)); set both to the same value and one response gives the same bytes either way. Its variants are the Discord callback types:
 
 | Variant | `type` | `data` |
 |---|---|---|
@@ -100,7 +117,7 @@ The typed endpoint (`try_typed_interactions_endpoint`) passes the handler a cont
 
 Discord specifies the `202` with no body for interactions received over HTTP whose response goes through the callback endpoint. Return `EndpointReply::Accepted` whenever the handler responds over REST, so the endpoint never has to discard a response.
 
-A clone kept by a spawned task after an inline response sees the interaction as acknowledged and can finish the work over REST:
+Work that outlives the handler, such as a spawned task that later calls `edit_reply` or `follow_up`, must start once the interaction is acknowledged. Defer over REST first, then spawn the task and return `EndpointReply::Accepted`:
 
 ```rust
 use discordrs::prelude::*;
@@ -110,19 +127,28 @@ let app = AppFramework::builder()
     .command("report", move |ctx: AppContext| {
         let rest = rest.clone();
         async move {
+            // Acknowledge over REST before the task starts: once `defer` returns,
+            // Discord holds the deferral and the task may edit it at any time.
+            if ctx.defer(&rest).await.is_err() {
+                // The endpoint sends this only if Discord cannot have applied the
+                // deferral; otherwise it answers 202.
+                return InteractionResponse::reply("Could not start the report.").into();
+            }
             tokio::spawn(async move {
                 let report: String = build_report().await;
                 let _ = ctx.edit_reply(&rest, report).await;
             });
-            InteractionResponse::defer(false)
+            EndpointReply::Accepted
         }
     })
     .build();
 ```
 
+Do not spawn the task and return an inline `defer` instead. The endpoint records an inline response only after the handler has returned, and Discord gets it only after that, so a task that reaches `edit_reply` first fails locally with "interaction has not been acknowledged" or is rejected by Discord. When the work fits in Discord's 3-second window, skip the task and return the inline reply.
+
 Notes:
 
-- The inline response is the body of Discord's own request, so it counts as delivered when the handler returns it. A follow-up sent in the instant before Discord has read that body can still be rejected by Discord.
+- The inline response is the body of Discord's own request, so the endpoint records it as delivered once the handler has returned it; there is no delivery outcome to wait for. A clone used after that (from a collector or a later event) sees the interaction as acknowledged, but a follow-up sent in the instant before Discord has read that body can still be rejected by Discord, which is why work handed to a task defers over REST first (above).
 - With `EndpointReply::Accepted`, the REST response must be sent within Discord's 3-second window, or the interaction fails.
 - The endpoint encodes the inline response before it claims the response state, as the REST path does. If it cannot be encoded (it cannot happen with the typed variants), the endpoint logs the error and answers `500` without recording an initial response.
 - The raw endpoint (`InteractionHandler`, `InteractionContext`) has no shared response state; helpers that take only an id and token are stateless.

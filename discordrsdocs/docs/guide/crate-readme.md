@@ -8,7 +8,7 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ## Features
 
-- Typed `Client` runtime with `Event` enum dispatch and compatibility `BotClient` alias
+- Typed `Client` runtime: each gateway event is decoded once into an `Event` envelope (`EventKind`, `EventMetadata`, optional raw payload) and shared as `Arc<Event>` by the cache, collectors, and your `EventHandler`, whose typed hooks (`message_create(ctx, Arc<Message>)`, ...) or `handle_event` override (matching on `event.kind()`) receive it without copying; `BotClient` remains as a compatibility alias
 - Typed `RestClient` with shared route/global rate-limit state and compatibility `DiscordHttpClient` alias
 - Gateway WebSocket client with connect, heartbeat, identify, resume, reconnect, zlib compression, and optional zstd-stream compression
 - HTTP REST client with automatic 429 rate-limit retry

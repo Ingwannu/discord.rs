@@ -85,7 +85,7 @@ flowchart LR
 ## Runtime Patterns
 
 - Gateway mode: maintain websocket session, handle typed `Event`, call `RestClient` or managers when needed
-- Endpoint mode: receive signed interaction payloads, decode the body with `decode_interaction(...)` (or `parse_interaction(&Value)` on a parsed value), respond with helpers
+- Endpoint mode: receive signed interaction payloads, decode the body with `decode_interaction(...)` (or `parse_interaction(&Value)` on a parsed value), and answer with an `EndpointReply`: an inline `InteractionResponse`, or `Accepted` after responding over REST through `InteractionResponder`
 - Hybrid mode: use both for richer operational workflows
 - Public async traits (`EventHandler`, `CacheBackend`, `InteractionHandler`, `TypedInteractionHandler`, `CachedManager`) declare `fn ... -> impl Future + Send`, so users implement them with plain `async fn` and no proc-macro dependency. Such traits are not object safe, so the gateway runtime shares the handler and the cache backend through private object-safe traits (`ErasedEventHandler` in `src/gateway/bot.rs`, `ErasedCacheBackend` in `src/gateway/bot/backend.rs`) with a blanket impl that boxes each call once. The interactions endpoint is generic over the handler and needs no erasure.
 - Sharding and voice are dedicated feature-gated layers above the base `Client`.

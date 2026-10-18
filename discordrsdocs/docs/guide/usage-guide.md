@@ -91,7 +91,7 @@ async fn on_event(ctx: Context, event: &Event) -> Result<(), discordrs::DiscordE
 }
 ```
 
-Double acknowledgements fail locally: the response state is shared atomically across clones of one interaction, so a second `reply(...)` or an early `follow_up(...)` returns an "already acknowledged" error without hitting Discord. See the [HTTP and Helpers API](../api/http-and-helpers.md) for the full responder and entity-method surface.
+Double acknowledgements fail locally: the response state is shared atomically across clones of one interaction, so a second `reply(...)` fails with "interaction was already acknowledged" and an early `follow_up(...)` with "interaction has not been acknowledged", without hitting Discord. See the [HTTP and Helpers API](../api/http-and-helpers.md) for the full responder and entity-method surface.
 
 ## 3. Register typed commands
 
@@ -110,7 +110,7 @@ let command = SlashCommandBuilder::new("ticket", "Create a support ticket")
 ## 4. Use typed REST plus helpers
 
 - Use `RestClient` for direct REST access and manager-backed lookups.
-- Use helper functions when you are building Components V2 or interaction responses.
+- Use the `InteractionResponder` methods (`reply`, `defer`, `update_message`, `follow_up`, ...) for interaction responses, and the helper functions for Components V2 channel messages.
 - Keep payload building inside the fluent builders instead of hand-written JSON whenever possible.
 - For your website's own Discord link preview (no bot involved), build a `discordrs::request::ComponentEmbed` and server-render `to_script_tag()` into the page; see [Builders: Component Embed](#/docs/api/builders) (3.0).
 - Use `get_guild_application_command_permissions(...)`, `get_application_command_permissions(...)`, and `edit_application_command_permissions(...)` for command permission flows. Permission writes require an OAuth2 Bearer token with Discord's `applications.commands.permissions.update` scope.

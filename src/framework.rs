@@ -40,8 +40,11 @@ pub enum RouteKey {
 /// Implements [`InteractionResponder`], so a route can respond over REST and
 /// keep (or move into a spawned task) a clone to send follow-ups later. All
 /// clones share one response state with the interaction: once the endpoint
-/// returns the route's inline response, `follow_up` and `edit_reply` on a
-/// retained clone are accepted. A route that sends its initial response over
+/// has answered with the route's inline response, `follow_up` and
+/// `edit_reply` on a retained clone are accepted. A task the route spawns
+/// can run before that, so a route that hands work to a task acknowledges
+/// over REST first (`ctx.defer(&rest)`) and returns
+/// [`EndpointReply::Accepted`]. A route that sends its initial response over
 /// REST should return [`EndpointReply::Accepted`], which the endpoint
 /// answers with `202` and no body. `Debug` output never contains the token.
 #[derive(Clone, Debug)]

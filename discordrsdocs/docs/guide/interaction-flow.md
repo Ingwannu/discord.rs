@@ -14,6 +14,7 @@ let raw = parse_raw_interaction(payload)?;
 ```rust
 match raw {
     RawInteraction::Command { name, .. } => { /* slash */ }
+    RawInteraction::Autocomplete { name, .. } => { /* option suggestions */ }
     RawInteraction::Component { custom_id, .. } => { /* button/select */ }
     RawInteraction::ModalSubmit(submission) => { /* modal */ }
     RawInteraction::Ping => { /* endpoint pong */ }

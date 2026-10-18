@@ -307,7 +307,7 @@ without any code change. With a pin, new lints arrive in one deliberate PR.
 - an integer where an open discriminant (`ChannelType`, `ButtonStyle`) is expected, `Default` on a discriminant (or a struct storing one), and the 2.x tuple spelling `ActivityType(0)` / `.0`;
 - `Patch::null()` on a non-nullable `Patch<bool>`;
 - an `async fn` impl of a public async trait whose future is not `Send` (`CacheBackend`, the async trait available with default features, which this test uses);
-- a custom-ID `ButtonBuilder` in a Component Embed preview row, or `custom_id` on a `PreviewLinkButton` (link buttons only).
+- a custom-ID `CustomButtonBuilder` in a Component Embed preview row, or `custom_id` on a `PreviewLinkButton` (link buttons only).
 
 The positive side of that contract is `tests/async_traits.rs`: it implements every public async trait from outside the crate with plain `async fn` (no attribute macro) and runs the futures on spawned Tokio tasks, so a signature that `async fn` can no longer implement fails the build.
 

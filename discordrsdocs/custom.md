@@ -28,7 +28,7 @@ flowchart TB
   end
 
   subgraph GatewayModule [Gateway]
-    bot[BotClient]
+    bot[Client]
     gw[GatewayClient]
     bot --> gw
   end
@@ -40,7 +40,7 @@ flowchart TB
   end
 
   subgraph HttpHelpers [HTTP & Helpers]
-    http[DiscordHttpClient]
+    http[RestClient]
     hlp[InteractionHelpers]
     http --> hlp
   end
@@ -134,31 +134,39 @@ Enables a full bot runtime using Discord’s Gateway API.
 
 ### 2.1 GatewayClient (`src/gateway/client.rs`)
 
-- **Purpose:** Manage a long-lived WebSocket connection to Discord.
+- **Purpose:** Manage a long-lived WebSocket connection to Discord. Crate-internal; `Client` creates and drives it.
 - **Features:**
   - Identify, resume, reconnect logic with exponential backoff.
   - Heartbeat scheduling and “zombie” detection.
-  - Dispatches all events via a user-provided callback.
+  - Dispatches all events via a callback supplied by `Client`.
 - **Key Methods:**
   - `new(token, intents)`: initialize client.
   - `run(on_event)`: start connect→listen loop.
   - Internal `connect_and_run`: handshake, heartbeat, event loop.
 
-### 2.2 BotClient & Builder (`src/gateway/bot.rs`)
+### 2.2 Client & ClientBuilder (`src/gateway/bot.rs`)
 
 - **Purpose:** High-level wrapper for GatewayClient + HTTP context + event handling.
 - **Key Types:**
-  - `BotClientBuilder`: configure token, intents, event handler, application ID, type map.
-  - `Context`: shared across handlers, provides `http: DiscordHttpClient` and mutable `TypeMap`.
-  - `EventHandler` trait: user implements `ready`, `message_create`, `interaction_create`, `raw_event`.
+  - `ClientBuilder` (from `Client::builder(token, intents)`): configure event handler, application ID, type map entries. `BotClient` and `BotClientBuilder` are compatibility aliases.
+  - `Context`: shared across handlers, provides `http: Arc<RestClient>` and `data: Arc<RwLock<TypeMap>>`.
+  - `EventHandler` trait: `handle_event(ctx, Arc<Event>)` receives every event as the shared `Arc<Event>` (match `event.kind()` for an `EventKind`) and by default forwards it to typed hooks such as `ready(ctx, &ReadyPayload)`, `message_create(ctx, Arc<Message>)`, and `interaction_create(ctx, &Interaction)`; unknown dispatches go to `raw_event` and undecodable payloads to `decode_failed`. Every typed hook defaults to a no-op.
 - **Flow:**
-  1. Build with `.event_handler(handler)` and optional `.application_id(id)`.
+  1. Build with `Client::builder(token, intents)`, `.event_handler(handler)`, and optional `.application_id(id)`.
   2. `.start().await` spins up GatewayClient and dispatches events into async handler methods.
 
 ### 2.3 Module Export (`src/gateway/mod.rs`)
 
 ```rust
-pub use bot::{BotClient, BotClientBuilder, Context, EventHandler, TypeMap};
+#[cfg(feature = "cache")]
+pub use bot::CacheBackendHealth;
+pub use bot::{
+    BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventDispatchMode, EventHandler,
+    InteractionOverloadReason, OverloadedInteraction, TypeMap,
+};
+pub use messenger::ShardMessenger;
+#[cfg(feature = "sharding")]
+pub use supervisor::ShardSupervisor;
 ```
 
 ---
@@ -170,11 +178,12 @@ Convert raw JSON payloads into typed enums and structs.
 ### 3.1 Interaction Parser (`src/parsers/interaction.rs`)
 
 - **Key Types:**
-  - `RawInteraction`: enum of `Ping`, `Command`, `Component`, `ModalSubmit`.
+  - `RawInteraction`: enum of `Ping`, `Command`, `Autocomplete`, `Component`, `ModalSubmit`.
   - `InteractionContext`: common fields (id, token, application_id, guild_id, channel_id, user_id).
 - **Functions:**
-  - `parse_raw_interaction(&Value) -> RawInteraction`
-  - `parse_interaction_context(&Value) -> InteractionContext`
+  - `parse_raw_interaction(&Value) -> Result<RawInteraction, DiscordError>`
+  - `parse_interaction_context(&Value) -> Result<InteractionContext, DiscordError>`
+  - `decode_interaction(&str) -> Result<Interaction, DiscordError>`: the typed model (`parse_interaction(&Value)` for an already-parsed value).
 
 ### 3.2 Modal Parser (`src/parsers/modal.rs`)
 
@@ -182,32 +191,33 @@ Convert raw JSON payloads into typed enums and structs.
   - `V2ModalComponent`: leaf enum variants (text input, select, radio, checkbox, etc.).
   - `V2ModalSubmission`: custom ID + flat list of `V2ModalComponent`.
 - **Function:**
-  - `parse_modal_submission(&Value) -> Result<V2ModalSubmission, Error>`
+  - `parse_modal_submission(&Value) -> Result<V2ModalSubmission, DiscordError>`
 
 ### 3.3 Module & Utilities (`src/parsers/mod.rs`)
 
-Re-exports parsers and provides JSON helpers:
+Re-exports the public parser surface, also available at the crate root:
 
-- `value_to_string`, `value_to_u8`
-- `optional_string_field`, `required_string_field`
-- Used by both interaction and modal parsers.
+- `decode_interaction`, `parse_interaction`, `parse_interaction_context`, `parse_raw_interaction`, `parse_modal_submission`
+- `InteractionContext`, `RawInteraction`, `V2ModalComponent`, `V2ModalSubmission`
+
+The JSON field helpers shared by both parsers are crate-internal.
 
 ---
 
 ## 4. HTTP & Helpers
 
-### 4.1 DiscordHttpClient (`src/http.rs`, endpoints in `src/http/`)
+### 4.1 RestClient (`src/http.rs`, endpoints in `src/http/`)
 
-- **Purpose:** REST client targeting Discord API v10.
+- **Purpose:** REST client targeting Discord API v10. `DiscordHttpClient` is a compatibility alias.
 - **Features:**
   - Automatic retry on `429 Too Many Requests`.
   - Common endpoints: create/update/delete messages, manage application commands, interaction responses, and followups.
 - **Key Methods:**
   - `new(token, application_id)`
-  - `create_message(channel_id, body)`, `update_message(channel_id, message_id, body)`
+  - `create_message(channel_id, &CreateMessage)`, `edit_message(channel_id, message_id, &EditMessage)`
   - `create_interaction_response(interaction_id, interaction_token, &InteractionResponse)`
-  - `create_followup_message(interaction_token, body)`
-  - `request(method, path, body)`: generic with rate limit logic.
+  - `create_followup_message(interaction_token, &CreateFollowup)`
+  - `request::<T>(RawRequest)`: any method and path for routes without a typed method, with the same rate limit logic.
 
 ### 4.2 Interaction Helpers (`src/helpers.rs`)
 
@@ -223,19 +233,19 @@ Re-exports parsers and provides JSON helpers:
 - **Purpose:** Provide an HTTP `/interactions` endpoint for Discord’s interaction callbacks.
 - **Components:**
   - Signature verification using Ed25519.
-  - Request routing with Axum.
-  - Calls a user’s `InteractionHandler` to produce an `InteractionResponse`.
-  - Automatic JSON encoding of response types: Pong, ChannelMessage, Deferred, Modal, UpdateMessage.
+  - Request routing with Axum; `try_interactions_endpoint(public_key, handler)` builds the `Router`.
+  - Calls a user’s `InteractionHandler` (or `TypedInteractionHandler`), which returns an `EndpointReply`: `Inline` (a boxed `InteractionResponse`, answered with 200) or `Accepted` (202 with no body, when the initial response goes over REST).
+  - Automatic JSON encoding of `InteractionResponse` variants: `Pong`, `ChannelMessage`, `DeferredChannelMessage`, `DeferredUpdateMessage`, `UpdateMessage`, `AutocompleteResult`, `Modal`, `LaunchActivity`, `Raw`, and the deprecated `PremiumRequired`.
 
 ---
 
 ## 6. Core Types & Constants
 
-- **Constants** (`src/constants.rs`): Component type codes, button styles, text-input styles, separator spacings, gateway opcodes.
+- **Constants** (`src/constants.rs`): gateway intents and the components-v2 message flag. Component types, button styles, text-input styles, and separator spacings are the open discriminants `ComponentType`, `ButtonStyle`, `TextInputStyle`, and `SeparatorSpacing` since 3.0.
+- **Errors** (`src/error.rs`): `DiscordError`, the crate's error type (the 2.x `Error` alias was removed in 3.0).
 - **Types** (`src/types.rs`): 
-  - `Error` alias, `invalid_data_error`.
   - `ButtonConfig`, `Emoji`, `SelectOption`, `MediaGalleryItem`, `MediaInfo`.
-  - `TypeMap` for storing user data in `Context`.
+  - `TypeMap` (defined in `src/gateway/bot.rs`) for storing user data in `Context`.
 
 ---
 
@@ -244,7 +254,7 @@ Re-exports parsers and provides JSON helpers:
 - **README.md**: High-level overview, features, installation, quickstart examples.
 - **USAGE.md**: Expanded usage guide covering bot startup, message sending, and interaction flows.
 - **CHANGELOG.md**: Version history with breaking changes and new features.
-- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `interactions`), and dependencies.
+- **Cargo.toml**: Crate metadata, feature flags (`gateway`, `zstd-stream`, `interactions`, `cache`, `collectors`, `sharding`, `voice`, `voice-encode`, `dave`), and dependencies.
 - **LICENSE-APACHE** & **LICENSE-MIT**: Dual licensing terms.
 
 ---

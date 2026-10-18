@@ -39,7 +39,7 @@ Every method takes a concrete request type and returns a typed model (3.0). For 
 - **Concrete request bodies.** Message endpoints take `discordrs::request::{CreateMessage, EditMessage, ExecuteWebhook, EditWebhookMessage}`. New bodies for the other domains live in `discordrs::request` too: `ModifyChannel` (for `update_channel`), `StartThreadFromMessage`, `StartThreadWithoutMessage`, `StartForumThread` + `ForumThreadMessage` (new `create_forum_thread(_with_files)`), `CreateAutoModerationRule` / `ModifyAutoModerationRule`, `CreateGuildEmoji` / `ModifyGuildEmoji` / `CreateApplicationEmoji` / `ModifyApplicationEmoji`, `SendSoundboardSound` / `CreateGuildSoundboardSound` / `ModifyGuildSoundboardSound`, `CreateGuildTemplate` / `ModifyGuildTemplate`, `CreateGuildScheduledEvent` / `ModifyGuildScheduledEvent`, and `EditApplicationCommand`. Create bodies use `Option` fields; modify bodies use `Patch` / `NullablePatch`, where the `clear_*` setters send `null`. The 2.x bodies still in `discordrs::model` (`ModifyGuild`, `CreateGuildRole`, `CreateWebhook`, ...) keep working and move to `request` later. A forum or media channel's `available_tags` (in `ModifyChannel` and `CreateGuildChannel`) is a list of `request::AvailableForumTag`: `AvailableForumTag::from(&tag)` keeps an existing tag by id, `AvailableForumTag::new("name")` creates one, and tags left out are deleted (2.x took the response type `ForumTag`, which cannot omit the id).
 - **Documented exceptions.** `execute_slack_compatible_webhook` / `execute_github_compatible_webhook` take `&Value` (Slack- and GitHub-format payloads), and `update_lobby_message_moderation_metadata` takes the application-defined `HashMap<String, String>`.
 - **Bodies are encoded once.** A body is serialized straight to bytes with `serde_json::to_vec` (no `serde_json::Value` tree) and every attempt, including retries, sends the same bytes. Object keys follow the request type's field order.
-- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, the Components V2 channel helpers (`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), and on the interaction side the message callbacks (types 4 and 7; not `RawInteractionResponse`), follow-ups, and `@original` / follow-up edits. An explicit value, or an explicit `null` on an edit, wins. 2.x did not apply it to `edit_webhook_message` or the channel helpers.
+- **Default `allowed_mentions`** (`RestClientBuilder::default_allowed_mentions`, `with_default_allowed_mentions`) is written while encoding every message body that leaves it unset: `create_message(_with_files)`, `edit_message(_with_files)`, `execute_webhook*`, `edit_webhook_message*`, the first message of `create_forum_thread`, the Components V2 channel helpers (`send_container_message`, `send_to_channel`, `send_components_v2`, `edit_message_with_container`), and on the interaction side the message callbacks (types 4 and 7; not `RawInteractionResponse`), follow-ups, and `@original` / follow-up edits. An explicit value, or an explicit `null` on an edit, wins. 2.x did not apply it to `edit_webhook_message` or the channel helpers. Inline answers of the HTTP interactions endpoint do not go through a client: give `InteractionsEndpointBuilder::default_allowed_mentions` the same value (see [Interactions Endpoint](./interactions-endpoint.md#default-allowed_mentions)).
 - **Nonce replay** comes from the typed request (`CreateMessage::nonce_replay()`, set with `.enforce_nonce("...")`), not from reading the JSON back, and only for Create Message.
 - **Voice messages** (`IS_VOICE_MESSAGE`) are checked locally before upload: exactly one `audio/*` file.
 - `modify_guild_member` returns the updated `Member` (Discord's 200 body) instead of `()`; `Member::edit` / `timeout` / `remove_timeout` follow.
@@ -126,7 +126,7 @@ let rest = RestClient::builder("bot-token", None)
 - `use_client(reqwest::Client)` supplies a fully custom client, superseding `connect_timeout`, `request_timeout`, and `proxy`.
 - `rate_limit_callback(...)` fires on every 429 with `RateLimitInfo { route, retry_after, global }` — the discord.js `rateLimited` event equivalent. `route` never contains a webhook or interaction token.
 - `retry_non_idempotent_requests(true)` (3.0, default `false`) lets POST and PATCH be replayed after a 5xx, timeout, or lost response. Enable it only when a duplicated mutation is acceptable for every request the client makes.
-- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`.
+- `default_allowed_mentions(...)` is injected into outgoing message payloads (`create_message`, `edit_message`, `execute_webhook`, interaction responses) only when the payload does not set `allowed_mentions` itself. The gateway-side counterpart is `ClientBuilder::default_allowed_mentions(...)`, and the HTTP interactions endpoint's is `InteractionsEndpointBuilder::default_allowed_mentions(...)`.
 
 ## Interaction Response API (`InteractionResponder`, 2.2.0; response state 3.0)
 
@@ -338,7 +338,7 @@ let updated = rest
     .await?;
 ```
 
-The generic `edit_current_application(...)` helper remains available for fields Discord adds before discord.rs grows a typed model.
+For a field Discord adds before discord.rs models it, send the route through `RestClient::request(RawRequest::patch("/applications/@me").json(&body))`.
 
 ## Webhook Resource Helpers
 
@@ -433,13 +433,13 @@ let message = rest
 rest.edit_webhook_message_with_query(
     webhook_id,
     token,
-    message.id.as_str(),
+    &message.id.to_string(),
     &message_query,
     &discordrs::request::EditWebhookMessage::new().content("edited"),
 )
 .await?;
 
-rest.delete_webhook_message_with_query(webhook_id, token, message.id.as_str(), &message_query)
+rest.delete_webhook_message_with_query(webhook_id, token, &message.id.to_string(), &message_query)
     .await?;
 ```
 
@@ -1069,7 +1069,7 @@ oauth
 
 - Use `RestClient` or context managers for typed fetch/send flows.
 - Use `OAuth2Client` for OAuth2 application backend flows.
-- Use helper functions for common interaction acknowledgment paths.
+- Use the `InteractionResponder` methods (`reply`, `defer`, `follow_up`, ...) for interaction responses; they share the interaction's response state, which the stateless helpers cannot see.
 - Keep Components V2 payload generation inside the builders.
 - Fall back to low-level raw request helpers only when the typed surface does not yet cover the route.
 

@@ -1,6 +1,6 @@
 # discord.rs 한국어 문서
 
-이 문서는 discord.rs 2.2.0 기준으로 갱신되었습니다. 현재 공개 API는 타입드 Gateway 런타임, 타입드 REST 클라이언트, HTTP Interactions Endpoint, Components V2 빌더, 캐시/컬렉터 계층, 샤딩 헬퍼, 고수준 앱 프레임워크, Webhook Events, Lobby 헬퍼, Voice 런타임 기반을 포함합니다.
+이 문서는 discord.rs 3.0.0 기준으로 갱신되었습니다. 현재 공개 API는 타입드 Gateway 런타임, 타입드 REST 클라이언트, HTTP Interactions Endpoint, Components V2 빌더, 캐시/컬렉터 계층, 샤딩 헬퍼, 고수준 앱 프레임워크, Webhook Events, Lobby 헬퍼, Voice 런타임 기반을 포함합니다.
 
 브랜드 표기는 `discord.rs`를 사용하고, crates.io 패키지 이름과 Rust import 경로는 `discordrs`를 유지합니다.
 
