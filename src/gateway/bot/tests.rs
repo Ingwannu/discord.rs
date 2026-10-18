@@ -8340,39 +8340,66 @@ fn client_builder_identify_gate_reaches_the_connection_config() {
     assert!(builder.gateway_config.identify_gate_ref().is_some());
 }
 
+/// How the context of [`context_in_mock_voice_call`] came to track the call.
+#[cfg(feature = "voice")]
+#[derive(Clone, Copy, Debug)]
+enum MockVoiceJoin {
+    /// `join_voice`, then the bot's voice state, then the server update.
+    StateFirst,
+    /// `join_voice`, then the server update, then the bot's voice state.
+    ServerFirst,
+    /// The server update, then the bot's voice state, with no `join_voice`
+    /// on this context (the request went out another way).
+    ServerFirstUntracked,
+}
+
 /// A context whose tracked voice state points at a mock voice gateway:
 /// guild 1, channel and user of the mock DAVE call.
 #[cfg(feature = "voice")]
-async fn context_in_mock_voice_call(endpoint: String) -> super::Context {
+async fn context_in_mock_voice_call(endpoint: String, join: MockVoiceJoin) -> super::Context {
     use crate::voice_runtime::test_call::{BOT, CHANNEL};
 
     let context = super::Context::new(
         Arc::new(DiscordHttpClient::new("token", None)),
         Arc::new(RwLock::new(super::TypeMap::new())),
     );
-    context
-        .connect_voice(VoiceConnectionConfig::new(test_id(1), test_id(CHANNEL)))
-        .await;
-    for event in [
-        Event::from_kind(
-            "VOICE_STATE_UPDATE",
-            EventKind::VoiceStateUpdate(Box::new(VoiceState {
-                guild_id: Some(test_id(1)),
-                channel_id: Some(test_id(CHANNEL)),
-                user_id: Some(test_id(BOT)),
-                session_id: Some("session".to_string()),
-                ..VoiceState::default()
-            })),
-        ),
-        Event::from_kind(
-            "VOICE_SERVER_UPDATE",
-            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
-                guild_id: test_id(1),
-                token: "token".to_string(),
-                endpoint: Some(endpoint),
-            })),
-        ),
-    ] {
+    let (command_tx, _command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+    super::write_gateway_commands(&context.gateway_commands).insert(
+        0,
+        ShardMessenger {
+            shard_id: 0,
+            command_tx,
+        },
+    );
+    let state = Event::from_kind(
+        "VOICE_STATE_UPDATE",
+        EventKind::VoiceStateUpdate(Box::new(VoiceState {
+            guild_id: Some(test_id(1)),
+            channel_id: Some(test_id(CHANNEL)),
+            user_id: Some(test_id(BOT)),
+            session_id: Some("session".to_string()),
+            ..VoiceState::default()
+        })),
+    );
+    let server = Event::from_kind(
+        "VOICE_SERVER_UPDATE",
+        EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
+            guild_id: test_id(1),
+            token: "token".to_string(),
+            endpoint: Some(endpoint),
+        })),
+    );
+    let events = match join {
+        MockVoiceJoin::StateFirst => [state, server],
+        MockVoiceJoin::ServerFirst | MockVoiceJoin::ServerFirstUntracked => [server, state],
+    };
+    if !matches!(join, MockVoiceJoin::ServerFirstUntracked) {
+        context
+            .join_voice(test_id(1), test_id(CHANNEL), false, true)
+            .await
+            .unwrap();
+    }
+    for event in events {
         super::apply_voice_updates(&context.voice(), &event).await;
     }
     context
@@ -8386,7 +8413,7 @@ async fn context_connect_voice_runtime_leaves_dave_to_the_caller() {
     use crate::voice_runtime::test_call::{DaveCall, BOT};
 
     let mut call = DaveCall::with_connector(|endpoint| async move {
-        context_in_mock_voice_call(endpoint)
+        context_in_mock_voice_call(endpoint, MockVoiceJoin::StateFirst)
             .await
             .connect_voice_runtime(test_id(1), test_id(BOT))
             .await
@@ -8416,24 +8443,165 @@ async fn context_connect_voice_runtime_leaves_dave_to_the_caller() {
     call.close().await;
 }
 
+/// `connect_voice_runtime_with_dave` connects whichever order the bot's
+/// VOICE_STATE_UPDATE and the VOICE_SERVER_UPDATE came in after
+/// `join_voice`. A server update that came first used to be dropped (the
+/// guild was not tracked yet), so the connection had a session ID but no
+/// token or endpoint and connecting failed.
 #[cfg(feature = "voice")]
 #[tokio::test]
 async fn context_connect_voice_runtime_with_dave_runs_the_session() {
     use crate::voice_runtime::test_call::{expect_key_package, DaveCall, BOT};
 
-    let mut call = DaveCall::with_connector(|endpoint| async move {
-        context_in_mock_voice_call(endpoint)
-            .await
-            .connect_voice_runtime_with_dave(test_id(1), test_id(BOT))
-            .await
-            .unwrap()
-    })
+    for join in [
+        MockVoiceJoin::StateFirst,
+        MockVoiceJoin::ServerFirst,
+        MockVoiceJoin::ServerFirstUntracked,
+    ] {
+        let mut call = DaveCall::with_connector(|endpoint| async move {
+            context_in_mock_voice_call(endpoint, join)
+                .await
+                .connect_voice_runtime_with_dave(test_id(1), test_id(BOT))
+                .await
+                .unwrap_or_else(|error| panic!("{join:?}: {error}"))
+        })
+        .await;
+        let key_package = expect_key_package(call.next_binary().await);
+        assert!(!call.handle.is_playable(), "{join:?}");
+        call.welcome_runtime(&key_package, 5).await;
+        assert!(call.handle.dave_status().can_send_audio(), "{join:?}");
+        call.close().await;
+    }
+}
+
+/// `join_voice` tracks the guild along with the request, leaves an already
+/// tracked connection alone, and tracks nothing when the request cannot be
+/// sent.
+#[cfg(feature = "voice")]
+#[tokio::test]
+async fn context_join_voice_tracks_the_guild_with_the_request() {
+    use crate::voice::VoiceConnectionStatus;
+
+    let context = super::Context::new(
+        Arc::new(DiscordHttpClient::new("token", None)),
+        Arc::new(RwLock::new(super::TypeMap::new())),
+    );
+    let guild_id = test_id(1);
+
+    // No messenger: an error, and nothing tracked.
+    assert!(context
+        .join_voice(guild_id, test_id(2), false, false)
+        .await
+        .is_err());
+    assert!(context.voice().read().await.connection(guild_id).is_none());
+
+    let (command_tx, mut command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+    super::write_gateway_commands(&context.gateway_commands).insert(
+        0,
+        ShardMessenger {
+            shard_id: 0,
+            command_tx,
+        },
+    );
+    context
+        .join_voice(guild_id, test_id(2), true, false)
+        .await
+        .unwrap();
+    assert!(matches!(
+        command_rx.try_recv(),
+        Ok(GatewayCommand::SendPayload(_))
+    ));
+    {
+        let voice = context.voice();
+        let voice = voice.read().await;
+        let connection = voice.connection(guild_id).expect("tracked by join_voice");
+        assert_eq!(connection.channel_id, test_id(2));
+        assert_eq!(connection.status, VoiceConnectionStatus::Connecting);
+        assert!(connection.self_mute);
+        assert!(voice.player(guild_id).is_some());
+        assert_eq!(
+            voice
+                .runtime_options(guild_id)
+                .map(|options| options.channel_id),
+            Some(test_id(2))
+        );
+    }
+
+    // Already tracked (here with a session): a second join leaves it alone;
+    // the bot's voice state moves it.
+    super::apply_voice_updates(
+        &context.voice(),
+        &Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
+                guild_id: Some(guild_id),
+                channel_id: Some(test_id(2)),
+                session_id: Some("session".to_string()),
+                ..VoiceState::default()
+            })),
+        ),
+    )
     .await;
-    let key_package = expect_key_package(call.next_binary().await);
-    assert!(!call.handle.is_playable());
-    call.welcome_runtime(&key_package, 5).await;
-    assert!(call.handle.dave_status().can_send_audio());
-    call.close().await;
+    context
+        .join_voice(guild_id, test_id(3), false, false)
+        .await
+        .unwrap();
+    {
+        let voice = context.voice();
+        let voice = voice.read().await;
+        let connection = voice.connection(guild_id).expect("still tracked");
+        assert_eq!(connection.channel_id, test_id(2));
+        assert_eq!(connection.session_id.as_deref(), Some("session"));
+    }
+
+    // The shard is gone: the request fails and tracks nothing; a server
+    // update kept for that guild survives the failed join.
+    drop(command_rx);
+    let other_guild = test_id(4);
+    super::apply_voice_updates(
+        &context.voice(),
+        &Event::from_kind(
+            "VOICE_SERVER_UPDATE",
+            EventKind::VoiceServerUpdate(Box::new(VoiceServerUpdate {
+                guild_id: other_guild,
+                token: "token".to_string(),
+                endpoint: Some("voice.discord.media".to_string()),
+            })),
+        ),
+    )
+    .await;
+    assert!(context
+        .join_voice(other_guild, test_id(5), false, false)
+        .await
+        .is_err());
+    assert!(context
+        .voice()
+        .read()
+        .await
+        .connection(other_guild)
+        .is_none());
+    super::apply_voice_updates(
+        &context.voice(),
+        &Event::from_kind(
+            "VOICE_STATE_UPDATE",
+            EventKind::VoiceStateUpdate(Box::new(VoiceState {
+                guild_id: Some(other_guild),
+                channel_id: Some(test_id(5)),
+                session_id: Some("session".to_string()),
+                ..VoiceState::default()
+            })),
+        ),
+    )
+    .await;
+    assert!(context
+        .voice_runtime_config(other_guild, test_id(9))
+        .await
+        .is_some());
+    assert!(context
+        .join_voice(guild_id, test_id(3), false, false)
+        .await
+        .is_err());
+    assert!(context.voice().read().await.connection(guild_id).is_some());
 }
 
 /// Other members' VOICE_STATE_UPDATEs in the bot's guild used to replace the

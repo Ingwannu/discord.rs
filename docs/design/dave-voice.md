@@ -194,6 +194,46 @@ subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}
 로그 변화다. `dave` 기능이 `voice`의 별칭이 되어 `voice`만 켠 사용자도 `davey`를 빌드하지만 API
 변화는 아니다. 핸드셰이크 중 메시지 보존과 4017 설명 오류는 두 진입점 모두에 적용되는 버그 수정이다.
 
+### 7.1 게이트웨이 컨텍스트의 음성 상태 추적
+
+`Context::connect_voice_runtime_with_dave`는 컨텍스트가 추적한 연결(세션 ID, 토큰, 엔드포인트,
+채널)로 연결하므로, 그 추적이 봇 자신의 것이고 완전해야 한다. 3.0.0에서 이어진 두 결함을 고쳤다.
+
+- **다른 멤버의 음성 상태(3차 리뷰).** VOICE_STATE_UPDATE는 길드의 모든 멤버에 대해 오는데 연결은
+  길드마다 하나라서, 다른 멤버의 입장·이동·퇴장이 봇의 채널·세션을 바꾸거나 지웠다. 컨텍스트는 READY의
+  봇 사용자를 기록하고 그 사용자의 상태만 적용한다(`VoiceManager::update_own_voice_state`).
+- **서버 업데이트가 먼저 오는 경우(4차 리뷰).** Discord는 봇의 VOICE_STATE_UPDATE와
+  VOICE_SERVER_UPDATE를 어느 순서로든 보낸다. `update_server`는 추적하지 않는 길드의 서버 업데이트를
+  버렸고 `join_voice`는 아무것도 추적하지 않았으므로, 서버 업데이트가 먼저 오면 토큰·엔드포인트가
+  사라지고 뒤이은 음성 상태가 세션만 있는 연결을 만들어 연결이 실패했다. 이제 `update_server`는
+  추적하지 않는 길드의 최신 서버 업데이트를 보관하고(새 것이 옛 것을 바꾸고, 엔드포인트가 null이면
+  지운다), 그 길드의 연결이 생길 때(봇의 음성 상태 또는 `connect`) 적용한다. 나가기(채널 없는 음성
+  상태)와 `disconnect`도 보관한 것을 지운다. `Context::join_voice`도 음성 이벤트가 쓰는 같은 잠금을
+  쥔 채 요청을 큐에 넣고 길드를 추적하므로, 요청에 대한 응답 이벤트는 항상 그 연결을 찾는다(이미
+  추적 중이면 그대로 둔다). 먼저 추적하고 보내기 실패 시 되돌리는 방식은 그 길드에 보관된 서버
+  업데이트를 `connect`가 써 버린 뒤 되돌리면서 잃으므로, 보내기에 성공한 뒤에만 추적한다.
+  그래서 "`join_voice` 전에 `connect_voice`를 부르라"는 안내를 지웠다.
+
+```text
+[Decision Log]
+- 목적과 의도: join_voice 뒤 두 업데이트가 어느 순서로 와도 완전한 연결이 남게 한다.
+- 기존 구현 및 제약 조건: VoiceManager는 공개 타입이고 update_server·update_voice_state·connect의
+  반환값과 연결 상태 타입(VoiceConnectionState, 모든 필드 공개)을 바꿀 수 없다. 추적하지 않는 길드의
+  음성 상태는 이미 연결을 만들므로 음성 상태 쪽은 따로 보관할 필요가 없다. 서버 업데이트에는 채널이
+  없어 연결을 만들 수 없다.
+- 검토한 주요 대안: (1) join_voice에서만 추적(다른 경로의 참여, disconnect 뒤의 서버 업데이트를
+  놓침), (2) 채널 없는 연결 상태(공개 타입 변경), (3) 추적하지 않는 길드의 서버 업데이트를 길드마다
+  하나 보관.
+- 선택한 방식: (3)에 더해 join_voice의 사전 추적(요청이 내는 이벤트가 같은 연결에 쌓이고,
+  runtime_options가 곧바로 채널을 안다).
+- 다른 대안 대신 이 방식을 선택한 이유: 공개 API를 바꾸지 않고 VoiceManager를 직접 쓰는 사용자도
+  같은 수정을 받는다.
+- 장점, 단점 및 영향: 보관은 길드마다 최대 하나이고, Discord는 봇 자신의 음성 연결에만 서버 업데이트를
+  보내므로 봇의 참여만 보관된다. join_voice가 Connecting 연결·이벤트·재생기를 만드는 것은 관찰 가능한
+  변화라서 CHANGELOG "Changed"에 적었다. 이미 추적 중인 연결은 join_voice가 바꾸지 않으므로
+  connect_voice를 먼저 부르던 코드도 그대로 동작한다.
+```
+
 ## 8. 테스트
 
 - 상태 기계 단위 테스트(`src/voice_runtime/dave.rs`): 테스트 전용 모의 게이트웨이(openmls로 외부
@@ -211,6 +251,10 @@ subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}
   카운터 소진.
 - 진입점(7절): `connect`가 3.0.0처럼 키 패키지를 보내지 않고 일반 송수신에서 같은 오류를 내며 늘
   재생 가능한지, 4017 오류 문구가 진입점에 맞는지.
+- 음성 상태 추적(7.1절): 다른 멤버의 음성 상태가 봇의 연결을 바꾸지 않는지, 서버 업데이트가 먼저 와도
+  나중에 와도 완전한 연결이 되는지, 새 서버 업데이트가 보관한 것을 바꾸는지, 나가기·null
+  엔드포인트·`disconnect`가 보관한 것을 지우는지, `join_voice`가 요청과 함께 추적하고 보내지 못하면
+  아무것도 추적하지 않으며 보관한 서버 업데이트도 남기는지, 그리고 두 순서 모두에서 `connect_voice_runtime_with_dave`가 모의 통화에 연결되는지.
 - 실제 Discord: `tests/live_voice_dave.rs`(무시됨)가 `connect_voice_runtime_with_options`로 톤을
   재생하고 다른 참가자의 음성을 복호화한다. 실행하지 않았다.
 
@@ -255,7 +299,9 @@ openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이
   - 다루지 못하는 것: 런타임 밖의 davey 호출(`VoiceDaveySession`, `session_mut`, davey 직접 호출),
     그리고 `tracing` 디스패처가 하나도 없을 때 `tracing`의 `log` 대체 경로. 범위 디스패처를 설치하면
     `dispatcher::has_been_set()`이 프로세스 전체에서 참이 되어 다른 크레이트의 `log` 대체 출력까지
-    꺼지므로, 디스패처가 없을 때는 필터를 설치하지 않는다(그 경로는 경고도 보지 못한다).
+    꺼지므로, 디스패처가 없을 때는 필터를 설치하지 않는다(그 경로는 경고도 보지 못한다). 필터와 경고
+    확인은 세션을 만들 때 한 번 정해지므로, 그때 디스패처가 없어 필터 없이 시작한 세션은 나중에 구독자를
+    설치해도 거르지 않고 경고도 없다. 안내서에 음성 연결 전에 구독자를 설치하라고 적는다.
   - 수신 복호화를 런타임 자체 구현으로 옮기는 안(송신처럼)은 하지 않았다. 가장 위험한 기반 비밀은
     런타임이 반드시 부르는 MLS 처리(`process_commit`/`process_welcome` 안의 `update_ratchets`)가
     모든 멤버에 대해 기록하므로, 자체 복호화로 없어지는 것은 세대별 유도 로그뿐이다. 그 대가로 davey

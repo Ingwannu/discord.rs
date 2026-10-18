@@ -873,6 +873,11 @@ pub struct VoiceManager {
     /// The bot's own user (from READY in a gateway client), whose voice
     /// states alone [`Self::update_own_voice_state`] applies.
     current_user_id: Option<UserId>,
+    /// The latest VOICE_SERVER_UPDATE of each guild that had no tracked
+    /// connection when it arrived, kept until a connection is tracked
+    /// ([`Self::update_server`]). Never holds a guild that is in
+    /// `connections`.
+    pending_servers: HashMap<GuildId, VoiceServerUpdate>,
 }
 
 impl VoiceManager {
@@ -881,6 +886,10 @@ impl VoiceManager {
         Self::default()
     }
 
+    /// Starts tracking the guild's connection from `config`, replacing any
+    /// tracked state. A VOICE_SERVER_UPDATE kept for the guild
+    /// ([`Self::update_server`]) supplies the token and endpoint when
+    /// `config` has neither.
     pub fn connect(&mut self, config: VoiceConnectionConfig) -> VoiceConnectionState {
         let guild_id = config.guild_id;
         let channel_id = config.channel_id;
@@ -889,7 +898,13 @@ impl VoiceManager {
             channel_id,
         });
 
-        let state = VoiceConnectionState::from_config(config);
+        let pending_server = self.pending_servers.remove(&guild_id);
+        let keeps_server = config.endpoint.is_none() && config.token.is_none();
+        let mut state = VoiceConnectionState::from_config(config);
+        if let Some(server) = pending_server.filter(|_| keeps_server) {
+            state.apply_server_update(&server);
+            self.events.push(VoiceEvent::ServerUpdated { guild_id });
+        }
         if state.status == VoiceConnectionStatus::Connected {
             self.events.push(VoiceEvent::Connected(state.clone()));
         }
@@ -901,18 +916,53 @@ impl VoiceManager {
 
     pub fn disconnect(&mut self, guild_id: GuildId) -> Option<VoiceConnectionState> {
         self.players.remove(&guild_id);
+        self.pending_servers.remove(&guild_id);
         let mut state = self.connections.remove(&guild_id)?;
         state.mark_disconnected();
         self.events.push(VoiceEvent::Disconnected { guild_id });
         Some(state)
     }
 
+    /// Applies a VOICE_SERVER_UPDATE (voice token and endpoint) to the
+    /// guild's tracked connection and returns it.
+    ///
+    /// Discord sends the VOICE_SERVER_UPDATE and the bot's own
+    /// VOICE_STATE_UPDATE in either order. When the guild has no tracked
+    /// connection yet, the update is kept and this returns `None`; the
+    /// voice state that creates the connection ([`Self::update_voice_state`])
+    /// or [`Self::connect`] applies it. A later server update replaces a
+    /// kept one, one with a null endpoint (the server went away) drops it,
+    /// and so do a voice state with no channel (a leave) and
+    /// [`Self::disconnect`].
+    ///
+    /// [Decision Log]
+    /// - Purpose: a join where the server update comes first must still end
+    ///   with a complete connection (session ID, token, endpoint); before,
+    ///   the update was dropped and `connect_voice_runtime*` failed.
+    /// - Constraint: VOICE_STATE_UPDATE for a guild with no connection
+    ///   already creates one, so the state needs no buffer of its own; a
+    ///   server update has no channel to create one with.
+    /// - Alternatives: track the guild in `Context::join_voice` only (misses
+    ///   joins sent another way, and a server update after `disconnect`); a
+    ///   connection without a channel (changes the public state type).
+    /// - Chosen: keep the latest server update per untracked guild, and apply
+    ///   it when the guild's connection is created.
+    /// - Trade-offs: one kept update per guild until it is applied or
+    ///   dropped; Discord sends server updates only for the bot's own voice
+    ///   connections, so these are the bot's joins.
     pub fn update_server(
         &mut self,
         update: impl Into<VoiceServerUpdate>,
     ) -> Option<VoiceConnectionState> {
         let update = update.into();
-        let state = self.connections.get_mut(&update.guild_id)?;
+        let Some(state) = self.connections.get_mut(&update.guild_id) else {
+            if update.endpoint.is_some() {
+                self.pending_servers.insert(update.guild_id, update);
+            } else {
+                self.pending_servers.remove(&update.guild_id);
+            }
+            return None;
+        };
         let was_disconnected = state.status == VoiceConnectionStatus::Disconnected;
         state.apply_server_update(&update);
         let guild_id = state.guild_id;
@@ -967,15 +1017,27 @@ impl VoiceManager {
         }
     }
 
+    /// Applies a member's VOICE_STATE_UPDATE (channel and session ID) to the
+    /// guild's connection, creating it when the guild has none and the
+    /// state has a channel. A server update kept for the guild
+    /// ([`Self::update_server`]) is applied to a connection created here,
+    /// and dropped when the state has no channel (a leave).
     pub fn update_voice_state(&mut self, update: &VoiceState) -> Option<VoiceConnectionState> {
         let guild_id = update.guild_id?;
+        if update.channel_id.is_none() {
+            self.pending_servers.remove(&guild_id);
+        }
         let state = match self.connections.get_mut(&guild_id) {
             Some(state) => state,
             None => {
                 let channel_id = update.channel_id?;
-                let state = VoiceConnectionState::from_config(VoiceConnectionConfig::new(
+                let mut state = VoiceConnectionState::from_config(VoiceConnectionConfig::new(
                     guild_id, channel_id,
                 ));
+                if let Some(server) = self.pending_servers.remove(&guild_id) {
+                    state.apply_server_update(&server);
+                    self.events.push(VoiceEvent::ServerUpdated { guild_id });
+                }
                 self.players.entry(guild_id).or_default();
                 self.connections.entry(guild_id).or_insert(state)
             }
@@ -1829,5 +1891,162 @@ mod tests {
         let connection = manager.connection(guild_id).unwrap();
         assert_eq!(connection.channel_id, test_id(2));
         assert_eq!(connection.session_id.as_deref(), Some("mine"));
+    }
+
+    fn own_state(channel: Option<u64>) -> VoiceState {
+        VoiceState {
+            guild_id: Some(test_id(1)),
+            channel_id: channel.map(test_id),
+            user_id: Some(test_id(3)),
+            session_id: Some("session".to_string()),
+            ..VoiceState::default()
+        }
+    }
+
+    fn server(token: &str, endpoint: Option<&str>) -> VoiceServerUpdate {
+        VoiceServerUpdate {
+            guild_id: test_id(1),
+            token: token.to_string(),
+            endpoint: endpoint.map(str::to_string),
+        }
+    }
+
+    /// Token and endpoint of the tracked connection, and whether it is
+    /// complete enough for the voice runtime.
+    fn tracked_server(manager: &VoiceManager) -> (Option<String>, Option<String>, bool) {
+        let connection = manager.connection(test_id(1)).unwrap();
+        (
+            connection.token.clone(),
+            connection.endpoint.clone(),
+            manager.runtime_config(test_id(1), test_id(3)).is_some(),
+        )
+    }
+
+    /// Discord sends the bot's VOICE_STATE_UPDATE and the VOICE_SERVER_UPDATE
+    /// in either order. A server update for an untracked guild used to be
+    /// dropped, leaving a connection with a session ID but no token or
+    /// endpoint once the voice state arrived.
+    #[test]
+    fn voice_manager_combines_server_and_state_updates_in_either_order() {
+        let complete = (
+            Some("token".to_string()),
+            Some("voice.discord.media".to_string()),
+            true,
+        );
+
+        let mut server_first = VoiceManager::new();
+        server_first.set_current_user(test_id(3));
+        assert!(server_first
+            .update_server(server("token", Some("voice.discord.media")))
+            .is_none());
+        assert!(server_first.connection(test_id(1)).is_none());
+        let state = server_first
+            .update_own_voice_state(&own_state(Some(2)))
+            .unwrap();
+        assert_eq!(state.status, VoiceConnectionStatus::Connected);
+        assert_eq!(tracked_server(&server_first), complete);
+        assert!(matches!(
+            server_first.events(),
+            [
+                super::VoiceEvent::ServerUpdated { .. },
+                super::VoiceEvent::SessionUpdated { .. },
+                super::VoiceEvent::Connected(_),
+            ]
+        ));
+        assert_eq!(
+            server_first
+                .runtime_options(test_id(1))
+                .map(|options| options.channel_id),
+            Some(test_id(2))
+        );
+
+        let mut state_first = VoiceManager::new();
+        state_first.set_current_user(test_id(3));
+        state_first.update_own_voice_state(&own_state(Some(2)));
+        assert!(state_first
+            .update_server(server("token", Some("voice.discord.media")))
+            .is_some());
+        assert_eq!(tracked_server(&state_first), complete);
+
+        // Another member's voice state does not pick up the bot's server
+        // update.
+        let mut other = VoiceManager::new();
+        other.set_current_user(test_id(3));
+        other.update_server(server("token", Some("voice.discord.media")));
+        let mut others_state = own_state(Some(2));
+        others_state.user_id = Some(test_id(9));
+        assert!(other.update_own_voice_state(&others_state).is_none());
+        other.update_own_voice_state(&own_state(Some(2)));
+        assert_eq!(tracked_server(&other), complete);
+    }
+
+    #[test]
+    fn voice_manager_keeps_only_the_latest_pending_server_update() {
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("old-token", Some("old.discord.media")));
+        manager.update_server(server("new-token", Some("new.discord.media")));
+        manager.update_voice_state(&own_state(Some(2)));
+        assert_eq!(
+            tracked_server(&manager),
+            (
+                Some("new-token".to_string()),
+                Some("new.discord.media".to_string()),
+                true
+            )
+        );
+
+        // A null endpoint (the server went away) drops the kept update.
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("old-token", Some("old.discord.media")));
+        assert!(manager.update_server(server("gone", None)).is_none());
+        manager.update_voice_state(&own_state(Some(2)));
+        assert_eq!(tracked_server(&manager), (None, None, false));
+        assert_eq!(
+            manager.connection(test_id(1)).unwrap().status,
+            VoiceConnectionStatus::Connecting
+        );
+    }
+
+    #[test]
+    fn voice_manager_drops_a_pending_server_update_on_leave_or_disconnect() {
+        // The bot left before its voice state arrived.
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("token", Some("voice.discord.media")));
+        assert!(manager.update_voice_state(&own_state(None)).is_none());
+        manager.update_voice_state(&own_state(Some(2)));
+        assert_eq!(tracked_server(&manager), (None, None, false));
+
+        // Disconnecting an untracked guild drops it too.
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("token", Some("voice.discord.media")));
+        assert!(manager.disconnect(test_id(1)).is_none());
+        manager.update_voice_state(&own_state(Some(2)));
+        assert_eq!(tracked_server(&manager), (None, None, false));
+    }
+
+    #[test]
+    fn voice_manager_connect_applies_a_pending_server_update() {
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("token", Some("voice.discord.media")));
+        let state = manager.connect(VoiceConnectionConfig::new(test_id(1), test_id(2)));
+        assert_eq!(state.token.as_deref(), Some("token"));
+        assert_eq!(state.endpoint.as_deref(), Some("voice.discord.media"));
+        assert_eq!(state.status, VoiceConnectionStatus::Connecting);
+        manager.update_voice_state(&own_state(Some(2)));
+        assert!(tracked_server(&manager).2);
+
+        // A config with its own token or endpoint wins, and the kept update
+        // is dropped rather than applied later.
+        let mut manager = VoiceManager::new();
+        manager.update_server(server("kept", Some("kept.discord.media")));
+        let state = manager.connect(
+            VoiceConnectionConfig::new(test_id(1), test_id(2))
+                .token("explicit")
+                .endpoint("explicit.discord.media"),
+        );
+        assert_eq!(state.token.as_deref(), Some("explicit"));
+        manager.disconnect(test_id(1));
+        manager.update_voice_state(&own_state(Some(2)));
+        assert_eq!(tracked_server(&manager), (None, None, false));
     }
 }

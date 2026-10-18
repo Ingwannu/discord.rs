@@ -45,7 +45,7 @@ mod bot {
     };
     use discordrs::{
         gateway_intents, ChannelId, Client, Context, DiscordError, EventHandler, GuildId,
-        ReadyPayload, UserId, VoiceConnectionConfig, VoiceServerUpdate, VoiceState,
+        ReadyPayload, UserId, VoiceServerUpdate, VoiceState,
     };
 
     /// How long FFmpeg may take to produce the first frame before the bot
@@ -218,10 +218,9 @@ mod bot {
                 "ready as {}; joining voice channel {} in guild {}",
                 ready.user.username, self.channel_id, self.guild_id
             );
-            // Track the connection before joining, so the VOICE_SERVER_UPDATE
-            // is kept even if it arrives before the bot's VOICE_STATE_UPDATE.
-            ctx.connect_voice(VoiceConnectionConfig::new(self.guild_id, self.channel_id))
-                .await;
+            // The bot's VOICE_STATE_UPDATE and the VOICE_SERVER_UPDATE that
+            // answer this may arrive in either order; the context combines
+            // them, and the hooks below connect once both have.
             if let Err(error) = ctx
                 .join_voice(self.guild_id, self.channel_id, false, true)
                 .await

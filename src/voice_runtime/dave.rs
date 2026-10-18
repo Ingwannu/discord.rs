@@ -166,7 +166,9 @@ fn is_davey_trace(metadata: &tracing::Metadata<'_>) -> bool {
 ///   without one, davey's events go nowhere, or to `log` through tracing's
 ///   fallback, which installing a scoped dispatcher would switch off for the
 ///   whole process, so then nothing is filtered (and the warning cannot see
-///   it either). davey calls made outside the runtime are not covered.
+///   it either). A session set up that way stays unfiltered when a
+///   subscriber is installed later. davey calls made outside the runtime
+///   are not covered.
 ///   Registering the filter rebuilds tracing's callsite interest once per
 ///   connection; davey's trace callsites become "sometimes" where the
 ///   application records them, every other callsite keeps the

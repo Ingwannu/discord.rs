@@ -20,11 +20,12 @@ DAVE가 선택 사항이 아니게 된 이유는 아래 [DAVE](#dave-종단-간-
 
 ## 연결 흐름
 
-1. `ctx.connect_voice(VoiceConnectionConfig::new(guild_id, channel_id))`로 연결을 추적하게 한 뒤
-   `ctx.join_voice(guild_id, channel_id, self_mute, self_deaf)`로 음성 상태를 보냅니다(먼저 추적해야
-   VOICE_SERVER_UPDATE가 봇의 VOICE_STATE_UPDATE보다 먼저 와도 남습니다).
+1. `ctx.join_voice(guild_id, channel_id, self_mute, self_deaf)`로 음성 상태를 보냅니다. 컨텍스트는 요청과
+   함께, 응답이 적용되기 전에 그 길드의 연결을 추적하기 시작합니다.
 2. 봇 자신의 VOICE_STATE_UPDATE(`session_id`)와 VOICE_SERVER_UPDATE(`token`, `endpoint`)를 기다립니다.
-   순서는 정해져 있지 않으며, 둘 다 오면 `ctx.voice_runtime_config(..)`가 `Some`이 됩니다. 컨텍스트는
+   순서는 정해져 있지 않습니다. 추적하지 않는 길드의 VOICE_SERVER_UPDATE는 보관했다가 연결이 생길 때
+   적용하므로, 어느 순서로 와도 둘 다 오면 `ctx.voice_runtime_config(..)`가 `Some`이 됩니다. 새
+   VOICE_SERVER_UPDATE는 보관한 것을 바꾸고, 나가기(채널 없는 음성 상태)는 지웁니다. 컨텍스트는
    READY의 봇 사용자 것만 추적하므로 다른 멤버가 들어오거나 옮기거나 나가도 바뀌지 않습니다.
 3. **`connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.**
    그러면 런타임이 DAVE를 직접 운영합니다. DAVE가 채널을 MLS 그룹 id로 쓰기 때문에 채널이 필요합니다.
@@ -135,9 +136,12 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
 > 기능(`VoiceDaveySession`) 때부터 그랬고 최신판 davey 0.1.5도 같습니다. **런타임은 이를 완화할 뿐
 > 고치지 못합니다.** 자신의 davey 호출을 `tracing` 필터 아래에서 실행해 davey의 trace 이벤트(키 재료
 > 포함)가 구독자에 닿기 전에 버리고, 그 모듈 중 하나라도 trace인 상태로 DAVE 세션을 시작하면 경고를
-> 남깁니다. 다루지 못하는 것: 런타임 밖의 davey 호출(`VoiceDaveySession`, davey 직접 호출), 그리고
+> 남깁니다. 다루지 못하는 것: 런타임 밖의 davey 호출(`VoiceDaveySession`, davey 직접 호출),
 > `tracing` 구독자가 없을 때 `tracing`이 `log` 크레이트로 넘기는 davey 이벤트(이 경로는 경고도 보지
-> 못합니다). 근본 수정은 davey에서 해야 하며, 상류 이슈는 초안만 있고 제출하지 않았습니다.
+> 못합니다), 그리고 프로세스가 구독자를 설치하기 전에 시작한 DAVE 세션. 필터는 세션을 시작할 때, 그때
+> 구독자가 설치되어 있을 때만 만들어지므로, 나중에 설치한 구독자는 그 세션의 davey trace 이벤트를
+> 거르지 않고 경고 없이 기록합니다. 음성을 연결하기 전에 구독자를 설치하십시오. 근본 수정은 davey에서
+> 해야 하며, 상류 이슈는 초안만 있고 제출하지 않았습니다.
 
 - **참여.** IDENTIFY에 `max_dave_protocol_version`을 광고합니다(기본 1, 최대 1). SESSION_DESCRIPTION이
   DAVE를 정하면 MLS 키 패키지를 보내고, 게이트웨이의 외부 발신자를 적용하고, 새로 들어온 멤버의 제안을

@@ -1862,9 +1862,13 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
 /// under a `tracing` filter that drops davey's trace-level events before
 /// they reach your subscriber, and warns when it starts a DAVE session while
 /// any of davey's key-logging modules is at trace level. Not covered:
-/// davey calls made elsewhere (`VoiceDaveySession`, davey directly), and
+/// davey calls made elsewhere (`VoiceDaveySession`, davey directly);
 /// davey's events that tracing hands to the `log` crate when no `tracing`
-/// subscriber is installed.
+/// subscriber is installed; and a session that starts before the process
+/// installs one. The filter is set up when the session starts, and only
+/// when a subscriber is installed by then: a subscriber installed later
+/// records that session's davey trace events unfiltered, with no warning.
+/// Install your subscriber before connecting.
 ///
 /// # Errors
 ///

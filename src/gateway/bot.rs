@@ -568,6 +568,14 @@ impl Context {
     }
 
     /// Joins a voice channel through the shard that owns the guild.
+    ///
+    /// With the `voice` feature, a guild this context does not track yet is
+    /// tracked (as `connect_voice` would) before any answer to the request
+    /// is applied, so the VOICE_STATE_UPDATE and VOICE_SERVER_UPDATE land on
+    /// that connection in whichever order Discord sends them. A connection
+    /// that is already tracked is left as is: the bot's own voice state
+    /// moves it to the new channel. A request that cannot be sent tracks
+    /// nothing.
     pub async fn join_voice(
         &self,
         guild_id: GuildId,
@@ -575,8 +583,28 @@ impl Context {
         self_mute: bool,
         self_deaf: bool,
     ) -> Result<(), DiscordError> {
-        self.messenger_for_guild(guild_id)?
-            .join_voice(guild_id, channel_id, self_mute, self_deaf)
+        let messenger = self.messenger_for_guild(guild_id)?;
+        #[cfg(feature = "voice")]
+        {
+            // The request is queued and the guild tracked under one voice
+            // lock, which the gateway takes to apply voice events: the
+            // events answering the request always find the connection, and
+            // a request that cannot be sent leaves nothing behind (tracking
+            // first and undoing it would also use up, then lose, a server
+            // update kept for the guild).
+            let mut voice = self.voice.write().await;
+            messenger.join_voice(guild_id, channel_id, self_mute, self_deaf)?;
+            if voice.connection(guild_id).is_none() {
+                voice.connect(
+                    VoiceConnectionConfig::new(guild_id, channel_id)
+                        .self_mute(self_mute)
+                        .self_deaf(self_deaf),
+                );
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "voice"))]
+        messenger.join_voice(guild_id, channel_id, self_mute, self_deaf)
     }
 
     /// Leaves voice through the shard that owns the guild.
@@ -668,9 +696,9 @@ impl Context {
     /// `user_id` must be the bot's own user. The context tracks only the
     /// bot's own voice state (the user from READY), so other members joining,
     /// moving, or leaving do not change the session ID and channel used
-    /// here. Call [`Context::connect_voice`] before [`Context::join_voice`]:
-    /// a VOICE_SERVER_UPDATE that arrives before the bot's VOICE_STATE_UPDATE
-    /// is only kept for a connection that is already tracked.
+    /// here. The bot's VOICE_STATE_UPDATE and the VOICE_SERVER_UPDATE may
+    /// arrive in either order after [`Context::join_voice`]; this works once
+    /// both have.
     ///
     /// [Decision Log]
     /// - Purpose: one call that gives a working voice handle in DAVE
