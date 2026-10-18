@@ -164,7 +164,7 @@ let modal = ModalBuilder::new("preferences_modal", "Preferences")
 - `discord.rs` started as a helper around serenity workflows, and `1.0.0` is the first stabilized standalone framework release.
 - `EventHandler::handle_event(...)` is the gateway entry point and receives the shared `Arc<Event>`; the per-event hooks (`ready`, `message_create`, `interaction_create`, ...) receive their payload without a copy.
 - The parser keeps V2 modal component types, including `Label`, `RadioGroup`, and `CheckboxGroup`, so routing logic can keep full fidelity.
-- Default `voice` provides Opus-frame RTP send, transport-decrypted received Opus frames, PCM decode, and DAVE end-to-end encryption (set `VoiceRuntimeConfig::channel_id`). `voice-encode` adds PCM-to-Opus playback.
+- Default `voice` provides Opus-frame RTP send, transport-decrypted received Opus frames, PCM decode, and DAVE end-to-end encryption (with `connect_voice_runtime_with_options`). `voice-encode` adds PCM-to-Opus playback.
 
 ## License
 

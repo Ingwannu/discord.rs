@@ -12,10 +12,11 @@
 //! Requires an `ffmpeg` binary on `PATH`.
 //!
 //! Works in DAVE (end-to-end encrypted) channels, which is every voice
-//! channel except Stage channels: the runtime config carries the channel ID,
-//! so the voice runtime joins the call's MLS group and the player's frames
-//! are encrypted before they leave. The player waits in `AutoPaused` until
-//! the group's keys arrive, which needs another member in the channel.
+//! channel except Stage channels: it connects with
+//! `connect_voice_runtime_with_options` and the channel ID, so the voice
+//! runtime joins the call's MLS group and the player's frames are encrypted
+//! before they leave. The player waits in `AutoPaused` until the runtime has
+//! a key in use, which needs another member in the channel.
 //!
 //! If FFmpeg produces no audio within `START_TIMEOUT` (an unreachable URL, a
 //! stalled stream), the bot stops the track instead of waiting forever. This
@@ -42,7 +43,8 @@ mod bot {
     };
     use discordrs::{
         gateway_intents, ChannelId, Client, Context, DiscordError, EventHandler, GuildId,
-        ReadyPayload, UserId, VoiceRuntimeConfig, VoiceServerUpdate, VoiceState,
+        ReadyPayload, UserId, VoiceConnectOptions, VoiceRuntimeConfig, VoiceServerUpdate,
+        VoiceState,
     };
 
     /// How long FFmpeg may take to produce the first frame before the bot
@@ -92,23 +94,23 @@ mod bot {
                 let Some(endpoint) = server.endpoint.as_ref() else {
                     return;
                 };
-                // The channel ID is what lets the runtime take part in DAVE;
-                // without it Discord refuses the connection (close 4017).
                 let config = VoiceRuntimeConfig::new(
                     self.guild_id,
                     user_id,
                     session_id.as_str(),
                     server.token.as_str(),
                     endpoint.as_str(),
-                )
-                .channel_id(self.channel_id);
+                );
                 state.started = true;
                 config
             };
 
+            // The channel is what lets the runtime take part in DAVE (its MLS
+            // group); `connect_voice_runtime` alone would leave DAVE to us.
+            let options = VoiceConnectOptions::new(self.channel_id);
             let input = self.input.clone();
             tokio::spawn(async move {
-                if let Err(error) = play(config, input).await {
+                if let Err(error) = play(config, options, input).await {
                     eprintln!("playback failed: {error}");
                 }
                 std::process::exit(0);
@@ -116,9 +118,14 @@ mod bot {
         }
     }
 
-    async fn play(config: VoiceRuntimeConfig, input: String) -> Result<(), DiscordError> {
+    async fn play(
+        config: VoiceRuntimeConfig,
+        options: VoiceConnectOptions,
+        input: String,
+    ) -> Result<(), DiscordError> {
         println!("connecting voice runtime to {}", config.endpoint);
-        let handle = Arc::new(discordrs::connect_voice_runtime(config).await?);
+        let handle =
+            Arc::new(discordrs::connect_voice_runtime_with_options(config, options).await?);
         let dave = handle.dave_status();
         if dave.protocol_version > 0 && !dave.can_send_audio() {
             println!(

@@ -1635,26 +1635,27 @@ If you already have a full runtime config, connect directly:
 use std::time::Duration;
 
 use discordrs::{
-    connect_voice_runtime, VoiceOpusDecoder, VoiceOpusFrame, VoiceRuntimeConfig, VoiceSpeakingFlags,
+    connect_voice_runtime_with_options, VoiceConnectOptions, VoiceOpusDecoder, VoiceOpusFrame,
+    VoiceRuntimeConfig, VoiceSpeakingFlags,
 };
 
 async fn connect_runtime() -> Result<(), discordrs::DiscordError> {
-    let handle = connect_voice_runtime(
+    let handle = connect_voice_runtime_with_options(
         VoiceRuntimeConfig::new(
             "1".parse()?,
             "42".parse()?,
             "session-id",
             "voice-token",
             "wss://voice.discord.media/?v=8",
-        )
+        ),
         // The voice channel: DAVE end-to-end encryption uses it as the MLS
         // group, and Discord requires DAVE outside Stage channels.
-        .channel_id("7".parse()?),
+        VoiceConnectOptions::new("7".parse()?),
     )
     .await?;
 
-    // In a DAVE call, audio can be sent once this client holds the group's
-    // keys (another member must be in the call). Silence always goes out.
+    // In a DAVE call, audio can be sent once this client has a media key in
+    // use (another member must be in the call). Silence always goes out.
     handle.wait_until_playable().await?;
     handle.set_speaking(VoiceSpeakingFlags::MICROPHONE, 0)?;
     handle
@@ -1737,7 +1738,7 @@ The current runtime covers:
 - low-level `VoiceDaveFrameDecryptor`, `VoiceDaveySession`, `VoiceDaveFrameEncryptor`, and `send_opus_frame_with_dave(...)` for custom DAVE handling
 - graceful close
 
-Discord requires DAVE in every voice channel except Stage channels and refuses clients without it (close code 4017). The runtime takes part in the call's MLS group when `VoiceRuntimeConfig` carries the voice channel (`.channel_id(..)`; `Context::connect_voice_runtime` sets it). The plain `send_opus_frame(...)`, `play_opus_frames(...)`, and `AudioPlayer` encrypt with DAVE, and `recv_voice_packet(...)` / `recv_decoded_voice_packet(...)` decrypt each speaker, skipping the few packets that cannot be decrypted around MLS transitions (counted in `dave_status().undecryptable_packets`). Until this client holds the group's keys, sends return an error instead of transmitting audio unencrypted, and an `AudioPlayer` waits in `AutoPaused`; alone in a channel, the group forms when someone joins.
+Discord requires DAVE in every voice channel except Stage channels and refuses clients without it (close code 4017). The runtime takes part in the call's MLS group when connected with `connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`, which `Context::connect_voice_runtime` uses; plain `connect_voice_runtime(config)` keeps 3.0.0's behaviour and leaves DAVE to the caller. The plain `send_opus_frame(...)`, `play_opus_frames(...)`, and `AudioPlayer` encrypt with DAVE, and `recv_voice_packet(...)` / `recv_decoded_voice_packet(...)` decrypt each speaker, skipping the few packets that cannot be decrypted around MLS transitions (counted in `dave_status().undecryptable_packets`). Until this client holds the group's keys, sends return an error instead of transmitting audio unencrypted, and an `AudioPlayer` waits in `AutoPaused`; alone in a channel, the group forms when someone joins.
 Use `examples/live_dave_capture_bot.rs` to join a prepared voice channel and print the `DISCORDRS_LIVE_VOICE_*` environment block needed by `tests/live_voice_dave.rs`:
 
 ```powershell
@@ -1757,11 +1758,16 @@ use std::sync::Arc;
 use discordrs::voice::player::{
     AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
 };
-use discordrs::{connect_voice_runtime, VoiceRuntimeConfig};
+use discordrs::{connect_voice_runtime_with_options, VoiceConnectOptions, VoiceRuntimeConfig};
 
-async fn play(config: VoiceRuntimeConfig, input: &str) -> Result<(), discordrs::DiscordError> {
-    // Connect the voice runtime (see §11 for obtaining the config values).
-    let handle = Arc::new(connect_voice_runtime(config).await?);
+async fn play(
+    config: VoiceRuntimeConfig,
+    options: VoiceConnectOptions,
+    input: &str,
+) -> Result<(), discordrs::DiscordError> {
+    // Connect the voice runtime (see §11 for obtaining the config values);
+    // `options` carries the channel, so the runtime runs DAVE itself.
+    let handle = Arc::new(connect_voice_runtime_with_options(config, options).await?);
 
     let player = AudioPlayer::new(AudioPlayerOptions::default());
     let subscription = player.subscribe_runtime(Arc::clone(&handle))?;

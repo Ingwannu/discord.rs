@@ -29,7 +29,7 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 DAVE(MLS 기
 
 ```text
 VoiceRuntimeHandle ─┬─ outbound_rtp: tokio::Mutex<VoiceOutboundRtpState>   (송신 순서)
-                    ├─ dave: Arc<std::Mutex<DaveController>>              (MLS·암복호화)
+                    ├─ dave: Option<Arc<std::Mutex<DaveController>>>      (MLS·암복호화, connect_with_options만)
                     └─ dave_status: watch::Receiver<VoiceDaveStatus>       (재생기·사용자 관찰용)
 runtime task ───────── 같은 Arc<Mutex<DaveController>>를 잠가 게이트웨이 메시지를 처리하고,
                        돌려받은 VoiceGatewayCommand를 웹소켓에 쓴다
@@ -76,12 +76,14 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 
 ## 4. 버전 협상과 기능 게이트
 
-- 광고하는 버전 = `min(config.max_dave_protocol_version, davey::DAVE_PROTOCOL_VERSION)`. 단
-  `VoiceRuntimeConfig::channel_id`가 없으면 0을 광고하고 경고를 남긴다. MLS 그룹 id가 채널 id라
-  채널 없이는 세션을 운영할 수 없기 때문이다(`davey::DaveSession::new(.., channel_id, ..)`).
-  `None`은 이전처럼 필드를 보내지 않는다.
+- 진입점이 둘이다(7절). `connect_with_options(config, VoiceConnectOptions)`
+  (`connect_voice_runtime_with_options`)는 런타임이 DAVE를 운영하고, 광고하는 버전은
+  `min(config.max_dave_protocol_version, davey::DAVE_PROTOCOL_VERSION)`이다. MLS 그룹 id가 채널
+  id이고(`davey::DaveSession::new(.., channel_id, ..)`) 음성 게이트웨이는 세션의 채널을 알려 주지
+  않으므로 채널은 옵션으로 받는다. `connect(config)`(`connect_voice_runtime`)는 3.0.0 그대로
+  설정값을 광고하고 세션을 운영하지 않는다. `None`은 두 경우 모두 필드를 보내지 않는다.
 - 핸드셰이크 중 닫힘 프레임은 코드와 설명이 담긴 오류가 된다. 4017이면 "이 채널은 DAVE가 필요하고
-  런타임은 0을 광고했다(이유: channel_id 없음 / 설정이 0)"를 알려 준다.
+  이 연결은 N을 광고했다"를 알려 주고, `connect`였다면 `connect_voice_runtime_with_options`를 안내한다.
 - `voice` 기능이 `davey`를 포함한다. `dave`는 호환용 별칭(`dave = ["voice"]`)으로 남는다.
   `#[cfg(feature = "dave")]`였던 API는 `voice`만으로 쓸 수 있다. 결정 근거는 7절.
 
@@ -160,23 +162,29 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 
 ## 7. 공개 API와 SemVer
 
-추가: `VoiceRuntimeConfig::channel_id(ChannelId)` 빌더, `VoiceDaveStatus`(non_exhaustive),
-`VoiceRuntimeHandle::{dave_status, subscribe_dave_status, wait_until_playable,
-dave_verification_code}`, `VoiceFrameSink::is_playable`(기본 구현), `AudioPlayer::connection_events`,
-`PlayerConnectionEvent`(non_exhaustive), `PlayerSubscription::id`. `VoiceManager::runtime_config`와
-`Context::connect_voice_runtime`은 채널 id를 채운다.
+**정정(2026-10-18 리뷰).** 이 절의 첫 판은 `VoiceRuntimeConfig`에 공개 필드 `channel_id`를 더하고
+3.1.0을 권했다. 그 구조체는 모든 필드가 공개이고 `#[non_exhaustive]`가 아니라서 필드 추가는 구조체
+리터럴을 깨는 **주 버전 변경**이다. 3.1.0으로는 낼 수 없었으므로 다음과 같이 바꿨다.
 
-호환성 주의: `VoiceRuntimeConfig`에 공개 필드 `channel_id: Option<ChannelId>`가 생긴다. 모든 필드가
-공개인 구조체라 **필드를 전부 나열한 구조체 리터럴은 컴파일되지 않는다**(`..VoiceRuntimeConfig::new(..)`
-갱신 문법과 `new()`는 그대로 동작). 채널 id 없이는 DAVE를 운영할 수 없고, 다른 저장 위치(비공개
-필드, 별도 함수)는 같은 정도로 깨지거나 기본 경로를 고치지 못한다. 릴리스 버전 판단은 관리자에게
-남긴다(3.1.0과 변경 기록 안내 권장).
+- `VoiceRuntimeConfig`는 3.0.0 그대로다(필드 추가 없음).
+- 새 진입점 `connect_with_options(config, VoiceConnectOptions)`(`connect_voice_runtime_with_options`)와
+  `VoiceConnectOptions`(`#[non_exhaustive]`, `VoiceConnectOptions::new(channel_id)`)가 런타임 DAVE를
+  켠다. `VoiceManager::runtime_options(guild_id)`가 추적한 음성 상태로 옵션을 만든다.
+- `connect(config)`는 3.0.0 동작을 그대로 지킨다: 설정한 버전을 광고하고, DAVE 세션을 운영하지 않고,
+  일반 송수신은 DAVE 세션에서 3.0.0과 같은 오류를 내고, `VoiceDaveySession`·`send_dave_*`로 MLS를
+  손수 진행할 수 있다. `is_playable()`은 늘 `true`라서 `AudioPlayer`도 3.0.0처럼 동작한다.
+- 채널을 이미 아는 고수준 경로 `Context::connect_voice_runtime`은 새 진입점을 쓴다. 기본 경험이
+  동작하게 하려는 의도이며, 이 메서드의 DAVE 동작은 바뀐다(3.0.0에서는 DAVE 채널에서 소리가 나지
+  않았다).
 
-동작 변화: 평문 `send_opus_frame*`/`play_opus_frames`는 DAVE 세션에서 오류 대신 자동 암호화하고,
-`recv_voice_packet*`는 오류 대신 자동 복호화한다. `AudioPlayer`는 DAVE 그룹이 준비될 때까지
-`AutoPaused`에 머문다. `VoiceDaveState`(원시 메시지 미러)는 이전처럼 채워진다. 런타임과 별도로
-`VoiceDaveySession`과 `send_dave_*` 명령으로 MLS를 직접 운영하는 것은 더 이상 지원하지 않는다(같은
-연결에서 키 패키지가 둘이 된다). 저수준 API 자체는 남는다.
+나머지 추가는 모두 하위 호환이다: `VoiceDaveStatus`(non_exhaustive), `VoiceRuntimeHandle::{dave_status,
+subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}`, 기본 구현이 있는
+`VoiceFrameSink::is_playable`, `AudioPlayer::connection_events`, `PlayerConnectionEvent`(non_exhaustive),
+`PlayerSubscription::id`. `AudioPlayer`의 재생 가능성 판단은 `is_playable()`이 `false`인 싱크에만
+영향을 주므로, 기존 싱크와 `connect` 핸들에서는 동작이 같다(`NoSubscriberBehavior::Stop`이 DAVE 키
+전 구독을 "없음"으로 보는 것도 새 경로에서만 일어난다). 실패 로그가 구간마다 한 번으로 줄어든 것은
+로그 변화다. `dave` 기능이 `voice`의 별칭이 되어 `voice`만 켠 사용자도 `davey`를 빌드하지만 API
+변화는 아니다. 핸드셰이크 중 메시지 보존과 4017 설명 오류는 두 진입점 모두에 적용되는 버그 수정이다.
 
 ## 8. 테스트
 
@@ -190,8 +198,13 @@ dave_verification_code}`, `VoiceFrameSink::is_playable`(기본 구현), `AudioPl
   복호화, 4017 닫힘 오류, IDENTIFY 광고 버전.
 - 재생기 테스트: 재생 불가 → `AutoPaused` → 준비 → `Playing`, 재생 불가 구독 제외, 실패 구간 이벤트
   한 번과 회복 이벤트.
-- 실제 Discord: `tests/live_voice_dave.rs`(무시됨)가 자동 경로로 톤을 재생하고 다른 참가자의
-  음성을 복호화한다. 실행하지 않았다.
+- 송신 키(5.1절): 세 멤버 중 커밋을 먼저 처리한 멤버의 프레임을 아직 처리하지 않은 멤버가 복호화,
+  업그레이드는 EXECUTE까지 평문, `davey` 자체 암호화기와 바이트 단위 일치, `davey` 래칫 테스트 벡터,
+  카운터 소진.
+- 진입점(7절): `connect`가 3.0.0처럼 키 패키지를 보내지 않고 일반 송수신에서 같은 오류를 내며 늘
+  재생 가능한지, 4017 오류 문구가 진입점에 맞는지.
+- 실제 Discord: `tests/live_voice_dave.rs`(무시됨)가 `connect_voice_runtime_with_options`로 톤을
+  재생하고 다른 참가자의 음성을 복호화한다. 실행하지 않았다.
 
 openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이미 `davey`가 같은 버전을
 쓰므로 잠금 파일에 새 패키지가 생기지 않는다. 대신 테스트 대상을 빌드할 때는 `voice` 없이도
@@ -220,16 +233,19 @@ openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이
   키가 없을 때 송신: (a) discord.js·Songbird처럼 평문 전송, (b) 보내지 않고 재생기를 자동 일시정지.
   오류 노출: (i) AudioPlayerEvent 변형 추가, (ii) 별도 연결 이벤트 스트림, (iii) 로그만.
 - 선택한 방식 (Chosen approach): (3) + (b) + (ii). 런타임 소유 `DaveController`(std Mutex, 동기
-  상태 기계), 핸드셰이크 메시지 버퍼링, 채널 id 없으면 0 광고, 4017 설명 오류, 재생 가능성 기반
-  자동 일시정지, 실패 구간 이벤트.
+  상태 기계)를 새 진입점 `connect_with_options`에서만 켜고(`connect`는 3.0.0 그대로), 송신 키는
+  EXECUTE에서 바꾸며(5.1절), 핸드셰이크 메시지 버퍼링, 4017 설명 오류, 재생 가능성 기반 자동
+  일시정지, 실패 구간 이벤트를 더한다.
 - 다른 대안 대신 이 방식을 선택한 이유 (Why this over the alternatives): 비-Stage 음성은 DAVE 없이 쓸 수
   없으므로 `voice`만 켠 사용자도 동작해야 한다. `davey`는 순수 Rust(시스템 라이브러리 없음)이고
   깨끗한 빌드 비용은 `voice` 41 s → 47 s(+6 s, 이 머신 기준), 의존 크레이트 +103개다. (a)는 상대가
   버리는 평문을 SFU에 노출하고 트랙 앞부분이 사라진다. (b)는 discord.js의 `playable` 의미와 같고
   혼자 있는 채널에서는 아무도 듣지 않으므로 기다리는 편이 맞다. (i)은 망라형 열거형을 깨므로 3.x에서
   불가하다.
-- 장점, 단점 및 영향 (Pros, cons, and impact): 기본 경로가 DAVE 채널에서 동작하고 E2EE가 유지된다.
-  단점: `voice` 빌드가 무거워지고, `VoiceRuntimeConfig` 구조체 리터럴 사용자는 필드를 더해야 하며,
-  `NoSubscriberBehavior::Stop`은 DAVE 준비 전 구독을 "없음"으로 보아 트랙을 멈춘다(문서화,
-  `wait_until_playable`). 실제 Discord와의 상호 운용은 무시된 라이브 테스트로만 확인할 수 있다.
+- 장점, 단점 및 영향 (Pros, cons, and impact): `Context::connect_voice_runtime`과 새 진입점이 DAVE
+  채널에서 동작하고 E2EE가 유지되며, 3.0.0 코드는 그대로 컴파일·동작한다(3.1.0 가능). 단점: `voice`
+  빌드가 무거워지고, 진입점이 둘이라 문서로 구분해야 하며, 새 경로에서 `NoSubscriberBehavior::Stop`은
+  DAVE 키 전 구독을 "없음"으로 보아 트랙을 멈춘다(문서화, `wait_until_playable`). 송신 키 유도와 Opus
+  프레임 암호화를 `davey`와 같은 방식으로 직접 갖는다(바이트 단위 비교 테스트). 실제 Discord와의
+  상호 운용은 무시된 라이브 테스트로만 확인할 수 있다.
 ```

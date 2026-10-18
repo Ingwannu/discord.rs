@@ -12,7 +12,7 @@ use crate::error::DiscordError;
 use crate::model::{ChannelId, GuildId, UserId, VoiceServerUpdate, VoiceState};
 use crate::types::invalid_data_error;
 #[cfg(feature = "voice")]
-use crate::voice_runtime::VoiceRuntimeConfig;
+use crate::voice_runtime::{VoiceConnectOptions, VoiceRuntimeConfig};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 /// Typed Discord API enum for `VoiceConnectionStatus`.
@@ -991,21 +991,25 @@ impl VoiceManager {
         })
     }
 
-    /// The runtime configuration for the guild's voice connection, once its
-    /// session ID, token, and endpoint are known. It carries the connection's
-    /// channel, which DAVE end-to-end encryption needs.
     pub fn runtime_config(&self, guild_id: GuildId, user_id: UserId) -> Option<VoiceRuntimeConfig> {
         let connection = self.connections.get(&guild_id)?;
-        Some(
-            VoiceRuntimeConfig::new(
-                guild_id,
-                user_id,
-                connection.session_id.clone()?,
-                connection.token.clone()?,
-                connection.endpoint.clone()?,
-            )
-            .channel_id(connection.channel_id),
-        )
+        Some(VoiceRuntimeConfig::new(
+            guild_id,
+            user_id,
+            connection.session_id.clone()?,
+            connection.token.clone()?,
+            connection.endpoint.clone()?,
+        ))
+    }
+
+    /// The options for connecting the guild's voice runtime with
+    /// [`connect_with_options`](crate::voice_runtime::connect_with_options)
+    /// (`connect_voice_runtime_with_options`), so that it runs DAVE end-to-end
+    /// encryption: the connection's channel, which DAVE uses as its MLS
+    /// group.
+    pub fn runtime_options(&self, guild_id: GuildId) -> Option<VoiceConnectOptions> {
+        let connection = self.connections.get(&guild_id)?;
+        Some(VoiceConnectOptions::new(connection.channel_id))
     }
 
     pub fn resume_command(&self, guild_id: GuildId) -> Option<VoiceGatewayCommand> {

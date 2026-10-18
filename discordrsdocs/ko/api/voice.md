@@ -23,9 +23,11 @@ DAVE가 선택 사항이 아니게 된 이유는 아래 [DAVE](#dave-종단-간-
 1. `ctx.join_voice(guild_id, channel_id, self_mute, self_deaf)`로 음성 상태를 보냅니다.
 2. 봇 자신의 VOICE_STATE_UPDATE(`session_id`)와 VOICE_SERVER_UPDATE(`token`, `endpoint`)를 기다립니다.
    순서는 정해져 있지 않습니다.
-3. `connect_voice_runtime(config)`로 연결합니다. **`VoiceRuntimeConfig::channel_id(..)`로 음성 채널을
-   꼭 넣습니다.** DAVE가 채널을 MLS 그룹 id로 쓰기 때문입니다. `Context::connect_voice_runtime`과
-   `VoiceManager::runtime_config`는 자동으로 넣습니다.
+3. **`connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.**
+   그러면 런타임이 DAVE를 직접 운영합니다. DAVE가 채널을 MLS 그룹 id로 쓰기 때문에 채널이 필요합니다.
+   `Context::connect_voice_runtime`은 이 방식으로 연결하고, `VoiceManager::runtime_options(guild_id)`가
+   옵션을 만들어 줍니다. 옵션 없는 `connect_voice_runtime(config)`은 3.0.0과 같이 DAVE를 호출자에게
+   맡깁니다(아래 참고).
 4. `AudioPlayer`로 재생하거나 Opus 프레임을 직접 보내고, `recv_voice_packet*`로 받습니다.
 
 ```rust
@@ -34,15 +36,18 @@ use std::sync::Arc;
 use discordrs::voice::player::{
     AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
 };
-use discordrs::{connect_voice_runtime, ChannelId, VoiceRuntimeConfig};
+use discordrs::{
+    connect_voice_runtime_with_options, ChannelId, VoiceConnectOptions, VoiceRuntimeConfig,
+};
 
 async fn play(
     config: VoiceRuntimeConfig,
     channel_id: ChannelId,
     input: &str,
 ) -> Result<(), discordrs::DiscordError> {
-    // 채널 id가 있어야 DAVE를 광고하고 MLS 그룹에 들어갑니다.
-    let handle = Arc::new(connect_voice_runtime(config.channel_id(channel_id)).await?);
+    // 채널을 넘겨야 런타임이 DAVE를 운영하고 MLS 그룹에 들어갑니다.
+    let options = VoiceConnectOptions::new(channel_id);
+    let handle = Arc::new(connect_voice_runtime_with_options(config, options).await?);
 
     let player = AudioPlayer::new(AudioPlayerOptions::default());
     let subscription = player.subscribe_runtime(Arc::clone(&handle))?;
@@ -111,10 +116,13 @@ async fn receive(handle: &VoiceRuntimeHandle) -> Result<(), discordrs::DiscordEr
 ## DAVE 종단 간 암호화
 
 Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https://daveprotocol.com/)(MLS 기반
-종단 간 암호화)를 요구하고, 지원하지 않는 클라이언트를 닫힘 코드 4017로 거절합니다. 음성 런타임은
-@discordjs/voice·Songbird처럼 DAVE를 직접 운영합니다.
+종단 간 암호화)를 요구하고, 지원하지 않는 클라이언트를 닫힘 코드 4017로 거절합니다.
+`connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결한 런타임은
+(`Context::connect_voice_runtime`이 이렇게 연결) @discordjs/voice·Songbird처럼 DAVE를 직접 운영합니다.
+음성 게이트웨이는 세션이 어느 채널인지 알려 주지 않으므로 채널(MLS 그룹)을 옵션으로 받습니다. 옵션 없는
+`connect_voice_runtime(config)`은 이 절 끝에 적은 3.0.0 동작을 그대로 유지합니다.
 
-- **참여.** 채널 id가 있으면 IDENTIFY에 `max_dave_protocol_version` 1을 광고합니다. SESSION_DESCRIPTION이
+- **참여.** IDENTIFY에 `max_dave_protocol_version`을 광고합니다(기본 1, 최대 1). SESSION_DESCRIPTION이
   DAVE를 정하면 MLS 키 패키지를 보내고, 게이트웨이의 외부 발신자를 적용하고, 새로 들어온 멤버의 제안을
   `CLIENTS_CONNECT`와 대조해 커밋하고, 커밋과 웰컴을 처리하고, `transition_ready`를 알린 뒤
   `execute_transition`에서 키를 바꿉니다. 핸드셰이크 중에 온 메시지(`CLIENTS_CONNECT`, 외부 발신자)는
@@ -137,8 +145,8 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
   그 전환이 실행될 때까지 평문을 계속 보냅니다. 잘못된 커밋·웰컴은 `dave_mls_invalid_commit_welcome`으로
   알리고 새 키 패키지로 다시 들어갑니다. 전환이 없는데 복호화가 36번 넘게 연속 실패해도 같은 복구를
   합니다.
-- **채널 id가 없으면** MLS 그룹을 만들 수 없어 버전 0을 광고합니다(경고 로그). Stage 채널은 동작하고,
-  그 밖에서는 Discord가 4017로 닫으며 `connect_voice_runtime`이 빠진 설정을 알려 주는 오류를 돌려줍니다.
+- **핸드셰이크 중 4017 닫힘**(Discord가 DAVE를 요구)은 연결이 무엇을 광고했는지 알려 주는 오류가 되고,
+  `connect_voice_runtime`이었다면 `connect_voice_runtime_with_options`를 안내합니다.
 
 ```rust
 use discordrs::VoiceRuntimeHandle;
@@ -158,17 +166,20 @@ fn describe(handle: &VoiceRuntimeHandle) {
 `subscribe_dave_status()`는 같은 상태의 watch 수신기를, `dave_verification_code(user_id)`는 Discord
 클라이언트가 멤버를 확인할 때 보여 주는 쌍별 코드를 돌려줍니다.
 
-**직접 DAVE를 다룰 때.** `send_opus_frame_with_dave(...)`/`recv_voice_packet_with_dave(...)`에
-`VoiceDaveFrameEncryptor`/`VoiceDaveFrameDecryptor`를 넘기는 방식은 그대로 동작합니다. 다만 런타임이 이미
-세션을 운영하는 연결에서 `VoiceDaveySession`과 `send_dave_*` 명령으로 MLS를 손수 진행하는 것은 지원하지
-않습니다. 게이트웨이가 한 연결에서 키 패키지를 둘 받게 됩니다. `VoiceRuntimeState::dave`
-(`VoiceDaveState`)는 진단용으로 원시 DAVE 메시지를 계속 담습니다.
+**`connect_voice_runtime`(3.0.0 동작).** 설정한 `max_dave_protocol_version`을 광고하지만 DAVE 세션은
+운영하지 않습니다. DAVE 통화에서 일반 송수신은 오류를 내고, `dave_status()`는 협상된 버전만 보여 주며,
+`is_playable()`은 늘 `true`라서 `AudioPlayer`는 3.0.0처럼 동작합니다. DAVE는 직접 다룹니다:
+`VoiceDaveySession`, 원시 `send_dave_*` 명령, 원시 DAVE 메시지를 담는 `VoiceRuntimeState::dave`
+(`VoiceDaveState`), 그리고 `VoiceDaveFrameEncryptor`/`VoiceDaveFrameDecryptor`를 넘기는
+`send_opus_frame_with_dave(...)`/`recv_voice_packet_with_dave(...)`. 이 `*_with_dave` 메서드는
+`connect_voice_runtime_with_options` 런타임에서도 직접 만든 프레임 암호화에 쓸 수 있지만, 그 연결에서 MLS를
+손수 진행하지는 마십시오. 런타임이 자기 키 패키지를 보내므로 게이트웨이가 키 패키지를 둘 받게 됩니다.
 
-**3.0.0에서 올릴 때.** 3.0.0은 DAVE를 광고만 하고 운영하지 않아서, DAVE 채널에서 `AudioPlayer`는 아무
-소리도 내지 못했고(프레임마다 경고만 남김) 일반 송수신 메서드는 오류를 냈습니다. 설정을 직접 만든다면
-`VoiceRuntimeConfig::channel_id(..)`를 넣습니다. `VoiceRuntimeConfig`의 모든 필드를 구조체 리터럴로 적은
-코드는 `channel_id`를 더해야 합니다. `VoiceRuntimeConfig::new(..)`와 `..VoiceRuntimeConfig::new(..)`는
-영향이 없습니다.
+**3.0.0에서 올릴 때.** 3.0.0의 런타임은 DAVE를 광고만 하고 운영하지 않아서, DAVE 채널에서
+`AudioPlayer`는 아무 소리도 내지 못했습니다(프레임마다 경고만 남김). 깨지는 변경은 없습니다.
+`connect_voice_runtime(config)`을 쓰는 코드는 전과 같이 동작합니다. DAVE 채널에서 소리를 내려면
+`connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id))`로 연결합니다.
+`Context::connect_voice_runtime`을 쓰는 코드는 그대로 두어도 됩니다.
 
 **검증 상태.** 독립된 두 `davey` 세션과 테스트용 음성 게이트웨이(OpenMLS 외부 발신자)로 웰컴 참여, 혼자인
 멤버의 커밋, 양방향 오디오(실제 Opus를 쓰는 `AudioPlayer` 포함), 다운그레이드·업그레이드, 잘못된

@@ -132,18 +132,10 @@ pub struct VoiceRuntimeConfig {
     pub preferred_mode: Option<VoiceEncryptionMode>,
     /// The highest DAVE (end-to-end encryption) protocol version to
     /// advertise; `None` leaves the field out of IDENTIFY, which Discord
-    /// reads as 0. Defaults to the version this crate implements. The
-    /// runtime caps it at that version, and advertises 0 when
-    /// [`channel_id`](#structfield.channel_id) is unset.
+    /// reads as 0. Defaults to 1, the version this crate implements.
+    /// [`connect_with_options`] caps it at that version; [`connect`] sends
+    /// it as it is.
     pub max_dave_protocol_version: Option<u8>,
-    /// The voice channel being joined. DAVE uses it as the MLS group ID, so
-    /// without it the runtime cannot take part in end-to-end encryption and
-    /// Discord refuses the connection in every channel except Stage
-    /// channels (close code 4017). [`VoiceManager::runtime_config`] and
-    /// `Context::connect_voice_runtime` fill it in.
-    ///
-    /// [`VoiceManager::runtime_config`]: crate::voice::VoiceManager::runtime_config
-    pub channel_id: Option<ChannelId>,
 }
 
 impl fmt::Debug for VoiceRuntimeConfig {
@@ -157,7 +149,6 @@ impl fmt::Debug for VoiceRuntimeConfig {
             .field("gateway_version", &self.gateway_version)
             .field("preferred_mode", &self.preferred_mode)
             .field("max_dave_protocol_version", &self.max_dave_protocol_version)
-            .field("channel_id", &self.channel_id)
             .finish()
     }
 }
@@ -180,30 +171,7 @@ impl VoiceRuntimeConfig {
             gateway_version: DEFAULT_VOICE_GATEWAY_VERSION,
             preferred_mode: None,
             max_dave_protocol_version: Some(supported_dave_version()),
-            channel_id: None,
         }
-    }
-
-    /// Sets the voice channel being joined, which DAVE end-to-end encryption
-    /// needs (see [`Self::channel_id`](#structfield.channel_id)).
-    pub fn channel_id(mut self, channel_id: ChannelId) -> Self {
-        self.channel_id = Some(channel_id);
-        self
-    }
-
-    /// The DAVE version IDENTIFY advertises: the configured maximum, capped
-    /// at the version this crate implements, and 0 without a channel ID.
-    ///
-    /// Advertising a version the runtime cannot run would let Discord
-    /// negotiate DAVE for a connection that can then neither send nor
-    /// receive audio; advertising 0 makes Discord refuse it with close code
-    /// 4017 instead, which the handshake reports.
-    fn advertised_dave_version(&self) -> Option<u8> {
-        let requested = self.max_dave_protocol_version?;
-        if self.channel_id.is_none() {
-            return Some(0);
-        }
-        Some(requested.min(supported_dave_version()))
     }
 
     pub fn gateway_version(mut self, gateway_version: u8) -> Self {
@@ -238,6 +206,51 @@ impl VoiceRuntimeConfig {
         }
 
         endpoint
+    }
+}
+
+/// How [`connect_with_options`] connects: the voice runtime then takes part
+/// in DAVE, Discord's end-to-end encryption, on its own.
+///
+/// Discord requires DAVE in every voice channel except Stage channels.
+/// DAVE uses the voice channel as its MLS group, which is why the channel is
+/// needed here; the voice gateway does not say which channel a session is
+/// for.
+///
+/// ```
+/// # use discordrs::{ChannelId, VoiceConnectOptions};
+/// # fn options(channel_id: ChannelId) -> VoiceConnectOptions {
+/// VoiceConnectOptions::new(channel_id)
+/// # }
+/// ```
+///
+/// [Decision Log]
+/// - Purpose: let the runtime run DAVE without breaking 3.0.0 code.
+/// - Constraint: `VoiceRuntimeConfig` has only public fields and is not
+///   `#[non_exhaustive]`, so a new field (the channel) would break struct
+///   literals, a semver-major change; and code that drove DAVE by hand
+///   through `connect` must keep working.
+/// - Alternatives: (1) a `channel_id` field on `VoiceRuntimeConfig`
+///   (breaking); (2) a setter on the handle after connecting (too late: the
+///   key package goes out right after SESSION_DESCRIPTION); (3) a new entry
+///   point with its own options type.
+/// - Chosen: (3). `connect` keeps 3.0.0's behaviour; `connect_with_options`
+///   runs DAVE; `Context::connect_voice_runtime`, which knows the channel,
+///   uses the new one.
+/// - Trade-offs: two entry points to document; the options type is
+///   `#[non_exhaustive]` with a constructor, so it can grow without another
+///   one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VoiceConnectOptions {
+    /// The voice channel being joined: the DAVE MLS group.
+    pub channel_id: ChannelId,
+}
+
+impl VoiceConnectOptions {
+    /// Options for joining `channel_id`.
+    pub fn new(channel_id: ChannelId) -> Self {
+        Self { channel_id }
     }
 }
 
@@ -1200,15 +1213,17 @@ fn parse_dave_frame(frame: &[u8]) -> Result<VoiceDaveFrame, DiscordError> {
 
 /// Typed Discord API object for `VoiceRuntimeHandle`.
 ///
-/// A connected voice session. When Discord negotiates DAVE end-to-end
-/// encryption for the call, the runtime runs the MLS group on its own: the
-/// plain send methods ([`Self::send_opus_frame`],
-/// [`Self::send_opus_frame_after_gap`], [`Self::play_opus_frames`], and an
+/// A connected voice session.
+///
+/// From [`connect_with_options`], the runtime runs DAVE end-to-end
+/// encryption on its own when Discord negotiates it: the plain send methods
+/// ([`Self::send_opus_frame`], [`Self::send_opus_frame_after_gap`],
+/// [`Self::play_opus_frames`], and an
 /// [`AudioPlayer`](crate::voice::player::AudioPlayer) subscribed with
 /// `subscribe_runtime`) encrypt with DAVE, and the plain receive methods
 /// ([`Self::recv_voice_packet`], [`Self::recv_decoded_voice_packet`])
 /// decrypt each sender's frames. [`Self::dave_status`] shows where the
-/// session is.
+/// session is. From [`connect`], DAVE is left to the caller as in 3.0.0.
 pub struct VoiceRuntimeHandle {
     state_rx: watch::Receiver<VoiceRuntimeState>,
     command_tx: mpsc::UnboundedSender<VoiceGatewayCommand>,
@@ -1223,11 +1238,15 @@ pub struct VoiceRuntimeHandle {
     // The DAVE session, shared with the gateway task (MLS messages) and used
     // by every send and receive here; a std lock, never held across an
     // await. Senders take it inside `outbound_rtp`, so DAVE frame counters
-    // go out in RTP order.
-    dave: Arc<StdMutex<DaveController>>,
+    // go out in RTP order. `None` for `connect`, which leaves DAVE to the
+    // caller as in 3.0.0.
+    dave: Option<Arc<StdMutex<DaveController>>>,
     /// Published by `dave` after every change; read without its lock, so
     /// [`Self::is_playable`] never waits for MLS work.
     dave_status: watch::Receiver<VoiceDaveStatus>,
+    /// Keeps the fixed status of a `connect` handle open, so watchers wait
+    /// instead of seeing a closed channel.
+    _manual_dave_status: Option<watch::Sender<VoiceDaveStatus>>,
 }
 
 /// Locks the DAVE controller.
@@ -1261,7 +1280,8 @@ impl VoiceRuntimeHandle {
         Arc::clone(&self.udp_socket)
     }
 
-    /// The state of the call's DAVE end-to-end encryption.
+    /// The state of the call's DAVE end-to-end encryption. For a
+    /// connection from [`connect`] it only reports the negotiated version.
     pub fn dave_status(&self) -> VoiceDaveStatus {
         self.dave_status.borrow().clone()
     }
@@ -1271,15 +1291,21 @@ impl VoiceRuntimeHandle {
         self.dave_status.clone()
     }
 
-    /// Whether this connection can send audio now: its gateway task is
-    /// running and [`VoiceDaveStatus::can_send_audio`] holds. Never blocks.
+    /// Whether this connection can send audio now. Never blocks.
     ///
-    /// In an end-to-end encrypted call that is the case once this client is
-    /// a member of the call's MLS group, which needs another member in the
-    /// call. An [`AudioPlayer`](crate::voice::player::AudioPlayer) counts
-    /// only playable connections as subscribed.
+    /// For a connection from [`connect_with_options`]: its gateway task is
+    /// running and [`VoiceDaveStatus::can_send_audio`] holds, which in an
+    /// end-to-end encrypted call means this client has a media key in use
+    /// (it is a member of the call's MLS group, which needs another member
+    /// in the call). An [`AudioPlayer`](crate::voice::player::AudioPlayer)
+    /// counts only playable connections as subscribed.
+    ///
+    /// For a connection from [`connect`] always `true`: the runtime cannot
+    /// know whether your own DAVE handling can send, and an `AudioPlayer`
+    /// keeps behaving as in 3.0.0.
     pub fn is_playable(&self) -> bool {
-        !self.task.is_finished() && self.dave_status.borrow().can_send_audio()
+        self.dave.is_none()
+            || (!self.task.is_finished() && self.dave_status.borrow().can_send_audio())
     }
 
     /// Waits until [`Self::is_playable`] holds.
@@ -1291,6 +1317,9 @@ impl VoiceRuntimeHandle {
     ///
     /// When the voice gateway connection ends first.
     pub async fn wait_until_playable(&self) -> Result<(), DiscordError> {
+        if self.dave.is_none() {
+            return Ok(());
+        }
         let closed =
             || DiscordError::voice("the voice connection closed before it could send audio");
         let mut status = self.dave_status.clone();
@@ -1321,10 +1350,27 @@ impl VoiceRuntimeHandle {
     ///
     /// # Errors
     ///
-    /// When the call has no DAVE session, or `user_id` is not in the MLS
+    /// When the call has no DAVE session (or the connection is from
+    /// [`connect`], whose runtime runs none), or `user_id` is not in the MLS
     /// group.
     pub fn dave_verification_code(&self, user_id: UserId) -> Result<String, DiscordError> {
-        lock_dave(&self.dave).verification_code(user_id)
+        let dave = self.dave.as_ref().ok_or_else(|| {
+            DiscordError::voice(
+                "this voice connection does not run DAVE itself; connect with \
+                 connect_voice_runtime_with_options",
+            )
+        })?;
+        lock_dave(dave).verification_code(user_id)
+    }
+
+    /// Whether frames inside transport encryption are DAVE frames: the
+    /// runtime session's current version, or for a [`connect`] handle the
+    /// version SESSION_DESCRIPTION negotiated (3.0.0's rule).
+    fn dave_active(&self, negotiated: u8) -> bool {
+        match &self.dave {
+            Some(dave) => lock_dave(dave).protocol_version() > 0,
+            None => negotiated > 0,
+        }
     }
 
     /// Hands commands the DAVE session produced outside the gateway task
@@ -1337,27 +1383,32 @@ impl VoiceRuntimeHandle {
         }
     }
 
-    /// The transport mode and key from SESSION_DESCRIPTION.
-    fn transport_keys(&self) -> Result<(VoiceEncryptionMode, Vec<u8>), DiscordError> {
+    /// The transport mode and key, and the DAVE version, from
+    /// SESSION_DESCRIPTION.
+    fn transport_keys(&self) -> Result<(VoiceEncryptionMode, Vec<u8>, u8), DiscordError> {
         let state = self.state_rx.borrow();
         let description = state
             .session_description
             .as_ref()
             .ok_or_else(|| invalid_data_error("missing voice session description"))?;
-        Ok((description.mode.clone(), description.secret_key.clone()))
+        Ok((
+            description.mode.clone(),
+            description.secret_key.clone(),
+            description.dave_protocol_version.unwrap_or(0),
+        ))
     }
 
     /// Parses and transport-decrypts a received packet, and looks up its
-    /// sender.
+    /// sender. Also returns SESSION_DESCRIPTION's DAVE version.
     fn open_transport(
         &self,
         raw: &VoiceRawUdpPacket,
-    ) -> Result<(VoiceRtpHeader, Vec<u8>, Option<UserId>), DiscordError> {
-        let (mode, secret_key) = self.transport_keys()?;
+    ) -> Result<(VoiceRtpHeader, Vec<u8>, Option<UserId>, u8), DiscordError> {
+        let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
         let rtp = parse_rtp_header(&raw.bytes)?;
         let frame = decrypt_transport_payload(&raw.bytes, &rtp, &mode, &secret_key)?;
         let user_id = self.state_rx.borrow().ssrc_users.get(&rtp.ssrc).copied();
-        Ok((rtp, frame, user_id))
+        Ok((rtp, frame, user_id, negotiated_dave))
     }
 
     pub async fn recv_raw_udp_packet(
@@ -1375,7 +1426,8 @@ impl VoiceRuntimeHandle {
     }
 
     /// Receives the next packet with media and removes transport encryption
-    /// and, in an end-to-end encrypted call, DAVE encryption.
+    /// and, for a connection from [`connect_with_options`] in an end-to-end
+    /// encrypted call, DAVE encryption.
     ///
     /// The sender's DAVE keys are found through the SSRC → user mapping
     /// from SPEAKING updates. Packets that cannot be decrypted are skipped
@@ -1386,6 +1438,9 @@ impl VoiceRuntimeHandle {
     /// users, is returned as is. Transport errors (a malformed packet, a
     /// failed AEAD check) are still returned.
     ///
+    /// For a connection from [`connect`], a DAVE session is an error, as in
+    /// 3.0.0: use [`Self::recv_voice_packet_with_dave`] with your decryptor.
+    ///
     /// Cancel safe: a cancelled call loses at most the packet it was
     /// skipping.
     pub async fn recv_voice_packet(
@@ -1394,8 +1449,11 @@ impl VoiceRuntimeHandle {
     ) -> Result<VoiceReceivedPacket, DiscordError> {
         loop {
             let raw = self.recv_raw_udp_packet(max_len).await?;
-            let (rtp, frame, user_id) = self.open_transport(&raw)?;
-            let inbound = lock_dave(&self.dave).decrypt_inbound(user_id, frame);
+            let Some(dave) = self.dave.as_ref() else {
+                return self.recv_plain(raw);
+            };
+            let (rtp, frame, user_id, _) = self.open_transport(&raw)?;
+            let inbound = lock_dave(dave).decrypt_inbound(user_id, frame);
             self.send_dave_commands(inbound.commands);
             if let Some(opus_frame) = inbound.media {
                 return Ok(VoiceReceivedPacket {
@@ -1424,7 +1482,7 @@ impl VoiceRuntimeHandle {
         D: VoiceDaveFrameDecryptor,
     {
         let raw = self.recv_raw_udp_packet(max_len).await?;
-        let (rtp, transport_frame, user_id) = self.open_transport(&raw)?;
+        let (rtp, transport_frame, user_id, negotiated_dave) = self.open_transport(&raw)?;
         // Why the silence check: Discord's SFU sends the 3-byte Opus silence
         // packet for a muted sender without DAVE encryption, even inside an
         // E2EE session, and the DAVE decrypting transform must let a frame
@@ -1436,7 +1494,7 @@ impl VoiceRuntimeHandle {
         // that whoever can inject packets could inject silence; here that
         // means the SFU, because transport AEAD already rejected anything
         // sealed without the session key.
-        let dave_active = lock_dave(&self.dave).protocol_version() > 0;
+        let dave_active = self.dave_active(negotiated_dave);
         let opus_frame = if dave_active && transport_frame.as_slice() != OPUS_SILENCE_FRAME {
             let dave_frame = parse_dave_frame(&transport_frame)?;
             dave_decryptor.decrypt_frame(&rtp, user_id, &dave_frame)?
@@ -1444,6 +1502,26 @@ impl VoiceRuntimeHandle {
             transport_frame
         };
 
+        Ok(VoiceReceivedPacket {
+            raw,
+            rtp,
+            user_id,
+            opus_frame,
+        })
+    }
+
+    /// 3.0.0's receive for a [`connect`] handle: transport decryption only,
+    /// and an error on a DAVE session.
+    fn recv_plain(&self, raw: VoiceRawUdpPacket) -> Result<VoiceReceivedPacket, DiscordError> {
+        let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
+        if negotiated_dave > 0 {
+            return Err(invalid_data_error(
+                "DAVE encrypted voice frames are not supported by recv_voice_packet",
+            ));
+        }
+        let rtp = parse_rtp_header(&raw.bytes)?;
+        let opus_frame = decrypt_transport_payload(&raw.bytes, &rtp, &mode, &secret_key)?;
+        let user_id = self.state_rx.borrow().ssrc_users.get(&rtp.ssrc).copied();
         Ok(VoiceReceivedPacket {
             raw,
             rtp,
@@ -1490,14 +1568,16 @@ impl VoiceRuntimeHandle {
         ))
     }
 
-    /// Sends a raw `dave_protocol_ready_for_transition`. The runtime already
-    /// answers every transition itself; this is for diagnostics.
+    /// Sends a raw `dave_protocol_ready_for_transition`, for your own DAVE
+    /// handling on a [`connect`] connection. A runtime from
+    /// [`connect_with_options`] answers every transition itself.
     pub fn send_dave_transition_ready(&self, transition_id: u64) -> Result<(), DiscordError> {
         self.send(VoiceGatewayCommand::DaveProtocolTransitionReady { transition_id })
     }
 
-    /// Sends a raw MLS key package. The runtime already sends its own; a
-    /// second one on the same connection confuses the voice gateway.
+    /// Sends a raw MLS key package, for your own DAVE handling on a
+    /// [`connect`] connection. A runtime from [`connect_with_options`] sends
+    /// its own; a second one on that connection confuses the voice gateway.
     pub fn send_dave_mls_key_package(
         &self,
         key_package: impl Into<Vec<u8>>,
@@ -1507,8 +1587,9 @@ impl VoiceRuntimeHandle {
         })
     }
 
-    /// Sends a raw MLS commit/welcome. The runtime already commits pending
-    /// proposals itself.
+    /// Sends a raw MLS commit/welcome, for your own DAVE handling on a
+    /// [`connect`] connection. A runtime from [`connect_with_options`]
+    /// commits pending proposals itself.
     pub fn send_dave_mls_commit_welcome(
         &self,
         commit: impl Into<Vec<u8>>,
@@ -1520,8 +1601,10 @@ impl VoiceRuntimeHandle {
         })
     }
 
-    /// Sends a raw `dave_mls_invalid_commit_welcome`. The runtime already
-    /// reports invalid transitions and rejoins itself.
+    /// Sends a raw `dave_mls_invalid_commit_welcome`, for your own DAVE
+    /// handling on a [`connect`] connection. A runtime from
+    /// [`connect_with_options`] reports invalid transitions and rejoins
+    /// itself.
     pub fn send_dave_mls_invalid_commit_welcome(
         &self,
         transition_id: u64,
@@ -1529,14 +1612,17 @@ impl VoiceRuntimeHandle {
         self.send(VoiceGatewayCommand::DaveMlsInvalidCommitWelcome { transition_id })
     }
 
-    /// Sends one Opus frame, DAVE-encrypted when the call is end-to-end
-    /// encrypted.
+    /// Sends one Opus frame. For a connection from [`connect_with_options`]
+    /// it is DAVE-encrypted when the call is end-to-end encrypted.
     ///
     /// # Errors
     ///
-    /// Besides transport failures: when the call is end-to-end encrypted and
-    /// this client holds no media keys yet ([`Self::is_playable`] is
-    /// `false`). Nothing is sent or used up then, not even a nonce.
+    /// Besides transport failures: for a [`connect_with_options`]
+    /// connection, when the call is end-to-end encrypted and this client has
+    /// no media key in use yet ([`Self::is_playable`] is `false`); for a
+    /// [`connect`] connection, whenever DAVE was negotiated, as in 3.0.0 (use
+    /// [`Self::send_opus_frame_with_dave`]). Nothing is sent or used up then,
+    /// not even a nonce.
     pub async fn send_opus_frame(
         &self,
         opus_frame: &[u8],
@@ -1576,7 +1662,7 @@ impl VoiceRuntimeHandle {
         gap: Duration,
         duration: Duration,
     ) -> Result<VoiceOutboundPacket, DiscordError> {
-        let (mode, secret_key) = self.transport_keys()?;
+        let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
         // The RTP state stays locked across the UDP send and is committed
         // only after it. `UdpSocket::send` is cancel safe (a cancelled send
         // transmitted nothing), so a failed or cancelled send leaves the
@@ -1585,15 +1671,24 @@ impl VoiceRuntimeHandle {
         let mut outbound_rtp = self.outbound_rtp.lock().await;
         // DAVE runs inside the RTP lock so its frame counter follows RTP
         // order; the std lock is released before the send below.
-        let payload: Cow<'_, [u8]> = match media {
-            OutboundMedia::Opus(frame) => {
+        let payload: Cow<'_, [u8]> = match (media, self.dave.as_ref()) {
+            (OutboundMedia::Opus(frame), Some(dave)) => {
                 if frame.is_empty() {
                     return Err(invalid_data_error("opus frame must not be empty"));
                 }
-                lock_dave(&self.dave).encrypt_outbound(frame)?
+                lock_dave(dave).encrypt_outbound(frame)?
             }
-            OutboundMedia::DaveFrame(frame) => {
-                if lock_dave(&self.dave).protocol_version() == 0 {
+            // A `connect` handle refuses DAVE sessions, as in 3.0.0.
+            (OutboundMedia::Opus(frame), None) => {
+                if negotiated_dave > 0 {
+                    return Err(invalid_data_error(
+                        "DAVE encrypted voice frames are not supported by send_opus_frame",
+                    ));
+                }
+                Cow::Borrowed(frame)
+            }
+            (OutboundMedia::DaveFrame(frame), _) => {
+                if !self.dave_active(negotiated_dave) {
                     return Err(invalid_data_error(
                         "DAVE encrypted Opus send requires an active DAVE session",
                     ));
@@ -1705,26 +1800,62 @@ impl VoiceRuntimeHandle {
     }
 }
 
-/// Provides the `connect` helper.
+/// Connects a voice runtime that leaves DAVE to the caller, as in 3.0.0
+/// (exported as `connect_voice_runtime`).
 ///
 /// Connects the voice websocket, performs UDP discovery and protocol
-/// selection, and waits for SESSION_DESCRIPTION. When it negotiates DAVE,
-/// the returned handle's runtime takes part in the call's MLS group on its
-/// own (see [`VoiceRuntimeHandle`]).
+/// selection, and waits for SESSION_DESCRIPTION. IDENTIFY advertises
+/// [`VoiceRuntimeConfig::max_dave_protocol_version`] as it is (1 by
+/// default), but the runtime does not run the DAVE session: when Discord
+/// negotiates DAVE (every voice channel except Stage channels), the plain
+/// send and receive methods refuse it, and audio needs your own MLS handling
+/// through [`VoiceDaveySession`], the raw `send_dave_*` commands, the
+/// [`VoiceDaveState`] mirror, and the `*_with_dave` methods.
+///
+/// Use [`connect_with_options`] (`connect_voice_runtime_with_options`) to
+/// have the runtime run DAVE; `Context::connect_voice_runtime` does.
 ///
 /// # Errors
 ///
 /// A handshake stage that times out or fails, or the voice gateway closing
-/// the connection; a close with code 4017 (DAVE required) explains why the
-/// connection advertised no DAVE support.
+/// the connection; a close with code 4017 (DAVE required) explains it.
 pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, DiscordError> {
-    let advertised_dave = config.advertised_dave_version();
-    if config.channel_id.is_none() && config.max_dave_protocol_version.is_some_and(|v| v > 0) {
-        tracing::warn!(
-            "VoiceRuntimeConfig::channel_id is not set, so this voice connection cannot use DAVE \
-             end-to-end encryption; Discord refuses it outside Stage channels (close code 4017)"
-        );
-    }
+    connect_runtime(config, None).await
+}
+
+/// Connects a voice runtime that runs DAVE, Discord's end-to-end encryption,
+/// on its own (exported as `connect_voice_runtime_with_options`).
+///
+/// IDENTIFY advertises [`VoiceRuntimeConfig::max_dave_protocol_version`]
+/// capped at the version this crate implements. When SESSION_DESCRIPTION
+/// negotiates DAVE, the runtime joins the call's MLS group in
+/// `options.channel_id`; the plain send methods and an
+/// [`AudioPlayer`](crate::voice::player::AudioPlayer) encrypt with it, and
+/// the plain receive methods decrypt each speaker (see
+/// [`VoiceRuntimeHandle`]).
+///
+/// # Errors
+///
+/// As [`connect`].
+pub async fn connect_with_options(
+    config: VoiceRuntimeConfig,
+    options: VoiceConnectOptions,
+) -> Result<VoiceRuntimeHandle, DiscordError> {
+    connect_runtime(config, Some(options)).await
+}
+
+async fn connect_runtime(
+    config: VoiceRuntimeConfig,
+    options: Option<VoiceConnectOptions>,
+) -> Result<VoiceRuntimeHandle, DiscordError> {
+    // The runtime's own session can only run the version this crate
+    // implements; `connect` keeps sending the configured value unchanged.
+    let advertised_dave = match &options {
+        Some(_) => config
+            .max_dave_protocol_version
+            .map(|version| version.min(supported_dave_version())),
+        None => config.max_dave_protocol_version,
+    };
     let websocket_url = config.websocket_url();
     let (ws_stream, _) = voice_stage_timeout("websocket connect", VOICE_CONNECT_TIMEOUT, async {
         Ok(connect_async(&websocket_url).await?)
@@ -1732,7 +1863,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
     .await?;
     let (mut write, mut read) = ws_stream.split();
     let mut handshake = Handshake {
-        config: &config,
+        runtime_dave: options.is_some(),
         advertised_dave,
         backlog: Vec::new(),
         last_sequence: None,
@@ -1745,7 +1876,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
         handshake.last_sequence = Some(seq);
     }
 
-    let identify = build_identify_payload(&config);
+    let identify = build_identify_payload(&config, advertised_dave);
     write
         .send(WsMessage::Text(identify.to_string().into()))
         .await?;
@@ -1800,15 +1931,30 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
         ..
     } = handshake;
 
-    let mut controller = DaveController::new(
-        config.user_id,
-        config.channel_id,
-        u16::from(advertised_dave.unwrap_or(0)),
-    );
-    let initial_commands =
-        controller.on_session_description(u16::from(dave_protocol_version.unwrap_or(0)));
-    let dave_status = controller.subscribe();
-    let dave = Arc::new(StdMutex::new(controller));
+    let negotiated_dave = u16::from(dave_protocol_version.unwrap_or(0));
+    // `connect` (no options) keeps 3.0.0's behaviour: no session of its own,
+    // and a status that only reports the negotiated version.
+    let (dave, dave_status, manual_dave_status, initial_commands) = match &options {
+        Some(options) => {
+            let mut controller = DaveController::new(
+                config.user_id,
+                options.channel_id,
+                u16::from(advertised_dave.unwrap_or(0)),
+            );
+            let commands = controller.on_session_description(negotiated_dave);
+            let status = controller.subscribe();
+            (
+                Some(Arc::new(StdMutex::new(controller))),
+                status,
+                None,
+                commands,
+            )
+        }
+        None => {
+            let (status_tx, status) = watch::channel(VoiceDaveStatus::manual(negotiated_dave));
+            (None, status, Some(status_tx), Vec::new())
+        }
+    };
 
     let initial_state = VoiceRuntimeState {
         config,
@@ -1833,7 +1979,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
     let (task_done_tx, task_done) = watch::channel(());
     let udp_socket_handle = Arc::clone(&udp_socket);
     let outbound_rtp = Mutex::new(VoiceOutboundRtpState::new(state_tx.borrow().ready.ssrc));
-    let gateway_dave = Arc::clone(&dave);
+    let gateway_dave = dave.as_ref().map(Arc::clone);
 
     let task = tokio::spawn(async move {
         // Dropped when this task ends, however it ends, which wakes
@@ -1925,6 +2071,7 @@ pub async fn connect(config: VoiceRuntimeConfig) -> Result<VoiceRuntimeHandle, D
         outbound_rtp,
         dave,
         dave_status,
+        _manual_dave_status: manual_dave_status,
     })
 }
 
@@ -1973,13 +2120,26 @@ enum GatewayStep {
 /// the live loop.
 struct GatewayLoop {
     state_tx: watch::Sender<VoiceRuntimeState>,
-    dave: Arc<StdMutex<DaveController>>,
+    /// The runtime's DAVE session, if it runs one.
+    dave: Option<Arc<StdMutex<DaveController>>>,
     seq_ack: Option<i64>,
     heartbeat_ack_pending: bool,
     heartbeat_sent_at: Option<Instant>,
 }
 
 impl GatewayLoop {
+    /// Runs `step` on the DAVE session, if the runtime runs one; returns
+    /// the commands to send.
+    fn with_dave(
+        &self,
+        step: impl FnOnce(&mut DaveController) -> Vec<VoiceGatewayCommand>,
+    ) -> Vec<VoiceGatewayCommand> {
+        match &self.dave {
+            Some(dave) => step(&mut lock_dave(dave)),
+            None => Vec::new(),
+        }
+    }
+
     fn handle(&mut self, message: WsMessage) -> Result<GatewayStep, DiscordError> {
         let commands = match message {
             WsMessage::Text(text) => self.handle_text(text.as_str())?,
@@ -2024,8 +2184,8 @@ impl GatewayLoop {
                     if let (Some(transition_id), Some(version)) =
                         (data.transition_id.0, data.dave_version())
                     {
-                        commands =
-                            lock_dave(&self.dave).on_prepare_transition(transition_id, version);
+                        commands = self
+                            .with_dave(|dave| dave.on_prepare_transition(transition_id, version));
                     }
                 }
             }
@@ -2040,7 +2200,10 @@ impl GatewayLoop {
                     .lenient_data::<DaveTransitionData>()
                     .and_then(|data| data.transition_id.0)
                 {
-                    lock_dave(&self.dave).on_execute_transition(transition_id);
+                    self.with_dave(|dave| {
+                        dave.on_execute_transition(transition_id);
+                        Vec::new()
+                    });
                 }
             }
             Some(VOICE_OP_DAVE_PREPARE_EPOCH) => {
@@ -2058,7 +2221,7 @@ impl GatewayLoop {
                         }
                     })?;
                     if let (Some(epoch), Some(version)) = (data.epoch.0, data.dave_version()) {
-                        commands = lock_dave(&self.dave).on_prepare_epoch(epoch, version);
+                        commands = self.with_dave(|dave| dave.on_prepare_epoch(epoch, version));
                     }
                 }
             }
@@ -2080,7 +2243,11 @@ impl GatewayLoop {
                         }
                     })?;
                 }
-                lock_dave(&self.dave).on_clients_connect(payload.connected_user_ids());
+                let user_ids = payload.connected_user_ids();
+                self.with_dave(|dave| {
+                    dave.on_clients_connect(user_ids);
+                    Vec::new()
+                });
             }
             Some(VOICE_OP_CLIENT_DISCONNECT) => {
                 if let Some(user_id) = payload
@@ -2092,7 +2259,10 @@ impl GatewayLoop {
                             .ssrc_users
                             .retain(|_, stored_user_id| stored_user_id != &user_id);
                     })?;
-                    lock_dave(&self.dave).on_client_disconnect(user_id);
+                    self.with_dave(|dave| {
+                        dave.on_client_disconnect(user_id);
+                        Vec::new()
+                    });
                 }
             }
             Some(VOICE_OP_HEARTBEAT_ACK) => {
@@ -2122,13 +2292,16 @@ impl GatewayLoop {
                 update_state(&self.state_tx, |state| {
                     state.dave.external_sender = Some(payload.to_vec());
                 })?;
-                lock_dave(&self.dave).on_external_sender(payload);
+                self.with_dave(|dave| {
+                    dave.on_external_sender(payload);
+                    Vec::new()
+                });
             }
             VOICE_OP_DAVE_MLS_PROPOSALS => {
                 update_state(&self.state_tx, |state| {
                     state.dave.proposals.push(payload.to_vec());
                 })?;
-                commands = lock_dave(&self.dave).on_proposals(payload);
+                commands = self.with_dave(|dave| dave.on_proposals(payload));
             }
             VOICE_OP_DAVE_MLS_ANNOUNCE_COMMIT_TRANSITION => {
                 if let Some((transition_id, commit)) = payload.split_first_chunk::<2>() {
@@ -2138,7 +2311,7 @@ impl GatewayLoop {
                         state.dave.pending_commit = Some(commit.to_vec());
                     })?;
                 }
-                commands = lock_dave(&self.dave).on_announce_commit(payload);
+                commands = self.with_dave(|dave| dave.on_announce_commit(payload));
             }
             VOICE_OP_DAVE_MLS_WELCOME => {
                 if let Some((transition_id, welcome)) = payload.split_first_chunk::<2>() {
@@ -2148,7 +2321,7 @@ impl GatewayLoop {
                         state.dave.pending_welcome = Some(welcome.to_vec());
                     })?;
                 }
-                commands = lock_dave(&self.dave).on_welcome(payload);
+                commands = self.with_dave(|dave| dave.on_welcome(payload));
             }
             _ => {}
         }
@@ -2214,14 +2387,15 @@ fn log_voice_close(frame: Option<&CloseFrame>) {
 /// the one a stage waits for are kept for the runtime loop instead of being
 /// dropped (CLIENTS_CONNECT can precede SESSION_DESCRIPTION, and DAVE needs
 /// it to accept proposals; Songbird keeps them the same way).
-struct Handshake<'a> {
-    config: &'a VoiceRuntimeConfig,
+struct Handshake {
+    /// Whether this is `connect_with_options` (the runtime runs DAVE).
+    runtime_dave: bool,
     advertised_dave: Option<u8>,
     backlog: Vec<WsMessage>,
     last_sequence: Option<i64>,
 }
 
-impl Handshake<'_> {
+impl Handshake {
     /// The next text message; binary messages before it go to the backlog.
     async fn next_text(&mut self, read: &mut VoiceWsRead) -> Result<String, DiscordError> {
         loop {
@@ -2274,15 +2448,16 @@ impl Handshake<'_> {
                 ". Discord requires DAVE end-to-end encryption in this channel, and this \
                  connection advertised max_dave_protocol_version {advertised}"
             ));
-            if self.config.channel_id.is_none() {
+            if advertised == 0 {
                 message.push_str(
-                    " because VoiceRuntimeConfig::channel_id is not set (DAVE uses the channel as \
-                     its MLS group); set it with VoiceRuntimeConfig::channel_id(..), or use \
-                     VoiceManager::runtime_config / Context::connect_voice_runtime, which do",
+                    "; leave VoiceRuntimeConfig::max_dave_protocol_version at its default (1)",
                 );
-            } else {
+            }
+            if !self.runtime_dave {
                 message.push_str(
-                    "; leave VoiceRuntimeConfig::max_dave_protocol_version at its default",
+                    ". connect_voice_runtime leaves DAVE to the caller; connect with \
+                     connect_voice_runtime_with_options(config, VoiceConnectOptions::new(channel_id)) \
+                     (as Context::connect_voice_runtime does) to have the runtime run it",
                 );
             }
         }
@@ -2290,7 +2465,11 @@ impl Handshake<'_> {
     }
 }
 
-fn build_identify_payload(config: &VoiceRuntimeConfig) -> Value {
+/// IDENTIFY, advertising `max_dave_protocol_version` (left out when `None`).
+fn build_identify_payload(
+    config: &VoiceRuntimeConfig,
+    max_dave_protocol_version: Option<u8>,
+) -> Value {
     let mut payload = serde_json::json!({
         "op": VOICE_OP_IDENTIFY,
         "d": {
@@ -2301,7 +2480,7 @@ fn build_identify_payload(config: &VoiceRuntimeConfig) -> Value {
         }
     });
 
-    if let Some(max_dave_protocol_version) = config.advertised_dave_version() {
+    if let Some(max_dave_protocol_version) = max_dave_protocol_version {
         payload["d"]["max_dave_protocol_version"] = serde_json::json!(max_dave_protocol_version);
     }
 
@@ -2976,7 +3155,7 @@ mod tests {
             )
         };
         assert_eq!(
-            build_identify_payload(&config),
+            build_identify_payload(&config, None),
             serde_json::json!({
                 "op": 0,
                 "d": {
@@ -2986,6 +3165,10 @@ mod tests {
                     "token": "token",
                 }
             })
+        );
+        assert_eq!(
+            build_identify_payload(&config, Some(1))["d"]["max_dave_protocol_version"],
+            1
         );
         assert_eq!(
             build_heartbeat_payload(55, None),
@@ -4227,7 +4410,6 @@ mod tests {
                 "token",
                 format!("ws://127.0.0.1:{ws_port}"),
             )
-            .channel_id(test_id(3))
             .preferred_mode(VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize()),
         )
         .await
@@ -4315,8 +4497,9 @@ pub(crate) mod test_call {
     use super::dave::test_gateway::{commit_welcome, transition, MockDaveGateway};
     use super::dave::DaveController;
     use super::{
-        build_rtp_header, connect, decrypt_transport_payload, parse_rtp_header,
-        seal_rtpsize_packet, VoiceRuntimeConfig, VoiceRuntimeHandle,
+        build_rtp_header, connect, connect_with_options, decrypt_transport_payload,
+        parse_rtp_header, seal_rtpsize_packet, VoiceConnectOptions, VoiceRuntimeConfig,
+        VoiceRuntimeHandle,
     };
     use crate::model::test_id;
     use crate::voice::{VoiceEncryptionMode, VoiceUdpDiscoveryPacket};
@@ -4351,6 +4534,18 @@ pub(crate) mod test_call {
         /// call: CLIENTS_CONNECT and the external sender arrive during the
         /// handshake, before SESSION_DESCRIPTION.
         pub(crate) async fn connect(
+            configure: impl FnOnce(VoiceRuntimeConfig) -> VoiceRuntimeConfig,
+        ) -> Self {
+            Self::start(true, configure).await
+        }
+
+        /// Connects with `connect`, which leaves DAVE to the caller.
+        pub(crate) async fn connect_manual() -> Self {
+            Self::start(false, |config| config).await
+        }
+
+        async fn start(
+            runtime_dave: bool,
             configure: impl FnOnce(VoiceRuntimeConfig) -> VoiceRuntimeConfig,
         ) -> Self {
             let gateway = MockDaveGateway::new(CHANNEL);
@@ -4445,21 +4640,23 @@ pub(crate) mod test_call {
                 }
             });
 
-            let config = configure(
-                VoiceRuntimeConfig::new(
-                    test_id(1),
-                    test_id(BOT),
-                    "session",
-                    "token",
-                    format!("ws://127.0.0.1:{ws_port}"),
-                )
-                .channel_id(test_id(CHANNEL)),
-            );
-            let handle = connect(config).await.unwrap();
+            let config = configure(VoiceRuntimeConfig::new(
+                test_id(1),
+                test_id(BOT),
+                "session",
+                "token",
+                format!("ws://127.0.0.1:{ws_port}"),
+            ));
+            let handle = if runtime_dave {
+                connect_with_options(config, VoiceConnectOptions::new(test_id(CHANNEL))).await
+            } else {
+                connect(config).await
+            }
+            .unwrap();
             let mut client = handle.udp_socket().local_addr().unwrap();
             client.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
 
-            let mut peer = DaveController::new(test_id(PEER), Some(test_id(CHANNEL)), 1);
+            let mut peer = DaveController::new(test_id(PEER), test_id(CHANNEL), 1);
             peer.on_session_description(1);
             peer.on_external_sender(gateway.external_sender());
             peer.on_clients_connect([test_id(BOT)]);
@@ -4773,7 +4970,7 @@ mod dave_call_tests {
 
         // Someone joins: the gateway asks the runtime to add their key
         // package, and the runtime answers with a commit and a welcome.
-        let mut joiner = DaveController::new(test_id(PEER), Some(test_id(CHANNEL)), 1);
+        let mut joiner = DaveController::new(test_id(PEER), test_id(CHANNEL), 1);
         let joiner_key_package = key_package(&joiner.on_session_description(1));
         joiner.on_external_sender(call.gateway.external_sender());
         let proposals = call.gateway.add_proposal(&joiner_key_package, 0);
@@ -4963,8 +5160,9 @@ mod dave_call_tests {
         super::log_voice_close(None);
     }
 
-    #[tokio::test]
-    async fn voice_runtime_explains_a_dave_required_close() {
+    /// A voice gateway that answers IDENTIFY with close code 4017, and the
+    /// IDENTIFY it got.
+    async fn refuse_without_dave() -> (u16, tokio::task::JoinHandle<serde_json::Value>) {
         let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = tcp.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -4990,27 +5188,118 @@ mod dave_call_tests {
             .unwrap();
             identify
         });
+        (port, server)
+    }
 
-        // No channel ID: nothing to build the MLS group from, so 0 is
-        // advertised and Discord refuses the connection.
-        let error = super::connect(super::VoiceRuntimeConfig::new(
+    fn mock_config(port: u16) -> super::VoiceRuntimeConfig {
+        super::VoiceRuntimeConfig::new(
             test_id(1),
             test_id(BOT),
             "session",
             "token",
             format!("ws://127.0.0.1:{port}"),
-        ))
-        .await
-        .err()
-        .unwrap()
-        .to_string();
-        assert!(error.contains("4017"), "{error}");
+        )
+    }
+
+    #[tokio::test]
+    async fn voice_runtime_explains_a_dave_required_close() {
+        // `connect` sends the configured version as 3.0.0 did; the error
+        // points to the entry point that runs DAVE.
+        let (port, server) = refuse_without_dave().await;
+        let error = super::connect(mock_config(port).max_dave_protocol_version(0))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("4017 (E2EE/DAVE protocol required)"),
+            "{error}"
+        );
         assert!(
             error.contains("advertised max_dave_protocol_version 0"),
             "{error}"
         );
-        assert!(error.contains("VoiceRuntimeConfig::channel_id"), "{error}");
-        let identify = server.await.unwrap();
-        assert_eq!(identify["d"]["max_dave_protocol_version"], 0);
+        assert!(error.contains("at its default"), "{error}");
+        assert!(
+            error.contains("connect_voice_runtime_with_options"),
+            "{error}"
+        );
+        assert_eq!(server.await.unwrap()["d"]["max_dave_protocol_version"], 0);
+
+        // The runtime's own session caps the version at what it implements.
+        let (port, server) = refuse_without_dave().await;
+        let error = super::connect_with_options(
+            mock_config(port).max_dave_protocol_version(9),
+            super::VoiceConnectOptions::new(test_id(CHANNEL)),
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("advertised max_dave_protocol_version 1"),
+            "{error}"
+        );
+        assert!(
+            !error.contains("connect_voice_runtime_with_options"),
+            "{error}"
+        );
+        assert_eq!(server.await.unwrap()["d"]["max_dave_protocol_version"], 1);
+    }
+
+    /// `connect` keeps 3.0.0's DAVE behaviour: no key package of its own,
+    /// plain sends and receives refuse a DAVE session, and an `AudioPlayer`
+    /// sees it as playable.
+    #[tokio::test]
+    async fn voice_runtime_from_connect_leaves_dave_to_the_caller() {
+        let mut call = DaveCall::connect_manual().await;
+        assert_eq!(call.identify["d"]["max_dave_protocol_version"], 1);
+        let status = call.handle.dave_status();
+        assert_eq!(status.protocol_version, 1);
+        assert!(!status.ready && !status.can_send_audio());
+        assert!(call.handle.is_playable());
+        call.handle.wait_until_playable().await.unwrap();
+        assert!(call
+            .handle
+            .dave_verification_code(test_id(PEER))
+            .unwrap_err()
+            .to_string()
+            .contains("connect_voice_runtime_with_options"));
+
+        let error = call
+            .handle
+            .send_opus_frame(&OPUS, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not supported by send_opus_frame"),
+            "{error}"
+        );
+        call.send_peer_frame(&OPUS).await;
+        let error = call.handle.recv_voice_packet(2048).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not supported by recv_voice_packet"),
+            "{error}"
+        );
+
+        // The raw mirror still sees what arrived during the handshake, and
+        // nothing was sent on the caller's behalf.
+        let mut state = call.handle.subscribe();
+        timeout(
+            Duration::from_secs(5),
+            state.wait_for(|state| state.dave.external_sender.is_some()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        call.handle
+            .set_speaking(crate::voice::VoiceSpeakingFlags::MICROPHONE, 0)
+            .unwrap();
+        assert_eq!(call.next_json().await["op"], 5, "no key package before it");
+        call.close().await;
     }
 }

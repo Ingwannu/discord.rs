@@ -266,10 +266,11 @@ pub use voice::{
 };
 #[cfg(feature = "voice")]
 pub use voice_runtime::{
-    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveState,
-    VoiceDaveStatus, VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder,
-    VoiceOpusFrame, VoiceOutboundPacket, VoiceOutboundRtpState, VoiceRawUdpPacket,
-    VoiceReceivedPacket, VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
+    connect as connect_voice_runtime, connect_with_options as connect_voice_runtime_with_options,
+    VoiceConnectOptions, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveState, VoiceDaveStatus,
+    VoiceDaveUnencryptedRange, VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame,
+    VoiceOutboundPacket, VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket,
+    VoiceRtpHeader, VoiceRuntimeConfig, VoiceRuntimeHandle, VoiceRuntimeState,
     VoiceSessionDescription, VoiceSpeakingUpdate,
 };
 #[cfg(all(feature = "voice", feature = "voice-encode"))]

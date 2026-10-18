@@ -105,7 +105,8 @@ pub use crate::voice::{
 };
 #[cfg(feature = "voice")]
 pub use crate::voice_runtime::{
-    connect as connect_voice_runtime, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveStatus,
+    connect as connect_voice_runtime, connect_with_options as connect_voice_runtime_with_options,
+    VoiceConnectOptions, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveStatus,
     VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame, VoiceOutboundPacket,
     VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig,
     VoiceRuntimeHandle,

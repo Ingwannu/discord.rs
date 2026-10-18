@@ -40,7 +40,7 @@ use crate::types::invalid_data_error;
 use crate::voice::{AudioTrack, VoiceConnectionConfig, VoiceConnectionState, VoiceManager};
 #[cfg(feature = "voice")]
 use crate::voice_runtime::{
-    connect as connect_voice_runtime_impl, VoiceRuntimeConfig, VoiceRuntimeHandle,
+    connect_with_options as connect_voice_runtime_impl, VoiceRuntimeConfig, VoiceRuntimeHandle,
 };
 use crate::ws::GatewayConnectionConfig;
 
@@ -622,19 +622,34 @@ impl Context {
         voice.runtime_config(guild_id, user_id)
     }
 
+    /// Connects the voice runtime for `guild_id` from the voice state this
+    /// context tracked (session ID, token, endpoint, and channel), with the
+    /// runtime running DAVE end-to-end encryption itself
+    /// (`connect_voice_runtime_with_options`): Discord requires DAVE in every
+    /// voice channel except Stage channels.
+    ///
+    /// `user_id` must be the bot's own user. The voice state is recorded for
+    /// any member of the guild, so filter VOICE_STATE_UPDATE by the bot's
+    /// user before relying on it.
     #[cfg(feature = "voice")]
     pub async fn connect_voice_runtime(
         &self,
         guild_id: GuildId,
         user_id: UserId,
     ) -> Result<VoiceRuntimeHandle, DiscordError> {
-        let config = self
-            .voice_runtime_config(guild_id, user_id)
-            .await
-            .ok_or_else(|| {
-                invalid_data_error("voice runtime requires endpoint, session_id, and token")
-            })?;
-        connect_voice_runtime_impl(config).await
+        let (config, options) = {
+            let voice = self.voice.read().await;
+            (
+                voice.runtime_config(guild_id, user_id),
+                voice.runtime_options(guild_id),
+            )
+        };
+        let (Some(config), Some(options)) = (config, options) else {
+            return Err(invalid_data_error(
+                "voice runtime requires endpoint, session_id, and token",
+            ));
+        };
+        connect_voice_runtime_impl(config, options).await
     }
 
     /// The runtime's collector hub. Collectors created from it directly

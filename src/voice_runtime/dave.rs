@@ -89,8 +89,13 @@ type FrameCipher = davey::AesGcm<davey::aes::Aes128, U12, U8>;
 ///
 /// DAVE is Discord's end-to-end encryption for voice
 /// (<https://daveprotocol.com/>). Discord requires it in every voice channel
-/// except Stage channels; the runtime joins the call's MLS group, encrypts
-/// outgoing audio, and decrypts incoming audio on its own.
+/// except Stage channels. A runtime connected with
+/// [`connect_voice_runtime_with_options`](crate::connect_voice_runtime_with_options)
+/// joins the call's MLS group, encrypts outgoing audio, and decrypts
+/// incoming audio on its own. One connected with
+/// [`connect_voice_runtime`](crate::connect_voice_runtime) leaves DAVE to
+/// the caller, as in 3.0.0: its status only shows the protocol version
+/// SESSION_DESCRIPTION negotiated and is never ready.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct VoiceDaveStatus {
@@ -124,13 +129,34 @@ pub struct VoiceDaveStatus {
 }
 
 impl VoiceDaveStatus {
-    /// Whether audio can be sent now: the call uses transport encryption
-    /// only, this client holds the group's keys, or the call is still
-    /// upgrading from transport-only encryption (until the upgrade executes,
-    /// peers accept unencrypted frames).
+    /// The status of a connection from [`connect_voice_runtime`]
+    /// (`crate::voice_runtime::connect`), whose runtime does not run DAVE:
+    /// the version SESSION_DESCRIPTION negotiated, never ready.
     ///
-    /// While this is `false` the plain send methods return an error instead
-    /// of sending audio unencrypted into an end-to-end encrypted call, and an
+    /// [`connect_voice_runtime`]: crate::connect_voice_runtime
+    pub(crate) fn manual(protocol_version: u16) -> Self {
+        Self {
+            protocol_version,
+            ready: false,
+            epoch: None,
+            voice_privacy_code: None,
+            last_transition_id: None,
+            last_error: None,
+            undecryptable_packets: 0,
+            recoveries: 0,
+            can_send_audio: protocol_version == 0,
+        }
+    }
+
+    /// Whether the plain send methods can send audio now: the call uses
+    /// transport encryption only, this client has a key in use (its
+    /// transition executed), or the call is still upgrading from
+    /// transport-only encryption (until the upgrade executes, peers accept
+    /// unencrypted frames).
+    ///
+    /// With the runtime's own DAVE session, while this is `false` the plain
+    /// send methods return an error instead of sending audio unencrypted
+    /// into an end-to-end encrypted call, and an
     /// [`AudioPlayer`](crate::voice::player::AudioPlayer) treats the
     /// connection as not playable.
     pub fn can_send_audio(&self) -> bool {
@@ -379,8 +405,8 @@ fn write_uleb128(mut value: u64, out: &mut Vec<u8>) -> usize {
 /// unencrypted frames open only for the transition expiry after an upgrade.
 pub(crate) struct DaveController {
     user_id: u64,
-    /// The MLS group ID; `None` makes DAVE impossible for this connection.
-    channel_id: Option<u64>,
+    /// The MLS group ID.
+    channel_id: u64,
     /// The highest version this client advertised in IDENTIFY.
     advertised_version: u16,
     /// The version the session works toward: set by SESSION_DESCRIPTION, a
@@ -434,11 +460,7 @@ impl fmt::Debug for DaveController {
 impl DaveController {
     /// A controller for `user_id` in `channel_id` that advertised
     /// `advertised_version`. Call [`Self::on_session_description`] next.
-    pub(crate) fn new(
-        user_id: UserId,
-        channel_id: Option<ChannelId>,
-        advertised_version: u16,
-    ) -> Self {
+    pub(crate) fn new(user_id: UserId, channel_id: ChannelId, advertised_version: u16) -> Self {
         let (status_tx, _) = watch::channel(VoiceDaveStatus {
             protocol_version: 0,
             ready: false,
@@ -452,7 +474,7 @@ impl DaveController {
         });
         Self {
             user_id: user_id.get(),
-            channel_id: channel_id.map(ChannelId::get),
+            channel_id: channel_id.get(),
             advertised_version,
             protocol_version: 0,
             active_version: 0,
@@ -775,18 +797,11 @@ impl DaveController {
         if version.get() > self.advertised_version {
             return Err(format!(
                 "Discord negotiated DAVE protocol version {version}, but this connection \
-                 advertised {} ({})",
-                self.advertised_version,
-                if self.channel_id.is_none() {
-                    "VoiceRuntimeConfig::channel_id is not set"
-                } else {
-                    "max_dave_protocol_version is lower"
-                }
+                 advertised {} (VoiceRuntimeConfig::max_dave_protocol_version is lower)",
+                self.advertised_version
             ));
         }
-        let channel_id = self
-            .channel_id
-            .ok_or("DAVE needs the voice channel ID: set VoiceRuntimeConfig::channel_id")?;
+        let channel_id = self.channel_id;
         if let Some(session) = self.session.as_mut() {
             // Keeps the external sender and creates the pending group again.
             session
@@ -854,9 +869,9 @@ impl DaveController {
     }
 
     fn not_ready_error(&self) -> DiscordError {
-        let why = if self.channel_id.is_none() || self.advertised_version == 0 {
-            "this connection cannot run DAVE (set VoiceRuntimeConfig::channel_id and keep \
-             max_dave_protocol_version at its default)"
+        let why = if self.advertised_version == 0 {
+            "this connection advertised no DAVE support (leave \
+             VoiceRuntimeConfig::max_dave_protocol_version at its default)"
         } else if self.reinitializing {
             "it is rejoining the MLS group after an invalid transition"
         } else if !self.pending_send_keys.is_empty() {
@@ -1146,7 +1161,7 @@ mod tests {
     }
 
     fn controller(user_id: u64) -> DaveController {
-        DaveController::new(test_id(user_id), Some(test_id(CHANNEL)), 1)
+        DaveController::new(test_id(user_id), test_id(CHANNEL), 1)
     }
 
     fn ready(transition_id: u64) -> VoiceGatewayCommand {
@@ -1665,29 +1680,26 @@ mod tests {
     }
 
     #[test]
-    fn dave_cannot_run_without_a_channel_or_above_the_advertised_version() {
-        let mut no_channel = DaveController::new(test_id(BOT), None, 0);
-        assert!(no_channel.on_session_description(1).is_empty());
-        let status = no_channel.status();
+    fn dave_cannot_run_above_the_advertised_version() {
+        let mut capped = DaveController::new(test_id(BOT), test_id(CHANNEL), 0);
+        assert!(capped.on_session_description(1).is_empty());
+        let status = capped.status();
         assert!(!status.can_send_audio());
         assert!(status
             .last_error
             .unwrap()
-            .contains("VoiceRuntimeConfig::channel_id is not set"));
-        let error = no_channel.encrypt_outbound(&OPUS).unwrap_err().to_string();
-        assert!(
-            error.contains("set VoiceRuntimeConfig::channel_id"),
-            "{error}"
-        );
-        assert!(no_channel.verification_code(test_id(PEER)).is_err());
-
-        let mut capped = DaveController::new(test_id(BOT), Some(test_id(CHANNEL)), 0);
-        assert!(capped.on_session_description(1).is_empty());
-        assert!(capped
-            .status()
-            .last_error
-            .unwrap()
             .contains("max_dave_protocol_version is lower"));
+        let error = capped.encrypt_outbound(&OPUS).unwrap_err().to_string();
+        assert!(error.contains("advertised no DAVE support"), "{error}");
+        assert!(capped.verification_code(test_id(PEER)).is_err());
+    }
+
+    #[test]
+    fn dave_status_of_a_connection_without_the_runtime_session() {
+        let status = super::VoiceDaveStatus::manual(1);
+        assert_eq!(status.protocol_version, 1);
+        assert!(!status.ready && !status.can_send_audio());
+        assert!(super::VoiceDaveStatus::manual(0).can_send_audio());
     }
 
     #[test]

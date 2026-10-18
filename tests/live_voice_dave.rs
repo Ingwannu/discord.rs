@@ -1,6 +1,7 @@
-//! Live check of the runtime's own DAVE (end-to-end encryption) path against
-//! a real Discord voice call: join, become a member of the call's MLS group,
-//! play a tone through `AudioPlayer`, and decrypt what another member says.
+//! Live check of the runtime's own DAVE (end-to-end encryption) path, through
+//! `connect_voice_runtime_with_options`, against a real Discord voice call:
+//! join, become a member of the call's MLS group, play a tone through
+//! `AudioPlayer`, and decrypt what another member says.
 //!
 //! Ignored by default; see `discordrsdocs/docs/api/live-dave-validation.md`.
 //! It needs a prepared voice session (`examples/live_dave_capture_bot.rs`
@@ -25,7 +26,9 @@ use discordrs::voice::player::{
     AudioInput, AudioPlayer, AudioPlayerEvent, AudioPlayerOptions, AudioResource,
     PlayerConnectionEvent, TrackEndReason,
 };
-use discordrs::{connect_voice_runtime, VoiceOpusDecoder, VoiceRuntimeConfig};
+use discordrs::{
+    connect_voice_runtime_with_options, VoiceConnectOptions, VoiceOpusDecoder, VoiceRuntimeConfig,
+};
 use tokio::time::{timeout, Instant};
 
 /// How long to wait for the MLS group (another member must be present).
@@ -109,18 +112,18 @@ async fn live_voice_dave_plays_a_tone_and_decrypts_other_members() {
         "live DAVE validation was explicitly requested with --ignored but is not configured",
     );
 
-    // The default configuration: DAVE is advertised because the channel is
-    // known, and the runtime runs the MLS group itself.
+    // The entry point that runs DAVE (the one `Context::connect_voice_runtime`
+    // uses), with the default configuration otherwise.
     let handle = Arc::new(
-        connect_voice_runtime(
+        connect_voice_runtime_with_options(
             VoiceRuntimeConfig::new(
                 config.server_id.parse().expect("server id"),
                 config.user_id.parse().expect("user id"),
                 config.session_id,
                 config.token,
                 config.endpoint,
-            )
-            .channel_id(config.channel_id.parse().expect("channel id")),
+            ),
+            VoiceConnectOptions::new(config.channel_id.parse().expect("channel id")),
         )
         .await
         .expect("failed to connect the live voice runtime"),
