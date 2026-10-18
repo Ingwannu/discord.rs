@@ -119,7 +119,9 @@ aes-gcm = { version = "0.10", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 opus-decoder = { version = "0.1", optional = true }
 opus-rs = { version = "0.1", optional = true }
-davey = { version = "0.1", optional = true }
+# 0.1.5: passthrough expiry shrinks instead of growing when it is turned off
+# (libdave's `min`), and frame encryption checks its buffer size.
+davey = { version = "0.1.5", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
