@@ -243,8 +243,9 @@ fn describe(handle: &VoiceRuntimeHandle) {
 
 **검증 상태.** 독립된 두 `davey` 세션과 테스트용 음성 게이트웨이(OpenMLS 외부 발신자)로 웰컴 참여, 혼자인
 멤버의 커밋, 양방향 오디오(실제 Opus를 쓰는 `AudioPlayer` 포함), 다운그레이드·업그레이드, 잘못된
-커밋·웰컴 복구, 4017 닫힘을 검사합니다. 실제 Discord에서는 지금까지 수신만 실행했습니다(2026-10-21:
-DAVE 통화에 참여해 화자의 음성을 복호화했고, 위 "수신 메서드가 건너뛰는 것"의 RTCP 문제를 찾았습니다).
-참가자가 런타임의 소리를 들어야 하는 송신은 **아직 실행하지 않았습니다**. 무시된 라이브 테스트
-`tests/live_voice_dave.rs`가 기준입니다. 절차는
+커밋·웰컴 복구, 4017 닫힘을 검사합니다. 실제 Discord에서는 2026-10-21에 `Context::connect_voice_runtime_with_dave`로 네 번 실행했습니다.
+Discord가 런타임의 MLS 키 패키지와 커밋을 받아들였고(프로토콜 v1, 에폭 1~3, 오류 없음), 참가자가 공식
+클라이언트에서 `AudioPlayer` 톤을 들었으며, 런타임이 화자의 패킷 63개를 복호화했습니다. 첫 실행에서 위
+"수신 메서드가 건너뛰는 것"의 RTCP 문제를 찾았고, 수정 후 두 번의 실행에서 RTCP 33개·110개를 오류 없이
+건너뛰었습니다. 무시된 라이브 테스트 `tests/live_voice_dave.rs` 자체는 아직 실행하지 않았으며 공식 기준으로 남아 있습니다. 절차는
 [Live DAVE Validation](../../docs/api/live-dave-validation.md)(영문)에 있습니다.

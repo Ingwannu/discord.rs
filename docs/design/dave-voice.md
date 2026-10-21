@@ -315,7 +315,8 @@ subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}
   않는지, 서버 포트를 닫은 뒤 소켓 오류(ICMP port unreachable → connection refused)는 여전히 오류인지.
 - 실제 Discord: `tests/live_voice_dave.rs`(무시됨)가 `connect_voice_runtime_with_options`로 톤을
   재생하고 다른 참가자의 음성을 복호화한다. 이 게이트 테스트는 아직 실행하지 않았다. 별도로 2026-10-21에
-  수신만 실제 통화에서 돌려 봤다(6.1절).
+  고수준 경로로 실제 통화에서 네 번 실행했다: 송신(공식 클라이언트에서 톤이 들림), 수신(패킷 63개 복호화),
+  RTCP 건너뛰기(수정 후 오류 0). 수치는 `docs/design/perf-baseline.md`.
 
 openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이미 `davey`가 같은 버전을
 쓰므로 잠금 파일에 새 패키지가 생기지 않는다. 대신 테스트 대상을 빌드할 때는 `voice` 없이도
