@@ -489,6 +489,17 @@ IDENTIFY했다. 인터랙션에는 응답하지 않았고 메시지를 보내지
 | 같은 조건 120초, 수정 후(`fix-activity-buttons`) | GUILD_CREATE 30/30, PRESENCE_UPDATE 493, MESSAGE_CREATE 2, 디코딩 실패 0. RSS 22.6 MB |
 | 쓰기 경로(앱 소유자 DM 안에서만) | DM 열기, 메시지 생성·수정, 리액션 추가·제거, Components V2 메시지(컨테이너·버튼) 생성, 버튼 인터랙션 응답(ephemeral, 327 ms), flags 없는 V2 메시지 수정, 삭제 정리 모두 성공 |
 
+### 실전 DAVE 음성 검증 (2026-10-21, main `cea24e7`, 사용자 승인)
+
+승인받은 서버 한 곳의 일반(Stage 아님) 음성 채널에서 `Context::join_voice` →
+`Context::connect_voice_runtime_with_dave` → `AudioPlayer`(3초 440 Hz 톤, raw PCM) → 수신 루프를 돌렸다.
+
+| 항목 | 결과 |
+|---|---|
+| DAVE 협상 | 프로토콜 v1, 에폭 1, 전환 0, `last_error` 없음, 음성 보안 코드 발급. 봇 혼자일 때는 그룹이 생기지 않아 `AutoPaused`로 대기했고(약 80초), 사람이 들어오자 그룹이 생겨 바로 재생됐다. 사람이 먼저 있으면 20 ms 안에 재생 |
+| 송신 | 공식 Discord 클라이언트에서 톤이 들렸다(우리 DAVE 프레임 암호화의 실제 상호 운용 확인) |
+| 수신 | 사람 한 명의 패킷 63개를 DAVE + 전송 암호화 해제(말소리 14개). 같은 기간 `failed to decrypt AES-GCM voice packet` 오류 35건(약 1초에 1건) — 음성이 아닌 패킷(RTCP로 추정)을 음성으로 처리한 버그. 첫 실행에서는 `?` 수신 루프가 첫 오류에서 끝나 수신 0. 수정은 `fix-voice-recv-rtcp` |
+
 검증하지 못한 것: 음성 연결(봇이 음성 채널에 들어가면 서버에 보이는 변화가 생겨 하지 않았다), 길드 채널 쓰기,
 모달·자동완성 응답.
 
