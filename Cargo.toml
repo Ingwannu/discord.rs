@@ -1,6 +1,6 @@
 [package]
 name = "discordrs"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 rust-version = "1.88"
 description = "discord.rs - Standalone Discord bot framework with Components V2, Gateway, and HTTP client"

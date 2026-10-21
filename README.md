@@ -49,41 +49,41 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 
 ```toml
 [dependencies]
-discordrs = "3.0.0"
+discordrs = "3.1.0"
 ```
 
 ```toml
 [dependencies]
 # Gateway bot client
-discordrs = { version = "3.0.0", features = ["gateway"] }
+discordrs = { version = "3.1.0", features = ["gateway"] }
 
 # HTTP Interactions Endpoint
-discordrs = { version = "3.0.0", features = ["interactions"] }
+discordrs = { version = "3.1.0", features = ["interactions"] }
 
 # Gateway runtime with default cache storage
-discordrs = { version = "3.0.0", features = ["gateway"] }
+discordrs = { version = "3.1.0", features = ["gateway"] }
 
 # Minimal core without cache storage
-discordrs = { version = "3.0.0", default-features = false }
+discordrs = { version = "3.1.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "3.1.0", features = ["gateway", "collectors"] }
 
 # Sharding foundations
-discordrs = { version = "3.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "3.1.0", features = ["gateway", "sharding"] }
 
 # Voice foundations, including DAVE end-to-end encryption (`dave` is now an
 # alias of `voice`)
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 
 # PCM -> Opus voice encode/playback helpers
-discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.1.0", features = ["voice", "voice-encode"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "3.0.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "3.1.0", features = ["gateway", "zstd-stream"] }
 
 # Both runtime modes
-discordrs = { version = "3.0.0", features = ["gateway", "interactions"] }
+discordrs = { version = "3.1.0", features = ["gateway", "interactions"] }
 ```
 
 ## Quick Taste

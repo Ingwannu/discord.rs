@@ -35,20 +35,20 @@ Brand name: discord.rs. The crates.io package name and Rust import path remain `
 ```toml
 [dependencies]
 # core only
-discordrs = "3.0.0"
+discordrs = "3.1.0"
 
 # typed gateway runtime
-discordrs = { version = "3.0.0", features = ["gateway"] }
+discordrs = { version = "3.1.0", features = ["gateway"] }
 
 # typed gateway runtime with cache storage or collectors
-discordrs = { version = "3.0.0", features = ["gateway", "cache"] }
-discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "3.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "3.1.0", features = ["gateway", "collectors"] }
 
 # interactions endpoint
-discordrs = { version = "3.0.0", features = ["interactions"] }
+discordrs = { version = "3.1.0", features = ["interactions"] }
 
 # voice receive, Opus decode, and DAVE end-to-end encryption
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 ```
 
 ## Runtime Extensions

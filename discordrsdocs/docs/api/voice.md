@@ -6,10 +6,10 @@ Voice is an optional runtime layer. It stays feature-gated so core Gateway, REST
 
 ```toml
 [dependencies]
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 
 # PCM -> Opus encode/playback helpers
-discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.1.0", features = ["voice", "voice-encode"] }
 ```
 
 `voice` includes DAVE end-to-end encryption (`davey`/OpenMLS), which Discord requires in every voice channel except Stage channels. The `dave` feature still exists as an alias of `voice`, so `features = ["voice", "dave"]` keeps building. See [DAVE](#dave-end-to-end-encryption) for why it is no longer optional.

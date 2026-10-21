@@ -32,23 +32,23 @@
 ```toml
 [dependencies]
 # 기본 REST, 모델, 빌더
-discordrs = "3.0.0"
+discordrs = "3.1.0"
 
 # 타입드 Gateway 봇 런타임
-discordrs = { version = "3.0.0", features = ["gateway"] }
+discordrs = { version = "3.1.0", features = ["gateway"] }
 
 # Interactions Endpoint와 앱 프레임워크
-discordrs = { version = "3.0.0", features = ["interactions"] }
+discordrs = { version = "3.1.0", features = ["interactions"] }
 
 # Gateway 캐시와 컬렉터
-discordrs = { version = "3.0.0", features = ["gateway", "cache"] }
-discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "3.1.0", features = ["gateway", "cache"] }
+discordrs = { version = "3.1.0", features = ["gateway", "collectors"] }
 
 # Voice receive / Opus decode, DAVE 종단 간 암호화 포함
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 
 # PCM to Opus encode
-discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.1.0", features = ["voice", "voice-encode"] }
 ```
 
 ## DAVE 상태

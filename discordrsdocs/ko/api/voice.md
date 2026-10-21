@@ -9,10 +9,10 @@
 ```toml
 [dependencies]
 # 음성 런타임 + DAVE 종단 간 암호화
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 
 # PCM -> Opus 인코딩(AudioPlayer::play에 필요)
-discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.1.0", features = ["voice", "voice-encode"] }
 ```
 
 `dave` 기능은 `voice`의 별칭으로 남아 있어서 `features = ["voice", "dave"]`도 그대로 빌드됩니다.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0 - 2026-10-21
 
 - `InteractionsEndpointBuilder::default_allowed_mentions` gives the HTTP interactions endpoint the default `allowed_mentions` the REST client already applies: inline message responses (types 4 and 7) that leave it unset get the default, an explicit value wins, and `InteractionResponse::Raw` is sent as written, so one response and one policy produce the same bytes on both transports.
 - Docs: the "respond later" examples defer over REST and return `EndpointReply::Accepted` instead of spawning a task beside an inline defer (the task could call `edit_reply` before the deferral was recorded), and leftover 2.x wording in the README, `USAGE.md`, and the docs site is corrected.

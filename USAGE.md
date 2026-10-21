@@ -11,35 +11,35 @@ Pick features based on the runtime surface you want to ship.
 ```toml
 [dependencies]
 # Core default: models, builders, parsers, helpers, REST client, cache storage
-discordrs = "3.0.0"
+discordrs = "3.1.0"
 
 # Gateway runtime
-discordrs = { version = "3.0.0", features = ["gateway"] }
+discordrs = { version = "3.1.0", features = ["gateway"] }
 
 # HTTP interactions endpoint
-discordrs = { version = "3.0.0", features = ["interactions"] }
+discordrs = { version = "3.1.0", features = ["interactions"] }
 
 # Minimal core without cache storage
-discordrs = { version = "3.0.0", default-features = false }
+discordrs = { version = "3.1.0", default-features = false }
 
 # Gateway runtime with collectors
-discordrs = { version = "3.0.0", features = ["gateway", "collectors"] }
+discordrs = { version = "3.1.0", features = ["gateway", "collectors"] }
 
 # Gateway runtime with shard supervisor and shard status APIs
-discordrs = { version = "3.0.0", features = ["gateway", "sharding"] }
+discordrs = { version = "3.1.0", features = ["gateway", "sharding"] }
 
 # Voice manager plus voice gateway/UDP runtime, including DAVE end-to-end
 # encryption (`dave` is now an alias of `voice`)
-discordrs = { version = "3.0.0", features = ["voice"] }
+discordrs = { version = "3.1.0", features = ["voice"] }
 
 # PCM source/mixer plus Opus encoder playback
-discordrs = { version = "3.0.0", features = ["voice", "voice-encode"] }
+discordrs = { version = "3.1.0", features = ["voice", "voice-encode"] }
 
 # Gateway runtime with voice helpers
-discordrs = { version = "3.0.0", features = ["gateway", "voice"] }
+discordrs = { version = "3.1.0", features = ["gateway", "voice"] }
 
 # Gateway runtime with zstd-stream transport compression
-discordrs = { version = "3.0.0", features = ["gateway", "zstd-stream"] }
+discordrs = { version = "3.1.0", features = ["gateway", "zstd-stream"] }
 ```
 
 If you want the common runtime helpers in one import, prefer:
