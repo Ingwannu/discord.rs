@@ -21,6 +21,12 @@ The packet layout follows @discordjs/voice (`Networking.ts` `encryptOpusPacket`,
 - Padding: with the P bit set, the payload ends with padding whose last octet counts the
   padding octets, itself included (RFC 3550 section 5.1). It is part of the plaintext, so
   it is encrypted too; @discordjs/voice strips it after decrypting.
+- RTCP: Discord's voice server also sends RTCP reports on the voice socket (RFC 5761
+  multiplexing; the second byte, the RTCP packet type, is 200 for SR and 201 for RR). They
+  are sealed the same way with the 8-byte RTCP header (V/P/count, packet type, length,
+  sender SSRC) as the cleartext AAD, which is how Songbird opens them
+  (`decrypt_rtcp_in_place`). The receive path must skip them before decryption: read as
+  RTP, the AAD would be 12 bytes and the tag never verifies.
 
 Usage: python3 ci/voice_transport_kat.py   (needs `cryptography`, e.g. `pip install cryptography`)
 """
@@ -111,6 +117,15 @@ def rtp_header(first_byte, sequence, timestamp, ssrc, csrcs=(), extension=None):
     return header, body
 
 
+def rtcp_packet(first_byte, packet_type, sender_ssrc, body):
+    """Returns (cleartext AAD, encrypted body) for one RTCP packet: the 8-byte header,
+    whose length field counts 32-bit words minus one (RFC 3550 section 6.4.1)."""
+    assert len(body) % 4 == 0
+    words = (8 + len(body)) // 4 - 1
+    header = bytes([first_byte, packet_type]) + struct.pack(">HI", words, sender_ssrc)
+    return header, body
+
+
 def seal(mode, key, aad, plaintext, counter):
     counter_bytes = struct.pack(">I", counter)
     if mode == "aes":
@@ -174,6 +189,28 @@ def main():
     plaintext = body + opus + padding
     print(rust_bytes("KAT_AES_PADDED", seal("aes", key, aad, plaintext, counter)))
     print(rust_bytes("KAT_XCHACHA_PADDED", seal("xchacha", key, aad, plaintext, counter)))
+
+    # RTCP sender report (RFC 3550 section 6.4.1): no report blocks, sender SSRC
+    # 0x01020304, NTP timestamp 0xEB0C0D0E.1F2E3D4C, RTP timestamp 0x0001E240, 250
+    # packets, 12000 octets.
+    aad, body = rtcp_packet(
+        0x80,
+        200,
+        0x0102_0304,
+        struct.pack(">IIIII", 0xEB0C_0D0E, 0x1F2E_3D4C, 0x0001_E240, 250, 12_000),
+    )
+    print(rust_bytes("KAT_AES_RTCP_SR", seal("aes", key, aad, body, 0x0000_0101)))
+
+    # RTCP receiver report (section 6.4.2) from the server about the client's stream:
+    # one report block for SSRC 42 (fraction lost 1/256, 3 packets lost, highest sequence
+    # 0x00010203, jitter 16, last SR 0x0E1F2E3D, delay 0x00000800).
+    aad, body = rtcp_packet(
+        0x81,
+        201,
+        0x0102_0304,
+        struct.pack(">IIIIII", 42, (1 << 24) | 3, 0x0001_0203, 16, 0x0E1F_2E3D, 0x0000_0800),
+    )
+    print(rust_bytes("KAT_AES_RTCP_RR", seal("aes", key, aad, body, 0x0000_0102)))
 
 
 if __name__ == "__main__":

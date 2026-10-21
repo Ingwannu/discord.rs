@@ -67,14 +67,15 @@ A successful run:
 1. connects with DAVE negotiated (`negotiated DAVE protocol version 1`);
 2. becomes a member of the call's MLS group (`joined the MLS group: epoch ..., voice privacy code ...`); the privacy code should match the one Discord clients show for the call;
 3. plays three seconds of a 440 Hz tone with no `PlayerConnectionEvent::SendFailed`; **the participant must hear it**, which proves Discord clients decrypt the runtime's DAVE frames (the test cannot check that by itself);
-4. decrypts at least one speech frame from another member (`decrypted speech frames per user: ...`), with the count of undecryptable packets and recoveries printed for the record.
+4. decrypts at least one speech frame from another member (`decrypted speech frames per user: ...`), with the count of undecryptable packets and recoveries, and of the datagrams the receive skipped (RTCP reports, about one a second, and rejected packets, normally zero), printed for the record.
 
 Record the command output, and whether the tone was heard, with the release notes before changing DAVE support claims.
 
 ## Validation Records
 
 - **2.0.0 (2026-05-02):** an earlier version of this harness, which drove MLS by hand from the raw `VoiceDaveState` mirror, completed DAVE transport negotiation, received the external sender package, sent an MLS key package, processed live MLS proposal/commit/welcome payloads, and completed the transition-ready flow. It sent and received no media.
-- **Runtime-managed DAVE (after 3.0.0):** not run against live Discord yet.
+- **Runtime-managed DAVE, receive only (2026-10-21, outside this harness):** a bot that connected with `Context::connect_voice_runtime_with_dave` and called `recv_decoded_voice_packet` in a loop for about 28 seconds, with one person speaking, decoded 63 of that person's packets (DAVE and transport decryption). 35 calls, about one a second, failed with "failed to decrypt AES-GCM voice packet": RTCP reports on the voice socket opened as voice. A first run whose loop used `?` stopped at the first one. Fixed for 3.1.0: the receive methods skip RTCP and packets that fail transport decryption (see the voice guide, "What the Receive Methods Skip"). The record covers receiving only; this harness was not used.
+- **Runtime-managed DAVE, full harness:** not run against live Discord yet.
 
 ## Failure Modes
 

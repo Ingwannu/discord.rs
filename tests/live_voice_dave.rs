@@ -216,10 +216,14 @@ async fn live_voice_dave_plays_a_tone_and_decrypts_other_members() {
         *speech_frames.entry(user).or_default() += 1;
     }
     let status = handle.dave_status();
+    let skipped = handle.receive_stats();
     println!(
         "decrypted speech frames per user: {speech_frames:?}; undecryptable packets: {}; \
-         recoveries: {}",
-        status.undecryptable_packets, status.recoveries
+         recoveries: {}; skipped non-voice datagrams (RTCP): {}; rejected packets: {}",
+        status.undecryptable_packets,
+        status.recoveries,
+        skipped.non_voice_packets,
+        skipped.rejected_packets
     );
     assert!(
         !speech_frames.is_empty(),

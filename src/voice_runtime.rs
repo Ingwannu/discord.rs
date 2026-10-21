@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroU16;
+use std::ops::RangeInclusive;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,7 +70,18 @@ const VOICE_SESSION_DESCRIPTION_TIMEOUT: Duration = Duration::from_secs(10);
 const VOICE_CLOSE_DAVE_REQUIRED: u16 = 4017;
 const DAVE_MAGIC_MARKER: [u8; 2] = [0xfa, 0xfa];
 const RTP_VERSION: u8 = 2;
+/// The payload type of Discord's voice packets, `0x78` in the header's second
+/// byte (Discord docs: Voice Connections › Voice Packet Structure). Receivers
+/// treat only RTP packets of this type as voice, as @discordjs/voice
+/// (`RTP_OPUS_PAYLOAD_TYPE`, checked in `VoiceReceiver.onUdpMessage`) and
+/// Songbird (`RTP_PROFILE_TYPE`, checked by `rtp_valid` in `udp_rx`) do.
 const RTP_PAYLOAD_TYPE_OPUS: u8 = 120;
+/// RTCP packet types as the second byte of a datagram: RTCP shares the voice
+/// UDP port, and RFC 5761 §4 demultiplexes it by this byte (SR is 200, RR
+/// 201; read as an RTP header, the marker bit plus payload types 64–95).
+/// Discord's voice server sends RTCP reports on the voice socket about once a
+/// second; discortp's `demux` (Songbird) classifies them the same way.
+const RTCP_PACKET_TYPES: RangeInclusive<u8> = 192..=223;
 /// Fixed RTP header: flags, payload type, sequence, timestamp, SSRC
 /// (RFC 3550 §5.1).
 const RTP_HEADER_LEN: usize = 12;
@@ -414,9 +427,57 @@ pub struct VoiceReceivedPacket {
     /// A padding-only packet (P bit set and a padding count equal to the
     /// whole payload, which RFC 3550 §5.1 allows) yields an empty frame
     /// when DAVE is not active; with DAVE active it is reported as a DAVE
-    /// frame that is too short. A malformed padding count (zero, or longer
-    /// than the payload) is always an error.
+    /// frame that is too short. A packet with a malformed padding count
+    /// (zero, or longer than the payload) is never returned: the receive
+    /// methods drop it like one that fails authentication
+    /// ([`VoiceReceiveStats::rejected_packets`]).
     pub opus_frame: Vec<u8>,
+}
+
+/// Datagrams the receive methods of a [`VoiceRuntimeHandle`] skipped instead
+/// of returning, from [`VoiceRuntimeHandle::receive_stats`].
+///
+/// The receive methods ([`VoiceRuntimeHandle::recv_voice_packet`],
+/// [`VoiceRuntimeHandle::recv_voice_packet_with_dave`], and their decoded
+/// variants) return only Opus voice packets that pass transport
+/// authentication and wait for the next one otherwise, so that receive
+/// loops written with `?` keep running. Socket errors are still returned.
+/// Packets that pass transport encryption but not DAVE decryption are
+/// counted separately, in [`VoiceDaveStatus::undecryptable_packets`].
+/// [`VoiceRuntimeHandle::recv_raw_udp_packet`] skips nothing and counts
+/// nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct VoiceReceiveStats {
+    /// Datagrams that are not Opus RTP: RTCP reports, which Discord's voice
+    /// server sends on the voice socket about once a second, RTP of another
+    /// payload type, and anything shorter than an RTP header or of another
+    /// RTP version. A steady trickle is normal.
+    pub non_voice_packets: u64,
+    /// Opus RTP packets dropped by transport decryption: the AEAD check
+    /// failed (a corrupted packet, one sealed with another key, or a forged
+    /// one), the header, padding, or length is malformed, or the packet was
+    /// longer than the receive's `max_len`. Normally zero; a growing count
+    /// with no audio suggests a key mismatch or a `max_len` that is too
+    /// small (the debug log says which).
+    pub rejected_packets: u64,
+}
+
+/// The counters behind [`VoiceReceiveStats`]. Relaxed atomics: they are
+/// statistics, read without ordering against the packets they count.
+#[derive(Debug, Default)]
+struct ReceiveCounters {
+    non_voice_packets: AtomicU64,
+    rejected_packets: AtomicU64,
+}
+
+impl ReceiveCounters {
+    fn snapshot(&self) -> VoiceReceiveStats {
+        VoiceReceiveStats {
+            non_voice_packets: self.non_voice_packets.load(Ordering::Relaxed),
+            rejected_packets: self.rejected_packets.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1095,6 +1156,24 @@ pub struct VoiceSpeakingUpdate {
     pub user_id: Option<UserId>,
 }
 
+/// Why a received datagram is not an Opus voice packet, or `None` when it is
+/// one: at least an RTP header long, RTP version 2, and payload type
+/// [`RTP_PAYLOAD_TYPE_OPUS`]. Read before any decryption; RTCP is told apart
+/// only for the log, since its packet types are not that payload type either.
+fn non_voice_reason(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < RTP_HEADER_LEN {
+        Some("shorter than an RTP header")
+    } else if bytes[0] >> 6 != RTP_VERSION {
+        Some("not RTP version 2")
+    } else if RTCP_PACKET_TYPES.contains(&bytes[1]) {
+        Some("RTCP")
+    } else if bytes[1] & 0x7f != RTP_PAYLOAD_TYPE_OPUS {
+        Some("not the Opus payload type")
+    } else {
+        None
+    }
+}
+
 fn parse_rtp_header(bytes: &[u8]) -> Result<VoiceRtpHeader, DiscordError> {
     if bytes.len() < RTP_HEADER_LEN {
         return Err(invalid_data_error(
@@ -1264,6 +1343,8 @@ pub struct VoiceRuntimeHandle {
     /// Keeps the fixed status of a `connect` handle open, so watchers wait
     /// instead of seeing a closed channel.
     _manual_dave_status: Option<watch::Sender<VoiceDaveStatus>>,
+    /// Datagrams the receive methods skipped, see [`Self::receive_stats`].
+    receive_counters: ReceiveCounters,
 }
 
 /// Locks the DAVE controller.
@@ -1282,6 +1363,17 @@ enum OutboundMedia<'a> {
     Opus(&'a [u8]),
     /// A frame a caller already encrypted with its own DAVE encryptor.
     DaveFrame(&'a [u8]),
+}
+
+/// A received voice packet with transport encryption removed, before DAVE.
+struct InboundVoice {
+    raw: VoiceRawUdpPacket,
+    rtp: VoiceRtpHeader,
+    /// The media payload: an Opus frame or a DAVE frame.
+    frame: Vec<u8>,
+    user_id: Option<UserId>,
+    /// SESSION_DESCRIPTION's DAVE version.
+    negotiated_dave: u8,
 }
 
 impl VoiceRuntimeHandle {
@@ -1415,31 +1507,131 @@ impl VoiceRuntimeHandle {
         ))
     }
 
-    /// Parses and transport-decrypts a received packet, and looks up its
-    /// sender. Also returns SESSION_DESCRIPTION's DAVE version.
-    fn open_transport(
-        &self,
-        raw: &VoiceRawUdpPacket,
-    ) -> Result<(VoiceRtpHeader, Vec<u8>, Option<UserId>, u8), DiscordError> {
-        let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
-        let rtp = parse_rtp_header(&raw.bytes)?;
-        let frame = decrypt_transport_payload(&raw.bytes, &rtp, &mode, &secret_key)?;
-        let user_id = self.state_rx.borrow().ssrc_users.get(&rtp.ssrc).copied();
-        Ok((rtp, frame, user_id, negotiated_dave))
+    /// Datagrams the receive methods skipped since this handle connected:
+    /// those that are not Opus voice (RTCP reports, other payload types) and
+    /// voice packets that failed transport decryption. See
+    /// [`VoiceReceiveStats`].
+    pub fn receive_stats(&self) -> VoiceReceiveStats {
+        self.receive_counters.snapshot()
     }
 
+    /// Receives the next Opus voice packet and removes its transport
+    /// encryption; the DAVE layer is the caller's. Datagrams that are not
+    /// Opus RTP, and voice packets that fail transport decryption, are
+    /// skipped and counted ([`Self::receive_stats`]). Returns errors only
+    /// for the socket and for a session whose transport cannot open any
+    /// packet (no SESSION_DESCRIPTION, an unsupported mode or key).
+    ///
+    /// [Decision Log]
+    /// - Purpose: the receive methods return only Discord voice, and
+    ///   receive loops written with `?` keep running through traffic that
+    ///   is not voice or does not authenticate.
+    /// - Constraint: RTCP shares the voice socket (RFC 5761). In a live DAVE
+    ///   call (2026-10-21, `recv_decoded_voice_packet` for 28 s, one person
+    ///   speaking) 63 packets decoded and 35 calls failed with "failed to
+    ///   decrypt AES-GCM voice packet", about one a second: RTCP reports
+    ///   parsed as RTP (their cleartext is the 8-byte RTCP header, so a
+    ///   12-byte AAD never authenticates). The first run's `?` loop ended at
+    ///   the first one and received nothing. The UDP socket is connected to
+    ///   the voice server, but UDP source addresses can be spoofed.
+    /// - Alternatives: (1) return every failure (3.0.0): any RTCP report, or
+    ///   one spoofed datagram, ends a `?` loop; (2) skip other payload types
+    ///   but return transport failures: one corrupted or forged voice-shaped
+    ///   packet still ends it; (3) skip both and count them, and return only
+    ///   errors that every later packet would hit as well.
+    /// - Chosen: (3). Songbird does the same (`udp_rx` accepts RTP only with
+    ///   version 2 and payload type 120, and logs failed RTP and RTCP
+    ///   decryption and goes on); @discordjs/voice filters payload types the
+    ///   same way but ends the user's stream when decryption fails. The DAVE
+    ///   layer below already skips frames it cannot decrypt.
+    /// - Trade-offs: a wrong key no longer shows up as an error; the receive
+    ///   waits while `rejected_packets` grows, with a debug log per packet
+    ///   (header fields and the error, never the payload). Security: a
+    ///   packet that fails the AEAD check is dropped with its contents
+    ///   unused, and the caller is not told, so forged packets can neither
+    ///   inject media nor end a receive loop; that is also why a failure is
+    ///   not reported per packet. RTCP content (reception statistics) is not
+    ///   decrypted or exposed.
+    async fn recv_transport(&self, max_len: usize) -> Result<InboundVoice, DiscordError> {
+        loop {
+            let (raw, truncated) = self.recv_datagram(max_len).await?;
+            if let Some(reason) = non_voice_reason(&raw.bytes) {
+                self.receive_counters
+                    .non_voice_packets
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::trace!(
+                    reason,
+                    len = raw.bytes.len(),
+                    "voice receive: skipped a datagram that is not Opus RTP"
+                );
+                continue;
+            }
+            let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
+            let cipher = TransportCipher::new(&mode, &secret_key)?;
+            // A cut-off packet would only fail the AEAD check; saying why
+            // points at `max_len` instead of the key.
+            let opened = if truncated {
+                Err(invalid_data_error(format!(
+                    "voice packet is longer than max_len ({max_len} bytes)"
+                )))
+            } else {
+                parse_rtp_header(&raw.bytes)
+                    .and_then(|rtp| Ok((open_rtpsize_packet(&raw.bytes, &rtp, &cipher)?, rtp)))
+            };
+            match opened {
+                Ok((frame, rtp)) => {
+                    let user_id = self.state_rx.borrow().ssrc_users.get(&rtp.ssrc).copied();
+                    return Ok(InboundVoice {
+                        raw,
+                        rtp,
+                        frame,
+                        user_id,
+                        negotiated_dave,
+                    });
+                }
+                Err(error) => {
+                    self.receive_counters
+                        .rejected_packets
+                        .fetch_add(1, Ordering::Relaxed);
+                    tracing::debug!(
+                        ssrc = ?raw.ssrc,
+                        sequence = ?raw.sequence,
+                        len = raw.bytes.len(),
+                        %error,
+                        "voice receive: dropped a voice packet that failed transport decryption"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Receives the next datagram on the voice socket as it is, with its RTP
+    /// fields read when it is long enough for an RTP header. Nothing is
+    /// decrypted, skipped, or counted: RTCP reports arrive here too. A
+    /// datagram longer than `max_len` is cut to `max_len` bytes.
     pub async fn recv_raw_udp_packet(
         &self,
         max_len: usize,
     ) -> Result<VoiceRawUdpPacket, DiscordError> {
+        Ok(self.recv_datagram(max_len).await?.0)
+    }
+
+    /// [`Self::recv_raw_udp_packet`], and whether the datagram was longer
+    /// than `max_len` (and cut).
+    async fn recv_datagram(
+        &self,
+        max_len: usize,
+    ) -> Result<(VoiceRawUdpPacket, bool), DiscordError> {
         if max_len == 0 {
             return Err(invalid_data_error("max_len must be greater than zero"));
         }
 
-        let mut buffer = vec![0_u8; max_len];
+        // The spare byte tells a datagram that did not fit (the socket cuts
+        // it silently) from one exactly `max_len` long.
+        let mut buffer = vec![0_u8; max_len.saturating_add(1)];
         let received = self.udp_socket.recv(&mut buffer).await?;
-        buffer.truncate(received);
-        Ok(VoiceRawUdpPacket::from_bytes(buffer))
+        buffer.truncate(received.min(max_len));
+        Ok((VoiceRawUdpPacket::from_bytes(buffer), received > max_len))
     }
 
     /// Receives the next packet with media and removes transport encryption
@@ -1452,11 +1644,15 @@ impl VoiceRuntimeHandle {
     /// transitions, and an error would end receive loops that use `?`);
     /// [`VoiceDaveStatus::undecryptable_packets`] counts them. The Opus
     /// silence frame (`F8 FF FE`), which Discord sends unencrypted for muted
-    /// users, is returned as is. Transport errors (a malformed packet, a
-    /// failed AEAD check) are still returned.
+    /// users, is returned as is.
     ///
-    /// For a connection from [`connect`], a DAVE session is an error, as in
-    /// 3.0.0: use [`Self::recv_voice_packet_with_dave`] with your decryptor.
+    /// Datagrams that are not Opus voice (RTCP reports, which Discord's
+    /// voice server sends about once a second, and other RTP payload types)
+    /// and voice packets that fail transport decryption are skipped too, and
+    /// counted in [`Self::receive_stats`]. Errors are left for the socket,
+    /// for a session whose transport mode or key is unusable, and, for a
+    /// connection from [`connect`], for a DAVE session (as in 3.0.0: use
+    /// [`Self::recv_voice_packet_with_dave`] with your decryptor).
     ///
     /// Cancel safe: a cancelled call loses at most the packet it was
     /// skipping.
@@ -1465,11 +1661,27 @@ impl VoiceRuntimeHandle {
         max_len: usize,
     ) -> Result<VoiceReceivedPacket, DiscordError> {
         loop {
-            let raw = self.recv_raw_udp_packet(max_len).await?;
+            let InboundVoice {
+                raw,
+                rtp,
+                frame,
+                user_id,
+                negotiated_dave,
+            } = self.recv_transport(max_len).await?;
             let Some(dave) = self.dave.as_ref() else {
-                return self.recv_plain(raw);
+                // A `connect` handle refuses DAVE sessions, as in 3.0.0.
+                if negotiated_dave > 0 {
+                    return Err(invalid_data_error(
+                        "DAVE encrypted voice frames are not supported by recv_voice_packet",
+                    ));
+                }
+                return Ok(VoiceReceivedPacket {
+                    raw,
+                    rtp,
+                    user_id,
+                    opus_frame: frame,
+                });
             };
-            let (rtp, frame, user_id, _) = self.open_transport(&raw)?;
             let inbound = lock_dave(dave).filtered(|dave| dave.decrypt_inbound(user_id, frame));
             self.send_dave_commands(inbound.commands);
             if let Some(opus_frame) = inbound.media {
@@ -1483,13 +1695,22 @@ impl VoiceRuntimeHandle {
         }
     }
 
-    /// Receives one packet and removes transport encryption and, on a DAVE
-    /// session, DAVE encryption through `dave_decryptor` instead of the
-    /// runtime's own DAVE session.
+    /// Receives the next voice packet and removes transport encryption and,
+    /// on a DAVE session, DAVE encryption through `dave_decryptor` instead
+    /// of the runtime's own DAVE session.
+    ///
+    /// Like [`Self::recv_voice_packet`], it skips datagrams that are not
+    /// Opus voice and packets that fail transport decryption
+    /// ([`Self::receive_stats`]). Errors from DAVE frame parsing and from
+    /// `dave_decryptor` are returned; what to skip there is the caller's
+    /// decision.
     ///
     /// A payload that is exactly the Opus silence frame (`F8 FF FE`) is
     /// returned unchanged without calling `dave_decryptor`: Discord sends it
     /// unencrypted for muted users, as the DAVE protocol allows.
+    ///
+    /// Cancel safe: a cancelled call loses at most the packet it was
+    /// skipping.
     pub async fn recv_voice_packet_with_dave<D>(
         &self,
         max_len: usize,
@@ -1498,8 +1719,13 @@ impl VoiceRuntimeHandle {
     where
         D: VoiceDaveFrameDecryptor,
     {
-        let raw = self.recv_raw_udp_packet(max_len).await?;
-        let (rtp, transport_frame, user_id, negotiated_dave) = self.open_transport(&raw)?;
+        let InboundVoice {
+            raw,
+            rtp,
+            frame: transport_frame,
+            user_id,
+            negotiated_dave,
+        } = self.recv_transport(max_len).await?;
         // Why the silence check: Discord's SFU sends the 3-byte Opus silence
         // packet for a muted sender without DAVE encryption, even inside an
         // E2EE session, and the DAVE decrypting transform must let a frame
@@ -1519,26 +1745,6 @@ impl VoiceRuntimeHandle {
             transport_frame
         };
 
-        Ok(VoiceReceivedPacket {
-            raw,
-            rtp,
-            user_id,
-            opus_frame,
-        })
-    }
-
-    /// 3.0.0's receive for a [`connect`] handle: transport decryption only,
-    /// and an error on a DAVE session.
-    fn recv_plain(&self, raw: VoiceRawUdpPacket) -> Result<VoiceReceivedPacket, DiscordError> {
-        let (mode, secret_key, negotiated_dave) = self.transport_keys()?;
-        if negotiated_dave > 0 {
-            return Err(invalid_data_error(
-                "DAVE encrypted voice frames are not supported by recv_voice_packet",
-            ));
-        }
-        let rtp = parse_rtp_header(&raw.bytes)?;
-        let opus_frame = decrypt_transport_payload(&raw.bytes, &rtp, &mode, &secret_key)?;
-        let user_id = self.state_rx.borrow().ssrc_users.get(&rtp.ssrc).copied();
         Ok(VoiceReceivedPacket {
             raw,
             rtp,
@@ -2109,6 +2315,7 @@ async fn connect_runtime(
         dave,
         dave_status,
         _manual_dave_status: manual_dave_status,
+        receive_counters: ReceiveCounters::default(),
     })
 }
 
@@ -2600,23 +2807,116 @@ fn rtpsize_cleartext_len(packet: &[u8]) -> Result<usize, DiscordError> {
     Ok(RTP_HEADER_LEN + csrc_len + preamble_len)
 }
 
-/// Authenticates and decrypts an rtpsize packet and returns its media
-/// payload (an Opus or DAVE frame) without the header extension body or the
-/// RTP padding.
+/// The AEAD of one of the rtpsize transport modes, keyed with
+/// SESSION_DESCRIPTION's `secret_key`.
 ///
-/// The AEAD boundary ([`rtpsize_cleartext_len`]) and the media offset
-/// (`rtp.header_len`) differ by the extension body, and the padding sits at
-/// the end of the ciphertext; both are only readable after decryption, so
-/// they are stripped from the plaintext afterwards.
+/// Building one refuses an unsupported mode or a key of the wrong length, so
+/// an error from [`Self::decrypt`] (and from [`open_rtpsize_packet`]) is
+/// always about the packet. The receive path depends on that split: it
+/// returns mode and key errors, which every packet would hit, and skips
+/// packets that fail.
+enum TransportCipher {
+    /// Boxed: an expanded AES-256 key schedule is hundreds of bytes, the
+    /// XChaCha20 key 32.
+    Aes256Gcm(Box<Aes256Gcm>),
+    XChaCha20Poly1305(XChaCha20Poly1305),
+}
+
+impl TransportCipher {
+    fn new(mode: &VoiceEncryptionMode, secret_key: &[u8]) -> Result<Self, DiscordError> {
+        if secret_key.len() != VOICE_SECRET_KEY_LEN {
+            return Err(invalid_data_error("voice secret_key must be 32 bytes"));
+        }
+        if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
+            Aes256Gcm::new_from_slice(secret_key)
+                .map(|cipher| Self::Aes256Gcm(Box::new(cipher)))
+                .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))
+        } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
+            XChaCha20Poly1305::new_from_slice(secret_key)
+                .map(Self::XChaCha20Poly1305)
+                .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))
+        } else {
+            Err(invalid_data_error(format!(
+                "unsupported voice encryption mode: {mode:?}"
+            )))
+        }
+    }
+
+    /// Encrypts `buffer` in place and appends the tag.
+    fn encrypt(
+        &self,
+        counter: &[u8; RTPSIZE_NONCE_SUFFIX_LEN],
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), DiscordError> {
+        match self {
+            Self::Aes256Gcm(cipher) => {
+                let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(counter);
+                cipher
+                    .encrypt_in_place(AesNonce::from_slice(&nonce), aad, buffer)
+                    .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))
+            }
+            Self::XChaCha20Poly1305(cipher) => {
+                let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(counter);
+                cipher
+                    .encrypt_in_place(XNonce::from_slice(&nonce), aad, buffer)
+                    .map_err(|_| {
+                        invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet")
+                    })
+            }
+        }
+    }
+
+    /// Checks the tag at the end of `buffer` and decrypts the rest in place.
+    fn decrypt(
+        &self,
+        counter: &[u8; RTPSIZE_NONCE_SUFFIX_LEN],
+        aad: &[u8],
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), DiscordError> {
+        match self {
+            Self::Aes256Gcm(cipher) => {
+                let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(counter);
+                cipher
+                    .decrypt_in_place(AesNonce::from_slice(&nonce), aad, buffer)
+                    .map_err(|_| invalid_data_error("failed to decrypt AES-GCM voice packet"))
+            }
+            Self::XChaCha20Poly1305(cipher) => {
+                let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(counter);
+                cipher
+                    .decrypt_in_place(XNonce::from_slice(&nonce), aad, buffer)
+                    .map_err(|_| {
+                        invalid_data_error("failed to decrypt XChaCha20-Poly1305 voice packet")
+                    })
+            }
+        }
+    }
+}
+
+/// [`open_rtpsize_packet`] with a cipher built from `mode` and `secret_key`.
+#[cfg(test)]
 fn decrypt_transport_payload(
     packet: &[u8],
     rtp: &VoiceRtpHeader,
     mode: &VoiceEncryptionMode,
     secret_key: &[u8],
 ) -> Result<Vec<u8>, DiscordError> {
-    if secret_key.len() != VOICE_SECRET_KEY_LEN {
-        return Err(invalid_data_error("voice secret_key must be 32 bytes"));
-    }
+    open_rtpsize_packet(packet, rtp, &TransportCipher::new(mode, secret_key)?)
+}
+
+/// Authenticates and decrypts an rtpsize packet and returns its media
+/// payload (an Opus or DAVE frame) without the header extension body or the
+/// RTP padding. Every error is about the packet (see [`TransportCipher`]).
+///
+/// The AEAD boundary ([`rtpsize_cleartext_len`]) and the media offset
+/// (`rtp.header_len`) differ by the extension body, and the padding sits at
+/// the end of the ciphertext; both are only readable after decryption, so
+/// they are stripped from the plaintext afterwards.
+fn open_rtpsize_packet(
+    packet: &[u8],
+    rtp: &VoiceRtpHeader,
+    cipher: &TransportCipher,
+) -> Result<Vec<u8>, DiscordError> {
     let cleartext_len = rtpsize_cleartext_len(packet)?;
     let extension_body_len = rtp
         .header_len
@@ -2633,26 +2933,7 @@ fn decrypt_transport_payload(
         .ok_or_else(|| invalid_data_error("voice RTP packet is missing its nonce counter"))?;
     let (aad, ciphertext) = sealed.split_at(cleartext_len);
     let mut plaintext = ciphertext.to_vec();
-
-    if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
-        let cipher = Aes256Gcm::new_from_slice(secret_key)
-            .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(nonce_suffix);
-        cipher
-            .decrypt_in_place(AesNonce::from_slice(&nonce), aad, &mut plaintext)
-            .map_err(|_| invalid_data_error("failed to decrypt AES-GCM voice packet"))?;
-    } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
-        let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
-            .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(nonce_suffix);
-        cipher
-            .decrypt_in_place(XNonce::from_slice(&nonce), aad, &mut plaintext)
-            .map_err(|_| invalid_data_error("failed to decrypt XChaCha20-Poly1305 voice packet"))?;
-    } else {
-        return Err(invalid_data_error(format!(
-            "unsupported voice encryption mode for receive: {mode:?}"
-        )));
-    }
+    cipher.decrypt(nonce_suffix, aad, &mut plaintext)?;
 
     // The length check above leaves at least the extension body in the
     // plaintext. Its elements (RFC 8285) are not media, so they never reach
@@ -2734,32 +3015,10 @@ fn seal_rtpsize_packet(
     mode: &VoiceEncryptionMode,
     secret_key: &[u8],
 ) -> Result<Vec<u8>, DiscordError> {
-    if secret_key.len() != VOICE_SECRET_KEY_LEN {
-        return Err(invalid_data_error("voice secret_key must be 32 bytes"));
-    }
-
+    let cipher = TransportCipher::new(mode, secret_key)?;
     let mut packet = cleartext;
     let mut encrypted = plaintext.to_vec();
-    if mode == &VoiceEncryptionMode::aead_aes256_gcm_rtpsize() {
-        let cipher = Aes256Gcm::new_from_slice(secret_key)
-            .map_err(|_| invalid_data_error("invalid AES-GCM voice secret key"))?;
-        let nonce = rtpsize_nonce::<AES_GCM_NONCE_LEN>(&counter);
-        cipher
-            .encrypt_in_place(AesNonce::from_slice(&nonce), &packet, &mut encrypted)
-            .map_err(|_| invalid_data_error("failed to encrypt AES-GCM voice packet"))?;
-    } else if mode == &VoiceEncryptionMode::aead_xchacha20_poly1305_rtpsize() {
-        let cipher = XChaCha20Poly1305::new_from_slice(secret_key)
-            .map_err(|_| invalid_data_error("invalid XChaCha20-Poly1305 voice secret key"))?;
-        let nonce = rtpsize_nonce::<XCHACHA20_NONCE_LEN>(&counter);
-        cipher
-            .encrypt_in_place(XNonce::from_slice(&nonce), &packet, &mut encrypted)
-            .map_err(|_| invalid_data_error("failed to encrypt XChaCha20-Poly1305 voice packet"))?;
-    } else {
-        return Err(invalid_data_error(format!(
-            "unsupported voice encryption mode for send: {mode:?}"
-        )));
-    }
-
+    cipher.encrypt(&counter, &packet, &mut encrypted)?;
     packet.extend_from_slice(&encrypted);
     packet.extend_from_slice(&counter);
     Ok(packet)
@@ -2974,11 +3233,11 @@ mod tests {
     use super::VoiceDaveFrameEncryptor;
     use super::{
         build_heartbeat_payload, build_identify_payload, connect, decrypt_transport_payload,
-        gap_increment, next_voice_heartbeat_nonce, parse_dave_frame, parse_rtp_header,
-        parse_uleb128, read_hello_interval, seal_rtpsize_packet, select_encryption_mode,
-        update_state, voice_heartbeat_ack_timeout, voice_stage_timeout, VoiceDaveState,
-        VoiceOpusDecoder, VoiceOutboundRtpState, VoiceRuntimeConfig, VoiceRuntimeState,
-        VoiceSessionDescription,
+        gap_increment, next_voice_heartbeat_nonce, non_voice_reason, parse_dave_frame,
+        parse_rtp_header, parse_uleb128, read_hello_interval, seal_rtpsize_packet,
+        select_encryption_mode, update_state, voice_heartbeat_ack_timeout, voice_stage_timeout,
+        TransportCipher, VoiceDaveState, VoiceOpusDecoder, VoiceOutboundRtpState,
+        VoiceReceiveStats, VoiceRuntimeConfig, VoiceRuntimeState, VoiceSessionDescription,
     };
     #[cfg(feature = "voice-encode")]
     use super::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};
@@ -3054,6 +3313,30 @@ mod tests {
     /// range, the supplemental size, and the magic marker at the very end.
     const DAVE_FRAME: [u8; 18] = [
         1, 2, 3, 9, 9, 9, 9, 9, 9, 9, 9, 0xac, 0x02, 5, 6, 15, 0xfa, 0xfa,
+    ];
+
+    /// RTCP sender report in the rtpsize shape Songbird opens
+    /// (`decrypt_rtcp_in_place`), the shape of the reports Discord's voice
+    /// server sends on the voice socket: the 8-byte RTCP header (`80 c8`, length 6, sender SSRC
+    /// 0x01020304) in the clear as the AAD, the sender info encrypted (NTP
+    /// 0xeb0c0d0e.1f2e3d4c, RTP timestamp 0x0001e240, 250 packets, 12000
+    /// octets), then the tag and counter 0x00000101. Read as RTP it is
+    /// version 2 with payload type 72, and its 12-byte "header" ends inside
+    /// the ciphertext.
+    const KAT_AES_RTCP_SR: [u8; 48] = [
+        0x80, 0xc8, 0x00, 0x06, 0x01, 0x02, 0x03, 0x04, 0xe2, 0x94, 0x81, 0x2e, 0x24, 0xda, 0x5e,
+        0x97, 0x84, 0x75, 0x4b, 0xa7, 0xb4, 0x9d, 0x11, 0xdd, 0xd4, 0x51, 0xa0, 0xfe, 0x8b, 0xad,
+        0x0a, 0x0f, 0x6a, 0x54, 0xc0, 0x9a, 0xf5, 0xff, 0x6d, 0x20, 0x4f, 0x34, 0x41, 0xec, 0x00,
+        0x00, 0x01, 0x01,
+    ];
+    /// RTCP receiver report about the client's SSRC 42 (`81 c9`, one report
+    /// block: fraction lost 1/256, 3 lost, highest sequence 0x00010203,
+    /// jitter 16, last SR 0x0e1f2e3d, delay 0x800), counter 0x00000102.
+    const KAT_AES_RTCP_RR: [u8; 52] = [
+        0x81, 0xc9, 0x00, 0x07, 0x01, 0x02, 0x03, 0x04, 0x3f, 0x50, 0xc4, 0xa2, 0xaa, 0xa6, 0xe0,
+        0xe0, 0xf3, 0x9b, 0xc7, 0x7b, 0x0a, 0x35, 0x45, 0xe0, 0xaf, 0x6f, 0x1d, 0x76, 0xa6, 0x0b,
+        0xd0, 0x96, 0x68, 0x91, 0x88, 0x92, 0x6e, 0x26, 0xe0, 0x64, 0xb7, 0x28, 0x4b, 0x6c, 0x5d,
+        0x49, 0x0d, 0x2a, 0x00, 0x00, 0x01, 0x02,
     ];
 
     fn kat_padded() -> [(VoiceEncryptionMode, &'static [u8]); 2] {
@@ -3509,6 +3792,121 @@ mod tests {
                     .contains("too short"));
             }
         }
+    }
+
+    /// Regression (live DAVE call, 2026-10-21): about once a second a
+    /// receive failed with "failed to decrypt AES-GCM voice packet". RTCP
+    /// reports share the voice socket and were opened as RTP voice. The
+    /// receive path now recognizes them before decrypting anything.
+    #[test]
+    fn voice_receive_recognizes_rtcp_known_answer_vectors_as_not_voice() {
+        let mode = VoiceEncryptionMode::aead_aes256_gcm_rtpsize();
+        let reports: [(&[u8], [u8; 4], Vec<u8>); 2] = [
+            (
+                &KAT_AES_RTCP_SR,
+                [0, 0, 1, 1],
+                [0xeb0c_0d0e_u32, 0x1f2e_3d4c, 0x0001_e240, 250, 12_000]
+                    .iter()
+                    .flat_map(|word| word.to_be_bytes())
+                    .collect(),
+            ),
+            (
+                &KAT_AES_RTCP_RR,
+                [0, 0, 1, 2],
+                [42_u32, (1 << 24) | 3, 0x0001_0203, 16, 0x0e1f_2e3d, 0x800]
+                    .iter()
+                    .flat_map(|word| word.to_be_bytes())
+                    .collect(),
+            ),
+        ];
+        for (report, counter, body) in reports {
+            // The vector is the rtpsize sealing of the 8-byte RTCP header and
+            // its body, generated outside the crate.
+            let sealed =
+                seal_rtpsize_packet(report[..8].to_vec(), &body, counter, &mode, &KAT_KEY).unwrap();
+            assert_eq!(sealed, report);
+
+            assert_eq!(non_voice_reason(report), Some("RTCP"));
+            // What 3.0.0 did with it, with the right key: the live error.
+            let rtp = parse_rtp_header(report).unwrap();
+            assert_eq!((rtp.version, rtp.payload_type), (2, report[1] & 0x7f));
+            let error = decrypt_transport_payload(report, &rtp, &mode, &KAT_KEY).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("failed to decrypt AES-GCM voice packet"),
+                "{error}"
+            );
+        }
+
+        // Every voice vector is voice, whatever its CSRCs, extension, or
+        // padding.
+        for (_, plain, extended) in kat_modes() {
+            assert_eq!(non_voice_reason(plain), None);
+            assert_eq!(non_voice_reason(extended), None);
+        }
+        for (_, padded) in kat_padded() {
+            assert_eq!(non_voice_reason(padded), None);
+        }
+    }
+
+    #[test]
+    fn voice_receive_tells_other_datagrams_from_opus_rtp() {
+        let with = |first: u8, second: u8| {
+            let mut packet = KAT_AES_PLAIN.to_vec();
+            packet[0] = first;
+            packet[1] = second;
+            packet
+        };
+        let mut discovery = VoiceUdpDiscoveryPacket::request(42);
+        discovery[..2].copy_from_slice(&VoiceUdpDiscoveryPacket::RESPONSE_TYPE.to_be_bytes());
+        let cases: [(Vec<u8>, Option<&str>); 11] = [
+            // Opus, also with the marker bit.
+            (with(0x80, 0x78), None),
+            (with(0x80, 0xf8), None),
+            // Every RTCP packet type of RFC 5761 §4, including feedback
+            // (205, 206) and XR (207), with and without a report count.
+            (with(0x80, 192), Some("RTCP")),
+            (with(0x81, 204), Some("RTCP")),
+            (with(0x8f, 206), Some("RTCP")),
+            (with(0x80, 223), Some("RTCP")),
+            // Another payload type, and payload type 0 with the marker bit.
+            (with(0x80, 0x60), Some("not the Opus payload type")),
+            (with(0x80, 0x80), Some("not the Opus payload type")),
+            // Other RTP versions, such as a late IP discovery response.
+            (with(0x40, 0x78), Some("not RTP version 2")),
+            (discovery.to_vec(), Some("not RTP version 2")),
+            (
+                KAT_AES_PLAIN[..11].to_vec(),
+                Some("shorter than an RTP header"),
+            ),
+        ];
+        for (packet, expected) in cases {
+            assert_eq!(non_voice_reason(&packet), expected, "{:02x?}", &packet[..2]);
+        }
+        assert_eq!(non_voice_reason(&[]), Some("shorter than an RTP header"));
+    }
+
+    /// Only a mode or key no packet can be opened with fails building the
+    /// cipher; the receive path returns those errors and skips the rest.
+    #[test]
+    fn voice_transport_cipher_refuses_unusable_modes_and_keys_up_front() {
+        for (mode, _, _) in kat_modes() {
+            assert!(TransportCipher::new(&mode, &KAT_KEY).is_ok());
+            let error = TransportCipher::new(&mode, &KAT_KEY[..31])
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(error.contains("32 bytes"), "{error}");
+        }
+        let error = TransportCipher::new(&VoiceEncryptionMode::new("xsalsa20_poly1305"), &KAT_KEY)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains("unsupported voice encryption mode"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -4021,6 +4419,9 @@ mod tests {
             response[8..17].copy_from_slice(b"127.0.0.1");
             response[72..74].copy_from_slice(&remote_addr.port().to_be_bytes());
             udp_listener.send_to(&response, remote_addr).await.unwrap();
+            // The test's handle is then the socket's only owner and can
+            // close it.
+            drop(udp_listener);
 
             let _select_protocol = ws.next().await.unwrap().unwrap();
             ws.send(send_json(serde_json::json!({
@@ -4100,7 +4501,14 @@ mod tests {
             &[7_u8; 32],
         )
         .unwrap();
-        media.send_to(&packet, client).await.unwrap();
+        // An RTCP report and a copy with a corrupted tag come first; the
+        // receive skips both and never hands them to the DAVE decryptor.
+        let mut corrupted = packet.clone();
+        let tag_end = corrupted.len() - 4;
+        corrupted[tag_end - 1] ^= 0x01;
+        for datagram in [&KAT_AES_RTCP_RR[..], &corrupted, &packet] {
+            media.send_to(datagram, client).await.unwrap();
+        }
 
         let mut decryptor = RecordingDecryptor(None);
         let received = handle
@@ -4110,6 +4518,103 @@ mod tests {
         assert_eq!(received.rtp.ssrc, 0x63);
         assert_eq!(received.opus_frame, vec![1, 2, 3]);
         assert_eq!(decryptor.0.unwrap().bytes, DAVE_FRAME);
+        assert_eq!(
+            handle.receive_stats(),
+            VoiceReceiveStats {
+                non_voice_packets: 1,
+                rejected_packets: 1,
+            }
+        );
+
+        handle.close().await.unwrap();
+        server.await.unwrap();
+    }
+
+    /// Regression (live DAVE call, 2026-10-21): RTCP reports on the voice
+    /// socket failed transport decryption and ended receive loops that use
+    /// `?`. Everything but Opus RTP that authenticates is skipped and
+    /// counted; socket errors still end the receive.
+    #[tokio::test]
+    async fn voice_runtime_skips_rtcp_and_rejected_packets_between_voice_packets() {
+        let (handle, media, server) = connect_mock_voice_session(0).await;
+        let mut client = handle.udp_socket().local_addr().unwrap();
+        client.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+        let mode = VoiceEncryptionMode::aead_aes256_gcm_rtpsize();
+        let seal = |payload_type: u8, sequence: u8, media: &[u8]| {
+            let cleartext = vec![
+                0x80,
+                payload_type,
+                0x00,
+                sequence,
+                0x00,
+                0x00,
+                0x03,
+                0xc0,
+                0x00,
+                0x00,
+                0x00,
+                0x63,
+            ];
+            seal_rtpsize_packet(cleartext, media, [0, 0, 0, sequence], &mode, &[7_u8; 32]).unwrap()
+        };
+        let silence = [0xf8, 0xff, 0xfe];
+        let mut corrupted = seal(0x78, 3, &silence);
+        let tag_end = corrupted.len() - 4;
+        corrupted[tag_end - 1] ^= 0x80;
+
+        let datagrams: [&[u8]; 10] = [
+            &KAT_AES_RTCP_SR,
+            &seal(0x78, 1, &silence),
+            &KAT_AES_RTCP_RR,
+            // Authenticates, but payload type 96 is not voice.
+            &seal(0x60, 2, &silence),
+            &corrupted,
+            // Opus RTP sealed with another key.
+            &KAT_AES_PLAIN,
+            // Too short for an RTP header.
+            &[0x80, 0x78, 0x00],
+            // Authentic, but longer than the 128 bytes the receive takes.
+            &seal(0x78, 5, &[0xf8; 120]),
+            &KAT_AES_RTCP_SR,
+            &seal(0x78, 4, &silence),
+        ];
+        for datagram in datagrams {
+            media.send_to(datagram, client).await.unwrap();
+        }
+
+        let first = handle.recv_voice_packet(128).await.unwrap();
+        assert_eq!(
+            (first.rtp.sequence, first.opus_frame.as_slice()),
+            (1, &silence[..])
+        );
+        assert_eq!(handle.receive_stats().non_voice_packets, 1);
+        // The decoded variant goes through the same skipping.
+        let mut decoder = VoiceOpusDecoder::discord_default().unwrap();
+        let second = handle
+            .recv_decoded_voice_packet(&mut decoder, 128)
+            .await
+            .unwrap();
+        assert_eq!(second.packet.rtp.sequence, 4);
+        assert!(!second.pcm.is_empty());
+        assert_eq!(
+            handle.receive_stats(),
+            VoiceReceiveStats {
+                non_voice_packets: 5,
+                rejected_packets: 3,
+            }
+        );
+
+        // Socket errors are still returned: once the server's port is
+        // closed, the next datagram this socket sends draws an ICMP port
+        // unreachable, and the connected socket reports it on receive.
+        drop(media);
+        handle.udp_socket().send(&[0_u8; 4]).await.unwrap();
+        let error = timeout(Duration::from_secs(5), handle.recv_voice_packet(128))
+            .await
+            .expect("a socket error must end the receive, not be skipped")
+            .unwrap_err();
+        assert!(matches!(error, DiscordError::Io(_)), "{error}");
+        assert_eq!(handle.receive_stats().rejected_packets, 3);
 
         handle.close().await.unwrap();
         server.await.unwrap();
@@ -4832,6 +5337,13 @@ pub(crate) mod test_call {
 
         /// Sends `frame` (already DAVE-encrypted or not) as the peer's media.
         pub(crate) async fn send_peer_frame(&mut self, frame: &[u8]) {
+            let packet = self.peer_packet(frame);
+            self.send_datagram(&packet).await;
+        }
+
+        /// The peer's next media packet carrying `frame`, sealed with the
+        /// call's transport key.
+        pub(crate) fn peer_packet(&mut self, frame: &[u8]) -> Vec<u8> {
             self.peer_sequence = self.peer_sequence.wrapping_add(1);
             let header = build_rtp_header(
                 self.peer_sequence,
@@ -4839,15 +5351,34 @@ pub(crate) mod test_call {
                 PEER_SSRC,
                 120,
             );
-            let packet = seal_rtpsize_packet(
+            seal_rtpsize_packet(
                 header,
                 frame,
                 u32::from(self.peer_sequence).to_be_bytes(),
                 &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
                 &KEY,
             )
-            .unwrap();
-            self.media.send_to(&packet, self.client).await.unwrap();
+            .unwrap()
+        }
+
+        /// An RTCP report from the voice server, sealed with the call's
+        /// transport key the way Songbird opens them: the 8-byte RTCP header
+        /// (packet type 200 SR or 201 RR, sender SSRC 1) as the AAD.
+        pub(crate) fn server_rtcp(packet_type: u8, counter: u32) -> Vec<u8> {
+            let header = vec![0x80, packet_type, 0x00, 0x06, 0, 0, 0, 1];
+            seal_rtpsize_packet(
+                header,
+                &[0x5a; 20],
+                counter.to_be_bytes(),
+                &VoiceEncryptionMode::aead_aes256_gcm_rtpsize(),
+                &KEY,
+            )
+            .unwrap()
+        }
+
+        /// Sends `datagram` to the runtime's voice socket as it is.
+        pub(crate) async fn send_datagram(&self, datagram: &[u8]) {
+            self.media.send_to(datagram, self.client).await.unwrap();
         }
 
         /// Maps the peer's SSRC to its user, as SPEAKING does.
@@ -4963,6 +5494,80 @@ mod dave_call_tests {
         let received = call.handle.recv_voice_packet(2048).await.unwrap();
         assert_eq!(received.opus_frame, SILENCE);
         assert_eq!(call.handle.dave_status().undecryptable_packets, 1);
+
+        call.close().await;
+    }
+
+    /// Regression (live DAVE call, 2026-10-21): about once a second
+    /// `recv_decoded_voice_packet` failed with "failed to decrypt AES-GCM
+    /// voice packet", which ended receive loops that use `?`; the RTCP
+    /// reports Discord sends on the voice socket were opened as voice. In a
+    /// DAVE call they, and packets that fail transport authentication, are
+    /// skipped before the DAVE layer sees them.
+    #[tokio::test]
+    async fn voice_runtime_skips_rtcp_and_forged_packets_in_a_dave_call() {
+        let mut call = DaveCall::connect(|config| config).await;
+        let key_package = expect_key_package(call.next_binary().await);
+        call.welcome_runtime(&key_package, 5).await;
+        call.announce_peer_speaking();
+        let mut state = call.handle.subscribe();
+        timeout(
+            Duration::from_secs(5),
+            state.wait_for(|state| state.ssrc_users.contains_key(&PEER_SSRC)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        let first = call.peer.encrypt_outbound(&OPUS).unwrap().into_owned();
+        let first = call.peer_packet(&first);
+        // A DAVE frame whose transport tag was corrupted on the way, and a
+        // packet of another payload type (recognized from its header, before
+        // any decryption).
+        let forged = call.peer.encrypt_outbound(&OPUS).unwrap().into_owned();
+        let mut forged = call.peer_packet(&forged);
+        let tag_end = forged.len() - 4;
+        forged[tag_end - 16] ^= 0x01;
+        let mut other_type = call.peer_packet(&SILENCE);
+        other_type[1] = 0x6f;
+        let second = call.peer.encrypt_outbound(&OPUS).unwrap().into_owned();
+        let second = call.peer_packet(&second);
+        for datagram in [
+            DaveCall::server_rtcp(200, 1),
+            first,
+            DaveCall::server_rtcp(201, 2),
+            forged,
+            other_type,
+            DaveCall::server_rtcp(200, 3),
+            second,
+        ] {
+            call.send_datagram(&datagram).await;
+        }
+
+        for _ in 0..2 {
+            let received = call.handle.recv_voice_packet(2048).await.unwrap();
+            assert_eq!(received.opus_frame, OPUS);
+            assert_eq!(received.user_id, Some(test_id(PEER)));
+        }
+        let stats = call.handle.receive_stats();
+        assert_eq!((stats.non_voice_packets, stats.rejected_packets), (4, 1));
+        // Transport rejects never reach DAVE: nothing failed there, so no
+        // recovery is near.
+        let status = call.handle.dave_status();
+        assert_eq!((status.undecryptable_packets, status.recoveries), (0, 0));
+
+        // The decoded receive, as in the live run, keeps going through more
+        // reports.
+        call.send_datagram(&DaveCall::server_rtcp(201, 4)).await;
+        call.send_peer_frame(&SILENCE).await;
+        let mut decoder = crate::voice_runtime::VoiceOpusDecoder::discord_default().unwrap();
+        let decoded = call
+            .handle
+            .recv_decoded_voice_packet(&mut decoder, 2048)
+            .await
+            .unwrap();
+        assert_eq!(decoded.packet.opus_frame, SILENCE);
+        assert_eq!(call.handle.receive_stats().non_voice_packets, 5);
 
         call.close().await;
     }

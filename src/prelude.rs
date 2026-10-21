@@ -108,8 +108,8 @@ pub use crate::voice_runtime::{
     connect as connect_voice_runtime, connect_with_options as connect_voice_runtime_with_options,
     VoiceConnectOptions, VoiceDaveFrame, VoiceDaveFrameDecryptor, VoiceDaveStatus,
     VoiceDecodedPacket, VoiceOpusDecoder, VoiceOpusFrame, VoiceOutboundPacket,
-    VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceivedPacket, VoiceRuntimeConfig,
-    VoiceRuntimeHandle,
+    VoiceOutboundRtpState, VoiceRawUdpPacket, VoiceReceiveStats, VoiceReceivedPacket,
+    VoiceRuntimeConfig, VoiceRuntimeHandle,
 };
 #[cfg(all(feature = "voice", feature = "voice-encode"))]
 pub use crate::voice_runtime::{AudioMixer, AudioSource, PcmFrame, VoiceOpusEncoder};

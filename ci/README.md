@@ -12,7 +12,7 @@ Repository tooling that is not part of the published crate API.
 | `perf-gates.json` | The phase 4 gate table (checkpoints B and C) as absolute caps for `perf_diff.py --gates`. |
 | `perf_summary.sh` | Markdown summary of a PR's report against its base and the committed baseline, plus gate status; used by `.github/workflows/perf-report.yml` (non-blocking). |
 | `tests/` | `python3 -m unittest discover -s ci/tests -v`, with fixture MDX and Rust sources for the drift tools and synthetic reports for `perf_diff.py`. |
-| `voice_transport_kat.py` | Prints the voice transport known-answer vectors pinned in `src/voice_runtime.rs` tests (AES-256-GCM and XChaCha20-Poly1305 rtpsize packets: plain, with CSRCs and a header extension, and with RTP padding). Needs the `cryptography` package; checks its HChaCha20 against draft-irtf-cfrg-xchacha-03 before printing. |
+| `voice_transport_kat.py` | Prints the voice transport known-answer vectors pinned in `src/voice_runtime.rs` tests (AES-256-GCM and XChaCha20-Poly1305 rtpsize packets: plain, with CSRCs and a header extension, and with RTP padding; plus RTCP sender and receiver reports sealed with their 8-byte header as the AAD, which the receive path must recognize as not voice). Needs the `cryptography` package; checks its HChaCha20 against draft-irtf-cfrg-xchacha-03 before printing. |
 
 Usage, allowlist rules, CI behaviour, and the MSRV procedure are documented in
 `discordrsdocs/docs/guide/testing-and-coverage.md`; the design rationale is the Decision Log at

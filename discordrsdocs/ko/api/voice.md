@@ -118,6 +118,37 @@ async fn receive(handle: &VoiceRuntimeHandle) -> Result<(), discordrs::DiscordEr
 화자는 SPEAKING이 알려 준 SSRC → 사용자 매핑으로 찾습니다. 여러 화자를 받을 때는 SSRC마다 디코더를
 따로 두는 편이 맞습니다.
 
+### 수신 메서드가 건너뛰는 것
+
+음성 소켓에는 음성만 오지 않습니다. Discord 음성 서버는 같은 소켓으로 RTCP 송신·수신 보고를 약 1초에
+한 번 보내고(RTP와 RTCP가 포트를 공유, RFC 5761), 소켓에 닿을 수 있는 누구든 음성처럼 생긴 데이터그램을
+보낼 수 있습니다. 수신 메서드(`recv_voice_packet`, `recv_decoded_voice_packet`, 그리고 각각의
+`*_with_dave`)는 Opus 음성만 돌려주고 나머지는 건너뛰고 다음 패킷을 기다리므로, 위처럼 `?`를 쓰는
+루프가 끝나지 않습니다.
+
+- **음성이 아님.** RTP 헤더 길이 이상이고, RTP 버전 2이고, 페이로드 타입이 120(`0x78`, Discord 문서
+  "Voice Packet Structure", @discordjs/voice와 Songbird도 같은 검사)인 데이터그램만 음성입니다. RTCP(둘째
+  바이트 192–223), 다른 페이로드 타입, 그 밖의 것은 복호화 전에 건너뛰고
+  `receive_stats().non_voice_packets`로 셉니다. RTCP 내용은 복호화하지도 노출하지도 않습니다.
+- **전송 복호화 실패.** AEAD 태그가 맞지 않는(손상, 다른 키, 위조) 음성 패킷, 헤더·패딩·길이가 잘못된
+  패킷, 넘긴 `max_len`보다 길어 소켓이 잘라 낸 패킷은 버리고 `receive_stats().rejected_packets`로
+  셉니다. `debug` 로그에는 SSRC, 시퀀스 번호, 길이, 이유만 남고 페이로드는 남기지 않습니다.
+- **DAVE 복호화 실패**(런타임 자체 DAVE 세션): 건너뛰고 `dave_status().undecryptable_packets`로
+  셉니다(아래 DAVE 절).
+
+오류는 이후 모든 패킷에 똑같이 생길 것만 돌려줍니다: 소켓 오류(예: 서버 포트가 사라진 뒤의 "connection
+refused"), 쓸 수 있는 전송 모드·키가 없는 세션, 그리고 `connect_voice_runtime` 핸들의 DAVE 통화.
+`recv_voice_packet_with_dave`는 DAVE 프레임 해석과 사용자 복호화기의 오류를 그대로 돌려줍니다. 거기서
+무엇을 건너뛸지는 복호화기가 정합니다.
+
+**보안.** 위조 패킷은 드러내지 않고 버립니다. AEAD 검사에서 걸러져 내용이 쓰이지 않으므로 미디어를
+끼워 넣을 수 없고, 수신 루프를 끝낼 수도 없습니다. 하나하나 알려 주지도 않습니다. 대신 키가 맞지 않거나
+`max_len`이 너무 작아도 오류가 나지 않습니다: 수신은 계속 기다리고 `rejected_packets`만 늘어납니다.
+수신 루프에 음성이 오지 않으면 `receive_stats()`와 `debug` 로그를 보십시오.
+
+3.1 전에는 이런 패킷을 오류로 돌려줬습니다. 실제 DAVE 통화에서 수신이 약 1초에 한 번 "failed to decrypt
+AES-GCM voice packet"으로 실패했고(RTCP 보고를 음성으로 열려고 함), `?`를 쓰는 루프가 거기서 끝났습니다.
+
 ## DAVE 종단 간 암호화
 
 Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https://daveprotocol.com/)(MLS 기반
@@ -159,8 +190,9 @@ Discord는 2026-03-01부터 Stage가 아닌 모든 음성 채널에 [DAVE](https
 - **수신.** `recv_voice_packet(...)`과 `recv_decoded_voice_packet(...)`이 화자의 키로 복호화합니다. MLS
   전환 전후에는 몇 개가 늘 풀리지 않으므로, 그런 패킷과 아직 사용자를 모르는 SSRC의 DAVE 프레임은
   오류로 돌려주지 않고 건너뜁니다(`?`를 쓰는 수신 루프가 끝나지 않도록).
-  `VoiceDaveStatus::undecryptable_packets`가 그 수를 셉니다. 음소거 사용자에 대해 SFU가 DAVE 없이 보내는
-  무음 프레임(`F8 FF FE`)은 그대로 돌려줍니다.
+  `VoiceDaveStatus::undecryptable_packets`가 그 수를 셉니다. 음성이 아니거나 전송 복호화에 실패한
+  패킷은 DAVE까지 가지 않습니다("수신 메서드가 건너뛰는 것"). 음소거 사용자에 대해 SFU가 DAVE 없이
+  보내는 무음 프레임(`F8 FF FE`)은 그대로 돌려줍니다.
 - **전환.** 버전 0으로 내려가는 전환(DAVE를 지원하지 않는 클라이언트가 들어옴)은 준비되자마자 평문을
   받아들이고 실행된 뒤 평문을 보냅니다. 다시 올라가는 전환(epoch 1의 `prepare_epoch`)은 새 그룹을 만들고,
   그 전환이 실행될 때까지 평문을 계속 보냅니다. 잘못된 커밋·웰컴은 `dave_mls_invalid_commit_welcome`으로
@@ -211,6 +243,8 @@ fn describe(handle: &VoiceRuntimeHandle) {
 
 **검증 상태.** 독립된 두 `davey` 세션과 테스트용 음성 게이트웨이(OpenMLS 외부 발신자)로 웰컴 참여, 혼자인
 멤버의 커밋, 양방향 오디오(실제 Opus를 쓰는 `AudioPlayer` 포함), 다운그레이드·업그레이드, 잘못된
-커밋·웰컴 복구, 4017 닫힘을 검사합니다. 런타임이 운영하는 이 경로는 **아직 실제 Discord에서 실행하지
-않았습니다**. 무시된 라이브 테스트 `tests/live_voice_dave.rs`가 기준입니다. 절차는
+커밋·웰컴 복구, 4017 닫힘을 검사합니다. 실제 Discord에서는 지금까지 수신만 실행했습니다(2026-10-21:
+DAVE 통화에 참여해 화자의 음성을 복호화했고, 위 "수신 메서드가 건너뛰는 것"의 RTCP 문제를 찾았습니다).
+참가자가 런타임의 소리를 들어야 하는 송신은 **아직 실행하지 않았습니다**. 무시된 라이브 테스트
+`tests/live_voice_dave.rs`가 기준입니다. 절차는
 [Live DAVE Validation](../../docs/api/live-dave-validation.md)(영문)에 있습니다.

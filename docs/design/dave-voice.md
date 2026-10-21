@@ -1,6 +1,7 @@
 # 음성 런타임의 DAVE(E2EE) 세션 관리
 
 작성: 2026-10-18. 기준: main `84e6721`(3.0.0 배포본). 브랜치 `fix-dave-voice`.
+갱신: 2026-10-21, 6.1절(수신의 RTCP·전송 실패 건너뛰기, 브랜치 `fix-voice-recv-rtcp`).
 구현 위치: `src/voice_runtime/dave.rs`(상태 기계), `src/voice_runtime.rs`(게이트웨이 루프·송수신),
 `src/voice/player.rs`(재생기 연동). 이 문서를 바꾸지 않고 계약을 바꾸지 않는다.
 
@@ -164,7 +165,58 @@ runtime task ───────── 같은 Arc<Mutex<DaveController>>를 �
 버린 패킷은 오류로 돌려주지 않고 다음 패킷을 기다린다. 전환 중 몇 개가 풀리지 않는 것은 정상이고
 (discord.js도 `null`로 무시), 오류로 돌려주면 `?`를 쓰는 수신 루프가 끝난다(무음 프레임 수정과 같은
 이유). 버린 수는 `VoiceDaveStatus::undecryptable_packets`로 보이고 debug 로그를 남긴다.
-`recv_voice_packet_with_dave`(사용자 복호화기)는 동작을 바꾸지 않는다.
+`recv_voice_packet_with_dave`(사용자 복호화기)는 DAVE 단계의 동작을 바꾸지 않는다.
+
+### 6.1 음성이 아닌 데이터그램과 전송 복호화 실패 (2026-10-21)
+
+실제 DAVE 통화에서 `Context::connect_voice_runtime_with_dave` + `recv_decoded_voice_packet` 루프를 약
+28초 돌리자(한 사람이 말함) 그 사람의 패킷 63개는 DAVE·전송 복호화 모두 성공했지만, 35번의 호출이 약 1초에
+한 번꼴로 `failed to decrypt AES-GCM voice packet`을 돌려줬다. 첫 실행은 루프가 `?`를 써서 첫 오류에서
+끝났고 아무것도 받지 못했다. 원인은 같은 UDP 소켓으로 오는 RTCP 보고(RFC 5761 다중화)다. RTP로 읽으면
+버전 2, 페이로드 타입 72/73이고, 12바이트 "헤더"를 AAD로 쓰므로(RTCP의 평문 헤더는 8바이트) 태그가
+절대 맞지 않는다.
+
+이제 `recv_transport`(세 수신 경로의 공통 루프)가 복호화 전에 데이터그램을 분류한다.
+
+| 데이터그램 | 처리 |
+|---|---|
+| 12바이트 미만, RTP 버전 2가 아님, RTCP(둘째 바이트 192–223), 페이로드 타입 120이 아님 | 건너뜀, `VoiceReceiveStats::non_voice_packets` +1, trace 로그 |
+| Opus RTP인데 헤더·길이·패딩이 잘못됐거나, AEAD 검사 실패, 또는 `max_len`보다 길어 잘림 | 버림, `rejected_packets` +1, debug 로그(SSRC·시퀀스·길이·이유, 페이로드 없음) |
+| 소켓 오류, SESSION_DESCRIPTION 없음, 지원하지 않는 모드·키 | 오류 반환(이후 모든 패킷이 같으므로) |
+
+모드·키 오류와 패킷 오류를 구조로 나누려고 `TransportCipher`를 두었다. 만들 때 모드와 키 길이를 검사하므로
+그 뒤 `open_rtpsize_packet`의 오류는 언제나 패킷 문제다. 송신(`seal_rtpsize_packet`)도 같은 타입을 쓴다.
+AES 변형은 키 스케줄이 약 1 KB라 `Box`에 담는다(패킷마다 할당 하나, 기존 평문 복사와 같은 수준).
+
+```text
+[Decision Log]
+- 목적과 의도: 수신 메서드는 Discord 음성만 돌려주고, `?`로 쓴 수신 루프가 음성이 아니거나 인증되지 않는
+  트래픽에도 계속 돈다.
+- 기존 구현 및 제약 조건: 3.0.0은 받은 데이터그램을 모두 RTP 음성으로 열고 실패를 오류로 돌려줬다. RTCP가
+  같은 소켓으로 약 1초마다 온다. UDP 소켓은 음성 서버 주소로 connect되어 있지만 UDP 출발지 주소는 위조할
+  수 있다. Discord 문서는 음성 패킷의 페이로드 타입(0x78)만 적고 RTCP는 설명하지 않는다.
+- 검토한 주요 대안: (1) 모든 실패를 오류로 반환(3.0.0): RTCP 하나, 위조 데이터그램 하나로 `?` 루프가
+  끝난다. (2) 다른 페이로드 타입만 건너뛰고 전송 실패는 오류로 반환: 손상·위조된 음성 모양 패킷 하나로 여전히
+  끝난다. (3) 둘 다 건너뛰고 세며, 이후 모든 패킷에 똑같이 생길 오류만 반환.
+- 선택한 방식: (3).
+- 다른 대안 대신 이 방식을 선택한 이유: Songbird가 같다(`udp_rx`의 `rtp_valid`가 버전 2·페이로드 타입
+  120만 받고, RTP·RTCP 복호화 실패는 warn 로그 뒤 계속). @discordjs/voice도 페이로드 타입으로 거르지만
+  복호화 실패 시에는 그 사용자의 스트림을 끝낸다(`stream.destroy`). 아래 DAVE 단계는 이미 풀 수 없는
+  프레임을 건너뛰므로 같은 규칙이 된다.
+- 장점, 단점 및 영향: 수신 루프가 RTCP·위조 패킷에 끝나지 않는다. 보안상 AEAD 검사에 실패한 패킷은
+  내용이 쓰이지 않고 버려지며 호출자에게 알리지 않으므로, 위조 패킷으로 미디어를 끼워 넣을 수도 루프를
+  끝낼 수도 없다. 대신 키 불일치나 너무 작은 `max_len`이 오류로 드러나지 않고 수신이 기다리기만 하며
+  `rejected_packets`가 늘어난다(debug 로그가 이유를 적는다. 잘린 패킷은 AEAD 실패 대신 "longer than
+  max_len"으로 적도록 한 바이트 큰 버퍼로 받는다). RTCP 내용(수신 통계)은 복호화·노출하지 않는다. `recv_voice_packet_with_dave`는 DAVE
+  프레임 해석·사용자 복호화기 오류를 여전히 돌려준다(무엇을 건너뛸지는 복호화기 몫). 소켓 오류는
+  그대로 반환한다.
+```
+
+RTCP 판별 범위는 코디네이터가 제안한 200–204 대신 RFC 5761 §4의 192–223을 쓴다(discortp `demux`도 205
+전송 피드백, 206 페이로드 피드백, 207 XR까지 RTCP로 본다). 페이로드 타입 120 검사가 어차피 모두 거르므로
+범위는 로그 이유와 테스트에만 영향을 준다. rtpsize 모드에서 Discord가 RTCP를 어떻게 봉인하는지는 Discord
+문서에 없어, 테스트 벡터는 Songbird가 여는 모양(8바이트 RTCP 헤더를 AAD로)을 따른다
+(`ci/voice_transport_kat.py`의 `KAT_AES_RTCP_SR`/`KAT_AES_RTCP_RR`).
 
 ## 7. 공개 API와 SemVer
 
@@ -255,8 +307,15 @@ subscribe_dave_status, is_playable, wait_until_playable, dave_verification_code}
   나중에 와도 완전한 연결이 되는지, 새 서버 업데이트가 보관한 것을 바꾸는지, 나가기·null
   엔드포인트·`disconnect`가 보관한 것을 지우는지, `join_voice`가 요청과 함께 추적하고 보내지 못하면
   아무것도 추적하지 않으며 보관한 서버 업데이트도 남기는지, 그리고 두 순서 모두에서 `connect_voice_runtime_with_dave`가 모의 통화에 연결되는지.
+- 수신 분류(6.1절): 외부에서 생성한 RTCP SR/RR 벡터가 RTCP로 분류되고 3.0.0 경로에서는 실제 통화와 같은
+  오류가 나는지, RTCP 패킷 타입 전 범위·다른 페이로드 타입·다른 버전·짧은 데이터그램, 모드·키 오류는
+  `TransportCipher`를 만들 때 나는지. 모의 UDP로 세 수신 경로(`connect` 평문, `*_with_dave`, 런타임 DAVE
+  통화) 모두에서 RTCP·다른 페이로드 타입·태그 손상·다른 키·짧은 데이터그램을 음성 사이에 끼워 넣어 음성만
+  돌아오고 수가 맞는지, DAVE 통화에서는 전송 단계에서 버린 패킷이 `undecryptable_packets`를 늘리지
+  않는지, 서버 포트를 닫은 뒤 소켓 오류(ICMP port unreachable → connection refused)는 여전히 오류인지.
 - 실제 Discord: `tests/live_voice_dave.rs`(무시됨)가 `connect_voice_runtime_with_options`로 톤을
-  재생하고 다른 참가자의 음성을 복호화한다. 실행하지 않았다.
+  재생하고 다른 참가자의 음성을 복호화한다. 이 게이트 테스트는 아직 실행하지 않았다. 별도로 2026-10-21에
+  수신만 실제 통화에서 돌려 봤다(6.1절).
 
 openmls·openmls_basic_credential·openmls_rust_crypto는 dev-dependency다. 이미 `davey`가 같은 버전을
 쓰므로 잠금 파일에 새 패키지가 생기지 않는다. 대신 테스트 대상을 빌드할 때는 `voice` 없이도
