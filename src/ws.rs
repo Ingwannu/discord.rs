@@ -294,6 +294,7 @@ impl GatewayConnectionConfig {
             format!("wss://{}", self.base_url.trim_start_matches('/'))
         };
 
+        ensure_root_path(&mut normalized);
         remove_query_param(&mut normalized, "compress");
 
         if !has_query_param(&normalized, "v") {
@@ -329,6 +330,20 @@ impl GatewayConnectionConfig {
 impl Display for GatewayConnectionConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.normalized_url())
+    }
+}
+
+/// Gives a host-only URL the root path. The WebSocket handshake sends the URL's path and query as
+/// the HTTP request target, so `wss://host?v=10` became `GET ?v=10`, which Discord answers with
+/// 400. READY's `resume_gateway_url` has no path (`wss://gateway-us-east1-b.discord.gg`), so up to
+/// 3.1.0 every RESUME after a server-requested reconnect (opcode 7) failed this way.
+fn ensure_root_path(url: &mut String) {
+    let authority_start = url.find("://").map_or(0, |index| index + 3);
+    let authority_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |offset| authority_start + offset);
+    if !url[authority_end..].starts_with('/') {
+        url.insert(authority_end, '/');
     }
 }
 
@@ -440,6 +455,39 @@ mod tests {
         assert!(GatewayConnectionConfig::default()
             .identify_gate_ref()
             .is_none());
+    }
+
+    #[test]
+    fn normalized_url_gives_host_only_urls_the_root_path() {
+        // READY's resume_gateway_url arrives without a path.
+        for (base, expected) in [
+            (
+                "wss://gateway-us-east1-b.discord.gg",
+                "wss://gateway-us-east1-b.discord.gg/?v=10&encoding=json",
+            ),
+            (
+                "wss://gateway.discord.gg?v=10",
+                "wss://gateway.discord.gg/?v=10&encoding=json",
+            ),
+            (
+                "gateway.discord.gg",
+                "wss://gateway.discord.gg/?v=10&encoding=json",
+            ),
+            (
+                "wss://gateway.discord.gg/",
+                "wss://gateway.discord.gg/?v=10&encoding=json",
+            ),
+            (
+                "wss://gateway.discord.test/socket",
+                "wss://gateway.discord.test/socket?v=10&encoding=json",
+            ),
+        ] {
+            assert_eq!(
+                GatewayConnectionConfig::new(base).normalized_url(),
+                expected,
+                "{base}"
+            );
+        }
     }
 
     #[test]

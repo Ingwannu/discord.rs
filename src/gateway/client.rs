@@ -409,6 +409,7 @@ impl GatewayClient {
                     #[cfg(feature = "sharding")]
                     self.publish_error(e.to_string());
                     error!("Gateway connection error: {e}");
+                    self.forget_resume_url_after_failed_dial();
                     if self
                         .wait_for_backoff_command(Duration::from_secs(
                             backoff.min(MAX_RECONNECT_BACKOFF_SECS),
@@ -512,6 +513,17 @@ impl GatewayClient {
             );
         }
         dropped
+    }
+
+    /// A resume URL that could not be dialed is not tried again: up to 3.1.0 a broken one was
+    /// re-dialed every backoff interval forever, so the bot stayed offline (one 400 per 5 minutes
+    /// for hours). The session id is kept, so the next connection to the configured gateway still
+    /// sends RESUME; if Discord cannot resume there it answers INVALID_SESSION, which starts a
+    /// fresh IDENTIFY through the existing path.
+    fn forget_resume_url_after_failed_dial(&mut self) {
+        if self.resume_gateway_url.take().is_some() {
+            warn!("Resume gateway URL could not be dialed; falling back to the configured gateway");
+        }
     }
 
     /// Records READY's session id and resume URL for the next RESUME.
@@ -1314,8 +1326,29 @@ mod tests {
     fn normalize_gateway_url_adds_missing_gateway_query() {
         assert_eq!(
             GatewayConnectionConfig::new("gateway.discord.gg").normalized_url(),
-            "wss://gateway.discord.gg?v=10&encoding=json"
+            "wss://gateway.discord.gg/?v=10&encoding=json"
         );
+    }
+
+    #[test]
+    fn a_resume_url_that_failed_to_dial_falls_back_to_the_configured_gateway() {
+        let mut client = GatewayClient::new("secret-token".into(), 513);
+        client.session_id = Some("session".into());
+        client.resume_gateway_url =
+            Some("wss://gateway-us-east1-b.discord.gg/?v=10&encoding=json".into());
+        client.forget_resume_url_after_failed_dial();
+        assert!(
+            client.resume_gateway_url.is_none(),
+            "the next dial uses the configured gateway"
+        );
+        assert_eq!(
+            client.session_id.as_deref(),
+            Some("session"),
+            "RESUME is still attempted there"
+        );
+        // A second failure with no resume URL changes nothing.
+        client.forget_resume_url_after_failed_dial();
+        assert_eq!(client.session_id.as_deref(), Some("session"));
     }
 
     #[test]
@@ -1888,7 +1921,7 @@ mod tests {
         assert_eq!(client.session_id.as_deref(), Some("session-1"));
         assert_eq!(
             client.resume_gateway_url.as_deref(),
-            Some("wss://gateway.discord.gg?v=10&encoding=json")
+            Some("wss://gateway.discord.gg/?v=10&encoding=json")
         );
         assert_eq!(
             client.sequence.load(std::sync::atomic::Ordering::Relaxed),

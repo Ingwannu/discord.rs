@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.1 - Unreleased
+
+### Fixed
+- **Gateway sessions survive a server-requested reconnect.** READY's `resume_gateway_url` has no path (`wss://gateway-us-east1-b.discord.gg`), and the URL built from it (`wss://…discord.gg?v=10&encoding=json`) made the WebSocket handshake send `GET ?v=10…`, which Discord answers with HTTP 400. Every RESUME after a Reconnect (opcode 7) therefore failed, and the client re-dialed the same URL on every backoff, so a bot stayed offline until restarted (seen live on 2026-10-22: one 400 every 5 minutes for four hours after the first opcode 7). `GatewayConnectionConfig::normalized_url` now gives a host-only URL the root path (`wss://host/?v=10&encoding=json`), and a resume URL that cannot be dialed is dropped after the failed attempt, so the next connection goes to the configured gateway (still sending RESUME with the kept session; Discord's INVALID_SESSION then leads to a fresh IDENTIFY as before).
+
 ## 3.1.0 - 2026-10-22
 
 ### Fixed
