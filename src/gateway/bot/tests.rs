@@ -9230,3 +9230,131 @@ async fn a_shard_queued_for_a_later_identify_wave_stops_on_handoff() {
     assert_eq!(sessions[0].shard(), (0, 2));
     server.abort();
 }
+
+/// Regression (review of f76ee19): a resumed connection that upgrades but
+/// never sends HELLO had no setup deadline and did not read the control
+/// channel, so `GatewayHandoff::request()` never completed. The session is
+/// now handed back unchanged.
+#[tokio::test]
+async fn a_handoff_while_a_resume_waits_for_hello_hands_the_session_back() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let (upgraded_tx, upgraded_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        upgraded_tx.send(()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    let handoff = super::GatewayHandoff::new();
+    let session = super::GatewaySession::for_test(
+        "session-silent",
+        77,
+        Some(&url),
+        (0, 1),
+        crate::gateway_intents::GUILDS.bits(),
+    )
+    .with_application_id(test_id(12));
+    let run = tokio::spawn(
+        super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url))
+            .event_handler(NoopEventHandler)
+            .handoff(handoff.clone())
+            .resume_sessions([session])
+            .start(),
+    );
+    upgraded_rx.await.unwrap();
+    handoff.request();
+    tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("the request is served while the connection waits for HELLO")
+        .unwrap()
+        .unwrap();
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id(), "session-silent");
+    assert_eq!(sessions[0].sequence(), 77, "nothing was resumed or handled");
+    assert_eq!(sessions[0].application_id(), Some(test_id(12)));
+    server.abort();
+}
+
+/// Records the client's application id each time READY reaches the handler.
+#[derive(Clone, Default)]
+struct ApplicationIdProbe {
+    seen: Arc<std::sync::Mutex<Vec<Option<crate::model::ApplicationId>>>>,
+    ready: Arc<tokio::sync::Notify>,
+}
+
+impl super::EventHandler for ApplicationIdProbe {
+    async fn ready(&self, ctx: super::Context, _ready: &ReadyPayload) {
+        self.seen.lock().unwrap().push(ctx.rest().application_id());
+        self.ready.notify_one();
+    }
+}
+
+/// Regression (review of f76ee19): after a session from a snapshot could
+/// not be resumed, the READY processor only filled an application id that
+/// was absent, so REST routes kept the rejected snapshot's application. A
+/// snapshot's id is now provisional and gives way to the fresh READY's; an
+/// id set on the builder still wins.
+#[tokio::test]
+async fn a_rejected_sessions_application_id_gives_way_to_the_fresh_ready() {
+    let (url, server) = spawn_session_gateway(move |mut socket, opening| async move {
+        use futures_util::SinkExt;
+        if opening["op"] == json!(6) {
+            let invalid = json!({ "op": 9, "d": false });
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    invalid.to_string().into(),
+                ))
+                .await
+                .unwrap();
+        } else {
+            let mut ready = fake_handoff_ready();
+            ready["application"]["id"] = json!("999");
+            send_handoff_dispatch(&mut socket, 1, "READY", ready).await;
+        }
+        client_close_code(&mut socket).await;
+    })
+    .await;
+
+    for (builder_id, expected) in [(None, test_id(999)), (Some(test_id(555)), test_id(555))] {
+        let probe = ApplicationIdProbe::default();
+        let handoff = super::GatewayHandoff::new();
+        let session = super::GatewaySession::for_test(
+            "session-rejected",
+            5,
+            Some(&url),
+            (0, 1),
+            crate::gateway_intents::GUILDS.bits(),
+        )
+        .with_application_id(test_id(123));
+        let mut builder = super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url.clone()))
+            .event_handler(probe.clone())
+            .handoff(handoff.clone())
+            .resume_sessions([session]);
+        if let Some(id) = builder_id {
+            builder = builder.application_id(id);
+        }
+        let run = tokio::spawn(builder.start());
+        tokio::time::timeout(Duration::from_secs(10), probe.ready.notified())
+            .await
+            .expect("INVALID_SESSION falls back to IDENTIFY and READY");
+        assert_eq!(
+            *probe.seen.lock().unwrap(),
+            vec![Some(expected)],
+            "builder id {builder_id:?}"
+        );
+        handoff.request();
+        tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let sessions = handoff.take_sessions();
+        assert_eq!(sessions[0].session_id(), "session");
+        assert_eq!(sessions[0].application_id(), Some(expected));
+    }
+    server.abort();
+}

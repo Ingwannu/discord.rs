@@ -22,7 +22,7 @@ use super::{
 };
 use crate::event::{Event, EventKind};
 pub(in crate::gateway) use crate::gateway::client::GatewayDispatch;
-use crate::gateway::handoff::{DeliveryLane, DeliveryLedger};
+use crate::gateway::handoff::{DeliveryLane, DeliveryLedger, Enqueued, RouteInfo};
 
 /// How long aborted pipeline tasks get to confirm they stopped. Aborting is
 /// asynchronous: a task only stops at its next await point, so shutdown
@@ -345,6 +345,11 @@ impl EventPipeline {
     /// still finish their collectors and member fetches) but queues nothing
     /// more, and the dispatchers start no further calls. Everything not
     /// handed out by then is left for Discord to replay to the next process.
+    ///
+    /// The ledger halts first (under the lock the processor holds while it
+    /// records and queues a dispatch), and only then are the dispatchers
+    /// told: a lane they have left can never receive a dispatch that was
+    /// recorded before the halt.
     pub(super) fn halt(&self) {
         if let Some(ledger) = self.ledger.as_ref() {
             ledger.halt();
@@ -619,26 +624,30 @@ async fn run_event_processor(
         } else {
             DeliveryLane::Regular
         };
-        if let Some(ledger) = outputs.ledger.as_ref() {
-            if !ledger.route(lane, &delivery.event) {
+        let sender = if interaction {
+            &outputs.interactions
+        } else {
+            &outputs.events
+        };
+        // With a handoff, recording the dispatch and queueing it happen
+        // under the ledger's lock, so a halt can never fall between them.
+        let sent = match outputs.ledger.as_ref() {
+            Some(ledger) => match ledger.enqueue(lane, RouteInfo::of(&delivery.event), || {
+                sender.try_send(delivery)
+            }) {
+                Enqueued::Queued => Ok(()),
                 // Handing off: Discord replays this event to the next
                 // process, so it is not queued here.
-                continue;
-            }
-        }
-        // Every arm that does not queue the delivery tells the ledger, which
-        // then counts it as delivered (dropped or given to the hook).
-        let unroute = || {
-            if let Some(ledger) = outputs.ledger.as_ref() {
-                ledger.unroute(lane);
-            }
+                Enqueued::Halted => continue,
+                Enqueued::Refused(error) => Err(error),
+            },
+            None => sender.try_send(delivery),
         };
 
         if interaction {
-            match outputs.interactions.try_send(delivery) {
+            match sent {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(delivery)) => {
-                    unroute();
                     report_overloaded_interaction(
                         outputs.overload.as_ref(),
                         &ctx,
@@ -647,7 +656,6 @@ async fn run_event_processor(
                     );
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                    unroute();
                     fault.raise(format!(
                         "shard {}: interaction dispatcher stopped unexpectedly",
                         ctx.shard_id
@@ -657,7 +665,7 @@ async fn run_event_processor(
             continue;
         }
 
-        match outputs.events.try_send(delivery) {
+        match sent {
             Ok(()) => {
                 let queued = outputs.events.max_capacity() - outputs.events.capacity();
                 if queued >= warn_at && handler_backlog.due() {
@@ -671,7 +679,6 @@ async fn run_event_processor(
                 }
             }
             Err(mpsc::error::TrySendError::Full(delivery)) => {
-                unroute();
                 if let Some(total) = outputs.handler_drops.record() {
                     warn!(
                         "shard {}: event handler queue is full ({} events); dropped {total} \
@@ -684,7 +691,6 @@ async fn run_event_processor(
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                unroute();
                 fault.raise(format!(
                     "shard {}: event handler dispatcher stopped unexpectedly",
                     ctx.shard_id
@@ -1066,10 +1072,11 @@ pub(super) async fn process_gateway_dispatch(
     let event = Event::decode(metadata.with_shard(shard_id, shard_count), data, keep_raw);
 
     match event.kind() {
-        EventKind::Ready(ready) if ctx.http.application_id().is_none() => {
+        EventKind::Ready(ready) => {
             if let Some(application) = ready.application.as_ref() {
-                ctx.http.set_application_id(application.id);
-                info!("Set application_id from READY: {}", application.id);
+                if ctx.adopt_ready_application_id(application.id) {
+                    info!("Set application_id from READY: {}", application.id);
+                }
             }
         }
         EventKind::DecodeFailed(error) => {

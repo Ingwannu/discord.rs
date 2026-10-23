@@ -2,7 +2,8 @@
 
 ## 3.2.0 - Unreleased
 
-- Gateway session handoff between processes: `GatewayHandoff` + `ClientBuilder::handoff` close every shard with code 4000 (the session stays resumable) after the running handlers finish and record a serde `GatewaySession` per shard; `ClientBuilder::resume_sessions` makes the next process RESUME them (no IDENTIFY, no session-start budget, no identify wave), and Discord replays every event after the last one the old handler was given. A resumed process gets RESUMED instead of READY and starts with an empty cache. Unresumable sessions (INVALID_SESSION, 4007/4009, mismatched shard count or intents) fall back to IDENTIFY with a warning. See the [Gateway API](../api/gateway.md#session-handoff-between-processes-32).
+- Gateway session handoff between processes: `GatewayHandoff` + `ClientBuilder::handoff` close every shard with code 4000 (the session stays resumable) after the running handlers finish and record a serde `GatewaySession` per shard; `ClientBuilder::resume_sessions` makes the next process RESUME them (no IDENTIFY, no session-start budget, no identify wave), and Discord replays every event after the last one the old handler was given. A resumed process gets RESUMED instead of READY and starts with an empty cache. Unresumable sessions (INVALID_SESSION, 4007/4009, mismatched shard count or intents) fall back to IDENTIFY with a warning, and the fresh READY's application id replaces the snapshot's. See the [Gateway API](../api/gateway.md#session-handoff-between-processes-32).
+- Every gateway connection's setup (connect, upgrade, HELLO) is bounded to 15 seconds, and shutdown and handoff requests are served during it.
 
 ## 3.1.1 - 2026-10-23
 

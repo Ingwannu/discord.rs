@@ -7,10 +7,11 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::watch;
 use tracing::warn;
 
@@ -97,7 +98,9 @@ impl GatewaySession {
 
     /// The application id the old process used (from READY or
     /// [`ClientBuilder::application_id`]). A client that resumes the session
-    /// uses it unless its builder sets one.
+    /// uses it unless its builder sets one, and only until a fresh READY
+    /// (after a fallback to IDENTIFY) brings the id of the token's
+    /// application.
     pub fn application_id(&self) -> Option<ApplicationId> {
         self.application_id
     }
@@ -129,6 +132,11 @@ impl GatewaySession {
             application_id: None,
             user_id: None,
         }
+    }
+
+    pub(crate) fn with_application_id(mut self, application_id: ApplicationId) -> Self {
+        self.application_id = Some(application_id);
+        self
     }
 }
 
@@ -434,6 +442,40 @@ pub(crate) enum DeliveryLane {
     Interactions,
 }
 
+/// What the ledger needs to know about a dispatch, taken before the
+/// delivery that carries it is moved into the lane.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RouteInfo {
+    ready: bool,
+    sequence: Option<u64>,
+    user_id: Option<UserId>,
+}
+
+impl RouteInfo {
+    pub(crate) fn of(event: &Event) -> Self {
+        let user_id = match event.kind() {
+            EventKind::Ready(payload) => Some(payload.user.id),
+            _ => None,
+        };
+        Self {
+            ready: event.name() == "READY",
+            sequence: event.metadata().sequence(),
+            user_id,
+        }
+    }
+}
+
+/// How [`DeliveryLedger::enqueue`] ended.
+#[derive(Debug)]
+pub(crate) enum Enqueued<T> {
+    Queued,
+    /// The shard is handing off: nothing was recorded or sent, and Discord
+    /// replays the dispatch to the next process.
+    Halted,
+    /// The lane refused the value (see [`DeliveryLedger::enqueue`]).
+    Refused(TrySendError<T>),
+}
+
 /// Where a handed-off session resumes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ResumePoint {
@@ -468,6 +510,11 @@ pub(crate) struct ResumePoint {
 /// - 장점, 단점 및 영향: handoff 클라이언트는 디스패치마다 std 뮤텍스를 두 번 잡고 VecDeque가
 ///   큐 깊이만큼 자란다(정상 상태에선 재할당 없음). 일반 큐가 가득 차 버려진 이벤트는 기존처럼
 ///   손실로 친다(재전송되지 않는다).
+/// - 2026-10-23 리뷰 수정(f76ee19 이후): 처리기가 기록한 뒤 `try_send` 전에 handoff가 레인을
+///   닫으면 `Closed`가 "넘김"으로 세어져 재개점이 넘기지 않은 이벤트를 건너뛰었다. 이제 기록과
+///   `try_send`를 같은 잠금 안에서 하고(`enqueue`), `halt`도 그 잠금을 잡으므로 정지 뒤에는 아무것도
+///   기록·전송되지 않는다. `Closed`는 대기로 남긴다(레인이 닫혔다면 핸들러가 받지 못했다).
+///   `try_send`는 기다리지 않으므로 잠금 안에서 불러도 await를 건너지 않는다.
 /// ```
 #[derive(Default)]
 pub(crate) struct DeliveryLedger {
@@ -477,8 +524,6 @@ pub(crate) struct DeliveryLedger {
     state: StdMutex<LedgerState>,
     /// READY dispatches the gateway read loop queued for the processor.
     ready_read: AtomicU64,
-    /// Set when the shard hands off: the processor stops routing.
-    halted: AtomicBool,
 }
 
 #[derive(Default)]
@@ -494,6 +539,10 @@ struct LedgerState {
     user_id: Option<UserId>,
     regular: VecDeque<Pending>,
     interactions: VecDeque<Pending>,
+    /// Set when the shard hands off; from then on nothing is queued. Under
+    /// the same lock as routing, so a halt cannot fall between recording a
+    /// dispatch and queueing it.
+    halted: bool,
 }
 
 /// A routed dispatch that no handler call has started for yet.
@@ -535,44 +584,52 @@ impl DeliveryLedger {
         }
     }
 
-    /// Records a dispatch the processor is about to queue for `lane`.
-    /// Returns `false` once the shard is handing off: the dispatch is then
-    /// not queued, and Discord replays it to the next process.
-    pub(crate) fn route(&self, lane: DeliveryLane, event: &Event) -> bool {
-        if self.halted.load(Ordering::SeqCst) {
-            return false;
-        }
+    /// Records a dispatch and queues it for `lane` with `send` (a
+    /// non-blocking `try_send`), both under the ledger's lock, so a
+    /// concurrent [`Self::halt`] lands either before (nothing is recorded or
+    /// sent) or after (the dispatch is queued, and the halted lane leaves it
+    /// pending).
+    ///
+    /// A lane that is full refuses the dispatch for good: the regular lane
+    /// drops the handler call as before, the interaction lane gives it to
+    /// the overload hook, so it counts as delivered. A closed lane never
+    /// gave it to a handler, so it stays pending and is replayed.
+    pub(crate) fn enqueue<T>(
+        &self,
+        lane: DeliveryLane,
+        dispatch: RouteInfo,
+        send: impl FnOnce() -> Result<(), TrySendError<T>>,
+    ) -> Enqueued<T> {
         let mut state = self.lock();
-        let ready = event.name() == "READY";
-        if ready {
+        if state.halted {
+            return Enqueued::Halted;
+        }
+        if dispatch.ready {
             state.epoch += 1;
             state.routed = 0;
             state.ready_handed = false;
-            if let EventKind::Ready(payload) = event.kind() {
-                state.user_id = Some(payload.user.id);
+            if dispatch.user_id.is_some() {
+                state.user_id = dispatch.user_id;
             }
         }
-        let sequence = event.metadata().sequence();
-        if let Some(sequence) = sequence {
+        if let Some(sequence) = dispatch.sequence {
             state.routed = sequence;
         }
         let epoch = state.epoch;
         state.lane(lane).push_back(Pending {
             epoch,
-            sequence,
-            ready,
+            sequence: dispatch.sequence,
+            ready: dispatch.ready,
         });
-        true
-    }
-
-    /// The dispatch just routed to `lane` was not queued (the lane was full
-    /// or closed). It counts as delivered: a full regular lane drops the
-    /// handler call as before, a full interaction lane gives it to the
-    /// overload hook.
-    pub(crate) fn unroute(&self, lane: DeliveryLane) {
-        let mut state = self.lock();
-        if let Some(pending) = state.lane(lane).pop_back() {
-            state.mark_delivered(pending);
+        match send() {
+            Ok(()) => Enqueued::Queued,
+            Err(TrySendError::Full(value)) => {
+                if let Some(pending) = state.lane(lane).pop_back() {
+                    state.mark_delivered(pending);
+                }
+                Enqueued::Refused(TrySendError::Full(value))
+            }
+            Err(TrySendError::Closed(value)) => Enqueued::Refused(TrySendError::Closed(value)),
         }
     }
 
@@ -586,8 +643,10 @@ impl DeliveryLedger {
         }
     }
 
+    /// Stops queueing for a handoff. Waits for an [`Self::enqueue`] in
+    /// progress (a few instructions).
     pub(crate) fn halt(&self) {
-        self.halted.store(true, Ordering::SeqCst);
+        self.lock().halted = true;
     }
 
     /// Where the current session resumes, once the pipeline has stopped
@@ -660,6 +719,15 @@ mod tests {
             EventMetadata::new(name, tokio::time::Instant::now()).with_sequence(sequence),
             serde_json::value::to_raw_value(&data).unwrap(),
             false,
+        )
+    }
+
+    /// Queues `event` in a lane that accepts it; `false` once halted.
+    fn route(ledger: &DeliveryLedger, lane: DeliveryLane, event: &Event) -> bool {
+        let send = || -> Result<(), TrySendError<()>> { Ok(()) };
+        !matches!(
+            ledger.enqueue(lane, RouteInfo::of(event), send),
+            Enqueued::Halted
         )
     }
 
@@ -787,7 +855,7 @@ mod tests {
         assert_eq!(ledger.resume_point(), None);
 
         ledger.note_read("READY");
-        assert!(ledger.route(DeliveryLane::Regular, &event("READY", 1)));
+        assert!(route(&ledger, DeliveryLane::Regular, &event("READY", 1)));
         // READY was routed but not handed: the next process must identify.
         assert_eq!(ledger.resume_point(), None);
         ledger.handed(DeliveryLane::Regular);
@@ -801,20 +869,33 @@ mod tests {
 
         for sequence in 2..=4 {
             ledger.note_read("MESSAGE_CREATE");
-            assert!(ledger.route(DeliveryLane::Regular, &event("MESSAGE_CREATE", sequence)));
+            assert!(route(
+                &ledger,
+                DeliveryLane::Regular,
+                &event("MESSAGE_CREATE", sequence)
+            ));
         }
         ledger.handed(DeliveryLane::Regular);
         // 2 started; 3 and 4 wait in the lane.
         assert_eq!(ledger.resume_point().unwrap().sequence, 2);
 
         // An interaction overtakes the queued regular events.
-        assert!(ledger.route(DeliveryLane::Interactions, &event("INTERACTION_CREATE", 5)));
+        assert!(route(
+            &ledger,
+            DeliveryLane::Interactions,
+            &event("INTERACTION_CREATE", 5)
+        ));
         ledger.handed(DeliveryLane::Interactions);
         assert_eq!(ledger.resume_point().unwrap().sequence, 2);
 
-        // A dispatch that could not be queued counts as delivered.
-        assert!(ledger.route(DeliveryLane::Interactions, &event("INTERACTION_CREATE", 6)));
-        ledger.unroute(DeliveryLane::Interactions);
+        // A dispatch a full lane refused counts as delivered (dropped, or
+        // given to the overload hook).
+        let refused = ledger.enqueue(
+            DeliveryLane::Interactions,
+            RouteInfo::of(&event("INTERACTION_CREATE", 6)),
+            || Err(TrySendError::Full(())),
+        );
+        assert!(matches!(refused, Enqueued::Refused(TrySendError::Full(()))));
         ledger.handed(DeliveryLane::Regular);
         ledger.handed(DeliveryLane::Regular);
         assert_eq!(ledger.resume_point().unwrap().sequence, 6);
@@ -823,7 +904,11 @@ mod tests {
         // replayed.
         ledger.halt();
         ledger.note_read("MESSAGE_CREATE");
-        assert!(!ledger.route(DeliveryLane::Regular, &event("MESSAGE_CREATE", 7)));
+        assert!(!route(
+            &ledger,
+            DeliveryLane::Regular,
+            &event("MESSAGE_CREATE", 7)
+        ));
         assert_eq!(ledger.resume_point().unwrap().sequence, 6);
     }
 
@@ -838,16 +923,28 @@ mod tests {
                 user_id: Some(test_id(3)),
             })
         );
-        assert!(ledger.route(DeliveryLane::Regular, &event("MESSAGE_CREATE", 101)));
-        assert!(ledger.route(DeliveryLane::Regular, &event("MESSAGE_CREATE", 102)));
+        assert!(route(
+            &ledger,
+            DeliveryLane::Regular,
+            &event("MESSAGE_CREATE", 101)
+        ));
+        assert!(route(
+            &ledger,
+            DeliveryLane::Regular,
+            &event("MESSAGE_CREATE", 102)
+        ));
         assert_eq!(ledger.resume_point().unwrap().sequence, 100);
 
         // The session was replaced (a fresh IDENTIFY): READY is read but the
         // processor has not reached it yet.
         ledger.note_read("READY");
         assert_eq!(ledger.resume_point(), None);
-        assert!(ledger.route(DeliveryLane::Regular, &event("READY", 1)));
-        assert!(ledger.route(DeliveryLane::Regular, &event("MESSAGE_CREATE", 2)));
+        assert!(route(&ledger, DeliveryLane::Regular, &event("READY", 1)));
+        assert!(route(
+            &ledger,
+            DeliveryLane::Regular,
+            &event("MESSAGE_CREATE", 2)
+        ));
         // 101 and 102 of the old session are still queued ahead of READY.
         ledger.handed(DeliveryLane::Regular);
         ledger.handed(DeliveryLane::Regular);
@@ -862,5 +959,80 @@ mod tests {
         );
         ledger.handed(DeliveryLane::Regular);
         assert_eq!(ledger.resume_point().unwrap().sequence, 2);
+    }
+
+    /// Regression (review of f76ee19): the processor recorded a dispatch,
+    /// then the handoff closed the lane before `try_send`, and the `Closed`
+    /// error counted it as delivered, so RESUME skipped an event no handler
+    /// ever saw.
+    #[test]
+    fn a_dispatch_a_closed_lane_refused_stays_pending() {
+        let ledger = DeliveryLedger::default();
+        ledger.seed(4241, None);
+        let refused = ledger.enqueue(
+            DeliveryLane::Regular,
+            RouteInfo::of(&event("MESSAGE_CREATE", 4242)),
+            || Err(TrySendError::Closed(())),
+        );
+        assert!(matches!(
+            refused,
+            Enqueued::Refused(TrySendError::Closed(()))
+        ));
+        assert_eq!(
+            ledger.resume_point().unwrap().sequence,
+            4241,
+            "4242 never reached a handler, so it is replayed"
+        );
+
+        // The same in the interaction lane.
+        let ledger = DeliveryLedger::default();
+        ledger.seed(4241, None);
+        ledger.enqueue(
+            DeliveryLane::Interactions,
+            RouteInfo::of(&event("INTERACTION_CREATE", 4242)),
+            || Err(TrySendError::Closed(())),
+        );
+        assert_eq!(ledger.resume_point().unwrap().sequence, 4241);
+    }
+
+    /// Regression (review of f76ee19): a halt between recording a dispatch
+    /// and queueing it. The halt now waits for the enqueue in progress, and
+    /// after it nothing is recorded or sent.
+    #[test]
+    fn a_halt_waits_for_an_enqueue_in_progress_and_stops_later_ones() {
+        let ledger = DeliveryLedger::default();
+        ledger.seed(10, None);
+        let halted = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let outcome = ledger.enqueue(
+                DeliveryLane::Regular,
+                RouteInfo::of(&event("MESSAGE_CREATE", 11)),
+                || -> Result<(), TrySendError<()>> {
+                    // The handoff arrives while the dispatch is being queued.
+                    let halting = scope.spawn(|| {
+                        ledger.halt();
+                        halted.store(true, std::sync::atomic::Ordering::SeqCst);
+                    });
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    assert!(
+                        !halted.load(std::sync::atomic::Ordering::SeqCst) && !halting.is_finished(),
+                        "the halt must wait until the dispatch is queued"
+                    );
+                    Ok(())
+                },
+            );
+            assert!(matches!(outcome, Enqueued::Queued));
+        });
+        assert!(halted.load(std::sync::atomic::Ordering::SeqCst));
+        // Queued before the halt and still waiting in the lane: pending.
+        assert_eq!(ledger.resume_point().unwrap().sequence, 10);
+
+        let outcome = ledger.enqueue(
+            DeliveryLane::Regular,
+            RouteInfo::of(&event("MESSAGE_CREATE", 12)),
+            || -> Result<(), TrySendError<()>> { panic!("nothing is sent after the halt") },
+        );
+        assert!(matches!(outcome, Enqueued::Halted));
+        assert_eq!(ledger.resume_point().unwrap().sequence, 10);
     }
 }

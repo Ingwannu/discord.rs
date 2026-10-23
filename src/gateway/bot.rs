@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use serde_json::value::RawValue;
@@ -260,6 +260,10 @@ pub struct Context {
     event_cursor: Option<crate::collector::EventCursor>,
     #[cfg(feature = "cache")]
     cache_backend_health: Option<Arc<ForwarderShared>>,
+    // Set by the start path when `http`'s application id came from a
+    // handed-off session; cleared by the event processor of whichever shard
+    // replaces it with the id of a fresh READY.
+    application_id_provisional: Arc<AtomicBool>,
 }
 
 impl Context {
@@ -283,7 +287,26 @@ impl Context {
             event_cursor: None,
             #[cfg(feature = "cache")]
             cache_backend_health: None,
+            application_id_provisional: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Adopts the application id of a fresh READY: when none is set, or when
+    /// the one set was only taken from a handed-off session (a session that
+    /// could not be resumed may belong to another application). An id set
+    /// with [`ClientBuilder::application_id`] stays. Returns whether the id
+    /// was set.
+    pub(super) fn adopt_ready_application_id(&self, application_id: ApplicationId) -> bool {
+        // `||` keeps the flag when no id is set (it is then already clear).
+        if self.http.application_id().is_none()
+            || self
+                .application_id_provisional
+                .swap(false, Ordering::SeqCst)
+        {
+            self.http.set_application_id(application_id);
+            return true;
+        }
+        false
     }
 
     /// When this shard received the event the current handler call is
@@ -2141,7 +2164,9 @@ impl ClientBuilder {
     ///
     /// The session's application id is used when this builder sets none, so
     /// application-scoped routes (interaction follow-ups, commands) work
-    /// without READY. With the `voice` feature the bot's user id from the
+    /// without READY; it is provisional, and the READY of a fallback
+    /// IDENTIFY replaces it (an id set with [`Self::application_id`] is never
+    /// replaced). With the `voice` feature the bot's user id from the
     /// session is given to the voice manager, which otherwise learns it from
     /// READY.
     pub fn resume_sessions(mut self, sessions: impl IntoIterator<Item = GatewaySession>) -> Self {
@@ -2192,8 +2217,6 @@ impl ClientBuilder {
             intents,
         )
         .remove(&shard.0);
-        let application_id =
-            application_id.or_else(|| session.as_ref().and_then(GatewaySession::application_id));
         let runtime = SharedRuntime::new(
             &token,
             application_id,
@@ -2201,7 +2224,8 @@ impl ClientBuilder {
             cache_config,
             default_allowed_mentions,
         )
-        .with_handoff(handoff);
+        .with_handoff(handoff)
+        .with_session_application_id(session.as_ref().and_then(GatewaySession::application_id));
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2308,8 +2332,6 @@ impl ClientBuilder {
         let handler = handler.ok_or("event_handler is required")?;
         let total_shards = shard_count.max(1);
         let sessions = match_sessions(resume_sessions, 0..total_shards, total_shards, intents);
-        let application_id =
-            application_id.or_else(|| sessions.values().find_map(GatewaySession::application_id));
         // Even with a manual shard count, /gateway/bot supplies how many
         // shards may IDENTIFY concurrently and the session-start budget the
         // built-in IDENTIFY gate enforces. Starting without the budget would
@@ -2334,7 +2356,8 @@ impl ClientBuilder {
             cache_config,
             default_allowed_mentions,
         )
-        .with_handoff(handoff);
+        .with_handoff(handoff)
+        .with_session_application_id(sessions.values().find_map(GatewaySession::application_id));
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2395,8 +2418,6 @@ impl ClientBuilder {
             auto_shard_plan.total_shards,
             intents,
         );
-        let application_id =
-            application_id.or_else(|| sessions.values().find_map(GatewaySession::application_id));
         let runtime = SharedRuntime::new(
             &token,
             application_id,
@@ -2404,7 +2425,8 @@ impl ClientBuilder {
             cache_config,
             default_allowed_mentions,
         )
-        .with_handoff(handoff);
+        .with_handoff(handoff)
+        .with_session_application_id(sessions.values().find_map(GatewaySession::application_id));
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2499,6 +2521,9 @@ struct SharedRuntime {
     collectors: CollectorHub,
     /// The client's handoff handle, watched by every shard.
     handoff: Option<GatewayHandoff>,
+    // Shared with every shard's `Context`; see
+    // `Context::application_id_provisional`.
+    application_id_provisional: Arc<AtomicBool>,
 }
 
 impl SharedRuntime {
@@ -2527,11 +2552,25 @@ impl SharedRuntime {
             #[cfg(feature = "collectors")]
             collectors: CollectorHub::new(),
             handoff: None,
+            application_id_provisional: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn with_handoff(mut self, handoff: Option<GatewayHandoff>) -> Self {
         self.handoff = handoff;
+        self
+    }
+
+    /// Uses a handed-off session's application id until a fresh READY says
+    /// otherwise, when the builder set none: a resumed shard gets no READY
+    /// to learn it from, and one that falls back to IDENTIFY replaces it
+    /// with READY's (`Context::adopt_ready_application_id`).
+    fn with_session_application_id(self, application_id: Option<ApplicationId>) -> Self {
+        if let (None, Some(application_id)) = (self.http.application_id(), application_id) {
+            self.http.set_application_id(application_id);
+            self.application_id_provisional
+                .store(true, Ordering::SeqCst);
+        }
         self
     }
 
@@ -2564,6 +2603,7 @@ impl SharedRuntime {
         context.gateway_commands = Arc::clone(&self.gateway_commands);
         context.member_chunk_waiters = Arc::clone(&self.member_chunk_waiters);
         context.default_allowed_mentions = self.default_allowed_mentions.clone();
+        context.application_id_provisional = Arc::clone(&self.application_id_provisional);
         #[cfg(feature = "voice")]
         {
             context.voice = Arc::clone(&self.voice);

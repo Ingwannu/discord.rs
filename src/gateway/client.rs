@@ -74,11 +74,15 @@ pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Discord allows at most one IDENTIFY per shard per 5 seconds.
 const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
 /// Upper bound on connection setup (TCP/TLS connect, WebSocket upgrade, and
-/// HELLO) while an IDENTIFY permit is held. The permit blocks every other
-/// shard in the bucket, so a hung connect or a server that never sends
-/// HELLO gives it back (as abandoned) and retries through the normal
-/// backoff, instead of holding the bucket until the gate's own watchdog.
-const GATED_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// HELLO) for every connection; the attempt then fails and is retried
+/// through the normal backoff. With an IDENTIFY permit held, the permit
+/// blocks every other shard in the bucket, so a hung connect or a server
+/// that never sends HELLO gives it back (as abandoned) instead of holding
+/// the bucket until the gate's own watchdog. Without one (a RESUME, for
+/// example of a handed-off session) setup used to have no deadline, so such
+/// a server held the shard forever. Shutdown and handoff requests are
+/// served during setup too (see [`open_connection`]).
+const CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Most non-presence commands kept for the next connection while the
 /// client is not connected (reconnect backoff, or waiting for an IDENTIFY
 /// permit, which can last hours until a daily budget reset). The backlog is
@@ -118,8 +122,8 @@ pub(crate) struct GatewayClient {
     /// already sleeps before disconnecting, and IDENTIFY pacing bounds the
     /// identify rate — while unsolicited short-lived disconnects back off.
     server_directed_reconnect: bool,
-    /// [`GATED_SETUP_TIMEOUT`]; a field so tests can shorten it.
-    gated_setup_timeout: Duration,
+    /// [`CONNECTION_SETUP_TIMEOUT`]; a field so tests can shorten it.
+    setup_timeout: Duration,
     /// Set by [`Self::resume_from`] until RESUMED arrives or the session is
     /// dropped, so a handed-off session that cannot be resumed is reported
     /// (the shard then identifies and READY follows).
@@ -364,7 +368,7 @@ impl GatewayClient {
             heartbeat_ack_received: Arc::new(AtomicBool::new(true)),
             last_identify: None,
             server_directed_reconnect: false,
-            gated_setup_timeout: GATED_SETUP_TIMEOUT,
+            setup_timeout: CONNECTION_SETUP_TIMEOUT,
             handoff_resume: false,
         }
     }
@@ -731,26 +735,25 @@ impl GatewayClient {
             Ok(PermitWait::Shutdown) => return Ok(ReconnectAction::Shutdown),
             Err(error) => return Ok(ReconnectAction::Fatal(error)),
         };
-        // While a permit is held, connect + upgrade + HELLO share one
-        // deadline.
-        let gated_setup_timeout = self.gated_setup_timeout;
-        let setup_deadline = identify_permit
-            .as_ref()
-            .map(|_| Instant::now() + gated_setup_timeout);
-        let setup_timed_out = || {
+        // Connect, upgrade, and HELLO share one deadline, and the control
+        // channel is served meanwhile: a server that accepts the connection
+        // but never sends HELLO must neither hold the shard forever nor keep
+        // a shutdown or handoff waiting (both hung here when no IDENTIFY
+        // permit set a deadline).
+        let setup_timeout = self.setup_timeout;
+        let permit_held = identify_permit.is_some();
+        let setup_timed_out = move || {
             crate::error::DiscordError::gateway(format!(
                 "gateway connection setup (connect and HELLO) took longer than \
-                 {gated_setup_timeout:?} while holding an IDENTIFY permit"
+                 {setup_timeout:?}{}",
+                if permit_held {
+                    " while holding an IDENTIFY permit"
+                } else {
+                    ""
+                }
             ))
         };
-        let (ws_stream, _) = match setup_deadline {
-            Some(deadline) => timeout_at(deadline, connect_async(url))
-                .await
-                .map_err(|_| setup_timed_out())??,
-            None => connect_async(url).await?,
-        };
-        let (mut write, mut read) = ws_stream.split();
-        let mut compression_decoder = GatewayCompressionDecoder::new(
+        let compression_decoder = GatewayCompressionDecoder::new(
             self.gateway_config.compression_kind(),
         )
         .map_err(|error| {
@@ -758,23 +761,55 @@ impl GatewayClient {
                 "failed to initialize gateway compression decoder: {error}"
             ))
         })?;
-
-        // Wait for Hello
-        let hello_text = loop {
-            let next = match setup_deadline {
-                Some(deadline) => timeout_at(deadline, read.next())
-                    .await
-                    .map_err(|_| setup_timed_out())?,
-                None => read.next().await,
-            };
-            let hello = next.ok_or_else(|| {
-                crate::error::DiscordError::gateway("gateway closed before Hello")
-            })??;
+        let setup = open_connection(
+            url,
+            compression_decoder,
+            Instant::now() + setup_timeout,
+            setup_timed_out,
+        );
+        tokio::pin!(setup);
+        let mut listening = self.command_rx.is_some();
+        let setup = loop {
+            tokio::select! {
+                // A stop request wins over a setup that finishes in the same
+                // poll.
+                biased;
+                command = async {
+                    match self.command_rx.as_mut() {
+                        Some(command_rx) => command_rx.recv().await,
+                        None => None,
+                    }
+                }, if listening => match command {
+                    // Nothing was sent on this connection yet: dropping it
+                    // leaves a session exactly as it was, so a handoff can
+                    // still hand it over.
+                    Some(GatewayCommand::Shutdown) => return Ok(ReconnectAction::Shutdown),
+                    Some(GatewayCommand::Handoff) => {
+                        return Ok(if self.session_id.is_some() {
+                            ReconnectAction::Handoff
+                        } else {
+                            ReconnectAction::Shutdown
+                        })
+                    }
+                    // This is the reconnect.
+                    Some(GatewayCommand::Reconnect) => {}
+                    Some(command) => self.defer_command(command),
+                    None => listening = false,
+                },
+                setup = &mut setup => break setup?,
+            }
+        };
+        let OpenedConnection {
+            socket,
+            mut compression_decoder,
+            heartbeat_interval_ms,
+        } = match setup {
+            ConnectionSetup::Opened(opened) => *opened,
             // Discord can reject a connection before HELLO (for example 4012
             // for an invalid API version). The compression decoder ignores
             // close frames, so classify them here; otherwise a terminal code
             // would surface as a generic EOF and be retried forever.
-            if let WsMessage::Close(frame) = hello {
+            ConnectionSetup::ClosedBeforeHello(frame) => {
                 #[cfg(feature = "sharding")]
                 self.publish_error(terminal_close_error(frame.clone()));
                 warn!("Gateway closed before Hello: {frame:?}");
@@ -785,31 +820,8 @@ impl GatewayClient {
                     )),
                 };
             }
-            match decode_gateway_message(hello, &mut compression_decoder) {
-                Ok(Some(text)) => break text,
-                Ok(None) => continue,
-                Err(error) => {
-                    return Err(crate::error::DiscordError::gateway(format!(
-                        "failed to decode gateway Hello payload: {error}"
-                    )));
-                }
-            }
         };
-        let hello: GatewayEnvelope<'_> = serde_json::from_str(hello_text.as_str())?;
-        let hello_op = hello.op.unwrap_or(u64::MAX);
-        if hello_op != OP_HELLO {
-            return Err(crate::error::DiscordError::gateway(format!(
-                "expected Hello opcode {OP_HELLO}, got {hello_op}"
-            )));
-        }
-        let heartbeat_interval_ms = hello
-            .d
-            .and_then(|data| serde_json::from_str::<HelloData>(data.get()).ok())
-            .map(|data| data.heartbeat_interval)
-            .ok_or_else(|| {
-                crate::error::DiscordError::gateway("missing heartbeat_interval in Hello")
-            })?;
-        drop(hello_text);
+        let (mut write, mut read) = socket.split();
 
         debug!("Received Hello, heartbeat_interval={heartbeat_interval_ms}ms");
 
@@ -1103,6 +1115,79 @@ impl GatewayClient {
     }
 }
 
+/// The WebSocket of one gateway connection.
+type GatewaySocket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A connection that finished setup: upgraded, and HELLO received.
+struct OpenedConnection {
+    socket: GatewaySocket,
+    compression_decoder: GatewayCompressionDecoder,
+    heartbeat_interval_ms: u64,
+}
+
+/// How connection setup ended without an error.
+enum ConnectionSetup {
+    /// Boxed: the socket and decoder are large, and the value is moved
+    /// through the setup select once per connection.
+    Opened(Box<OpenedConnection>),
+    /// The gateway sent a close frame instead of HELLO.
+    ClosedBeforeHello(Option<CloseFrame>),
+}
+
+/// Dials `url`, upgrades, and waits for HELLO, all before `deadline`.
+///
+/// It borrows nothing from the client, so `connect_and_run` can serve the
+/// control channel while it runs and drop it on a shutdown or handoff.
+async fn open_connection(
+    url: &str,
+    mut compression_decoder: GatewayCompressionDecoder,
+    deadline: Instant,
+    timed_out: impl Fn() -> crate::error::DiscordError,
+) -> Result<ConnectionSetup, crate::error::DiscordError> {
+    let (mut socket, _) = timeout_at(deadline, connect_async(url))
+        .await
+        .map_err(|_| timed_out())??;
+    let hello_text = loop {
+        let next = timeout_at(deadline, socket.next())
+            .await
+            .map_err(|_| timed_out())?;
+        let hello = next
+            .ok_or_else(|| crate::error::DiscordError::gateway("gateway closed before Hello"))??;
+        if let WsMessage::Close(frame) = hello {
+            return Ok(ConnectionSetup::ClosedBeforeHello(frame));
+        }
+        match decode_gateway_message(hello, &mut compression_decoder) {
+            Ok(Some(text)) => break text,
+            Ok(None) => continue,
+            Err(error) => {
+                return Err(crate::error::DiscordError::gateway(format!(
+                    "failed to decode gateway Hello payload: {error}"
+                )));
+            }
+        }
+    };
+    let hello: GatewayEnvelope<'_> = serde_json::from_str(hello_text.as_str())?;
+    let hello_op = hello.op.unwrap_or(u64::MAX);
+    if hello_op != OP_HELLO {
+        return Err(crate::error::DiscordError::gateway(format!(
+            "expected Hello opcode {OP_HELLO}, got {hello_op}"
+        )));
+    }
+    let heartbeat_interval_ms = hello
+        .d
+        .and_then(|data| serde_json::from_str::<HelloData>(data.get()).ok())
+        .map(|data| data.heartbeat_interval)
+        .ok_or_else(|| {
+            crate::error::DiscordError::gateway("missing heartbeat_interval in Hello")
+        })?;
+    Ok(ConnectionSetup::Opened(Box::new(OpenedConnection {
+        socket,
+        compression_decoder,
+        heartbeat_interval_ms,
+    })))
+}
+
 enum ReconnectAction {
     Resume,
     Reconnect,
@@ -1165,6 +1250,13 @@ fn is_presence_command(command: &GatewayCommand) -> bool {
         command,
         GatewayCommand::UpdatePresence(_) | GatewayCommand::UpdatePresenceData(_)
     )
+}
+
+#[cfg(test)]
+impl GatewayCommand {
+    fn is_handoff(&self) -> bool {
+        matches!(self, Self::Handoff)
+    }
 }
 
 /// Variant name for logs; never the payload, which can carry credentials.
@@ -2569,8 +2661,14 @@ mod tests {
             }
         });
 
+        // Sent once the second connection identified: a Shutdown queued
+        // earlier would now be served during that connection's setup, before
+        // it identifies.
+        let payloads_for_shutdown = Arc::clone(&payloads);
         let shutdown = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            while payloads_for_shutdown.lock().unwrap().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             command_tx.send(GatewayCommand::Shutdown).await.unwrap();
         });
 
@@ -3180,7 +3278,7 @@ mod tests {
         });
         let gate = Arc::new(RecordingGate::default());
         let mut client = gated_client(&gate);
-        client.gated_setup_timeout = Duration::from_millis(200);
+        client.setup_timeout = Duration::from_millis(200);
 
         let started = Instant::now();
         let error = tokio::time::timeout(
@@ -3395,12 +3493,17 @@ mod tests {
                 (0, 1),
                 513,
             ));
-        // Read during the backoff after the failed dial.
-        command_tx.send(GatewayCommand::Handoff).await.unwrap();
-        let exit = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
-            .await
-            .unwrap()
-            .unwrap();
+        // Sent during the 1 s backoff after the dial (refused at once) failed.
+        let handoff = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            command_tx.send(GatewayCommand::Handoff).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(client.run(Arc::new(|_| {})), handoff)
+        })
+        .await
+        .unwrap();
+        let exit = exit.unwrap();
         let GatewayExit::HandedOff(session) = exit else {
             panic!("the session was never closed, so it is handed over");
         };
@@ -3604,5 +3707,158 @@ mod tests {
             assert_eq!(first_ops, expected, "{failure:?}");
             assert_eq!(permits, 1, "{failure:?}: only the IDENTIFY takes a permit");
         }
+    }
+
+    /// How a test server stalls connection setup.
+    #[derive(Clone, Copy, Debug)]
+    enum SetupStall {
+        /// Accepts the TCP connection but never answers the upgrade.
+        Handshake,
+        /// Upgrades but never sends HELLO.
+        Hello,
+    }
+
+    /// Starts a server that stalls setup as given and reports when the
+    /// client reached the stall. The server keeps the connection open.
+    async fn stalling_server(
+        stall: SetupStall,
+    ) -> (
+        String,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _held = match stall {
+                SetupStall::Handshake => {
+                    reached_tx.send(()).unwrap();
+                    (Some(stream), None)
+                }
+                SetupStall::Hello => {
+                    let ws = accept_async(stream).await.unwrap();
+                    reached_tx.send(()).unwrap();
+                    (None, Some(ws))
+                }
+            };
+            std::future::pending::<()>().await;
+        });
+        (url, reached_rx, server)
+    }
+
+    /// Regression (review of f76ee19): a RESUME needs no IDENTIFY permit, so
+    /// its setup had no deadline, and setup did not read the control
+    /// channel: against a server that never sent HELLO, `request()` (and a
+    /// normal shutdown) never completed. Both are now served during setup.
+    #[tokio::test]
+    async fn stop_requests_end_a_connection_setup_that_never_finishes() {
+        for (stall, command) in [
+            (SetupStall::Handshake, GatewayCommand::Shutdown),
+            (SetupStall::Handshake, GatewayCommand::Handoff),
+            (SetupStall::Hello, GatewayCommand::Shutdown),
+            (SetupStall::Hello, GatewayCommand::Handoff),
+        ] {
+            let what = format!("{stall:?}/{}", super::gateway_command_kind(&command));
+            let (url, reached, server) = stalling_server(stall).await;
+            let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+            let mut client = GatewayClient::new("secret-token".into(), 513)
+                .gateway_config(GatewayConnectionConfig::new(dead_url().await))
+                .control(command_rx)
+                .resume_from(&crate::gateway::handoff::GatewaySession::for_test(
+                    "session-stalled",
+                    21,
+                    Some(&url),
+                    (0, 1),
+                    513,
+                ));
+            // The default 15 s setup bound is not what ends these runs.
+            assert_eq!(client.setup_timeout, super::CONNECTION_SETUP_TIMEOUT);
+            let handoff = command.is_handoff();
+            let stop = async {
+                reached.await.unwrap();
+                command_tx.send(command).await.unwrap();
+            };
+            let started = Instant::now();
+            let (exit, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(client.run(Arc::new(|_| {})), stop)
+            })
+            .await
+            .unwrap_or_else(|_| panic!("{what}: the stop request was not served during setup"));
+            assert!(started.elapsed() < Duration::from_secs(3), "{what}");
+            match (exit.unwrap(), handoff) {
+                (GatewayExit::HandedOff(session), true) => {
+                    assert_eq!(session.session_id, "session-stalled", "{what}");
+                    assert_eq!(
+                        client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+                        21,
+                        "{what}: nothing was sent, the session is unchanged"
+                    );
+                }
+                (GatewayExit::Stopped, false) => {}
+                (other, _) => panic!("{what}: unexpected exit {other:?}"),
+            }
+            server.abort();
+        }
+    }
+
+    /// Regression (review of f76ee19): a resume URL whose server never sends
+    /// HELLO now fails within the setup bound, like a failed dial: the URL
+    /// is dropped and the configured gateway gets the RESUME.
+    #[tokio::test]
+    async fn a_resume_url_that_never_sends_hello_times_out_and_falls_back() {
+        let (silent_url, _reached, silent) = stalling_server(SetupStall::Hello).await;
+        let configured = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let configured_url = format!("ws://{}/", configured.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut ws = accept_with_hello(&configured).await;
+            let resume = next_client_payload(&mut ws).await.unwrap();
+            send_json(
+                &mut ws,
+                serde_json::json!({"op": 0, "t": "RESUMED", "s": 22, "d": null}),
+            )
+            .await;
+            let _ = next_client_payload(&mut ws).await;
+            resume
+        });
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(configured_url))
+            .control(command_rx)
+            .resume_from(&crate::gateway::handoff::GatewaySession::for_test(
+                "session-silent",
+                21,
+                Some(&silent_url),
+                (0, 1),
+                513,
+            ));
+        client.setup_timeout = Duration::from_millis(200);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let callback = recording_callback(&seen, &notify);
+        let shutdown = async {
+            while seen.lock().unwrap().is_empty() {
+                notify.notified().await;
+            }
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client.run(callback), shutdown)
+        })
+        .await
+        .expect("the silent resume URL must not hold the shard");
+        assert!(matches!(exit.unwrap(), GatewayExit::Stopped));
+        let resume = server.await.unwrap();
+        assert_eq!(resume["op"], serde_json::json!(6));
+        assert_eq!(
+            resume["d"]["session_id"],
+            serde_json::json!("session-silent")
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![("RESUMED".to_string(), Some(22))]
+        );
+        silent.abort();
     }
 }

@@ -286,7 +286,8 @@ After `request()`, each shard stops handing events to the handler, closes with c
 In the next process, a shard with a matching session (same shard id and count, same intents) connects at once, dials the session's resume URL, and sends RESUME, which takes no IDENTIFY permit and none of the daily session-start budget. Then:
 
 - **No READY arrives and the cache starts empty.** The `resumed` handler runs; initialisation that you do on READY must also run on RESUMED or at startup. The session keeps the presence and intents it was opened with.
-- The application id comes from the session when the builder sets none (interaction follow-ups need it), and with `voice` the bot's user id goes to the voice manager.
+- The application id comes from the session when the builder sets none (interaction follow-ups need it), until the READY of a fallback IDENTIFY replaces it; an id set with `ClientBuilder::application_id` is never replaced. With `voice` the bot's user id goes to the voice manager.
+- Connection setup (connect, WebSocket upgrade, HELLO) is bounded to 15 seconds for every connection, and `request()` or a shutdown is served during it, so a resume URL that accepts the connection but never sends HELLO neither holds the shard nor the handoff: on a request the session is handed back unchanged, and after the bound the URL is dropped and the configured gateway gets the RESUME.
 - If Discord does not resume the session (INVALID_SESSION, close code 4007 or 4009), or neither the resume URL nor the configured gateway accepts the RESUME, the shard logs a warning and identifies; READY follows as usual. A session that does not match the client is dropped with a warning before connecting.
 
 The session's sequence is the last event the old process's handler was given. Everything else is replayed:

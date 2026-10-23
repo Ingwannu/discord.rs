@@ -1,6 +1,7 @@
 # 게이트웨이 세션 handoff (프로세스 간 RESUME)
 
 작성: 2026-10-23. 기준: main `0a306d9`(3.1.1 배포본). 브랜치 `feat/session-handoff`, 버전 3.2.0(미배포).
+갱신: 2026-10-23, GPT-6.1-sol 리뷰(`f76ee19`) 지적 3건 수정(9절), 라이브 테스트 주의(8절).
 구현 위치: `src/gateway/handoff.rs`(공개 타입·세션 매칭·전달 장부), `src/gateway/client.rs`(4000 종료,
 스냅샷에서 RESUME, fallback), `src/gateway/bot/pipeline.rs`(정지·전달 추적), `src/gateway/bot.rs`
 (빌더·샤드 런타임 연결).
@@ -115,7 +116,9 @@ exec_new_binary();
    예산을 거치지 않는다.
 3. Discord가 sequence 이후 이벤트를 재전송하고 RESUMED를 보낸다. `resumed` 핸들러가 돈다. READY는
    오지 않고 캐시는 비어 있다. 스냅샷의 application id를 빌더가 지정하지 않았을 때 REST 클라이언트에
-   넣고, `voice` 기능이면 bot user id를 음성 관리자에 넣는다(둘 다 원래 READY에서 배운다).
+   **임시값**으로 넣는다. RESUME이 실패해 IDENTIFY하면 새 READY의 id가 그것을 대신한다. 빌더가 정한
+   id는 READY도 바꾸지 않는다. `voice` 기능이면 bot user id를 음성 관리자에 넣는다(READY가 오면
+   기존처럼 덮어쓴다).
 4. RESUMED는 supervisor 상태를 `Running`으로 바꾸고, handoff 세션이면 `SessionEstablished`도 보낸다
    (이전에는 같은 프로세스 RESUME 뒤 상태가 `Reconnecting`에 남았다).
 
@@ -127,6 +130,7 @@ exec_new_binary();
 | 닫힘 4007 / 4009 | 세션을 버리고 경고 → IDENTIFY (기존 경로) |
 | 기타 닫힘(4000 등), 읽기 오류 | 같은 세션으로 다시 RESUME (기존 경로) |
 | resume URL 연결 실패 | URL만 버리고(3.1.1 규칙) 설정된 게이트웨이로 RESUME. 거기서 INVALID_SESSION이면 IDENTIFY |
+| 연결은 받지만 HELLO가 없음 | 모든 연결의 설정(연결·업그레이드·HELLO)이 15초로 제한된다. 넘으면 연결 실패와 같다(URL을 버리고 재시도). 그동안 Shutdown·handoff 요청은 바로 처리한다 |
 | 스냅샷 불일치(샤드 수·id·intents·빈 id) | 시작 전에 경고하고 IDENTIFY |
 | 4004 등 종료 코드 | 기존처럼 샤드 오류 |
 
@@ -179,6 +183,8 @@ hook에 넘겼거나, 가득 찬 큐 때문에 버렸다(버린 것은 기존처
 - 장점, 단점 및 영향: handoff 클라이언트는 이벤트마다 짧은 std 뮤텍스를 두 번 잡는다(await를 넘지
   않음). FIFO는 큐 깊이만큼 자라고 이후 재할당하지 않는다. handoff가 없는 클라이언트는 Option 분기
   하나와 샤드당 watch 채널 하나(halt)만 더한다.
+- 리뷰 수정(9.1절): 기록과 `try_send`를 한 잠금 안에서 하고(`DeliveryLedger::enqueue`), 정지도 같은
+  잠금을 잡는다. 닫힌 레인(`Closed`)은 넘김으로 세지 않는다.
 ```
 
 ## 5. 앱이 알아야 할 것
@@ -236,6 +242,17 @@ hook에 넘겼거나, 가득 찬 큐 때문에 버렸다(버린 것은 기존처
   JSON 왕복, 재전송 2개 + RESUMED, READY 없음, 스냅샷 application id 사용, 두 번째 handoff sequence 5),
   불일치 스냅샷 → IDENTIFY, 세션 없는 handoff → 기록 없음, 예산 0에서도 즉시 RESUME + permit 대기 샤드
   정지, 부트 웨이브 대기 샤드 정지.
+- 리뷰 회귀 테스트(9절): 장부 `a_dispatch_a_closed_lane_refused_stays_pending`(두 레인),
+  `a_halt_waits_for_an_enqueue_in_progress_and_stops_later_ones`(스레드로 enqueue 도중 halt);
+  client `stop_requests_end_a_connection_setup_that_never_finishes`(업그레이드 무응답·HELLO 무응답 ×
+  Shutdown·Handoff, 기본 15초 제한 전에 반환), `a_resume_url_that_never_sends_hello_times_out_and_falls_back`;
+  빌더 `a_handoff_while_a_resume_waits_for_hello_hands_the_session_back`,
+  `a_rejected_sessions_application_id_gives_way_to_the_fresh_ready`(빌더 id 없음 → 999, 있음 → 555).
+- **라이브 테스트 주의(2026-10-23).** 운영 토큰으로 수동 세션을 하나 더 열면 Discord가 실제 사용자의
+  인터랙션을 그 세션으로 보낼 수 있다(아래 8절에서 s=5 인터랙션이 테스트 세션에 왔고, 운영 봇 대신 그쪽으로
+  간 것으로 보인다). 응답하지 않는 테스트 세션이 받으면 사용자는 "상호작용 실패"를 본다. 앞으로 운영
+  토큰으로 라이브 세션을 열지 않는다. 검증은 모의·루프백 게이트웨이 테스트로 하고, 라이브가 꼭 필요하면
+  운영과 분리된 테스트 봇 토큰을 쓴다.
 
 ## 8. 라이브 기록 (2026-10-23, 수동)
 
@@ -250,4 +267,60 @@ hook에 넘겼거나, 가득 찬 큐 때문에 버렸다(버린 것은 기존처
 | 잘못된 스냅샷 | 만든 session id로 RESUME → INVALID_SESSION(false) → 2초 뒤 경고 → IDENTIFY → READY |
 
 IDENTIFY는 모두 2회(프로세스 1, 잘못된 스냅샷)였다. 프로세스 2의 60초 동안 실제 사용자의 인터랙션 1건이
-테스트 세션으로 왔다. 같은 토큰의 다른 세션(운영 봇)도 그 인터랙션을 받았는지는 확인하지 않았다.
+테스트 세션으로 왔다. 같은 토큰의 다른 세션(운영 봇)도 그 인터랙션을 받았는지는 확인하지 않았지만,
+Discord가 인터랙션을 한 세션에만 보낸 것으로 보고 이후 라이브 테스트를 중단했다(7절 주의).
+
+## 9. 리뷰 수정 (2026-10-23, GPT-6.1-sol의 `f76ee19` 리뷰)
+
+리뷰어는 `/tmp`의 탐침으로 세 문제를 각각 재현했다. 공개 API는 바뀌지 않았다.
+
+### 9.1 정지와 enqueue 경합으로 이벤트를 영구히 건너뜀 (P1)
+
+처리기가 sequence 4242를 장부에 기록한 직후, handoff가 레인을 닫고 나서 `try_send`가 `Closed`를 받으면
+`unroute()`가 그 이벤트를 "넘김"으로 세었다. 재개점이 4242로 올라가 RESUME이 그 이벤트를 건너뛰었다.
+두 레인 모두 같은 경로가 있었다. 정지 뒤 가득 찬 레인의 `Full`도 같은 손실을 낳을 수 있었다.
+
+수정: `DeliveryLedger::enqueue`가 기록과 `try_send`(기다리지 않음)를 한 잠금 안에서 하고, `halt`도
+그 잠금을 잡은 뒤 정지 표시를 한다. 파이프라인은 장부를 먼저 정지하고 그다음 디스패처에 알린다. 그래서
+기록된 이벤트는 반드시 레인에 들어가 있거나(정지한 레인이 대기로 남긴다) 정지 전에 거절된 것이다.
+`Closed`는 대기로 남긴다. `Full`은 정지 전의 정상 넘침이므로 기존처럼 넘김(일반 레인은 손실, 상호작용
+레인은 overload hook)으로 센다.
+
+### 9.2 RESUME 연결 설정에서 handoff가 영원히 멈춤 (P1)
+
+RESUME은 IDENTIFY permit을 받지 않으므로 연결 설정에 제한 시간이 없었고, 설정 중에는 명령 채널을 읽지
+않았다. 업그레이드는 받고 HELLO를 보내지 않는 서버를 만나면 `request()`가 끝나지 않았다. 정상 종료도
+같았다.
+
+수정: 연결·업그레이드·HELLO 대기를 자기 상태를 빌리지 않는 `open_connection`으로 분리하고,
+`connect_and_run`이 그것과 명령 채널을 함께 기다린다(명령 우선). Shutdown은 바로 종료하고, handoff는
+세션이 있으면 그대로 넘긴다. 이 연결에는 아직 아무것도 보내지 않았으므로 세션은 바뀌지 않는다.
+Reconnect는 무시하고, 다른 명령은 backoff 때처럼 다음 연결로 미룬다. 설정 전체는 모든 연결에서
+15초(`CONNECTION_SETUP_TIMEOUT`)로 제한된다. 넘으면 연결 실패처럼 resume URL을 버리고 재시도한다.
+IDENTIFY 간격 대기(최대 5초)와 INVALID_SESSION 대기(2초)는 제한된 시간이라 그대로 두었다.
+
+```text
+[Decision Log]
+- 목적과 의도: 어떤 연결 단계에서도 handoff·종료 요청이 제한된 시간 안에 끝나게 한다.
+- 기존 구현 및 제약 조건: 설정 제한 시간은 permit을 쥔 IDENTIFY 연결에만 있었다. 명령은 permit 대기,
+  backoff, 읽기 루프에서만 읽었다. 설정 단계는 &mut self를 빌려 명령 채널과 함께 select할 수 없었다.
+- 검토한 주요 대안: (1) RESUME에도 제한 시간만 둔다 — 요청이 최대 15초 늦는다. (2) handoff를
+  CancellationToken 같은 별도 신호로 모든 await에 넣는다 — 대기 지점마다 새 경로가 생긴다.
+  (3) 설정을 self를 빌리지 않는 future로 분리하고 기존 명령 채널과 select한다 + 모든 연결에 제한 시간.
+- 선택한 방식: (3).
+- 다른 대안 대신 이 방식을 선택한 이유: 요청이 즉시 처리되고, 명령 처리 규칙(미루기·한도)이 permit
+  대기·backoff와 같다. 제한 시간은 요청이 없을 때도 샤드가 멈추지 않게 한다.
+- 장점, 단점 및 영향: 설정 중에 받은 Shutdown은 다음 IDENTIFY 전에 종료한다(기존 테스트 두 개의 명령
+  시점을 맞췄다). 15초 안에 HELLO를 못 받는 느린 네트워크에서는 재시도가 생긴다(Discord HELLO는 보통
+  1초 안에 온다).
+```
+
+### 9.3 fallback 뒤에도 거절된 스냅샷의 application id가 남음 (P2)
+
+스냅샷의 application id(예: 123)를 쓴 뒤 RESUME이 실패하고 IDENTIFY의 READY가 999를 가져와도, READY
+처리기는 id가 없을 때만 채웠으므로 REST 경로가 계속 123을 썼다.
+
+수정: 스냅샷에서 온 id에 공유 플래그(`application_id_provisional`, 모든 샤드의 `Context`가 공유)를
+세운다. READY 처리기는 id가 없거나 임시값이면 READY의 id로 바꾸고 플래그를 내린다
+(`Context::adopt_ready_application_id`). 빌더가 정한 id는 임시값이 아니므로 바뀌지 않는다. 재개에
+성공한 세션은 READY가 없으므로 임시값을 그대로 쓴다(같은 세션이라 맞는 값이다).

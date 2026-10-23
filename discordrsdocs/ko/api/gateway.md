@@ -254,7 +254,8 @@ write_snapshot_0600(&serde_json::to_vec(&handoff.take_sessions())?)?;
 다음 프로세스에서 맞는 세션(같은 샤드 id·샤드 수·인텐트)이 있는 샤드는 바로 연결해 세션의 resume URL로 RESUME을 보냅니다. RESUME은 IDENTIFY permit도, 하루 세션 시작 예산도 쓰지 않습니다. 그 뒤:
 
 - **READY가 오지 않고 캐시는 비어 있습니다.** `resumed` 핸들러가 돕니다. READY에서 하던 초기화는 RESUMED나 시작 시점에도 해야 합니다. 세션은 처음의 presence와 인텐트를 유지합니다.
-- 빌더가 application id를 정하지 않았으면 세션의 값을 씁니다(인터랙션 follow-up에 필요). `voice` 기능이면 봇 user id를 음성 관리자에 넣습니다.
+- 빌더가 application id를 정하지 않았으면 세션의 값을 씁니다(인터랙션 follow-up에 필요). 이 값은 임시값이라 fallback IDENTIFY의 READY가 오면 그 값으로 바뀝니다. `ClientBuilder::application_id`로 정한 값은 바뀌지 않습니다. `voice` 기능이면 봇 user id를 음성 관리자에 넣습니다.
+- 연결 설정(연결, WebSocket 업그레이드, HELLO)은 모든 연결에서 15초로 제한되고, 그동안에도 `request()`와 종료 요청을 처리합니다. 연결은 받지만 HELLO를 보내지 않는 resume URL이 샤드나 handoff를 붙잡지 못합니다: 요청이 오면 세션을 그대로 돌려주고, 제한 시간이 지나면 URL을 버리고 설정된 게이트웨이로 RESUME합니다.
 - Discord가 세션을 재개하지 않으면(INVALID_SESSION, 닫힘 코드 4007/4009) 또는 resume URL과 설정된 게이트웨이가 모두 RESUME을 받지 않으면 경고를 남기고 IDENTIFY합니다. READY는 평소처럼 옵니다. 클라이언트와 맞지 않는 세션은 연결 전에 경고와 함께 버립니다.
 
 세션의 sequence는 옛 프로세스의 핸들러가 받은 마지막 이벤트입니다. 나머지는 재전송됩니다.
