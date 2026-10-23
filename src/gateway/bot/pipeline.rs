@@ -22,6 +22,7 @@ use super::{
 };
 use crate::event::{Event, EventKind};
 pub(in crate::gateway) use crate::gateway::client::GatewayDispatch;
+use crate::gateway::handoff::{DeliveryLane, DeliveryLedger};
 
 /// How long aborted pipeline tasks get to confirm they stopped. Aborting is
 /// asynchronous: a task only stops at its next await point, so shutdown
@@ -192,6 +193,8 @@ pub(super) struct EventIngress {
     /// Dispatches that were not queued: the one that overflowed, and every
     /// one arriving after the fault while the shard is being stopped.
     pub(super) dropped: AtomicU64,
+    /// Delivery tracking for a handoff, when the client has one.
+    pub(super) ledger: Option<Arc<DeliveryLedger>>,
 }
 
 impl EventIngress {
@@ -202,6 +205,9 @@ impl EventIngress {
         if self.fault.is_raised() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
             return;
+        }
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.note_read(dispatch.metadata.name());
         }
         match self.events.try_send(dispatch) {
             Ok(()) => {}
@@ -301,6 +307,10 @@ pub(super) struct EventPipeline {
     ingress: Arc<EventIngress>,
     fault: PipelineFault,
     stop: Arc<watch::Sender<bool>>,
+    /// Set for a handoff: the dispatchers start no further handler calls but
+    /// let running ones finish (`stop` aborts them).
+    halt: Arc<watch::Sender<bool>>,
+    ledger: Option<Arc<DeliveryLedger>>,
     processor: AbortOnDrop<()>,
     events: AbortOnDrop<()>,
     interactions: AbortOnDrop<()>,
@@ -325,6 +335,23 @@ impl EventPipeline {
         self.fault.clone()
     }
 
+    /// The shard's delivery tracking, when the client has a handoff.
+    pub(super) fn ledger(&self) -> Option<Arc<DeliveryLedger>> {
+        self.ledger.as_ref().map(Arc::clone)
+    }
+
+    /// Stops handing events to the handler, for a handoff: the processor
+    /// keeps applying what the gateway already read (so running handlers can
+    /// still finish their collectors and member fetches) but queues nothing
+    /// more, and the dispatchers start no further calls. Everything not
+    /// handed out by then is left for Discord to replay to the next process.
+    pub(super) fn halt(&self) {
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.halt();
+        }
+        self.halt.send_replace(true);
+    }
+
     /// Drains and stops the pipeline once the gateway has stopped.
     ///
     /// Callers must drop every other [`EventIngress`] reference first (the
@@ -341,6 +368,7 @@ impl EventPipeline {
             ingress,
             fault,
             stop,
+            halt: _halt,
             mut processor,
             mut events,
             mut interactions,
@@ -429,6 +457,11 @@ pub(super) fn spawn_event_pipeline(
     let fault = PipelineFault::new();
     let (stop, _) = watch::channel(false);
     let stop = Arc::new(stop);
+    let (halt, _) = watch::channel(false);
+    let halt = Arc::new(halt);
+    let ledger = dispatch
+        .track_deliveries
+        .then(|| Arc::new(DeliveryLedger::default()));
     let (ingress_tx, ingress_rx) = mpsc::channel(dispatch.queue_capacity.max(1));
     let (events_tx, events_rx) = mpsc::channel(dispatch.queue_capacity.max(1));
     let (interactions_tx, interactions_rx) =
@@ -448,6 +481,7 @@ pub(super) fn spawn_event_pipeline(
         events: ingress_tx,
         fault: fault.clone(),
         dropped: AtomicU64::new(0),
+        ledger: ledger.as_ref().map(Arc::clone),
     });
     let processor = tokio::spawn(run_event_processor(
         ctx.clone(),
@@ -459,6 +493,7 @@ pub(super) fn spawn_event_pipeline(
             interactions: interactions_tx,
             handler_drops: Arc::clone(&handler_drops),
             overload: lane.overload.clone(),
+            ledger: ledger.as_ref().map(Arc::clone),
         },
         dispatch.backlog_warn_threshold(),
         dispatch.keep_raw_events,
@@ -469,7 +504,11 @@ pub(super) fn spawn_event_pipeline(
         ctx.clone(),
         events_rx,
         dispatch.handler_permits(),
-        stop.subscribe(),
+        LaneControl {
+            stop: stop.subscribe(),
+            halt: halt.subscribe(),
+            ledger: ledger.as_ref().map(Arc::clone),
+        },
         fault.clone(),
         #[cfg(test)]
         Arc::clone(&handler_high_water),
@@ -479,7 +518,11 @@ pub(super) fn spawn_event_pipeline(
         ctx,
         interactions_rx,
         lane,
-        stop.subscribe(),
+        LaneControl {
+            stop: stop.subscribe(),
+            halt: halt.subscribe(),
+            ledger: ledger.as_ref().map(Arc::clone),
+        },
         fault.clone(),
         #[cfg(test)]
         Arc::clone(&handler_high_water),
@@ -490,6 +533,8 @@ pub(super) fn spawn_event_pipeline(
         ingress,
         fault,
         stop,
+        halt,
+        ledger,
         processor: AbortOnDrop::new(processor),
         events: AbortOnDrop::new(events),
         interactions: AbortOnDrop::new(interactions),
@@ -506,6 +551,26 @@ struct ProcessorOutputs {
     interactions: mpsc::Sender<HandlerDelivery>,
     handler_drops: Arc<OverflowLog>,
     overload: Option<OverloadHookQueue>,
+    ledger: Option<Arc<DeliveryLedger>>,
+}
+
+/// What a handler lane watches besides its queue.
+struct LaneControl {
+    /// Shutdown escalation: abort running handler calls.
+    stop: watch::Receiver<bool>,
+    /// Handoff: start no further calls, let running ones finish.
+    halt: watch::Receiver<bool>,
+    ledger: Option<Arc<DeliveryLedger>>,
+}
+
+impl LaneControl {
+    /// Records that the lane gave its oldest queued event to a handler call
+    /// or the overload hook.
+    fn handed(&self, lane: DeliveryLane) {
+        if let Some(ledger) = self.ledger.as_ref() {
+            ledger.handed(lane);
+        }
+    }
 }
 
 /// Internal stage: applies every event to runtime state in gateway order
@@ -548,16 +613,41 @@ async fn run_event_processor(
         )
         .await;
 
-        if matches!(delivery.event.kind(), EventKind::InteractionCreate(_)) {
+        let interaction = matches!(delivery.event.kind(), EventKind::InteractionCreate(_));
+        let lane = if interaction {
+            DeliveryLane::Interactions
+        } else {
+            DeliveryLane::Regular
+        };
+        if let Some(ledger) = outputs.ledger.as_ref() {
+            if !ledger.route(lane, &delivery.event) {
+                // Handing off: Discord replays this event to the next
+                // process, so it is not queued here.
+                continue;
+            }
+        }
+        // Every arm that does not queue the delivery tells the ledger, which
+        // then counts it as delivered (dropped or given to the hook).
+        let unroute = || {
+            if let Some(ledger) = outputs.ledger.as_ref() {
+                ledger.unroute(lane);
+            }
+        };
+
+        if interaction {
             match outputs.interactions.try_send(delivery) {
                 Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(delivery)) => report_overloaded_interaction(
-                    outputs.overload.as_ref(),
-                    &ctx,
-                    delivery,
-                    InteractionOverloadReason::QueueFull,
-                ),
+                Err(mpsc::error::TrySendError::Full(delivery)) => {
+                    unroute();
+                    report_overloaded_interaction(
+                        outputs.overload.as_ref(),
+                        &ctx,
+                        delivery,
+                        InteractionOverloadReason::QueueFull,
+                    );
+                }
                 Err(mpsc::error::TrySendError::Closed(_)) => {
+                    unroute();
                     fault.raise(format!(
                         "shard {}: interaction dispatcher stopped unexpectedly",
                         ctx.shard_id
@@ -581,6 +671,7 @@ async fn run_event_processor(
                 }
             }
             Err(mpsc::error::TrySendError::Full(delivery)) => {
+                unroute();
                 if let Some(total) = outputs.handler_drops.record() {
                     warn!(
                         "shard {}: event handler queue is full ({} events); dropped {total} \
@@ -593,6 +684,7 @@ async fn run_event_processor(
                 }
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
+                unroute();
                 fault.raise(format!(
                     "shard {}: event handler dispatcher stopped unexpectedly",
                     ctx.shard_id
@@ -641,7 +733,7 @@ async fn run_handler_dispatcher(
     ctx: Context,
     mut deliveries: mpsc::Receiver<HandlerDelivery>,
     permits: usize,
-    mut stop: watch::Receiver<bool>,
+    mut control: LaneControl,
     fault: PipelineFault,
     #[cfg(test)] high_water: Arc<std::sync::atomic::AtomicUsize>,
 ) {
@@ -664,7 +756,8 @@ async fn run_handler_dispatcher(
         // stays in (and is bounded by) the queue.
         let permit = tokio::select! {
             biased;
-            _ = stop_requested(&mut stop) => break,
+            _ = stop_requested(&mut control.stop) => break,
+            _ = stop_requested(&mut control.halt) => break,
             permit = Arc::clone(&permits).acquire_owned() => match permit {
                 Ok(permit) => permit,
                 Err(_) => break,
@@ -673,7 +766,8 @@ async fn run_handler_dispatcher(
         let next = loop {
             tokio::select! {
                 biased;
-                _ = stop_requested(&mut stop) => break None,
+                _ = stop_requested(&mut control.stop) => break None,
+                _ = stop_requested(&mut control.halt) => break None,
                 Some(outcome) = running.join_next(), if !running.is_empty() => {
                     report_handler_outcome(ctx.shard_id, outcome);
                 }
@@ -691,10 +785,11 @@ async fn run_handler_dispatcher(
                 .handle_event_boxed(handler_ctx, delivery.event)
                 .await;
         });
+        control.handed(DeliveryLane::Regular);
         #[cfg(test)]
         high_water.fetch_max(running.len(), Ordering::Relaxed);
     }
-    finish_running(ctx.shard_id, &mut running, &mut stop).await;
+    finish_running(ctx.shard_id, &mut running, &mut control.stop).await;
     exit.complete();
 }
 
@@ -720,7 +815,7 @@ async fn run_interaction_dispatcher(
     ctx: Context,
     mut deliveries: mpsc::Receiver<HandlerDelivery>,
     lane: InteractionLane,
-    mut stop: watch::Receiver<bool>,
+    mut control: LaneControl,
     fault: PipelineFault,
     #[cfg(test)] high_water: Arc<std::sync::atomic::AtomicUsize>,
 ) {
@@ -738,7 +833,8 @@ async fn run_interaction_dispatcher(
         let next = loop {
             tokio::select! {
                 biased;
-                _ = stop_requested(&mut stop) => break None,
+                _ = stop_requested(&mut control.stop) => break None,
+                _ = stop_requested(&mut control.halt) => break None,
                 Some(outcome) = running.join_next(), if !running.is_empty() => {
                     report_handler_outcome(ctx.shard_id, outcome);
                 }
@@ -762,7 +858,9 @@ async fn run_interaction_dispatcher(
             permit = loop {
                 tokio::select! {
                     biased;
-                    _ = stop_requested(&mut stop) => break 'deliveries,
+                    _ = stop_requested(&mut control.stop) => break 'deliveries,
+                    // Not handed out: replayed to the next process.
+                    _ = stop_requested(&mut control.halt) => break 'deliveries,
                     _ = sleep_until_opt(deadline) => break None,
                     Some(outcome) = running.join_next(), if !running.is_empty() => {
                         report_handler_outcome(ctx.shard_id, outcome);
@@ -786,18 +884,22 @@ async fn run_interaction_dispatcher(
                         .handle_event_boxed(handler_ctx, delivery.event)
                         .await;
                 });
+                control.handed(DeliveryLane::Interactions);
                 #[cfg(test)]
                 high_water.fetch_max(running.len(), Ordering::Relaxed);
             }
-            None => report_overloaded_interaction(
-                lane.overload.as_ref(),
-                &ctx,
-                delivery,
-                InteractionOverloadReason::AdmissionTimeout,
-            ),
+            None => {
+                control.handed(DeliveryLane::Interactions);
+                report_overloaded_interaction(
+                    lane.overload.as_ref(),
+                    &ctx,
+                    delivery,
+                    InteractionOverloadReason::AdmissionTimeout,
+                );
+            }
         }
     }
-    finish_running(ctx.shard_id, &mut running, &mut stop).await;
+    finish_running(ctx.shard_id, &mut running, &mut control.stop).await;
     exit.complete();
 }
 

@@ -27,6 +27,7 @@ use crate::sharding::{ShardRuntimeState, ShardSupervisorEvent};
 use crate::ws::{GatewayConnectionConfig, IdentifyOutcome, IdentifyPermit};
 
 use super::compression::{decode_gateway_message, GatewayCompressionDecoder};
+use super::handoff::{GatewaySession, HandedOffShard, SessionIdHint};
 use super::outbound::{run_gateway_outbound_worker, send_gateway_outbound, GatewayOutboundMessage};
 
 // Gateway opcodes (Discord docs: Opcodes and Status Codes › Gateway Opcodes).
@@ -56,6 +57,12 @@ const CLOSE_SHARDING_REQUIRED: u16 = 4011;
 const CLOSE_INVALID_API_VERSION: u16 = 4012;
 const CLOSE_INVALID_INTENTS: u16 = 4013;
 const CLOSE_DISALLOWED_INTENTS: u16 = 4014;
+/// Close code this client sends when it hands its session to another
+/// process. Discord invalidates a session when the client closes with 1000
+/// or 1001 and keeps it resumable for any other code (Discord docs: Gateway
+/// › Closing Connections); 4000 is the code other libraries use for this
+/// (twilight-gateway `CloseFrame::RESUME`).
+const CLOSE_HANDOFF: u16 = 4000;
 /// First reconnect delay after an unhealthy session, in seconds; doubled on
 /// each further failure up to [`MAX_RECONNECT_BACKOFF_SECS`].
 const INITIAL_RECONNECT_BACKOFF_SECS: u64 = 1;
@@ -113,6 +120,61 @@ pub(crate) struct GatewayClient {
     server_directed_reconnect: bool,
     /// [`GATED_SETUP_TIMEOUT`]; a field so tests can shorten it.
     gated_setup_timeout: Duration,
+    /// Set by [`Self::resume_from`] until RESUMED arrives or the session is
+    /// dropped, so a handed-off session that cannot be resumed is reported
+    /// (the shard then identifies and READY follows).
+    handoff_resume: bool,
+}
+
+/// How [`GatewayClient::run`] ended without an error.
+#[derive(Debug)]
+pub(crate) enum GatewayExit {
+    /// A requested shutdown, or a handoff without a session to hand over.
+    Stopped,
+    /// A handoff: the connection was closed with [`CLOSE_HANDOFF`] and the
+    /// session can be resumed by another process.
+    HandedOff(HandedOffSession),
+}
+
+/// The session a handoff left resumable.
+pub(crate) struct HandedOffSession {
+    pub(crate) session_id: String,
+    /// READY's resume URL without the query this client added, so the next
+    /// process builds its own (API version, encoding, compression).
+    pub(crate) resume_gateway_url: Option<String>,
+}
+
+impl HandedOffSession {
+    pub(crate) fn for_shard(
+        self,
+        shard: (u32, u32),
+        intents: u64,
+        application_id: Option<crate::model::ApplicationId>,
+    ) -> HandedOffShard {
+        HandedOffShard {
+            session_id: self.session_id,
+            resume_gateway_url: self.resume_gateway_url,
+            shard,
+            intents,
+            application_id,
+        }
+    }
+}
+
+impl fmt::Debug for HandedOffSession {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HandedOffSession")
+            .field("session_id", &SessionIdHint(&self.session_id))
+            .field("resume_gateway_url", &self.resume_gateway_url)
+            .finish()
+    }
+}
+
+/// A stop request that arrived outside the read loop.
+enum StopRequest {
+    Shutdown,
+    Handoff,
 }
 
 /// Result of waiting for an IDENTIFY permit.
@@ -274,6 +336,8 @@ pub(crate) type SupervisorCallback = Arc<dyn Fn(ShardSupervisorEvent) + Send + S
 #[derive(Debug)]
 pub(crate) enum GatewayCommand {
     Shutdown,
+    /// Close for a process handoff (see `GatewayHandoff`).
+    Handoff,
     Reconnect,
     UpdatePresence(String),
     UpdatePresenceData(UpdatePresence),
@@ -301,7 +365,30 @@ impl GatewayClient {
             last_identify: None,
             server_directed_reconnect: false,
             gated_setup_timeout: GATED_SETUP_TIMEOUT,
+            handoff_resume: false,
         }
+    }
+
+    /// Continues a session an earlier process handed off: the first
+    /// connection dials the session's resume URL (normalized with this
+    /// client's gateway config, so set that first) and sends RESUME with its
+    /// sequence. No IDENTIFY permit is taken for it.
+    pub fn resume_from(mut self, session: &GatewaySession) -> Self {
+        self.session_id = Some(session.session_id().to_owned());
+        self.sequence.store(session.sequence(), Ordering::Relaxed);
+        self.resume_gateway_url = session.resume_gateway_url().map(|url| {
+            self.gateway_config
+                .clone()
+                .with_base_url(url.to_owned())
+                .normalized_url()
+        });
+        self.handoff_resume = true;
+        info!(
+            "Resuming handed-off gateway session {} at sequence {}",
+            SessionIdHint(session.session_id()),
+            session.sequence()
+        );
+        self
     }
 
     /// Sets the presence included in IDENTIFY so the bot appears with the
@@ -338,7 +425,10 @@ impl GatewayClient {
 
     /// Run the gateway connection loop. Reconnects automatically.
     /// `on_event` is called for every DISPATCH event with (event_name, data).
-    pub async fn run(&mut self, on_event: EventCallback) -> Result<(), crate::error::DiscordError> {
+    pub async fn run(
+        &mut self,
+        on_event: EventCallback,
+    ) -> Result<GatewayExit, crate::error::DiscordError> {
         let mut backoff = INITIAL_RECONNECT_BACKOFF_SECS;
         #[cfg(feature = "sharding")]
         self.publish_state(ShardRuntimeState::Starting);
@@ -362,14 +452,17 @@ impl GatewayClient {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Reconnecting);
                             info!("Reconnecting with fresh session");
-                            self.session_id = None;
-                            self.resume_gateway_url = None;
-                            self.sequence.store(0, Ordering::Relaxed);
+                            self.drop_session();
                         }
                         ReconnectAction::Shutdown => {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Stopped);
-                            return Ok(());
+                            return Ok(GatewayExit::Stopped);
+                        }
+                        ReconnectAction::Handoff => {
+                            #[cfg(feature = "sharding")]
+                            self.publish_state(ShardRuntimeState::Stopped);
+                            return Ok(self.exit_for(StopRequest::Handoff));
                         }
                         ReconnectAction::Fatal(error) => {
                             // Reconnecting cannot fix bad credentials, intents,
@@ -394,13 +487,13 @@ impl GatewayClient {
                             "Gateway session ended after {:?}, backing off {backoff}s before reconnecting",
                             connection_started.elapsed()
                         );
-                        if self
+                        if let Some(stop) = self
                             .wait_for_backoff_command(Duration::from_secs(backoff))
                             .await?
                         {
                             #[cfg(feature = "sharding")]
                             self.publish_state(ShardRuntimeState::Stopped);
-                            return Ok(());
+                            return Ok(self.exit_for(stop));
                         }
                         backoff = (backoff * 2).min(MAX_RECONNECT_BACKOFF_SECS);
                     }
@@ -410,7 +503,7 @@ impl GatewayClient {
                     self.publish_error(e.to_string());
                     error!("Gateway connection error: {e}");
                     self.forget_resume_url_after_failed_dial();
-                    if self
+                    if let Some(stop) = self
                         .wait_for_backoff_command(Duration::from_secs(
                             backoff.min(MAX_RECONNECT_BACKOFF_SECS),
                         ))
@@ -418,7 +511,7 @@ impl GatewayClient {
                     {
                         #[cfg(feature = "sharding")]
                         self.publish_state(ShardRuntimeState::Stopped);
-                        return Ok(());
+                        return Ok(self.exit_for(stop));
                     }
                     backoff = (backoff * 2).min(MAX_RECONNECT_BACKOFF_SECS);
                 }
@@ -457,7 +550,11 @@ impl GatewayClient {
                         None => None,
                     }
                 }, if listening => match command {
-                    Some(GatewayCommand::Shutdown) => return Ok(PermitWait::Shutdown),
+                    // Waiting for a permit means there is no session to hand
+                    // off, so a handoff stops the shard like a shutdown.
+                    Some(GatewayCommand::Shutdown | GatewayCommand::Handoff) => {
+                        return Ok(PermitWait::Shutdown)
+                    }
                     Some(GatewayCommand::Reconnect) => {}
                     Some(command) => self.defer_command(command),
                     None => listening = false,
@@ -522,7 +619,69 @@ impl GatewayClient {
     /// fresh IDENTIFY through the existing path.
     fn forget_resume_url_after_failed_dial(&mut self) {
         if self.resume_gateway_url.take().is_some() {
-            warn!("Resume gateway URL could not be dialed; falling back to the configured gateway");
+            if self.handoff_resume {
+                warn!(
+                    "The handed-off session's resume gateway URL could not be dialed; sending \
+                     RESUME to the configured gateway instead (an INVALID_SESSION there starts \
+                     a new session)"
+                );
+            } else {
+                warn!(
+                    "Resume gateway URL could not be dialed; falling back to the configured \
+                     gateway"
+                );
+            }
+        }
+    }
+
+    /// Forgets the session, so the next connection identifies.
+    fn drop_session(&mut self) {
+        if std::mem::take(&mut self.handoff_resume) {
+            warn!(
+                "The handed-off gateway session could not be resumed; identifying a new session \
+                 (READY follows, and events since the handoff are not replayed)"
+            );
+        }
+        self.session_id = None;
+        self.resume_gateway_url = None;
+        self.sequence.store(0, Ordering::Relaxed);
+    }
+
+    /// Notes a RESUMED dispatch: the session continues on this connection.
+    fn record_resumed(&mut self) {
+        let handed_off = std::mem::take(&mut self.handoff_resume);
+        if handed_off {
+            info!(
+                "Resumed the handed-off gateway session at sequence {}",
+                self.sequence.load(Ordering::Relaxed)
+            );
+        }
+        #[cfg(feature = "sharding")]
+        {
+            // A session resumed from a handoff is new to this process's
+            // shard status.
+            if let (true, Some(session_id)) = (handed_off, self.session_id.clone()) {
+                self.publish_supervisor(ShardSupervisorEvent::SessionEstablished {
+                    shard_id: self.current_shard_id(),
+                    session_id,
+                });
+            }
+            self.publish_state(ShardRuntimeState::Running);
+        }
+    }
+
+    /// What `run` returns for a stop request: a handoff with a session hands
+    /// it over, anything else is a plain stop.
+    fn exit_for(&self, stop: StopRequest) -> GatewayExit {
+        match (stop, self.session_id.as_ref()) {
+            (StopRequest::Handoff, Some(session_id)) => GatewayExit::HandedOff(HandedOffSession {
+                session_id: session_id.clone(),
+                resume_gateway_url: self
+                    .resume_gateway_url
+                    .as_deref()
+                    .map(|url| url.split('?').next().unwrap_or(url).to_owned()),
+            }),
+            _ => GatewayExit::Stopped,
         }
     }
 
@@ -552,10 +711,10 @@ impl GatewayClient {
             });
             self.publish_state(ShardRuntimeState::Running);
         }
-        info!(
-            "Received READY, session_id={}",
-            self.session_id.as_deref().unwrap_or("?")
-        );
+        match self.session_id.as_deref() {
+            Some(session_id) => info!("Received READY, session_id={}", SessionIdHint(session_id)),
+            None => info!("Received READY without a session id"),
+        }
     }
 
     async fn connect_and_run(
@@ -802,6 +961,8 @@ impl GatewayClient {
 
                             if event_name == "READY" {
                                 self.record_ready_session(data);
+                            } else if event_name == "RESUMED" {
+                                self.record_resumed();
                             }
 
                             let mut metadata = EventMetadata::new(event_name, received_at);
@@ -888,6 +1049,28 @@ impl GatewayClient {
                                 }))).ok();
                             break ReconnectAction::Shutdown;
                         }
+                        Some(GatewayCommand::Handoff) => {
+                            // Without a session there is nothing to keep, so
+                            // the shard closes as in a shutdown.
+                            let (code, reason, action) = if self.session_id.is_some() {
+                                (
+                                    CloseCode::from(CLOSE_HANDOFF),
+                                    "session handoff",
+                                    ReconnectAction::Handoff,
+                                )
+                            } else {
+                                (CloseCode::Normal, "supervisor shutdown", ReconnectAction::Shutdown)
+                            };
+                            // Fails only if the outbound worker already
+                            // ended, and then the socket is closing anyway.
+                            outbound_tx
+                                .send(GatewayOutboundMessage::Close(Some(CloseFrame {
+                                    code,
+                                    reason: reason.into(),
+                                })))
+                                .ok();
+                            break action;
+                        }
                         Some(GatewayCommand::Reconnect) => break ReconnectAction::Resume,
                         Some(command) => send_gateway_outbound(
                             &outbound_tx,
@@ -900,12 +1083,12 @@ impl GatewayClient {
         };
 
         // The heartbeat task is aborted when `_heartbeat_task` drops at the
-        // end of this function. Only a supervisor shutdown waits for the
-        // outbound worker, so the close frame it queued is flushed. The guard
-        // stays armed during the wait: if this future is cancelled or the
-        // flush times out, dropping the guard still aborts the worker
+        // end of this function. Only a supervisor shutdown or a handoff waits
+        // for the outbound worker, so the close frame it queued is flushed.
+        // The guard stays armed during the wait: if this future is cancelled
+        // or the flush times out, dropping the guard still aborts the worker
         // (aborting a task that already finished is a no-op).
-        if matches!(action, ReconnectAction::Shutdown) {
+        if matches!(action, ReconnectAction::Shutdown | ReconnectAction::Handoff) {
             drop(outbound_tx);
             if let Some(outbound_handle) = outbound_task.handle_mut() {
                 if timeout(Duration::from_secs(1), outbound_handle)
@@ -924,6 +1107,8 @@ enum ReconnectAction {
     Resume,
     Reconnect,
     Shutdown,
+    /// Closed with [`CLOSE_HANDOFF`]; the session stays resumable.
+    Handoff,
     /// The gateway rejected the connection in a way reconnecting cannot fix.
     Fatal(crate::error::DiscordError),
 }
@@ -986,6 +1171,7 @@ fn is_presence_command(command: &GatewayCommand) -> bool {
 fn gateway_command_kind(command: &GatewayCommand) -> &'static str {
     match command {
         GatewayCommand::Shutdown => "Shutdown",
+        GatewayCommand::Handoff => "Handoff",
         GatewayCommand::Reconnect => "Reconnect",
         GatewayCommand::UpdatePresence(_) => "UpdatePresence",
         GatewayCommand::UpdatePresenceData(_) => "UpdatePresenceData",
@@ -1196,13 +1382,17 @@ impl GatewayClient {
 }
 
 impl GatewayClient {
+    /// Waits out a reconnect backoff while serving the control channel.
+    /// Returns the stop request that ended it early, if any. A handoff
+    /// during the backoff still hands over the session (it was never closed
+    /// with 1000, so Discord keeps it).
     async fn wait_for_backoff_command(
         &mut self,
         duration: Duration,
-    ) -> Result<bool, crate::error::DiscordError> {
+    ) -> Result<Option<StopRequest>, crate::error::DiscordError> {
         if self.command_rx.is_none() {
             sleep(duration).await;
-            return Ok(false);
+            return Ok(None);
         }
 
         self.bound_deferred_commands();
@@ -1210,23 +1400,22 @@ impl GatewayClient {
         loop {
             let now = Instant::now();
             if now >= deadline {
-                return Ok(false);
+                return Ok(None);
             }
 
             let received = match self.command_rx.as_mut() {
                 Some(command_rx) => timeout(deadline - now, command_rx.recv()).await,
-                None => return Ok(false),
+                None => return Ok(None),
             };
             match received {
-                Ok(Some(GatewayCommand::Shutdown)) => return Ok(true),
+                Ok(Some(GatewayCommand::Shutdown)) => return Ok(Some(StopRequest::Shutdown)),
+                Ok(Some(GatewayCommand::Handoff)) => return Ok(Some(StopRequest::Handoff)),
                 Ok(Some(GatewayCommand::Reconnect)) => {
-                    self.session_id = None;
-                    self.resume_gateway_url = None;
-                    self.sequence.store(0, Ordering::Relaxed);
-                    return Ok(false);
+                    self.drop_session();
+                    return Ok(None);
                 }
                 Ok(Some(command)) => self.defer_command(command),
-                Ok(None) | Err(_) => return Ok(false),
+                Ok(None) | Err(_) => return Ok(None),
             }
         }
     }
@@ -1255,7 +1444,7 @@ mod tests {
         is_terminal_close_frame, rand_jitter, recv_control_command, request_channel_info_payload,
         request_guild_members_payload, resume_payload, terminal_close_error,
         update_presence_payload, voice_state_update_payload, AbortOnDrop, EventCallback,
-        GatewayClient, GatewayCommand, GatewayDispatch, ReconnectAction,
+        GatewayClient, GatewayCommand, GatewayDispatch, GatewayExit, ReconnectAction, StopRequest,
         GATEWAY_COMMAND_QUEUE_CAPACITY,
     };
     use crate::model::{RequestChannelInfo, RequestGuildMembers, UpdatePresence};
@@ -1690,10 +1879,13 @@ mod tests {
         let mut shutdown_client =
             GatewayClient::new("secret-token".into(), 513).control(shutdown_rx);
         shutdown_tx.send(GatewayCommand::Shutdown).await.unwrap();
-        assert!(shutdown_client
-            .wait_for_backoff_command(Duration::from_millis(10))
-            .await
-            .unwrap());
+        assert!(matches!(
+            shutdown_client
+                .wait_for_backoff_command(Duration::from_millis(10))
+                .await
+                .unwrap(),
+            Some(StopRequest::Shutdown)
+        ));
 
         let (reconnect_tx, reconnect_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
         let mut reconnect_client =
@@ -1704,10 +1896,11 @@ mod tests {
             .sequence
             .store(42, std::sync::atomic::Ordering::Relaxed);
         reconnect_tx.send(GatewayCommand::Reconnect).await.unwrap();
-        assert!(!reconnect_client
+        assert!(reconnect_client
             .wait_for_backoff_command(Duration::from_millis(10))
             .await
-            .unwrap());
+            .unwrap()
+            .is_none());
         assert!(reconnect_client.session_id.is_none());
         assert!(reconnect_client.resume_gateway_url.is_none());
         assert_eq!(
@@ -1724,10 +1917,11 @@ mod tests {
             .send(GatewayCommand::UpdatePresence("busy".into()))
             .await
             .unwrap();
-        assert!(!presence_client
+        assert!(presence_client
             .wait_for_backoff_command(Duration::from_millis(10))
             .await
-            .unwrap());
+            .unwrap()
+            .is_none());
         match recv_control_command(
             &mut presence_client.command_rx,
             &mut presence_client.deferred_commands,
@@ -1739,10 +1933,11 @@ mod tests {
         }
 
         let mut no_control_client = GatewayClient::new("secret-token".into(), 513);
-        assert!(!no_control_client
+        assert!(no_control_client
             .wait_for_backoff_command(Duration::from_millis(1))
             .await
-            .unwrap());
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -2933,7 +3128,7 @@ mod tests {
             .wait_for_backoff_command(Duration::from_millis(100))
             .await
             .unwrap();
-        assert!(!shutdown);
+        assert!(shutdown.is_none());
         assert_eq!(presence_statuses(&client), vec!["dnd".to_string()]);
         let max = super::MAX_DEFERRED_COMMANDS as u64;
         assert_eq!(payload_numbers(&client), (90 - max..90).collect::<Vec<_>>());
@@ -3020,5 +3215,394 @@ mod tests {
             .expect("a refused permit must stop the shard immediately");
         assert!(result.unwrap_err().to_string().contains("gate closed"));
         assert_eq!(*gate.acquired.lock().unwrap(), vec![(1, 2)]);
+    }
+
+    // -- session handoff -------------------------------------------------
+
+    /// Accepts one connection on `listener` and sends HELLO.
+    async fn accept_with_hello(
+        listener: &TcpListener,
+    ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ws.send(WsMessage::Text(
+            serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60_000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        ws
+    }
+
+    /// The next payload the client sent, skipping heartbeats; `None` once
+    /// the client closed (with the close frame's code, if any).
+    async fn next_client_payload(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> Result<serde_json::Value, Option<u16>> {
+        loop {
+            match ws.next().await {
+                Some(Ok(WsMessage::Text(text))) => {
+                    let payload: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    if payload["op"] != serde_json::json!(1) {
+                        return Ok(payload);
+                    }
+                }
+                Some(Ok(WsMessage::Close(frame))) => {
+                    return Err(frame.map(|frame| u16::from(frame.code)))
+                }
+                Some(Ok(_)) => {}
+                _ => return Err(None),
+            }
+        }
+    }
+
+    async fn send_json(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        payload: serde_json::Value,
+    ) {
+        ws.send(WsMessage::Text(payload.to_string().into()))
+            .await
+            .unwrap();
+    }
+
+    fn ready_dispatch(session_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "op": 0, "t": "READY", "s": 1,
+            "d": {
+                "user": {"id": "1", "username": "discordrs"},
+                "session_id": session_id,
+                "resume_gateway_url": "wss://gateway-us-east1-b.discord.gg"
+            }
+        })
+    }
+
+    /// Dispatch names and sequences a test callback saw.
+    type SeenDispatches = Arc<Mutex<Vec<(String, Option<u64>)>>>;
+
+    /// Records each dispatch name and sequence; notifies on every one.
+    fn recording_callback(
+        seen: &SeenDispatches,
+        notify: &Arc<tokio::sync::Notify>,
+    ) -> EventCallback {
+        let seen = Arc::clone(seen);
+        let notify = Arc::clone(notify);
+        Arc::new(move |dispatch: GatewayDispatch| {
+            seen.lock().unwrap().push((
+                dispatch.metadata.name().to_string(),
+                dispatch.metadata.sequence(),
+            ));
+            notify.notify_one();
+        })
+    }
+
+    /// A URL nothing listens on.
+    async fn dead_url() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        drop(listener);
+        url
+    }
+
+    #[tokio::test]
+    async fn handoff_closes_with_a_resumable_code_and_hands_back_the_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut ws = accept_with_hello(&listener).await;
+            let identify = next_client_payload(&mut ws).await.unwrap();
+            assert_eq!(identify["op"], serde_json::json!(2));
+            send_json(&mut ws, ready_dispatch("session-handoff")).await;
+            send_json(
+                &mut ws,
+                serde_json::json!({"op": 0, "t": "GUILD_CREATE", "s": 2, "d": {"id": "3"}}),
+            )
+            .await;
+            next_client_payload(&mut ws).await.unwrap_err()
+        });
+
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(url))
+            .control(command_rx);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let callback = recording_callback(&seen, &notify);
+        let handoff = async {
+            while seen.lock().unwrap().len() < 2 {
+                notify.notified().await;
+            }
+            command_tx.send(GatewayCommand::Handoff).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client.run(callback), handoff)
+        })
+        .await
+        .unwrap();
+
+        let close_code = server.await.unwrap();
+        assert_eq!(close_code, Some(4000), "4000 keeps the session resumable");
+        let GatewayExit::HandedOff(session) = exit.unwrap() else {
+            panic!("a client with a session hands it off");
+        };
+        assert_eq!(session.session_id, "session-handoff");
+        assert_eq!(
+            session.resume_gateway_url.as_deref(),
+            Some("wss://gateway-us-east1-b.discord.gg/"),
+            "the snapshot keeps the base URL, not this client's query"
+        );
+        assert!(!format!("{session:?}").contains("session-handoff"));
+        assert_eq!(
+            client.sequence.load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn handoff_without_a_session_closes_like_a_shutdown() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let (identified_tx, identified_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut ws = accept_with_hello(&listener).await;
+            next_client_payload(&mut ws).await.unwrap();
+            identified_tx.send(()).unwrap();
+            next_client_payload(&mut ws).await.unwrap_err()
+        });
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(url))
+            .control(command_rx);
+        let handoff = async {
+            identified_rx.await.unwrap();
+            command_tx.send(GatewayCommand::Handoff).await.unwrap();
+        };
+        let (exit, ()) = tokio::join!(client.run(Arc::new(|_| {})), handoff);
+        assert!(matches!(exit.unwrap(), GatewayExit::Stopped));
+        assert_eq!(server.await.unwrap(), Some(1000));
+    }
+
+    #[tokio::test]
+    async fn handoff_during_a_reconnect_backoff_still_hands_over_the_session() {
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(dead_url().await))
+            .control(command_rx)
+            .resume_from(&crate::gateway::handoff::GatewaySession::for_test(
+                "session-backoff",
+                9,
+                Some(&dead_url().await),
+                (0, 1),
+                513,
+            ));
+        // Read during the backoff after the failed dial.
+        command_tx.send(GatewayCommand::Handoff).await.unwrap();
+        let exit = tokio::time::timeout(Duration::from_secs(5), client.run(Arc::new(|_| {})))
+            .await
+            .unwrap()
+            .unwrap();
+        let GatewayExit::HandedOff(session) = exit else {
+            panic!("the session was never closed, so it is handed over");
+        };
+        assert_eq!(session.session_id, "session-backoff");
+        assert_eq!(
+            session.resume_gateway_url, None,
+            "the resume URL that failed to dial is not passed on"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_handed_off_session_resumes_on_its_resume_url_without_identifying() {
+        let resume_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let resume_url = format!("ws://{}", resume_listener.local_addr().unwrap());
+        let configured = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let configured_url = format!("ws://{}/", configured.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut ws = accept_with_hello(&resume_listener).await;
+            let resume = next_client_payload(&mut ws).await.unwrap();
+            // Discord replays what the old process did not handle, then
+            // confirms.
+            send_json(
+                &mut ws,
+                serde_json::json!({"op": 0, "t": "GUILD_CREATE", "s": 43, "d": {"id": "3"}}),
+            )
+            .await;
+            send_json(
+                &mut ws,
+                serde_json::json!({"op": 0, "t": "RESUMED", "s": 44, "d": null}),
+            )
+            .await;
+            let close = next_client_payload(&mut ws).await.unwrap_err();
+            (resume, close)
+        });
+
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let gate = Arc::new(RecordingGate::default());
+        let gate_dyn: Arc<dyn crate::ws::IdentifyGate> = gate.clone();
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(configured_url).identify_gate(gate_dyn))
+            .control(command_rx)
+            .resume_from(&crate::gateway::handoff::GatewaySession::for_test(
+                "session-old",
+                42,
+                Some(&resume_url),
+                (0, 1),
+                513,
+            ));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let callback = recording_callback(&seen, &notify);
+        let shutdown = async {
+            while seen.lock().unwrap().len() < 2 {
+                notify.notified().await;
+            }
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client.run(callback), shutdown)
+        })
+        .await
+        .unwrap();
+        assert!(matches!(exit.unwrap(), GatewayExit::Stopped));
+
+        let (resume, close) = server.await.unwrap();
+        assert_eq!(resume["op"], serde_json::json!(6));
+        assert_eq!(resume["d"]["session_id"], serde_json::json!("session-old"));
+        assert_eq!(resume["d"]["seq"], serde_json::json!(42));
+        assert_eq!(
+            close,
+            Some(1000),
+            "a normal shutdown still closes with 1000"
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                ("GUILD_CREATE".to_string(), Some(43)),
+                ("RESUMED".to_string(), Some(44))
+            ]
+        );
+        assert!(!client.handoff_resume, "RESUMED settles the handoff");
+        assert!(
+            gate.acquired.lock().unwrap().is_empty(),
+            "RESUME takes no permit"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), configured.accept())
+                .await
+                .is_err(),
+            "the configured gateway was never dialed"
+        );
+    }
+
+    /// How the first connection of a resumed client fails in
+    /// [`a_session_that_cannot_be_resumed_falls_back_to_identify`].
+    #[derive(Clone, Copy, Debug)]
+    enum ResumeFailure {
+        InvalidSession,
+        Close(u16),
+        DeadResumeUrl,
+    }
+
+    /// Runs a client resumed from a handoff against a gateway that refuses
+    /// the session in the given way, and returns the op of each payload the
+    /// client opened a connection with, plus the IDENTIFY permits it took.
+    async fn resume_fallback(failure: ResumeFailure) -> (Vec<serde_json::Value>, usize) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}/", listener.local_addr().unwrap());
+        let resume_url = match failure {
+            ResumeFailure::DeadResumeUrl => dead_url().await,
+            _ => url.clone(),
+        };
+        let server = tokio::spawn(async move {
+            let mut first_ops = Vec::new();
+            loop {
+                let mut ws = accept_with_hello(&listener).await;
+                let payload = next_client_payload(&mut ws).await.unwrap();
+                first_ops.push(payload["op"].clone());
+                if payload["op"] == serde_json::json!(2) {
+                    send_json(&mut ws, ready_dispatch("session-new")).await;
+                    next_client_payload(&mut ws).await.unwrap_err();
+                    return first_ops;
+                }
+                match failure {
+                    ResumeFailure::Close(code) => {
+                        ws.send(WsMessage::Close(Some(CloseFrame {
+                            code: CloseCode::from(code),
+                            reason: "session gone".into(),
+                        })))
+                        .await
+                        .unwrap();
+                    }
+                    ResumeFailure::InvalidSession | ResumeFailure::DeadResumeUrl => {
+                        send_json(&mut ws, serde_json::json!({"op": 9, "d": false})).await;
+                    }
+                }
+                // Wait for the client to go away before accepting again.
+                while let Some(Ok(_)) = ws.next().await {}
+            }
+        });
+
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let gate = Arc::new(RecordingGate::default());
+        let gate_dyn: Arc<dyn crate::ws::IdentifyGate> = gate.clone();
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(url).identify_gate(gate_dyn))
+            .control(command_rx)
+            .resume_from(&crate::gateway::handoff::GatewaySession::for_test(
+                "session-old",
+                42,
+                Some(&resume_url),
+                (0, 1),
+                513,
+            ));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let callback = recording_callback(&seen, &notify);
+        let shutdown = async {
+            while !seen.lock().unwrap().iter().any(|(name, _)| name == "READY") {
+                notify.notified().await;
+            }
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(client.run(callback), shutdown)
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{failure:?}: no fallback IDENTIFY"));
+        assert!(matches!(exit.unwrap(), GatewayExit::Stopped));
+        assert_eq!(client.session_id.as_deref(), Some("session-new"));
+        assert!(!client.handoff_resume);
+        let permits = gate.acquired.lock().unwrap().len();
+        (server.await.unwrap(), permits)
+    }
+
+    #[tokio::test]
+    async fn a_session_that_cannot_be_resumed_falls_back_to_identify() {
+        let resume = serde_json::json!(6);
+        let identify = serde_json::json!(2);
+        for (failure, expected) in [
+            (
+                ResumeFailure::InvalidSession,
+                vec![resume.clone(), identify.clone()],
+            ),
+            (
+                ResumeFailure::Close(4009),
+                vec![resume.clone(), identify.clone()],
+            ),
+            (
+                ResumeFailure::Close(4007),
+                vec![resume.clone(), identify.clone()],
+            ),
+            // The dead resume URL is dropped; the configured gateway gets the
+            // RESUME, and its INVALID_SESSION leads to IDENTIFY.
+            (
+                ResumeFailure::DeadResumeUrl,
+                vec![resume.clone(), identify.clone()],
+            ),
+        ] {
+            let (first_ops, permits) = resume_fallback(failure).await;
+            assert_eq!(first_ops, expected, "{failure:?}");
+            assert_eq!(permits, 1, "{failure:?}: only the IDENTIFY takes a permit");
+        }
     }
 }

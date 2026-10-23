@@ -1,4 +1,6 @@
 use std::any::{Any, TypeId};
+#[cfg(feature = "sharding")]
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -12,7 +14,7 @@ use tokio::sync::{mpsc, RwLock};
 #[cfg(feature = "sharding")]
 use tokio::time::sleep;
 use tokio::time::Duration;
-use tracing::warn;
+use tracing::{info, warn};
 
 #[cfg(feature = "cache")]
 use crate::cache::CacheBackend;
@@ -46,10 +48,11 @@ use crate::voice_runtime::{
 use crate::ws::GatewayConnectionConfig;
 
 #[cfg(feature = "sharding")]
-use super::client::GatewayCommand;
-#[cfg(feature = "sharding")]
 use super::client::SupervisorCallback;
-use super::client::{EventCallback, GatewayClient, GATEWAY_COMMAND_QUEUE_CAPACITY};
+use super::client::{
+    EventCallback, GatewayClient, GatewayCommand, GatewayExit, GATEWAY_COMMAND_QUEUE_CAPACITY,
+};
+use super::handoff::{match_sessions, GatewayHandoff, GatewaySession};
 use super::messenger::ShardMessenger;
 #[cfg(feature = "sharding")]
 use super::supervisor::{failure_raised, lock_sharding_manager, FleetFailure, ShardSupervisor};
@@ -70,7 +73,7 @@ use backend::{
 };
 #[cfg(test)]
 use pipeline::{process_gateway_dispatch, BacklogWarning, OverflowLog};
-use pipeline::{spawn_event_pipeline, GatewayDispatch};
+use pipeline::{spawn_event_pipeline, AbortOnDrop, GatewayDispatch};
 
 /// Typed Discord API object for `TypeMap`.
 pub struct TypeMap(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
@@ -1804,6 +1807,9 @@ struct DispatchConfig {
     /// Whether decoded known events keep their raw payload
     /// ([`ClientBuilder::keep_raw_events`]).
     keep_raw_events: bool,
+    /// Whether the pipeline tracks which events reached the handler, for a
+    /// handoff; set per shard when the client has a [`GatewayHandoff`].
+    track_deliveries: bool,
 }
 
 impl Default for DispatchConfig {
@@ -1818,6 +1824,7 @@ impl Default for DispatchConfig {
             interaction_admission_timeout: DEFAULT_INTERACTION_ADMISSION_TIMEOUT,
             interaction_overload: None,
             keep_raw_events: false,
+            track_deliveries: false,
         }
     }
 }
@@ -1854,6 +1861,8 @@ pub struct ClientBuilder {
     default_allowed_mentions: Option<crate::model::AllowedMentions>,
     #[cfg(feature = "cache")]
     cache_backend: Option<Arc<dyn ErasedCacheBackend>>,
+    handoff: Option<GatewayHandoff>,
+    resume_sessions: Vec<GatewaySession>,
 }
 
 impl ClientBuilder {
@@ -2098,6 +2107,48 @@ impl ClientBuilder {
         self
     }
 
+    /// Lets `handoff` end this client for a process handoff: after
+    /// [`GatewayHandoff::request`], every shard closes with a code that
+    /// keeps its session resumable, lets running handlers finish, and
+    /// records a [`GatewaySession`] for the next process (see
+    /// [`GatewayHandoff`]). Without a request the client runs as usual, and
+    /// its normal shutdown still closes with 1000.
+    ///
+    /// The client then tracks, per shard, which events reached the event
+    /// handler (a short lock in the internal processor and in the handler
+    /// lanes per event), so the session resumes after the last event the
+    /// handler was given. Clients without a handoff do not pay for this.
+    pub fn handoff(mut self, handoff: GatewayHandoff) -> Self {
+        self.handoff = Some(handoff);
+        self
+    }
+
+    /// Resumes sessions an earlier process handed off (see
+    /// [`GatewayHandoff`]) instead of identifying.
+    ///
+    /// Each shard picks the session recorded for its shard id; a session is
+    /// used only if its shard count and intents match this client's (a
+    /// resumed session keeps the intents it was opened with), otherwise it
+    /// is dropped with a warning and that shard identifies. A shard with a
+    /// session connects at once (it waits for no identify wave, IDENTIFY
+    /// gate, or session-start budget), dials the session's resume URL, and
+    /// sends RESUME; Discord replays the events after the session's
+    /// sequence, and the `resumed` handler runs. **No READY arrives and the
+    /// cache starts empty.** If Discord does not resume the session
+    /// (INVALID_SESSION, close code 4007 or 4009), or the resume URL cannot
+    /// be dialed and the configured gateway does not resume it either, the
+    /// shard logs a warning and identifies anew, and READY follows.
+    ///
+    /// The session's application id is used when this builder sets none, so
+    /// application-scoped routes (interaction follow-ups, commands) work
+    /// without READY. With the `voice` feature the bot's user id from the
+    /// session is given to the voice manager, which otherwise learns it from
+    /// READY.
+    pub fn resume_sessions(mut self, sessions: impl IntoIterator<Item = GatewaySession>) -> Self {
+        self.resume_sessions = sessions.into_iter().collect();
+        self
+    }
+
     /// Returns just the REST client without starting a gateway connection.
     pub fn rest_only(self) -> Arc<DiscordHttpClient> {
         Arc::new(DiscordHttpClient::new(self.token, self.application_id))
@@ -2128,17 +2179,29 @@ impl ClientBuilder {
             presence,
             dispatch,
             default_allowed_mentions,
+            handoff,
+            resume_sessions,
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let shard = shard.unwrap_or((0, 1));
+        let session = match_sessions(
+            resume_sessions,
+            shard.0..shard.0.saturating_add(1),
+            shard.1,
+            intents,
+        )
+        .remove(&shard.0);
+        let application_id =
+            application_id.or_else(|| session.as_ref().and_then(GatewaySession::application_id));
         let runtime = SharedRuntime::new(
             &token,
             application_id,
             data,
             cache_config,
             default_allowed_mentions,
-        );
+        )
+        .with_handoff(handoff);
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2154,6 +2217,7 @@ impl ClientBuilder {
                 shard,
                 presence,
                 dispatch,
+                session,
             },
             #[cfg(feature = "sharding")]
             ShardStartControl {
@@ -2237,10 +2301,15 @@ impl ClientBuilder {
             presence,
             dispatch,
             default_allowed_mentions,
+            handoff,
+            resume_sessions,
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let total_shards = shard_count.max(1);
+        let sessions = match_sessions(resume_sessions, 0..total_shards, total_shards, intents);
+        let application_id =
+            application_id.or_else(|| sessions.values().find_map(GatewaySession::application_id));
         // Even with a manual shard count, /gateway/bot supplies how many
         // shards may IDENTIFY concurrently and the session-start budget the
         // built-in IDENTIFY gate enforces. Starting without the budget would
@@ -2264,7 +2333,8 @@ impl ClientBuilder {
             data,
             cache_config,
             default_allowed_mentions,
-        );
+        )
+        .with_handoff(handoff);
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2281,6 +2351,7 @@ impl ClientBuilder {
             budget_refresher: Some(metadata_http),
             presence,
             dispatch,
+            sessions,
             #[cfg(feature = "cache")]
             background: backend_worker.and_then(CacheBackendWorker::into_task),
             #[cfg(not(feature = "cache"))]
@@ -2307,19 +2378,33 @@ impl ClientBuilder {
             presence,
             dispatch,
             default_allowed_mentions,
+            handoff,
+            resume_sessions,
             ..
         } = self;
         let handler = handler.ok_or("event_handler is required")?;
         let metadata_http = DiscordHttpClient::new(&token, application_id);
         let gateway_bot = metadata_http.get_gateway_bot().await?;
         let auto_shard_plan = auto_shard_plan(&gateway_bot);
+        // Matched against Discord's current recommendation: if it changed
+        // since the handoff, every session is dropped and the fleet
+        // identifies with the new shard count.
+        let sessions = match_sessions(
+            resume_sessions,
+            0..auto_shard_plan.total_shards,
+            auto_shard_plan.total_shards,
+            intents,
+        );
+        let application_id =
+            application_id.or_else(|| sessions.values().find_map(GatewaySession::application_id));
         let runtime = SharedRuntime::new(
             &token,
             application_id,
             data,
             cache_config,
             default_allowed_mentions,
-        );
+        )
+        .with_handoff(handoff);
         #[cfg(feature = "cache")]
         let (runtime, backend_worker) =
             runtime.with_cache_backend(cache_backend, dispatch.shutdown_timeout);
@@ -2338,6 +2423,7 @@ impl ClientBuilder {
             budget_refresher: Some(metadata_http),
             presence,
             dispatch,
+            sessions,
             #[cfg(feature = "cache")]
             background: backend_worker.and_then(CacheBackendWorker::into_task),
             #[cfg(not(feature = "cache"))]
@@ -2370,6 +2456,8 @@ impl Client {
             default_allowed_mentions: None,
             #[cfg(feature = "cache")]
             cache_backend: None,
+            handoff: None,
+            resume_sessions: Vec::new(),
         }
     }
 
@@ -2409,6 +2497,8 @@ struct SharedRuntime {
     voice: Arc<RwLock<VoiceManager>>,
     #[cfg(feature = "collectors")]
     collectors: CollectorHub,
+    /// The client's handoff handle, watched by every shard.
+    handoff: Option<GatewayHandoff>,
 }
 
 impl SharedRuntime {
@@ -2436,7 +2526,13 @@ impl SharedRuntime {
             voice: Arc::new(RwLock::new(VoiceManager::new())),
             #[cfg(feature = "collectors")]
             collectors: CollectorHub::new(),
+            handoff: None,
         }
+    }
+
+    fn with_handoff(mut self, handoff: Option<GatewayHandoff>) -> Self {
+        self.handoff = handoff;
+        self
     }
 
     /// Starts the client's single ordered backend worker and returns its
@@ -2515,6 +2611,8 @@ struct SpawnShardSupervisorConfig {
     budget_refresher: Option<DiscordHttpClient>,
     presence: Option<crate::model::UpdatePresence>,
     dispatch: DispatchConfig,
+    /// Handed-off sessions by shard id, already matched to this fleet.
+    sessions: BTreeMap<u32, GatewaySession>,
     /// The client's cache backend worker, handed to the supervisor.
     background: Option<tokio::task::JoinHandle<Result<(), String>>>,
 }
@@ -2553,6 +2651,7 @@ async fn spawn_shard_supervisor(
         budget_refresher,
         presence,
         dispatch,
+        mut sessions,
         background,
     } = config;
 
@@ -2596,7 +2695,18 @@ async fn spawn_shard_supervisor(
     let mut tasks = Vec::with_capacity(prepared.len());
     let mut boot_gates = Vec::with_capacity(prepared.len());
     for (shard_id, supervisor_channels) in prepared {
-        let (boot_tx, boot_rx) = watch::channel(false);
+        let session = sessions.remove(&shard_id);
+        // Identify waves pace IDENTIFYs only. A shard that resumes a
+        // handed-off session starts at once, so a handoff does not leave
+        // later shards offline for a wave delay each; if its RESUME fails,
+        // its IDENTIFY still goes through the shared gate.
+        let boot_gate = if session.is_some() {
+            None
+        } else {
+            let (boot_tx, boot_rx) = watch::channel(false);
+            boot_gates.push(boot_tx);
+            Some(boot_rx)
+        };
         let launch = ShardLaunch {
             token: token.clone(),
             intents,
@@ -2606,6 +2716,7 @@ async fn spawn_shard_supervisor(
             shard: (shard_id, total_shards),
             presence: presence.clone(),
             dispatch: dispatch.clone(),
+            session,
         };
         tasks.push((
             shard_id,
@@ -2613,12 +2724,11 @@ async fn spawn_shard_supervisor(
                 launch,
                 ShardStartControl {
                     supervisor_channels: Some(supervisor_channels),
-                    boot_gate: Some(boot_rx),
+                    boot_gate,
                     failure: Some(failures.clone()),
                 },
             )),
         ));
-        boot_gates.push(boot_tx);
     }
     drop(runtime);
 
@@ -2692,6 +2802,17 @@ struct ShardLaunch {
     shard: (u32, u32),
     presence: Option<crate::model::UpdatePresence>,
     dispatch: DispatchConfig,
+    /// A handed-off session this shard resumes instead of identifying.
+    session: Option<GatewaySession>,
+}
+
+/// Resolves once the client's handoff was requested; never without one.
+#[cfg(feature = "sharding")]
+async fn handoff_requested(handoff: Option<&GatewayHandoff>) {
+    match handoff {
+        Some(handoff) => handoff.requested().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Keeps a shard's messenger registered while its runtime runs.
@@ -2770,8 +2891,10 @@ async fn start_gateway_shard(
         gateway_config,
         shard,
         presence,
-        dispatch,
+        mut dispatch,
+        session,
     } = launch;
+    let handoff = runtime.handoff.clone();
 
     #[cfg(feature = "sharding")]
     let fleet_failure = shard_control.failure.clone();
@@ -2789,7 +2912,13 @@ async fn start_gateway_shard(
         }
 
         while !*boot_gate.borrow() {
-            if boot_gate.changed().await.is_err() {
+            // A handoff ends the wait too: a queued shard has no session to
+            // hand over and must not connect any more.
+            let released = tokio::select! {
+                changed = boot_gate.changed() => changed.is_ok(),
+                _ = handoff_requested(handoff.as_ref()) => false,
+            };
+            if !released {
                 if let Some(supervisor_channels) = shard_control.supervisor_channels.as_ref() {
                     // Best effort, as above.
                     supervisor_channels
@@ -2817,8 +2946,26 @@ async fn start_gateway_shard(
         gateway_commands: Arc::clone(&runtime.gateway_commands),
         member_chunk_waiters: Arc::clone(&runtime.member_chunk_waiters),
     };
+    // Turns the client-wide request into this shard's gateway command, so
+    // every wait of the gateway client (connection, backoff, IDENTIFY
+    // permit) sees it through its existing control channel. Aborted when
+    // the shard returns.
+    let _handoff_forwarder = handoff.clone().map(|handoff| {
+        let command_tx = gateway_command_tx.clone();
+        AbortOnDrop::new(tokio::spawn(async move {
+            handoff.requested().await;
+            // Fails only once the gateway stopped; nothing is left to close.
+            command_tx.send(GatewayCommand::Handoff).await.ok();
+        }))
+    });
+    #[cfg(feature = "voice")]
+    if let Some(user_id) = session.as_ref().and_then(GatewaySession::user_id) {
+        // A resumed session brings no READY to learn the bot's user from.
+        runtime.voice.write().await.set_current_user(user_id);
+    }
 
     let shutdown_timeout = dispatch.shutdown_timeout;
+    dispatch.track_deliveries = handoff.is_some();
     let pipeline = spawn_event_pipeline(
         handler,
         runtime.context(shard),
@@ -2827,6 +2974,10 @@ async fn start_gateway_shard(
         dispatch,
     );
     let fault = pipeline.fault();
+    let ledger = pipeline.ledger();
+    if let (Some(ledger), Some(session)) = (ledger.as_ref(), session.as_ref()) {
+        ledger.seed(session.sequence(), session.user_id());
+    }
     let ingress = pipeline.ingress();
     let callback: EventCallback = Arc::new(move |dispatch: GatewayDispatch| {
         ingress.push(dispatch);
@@ -2838,6 +2989,10 @@ async fn start_gateway_shard(
         .control(gateway_command_rx);
     if shard.1 > 1 {
         gateway = gateway.shard(shard.0, shard.1);
+    }
+    // After `shard`, so the resume URL is normalized with the shard's config.
+    if let Some(session) = session.as_ref() {
+        gateway = gateway.resume_from(session);
     }
     #[cfg(feature = "sharding")]
     let mut fault_publisher = None;
@@ -2876,10 +3031,23 @@ async fn start_gateway_shard(
     drop(gateway);
     drop(registration);
 
+    let (result, handed_off) = match result {
+        Ok(GatewayExit::HandedOff(session)) => (Ok(()), Some(session)),
+        Ok(GatewayExit::Stopped) => (Ok(()), None),
+        Err(error) => (Err(error), None),
+    };
     let result = match (result, fault.reason()) {
         (Ok(()), Some(reason)) => Err(DiscordError::gateway(reason)),
         (result, _) => result,
     };
+    // A fault means a dispatch was lost, so the stream has a gap that no
+    // resume point can describe: no session is handed over then.
+    let handed_off = handed_off.filter(|_| result.is_ok());
+    if handed_off.is_some() {
+        // Before the drain: whatever has not reached the handler by now is
+        // replayed to the next process instead of being handled here.
+        pipeline.halt();
+    }
     // Tell the supervisor and the boot scheduler now: draining handlers can
     // take up to the shutdown timeout, and later identify waves must not be
     // released meanwhile.
@@ -2888,6 +3056,26 @@ async fn start_gateway_shard(
         failure.raise(shard.0, error.to_string());
     }
     let pipeline_result = pipeline.shutdown(shutdown_timeout).await;
+    // Recorded even if the drain reports an error below: the ledger stays
+    // consistent however the pipeline tasks ended.
+    if let (Some(session), Some(handoff), Some(ledger)) =
+        (handed_off, handoff.as_ref(), ledger.as_ref())
+    {
+        match ledger.resume_point() {
+            Some(point) => {
+                let session = session
+                    .for_shard(shard, intents, runtime.http.application_id())
+                    .into_session(point);
+                info!("shard {}: handed off gateway session {session:?}", shard.0);
+                handoff.record(session);
+            }
+            None => warn!(
+                "shard {}: handed off before its READY reached the event handler, so no \
+                 session is recorded; the next process identifies this shard anew",
+                shard.0
+            ),
+        }
+    }
     if fault.is_raised() {
         // The shard's cached state no longer matches Discord: drop it (and
         // the backend mirror's copy) rather than serve it as current. The

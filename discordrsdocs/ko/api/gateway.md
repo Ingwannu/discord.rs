@@ -9,6 +9,7 @@
 - `Context`: 핸들러 공유 컨텍스트(`http`, 캐시, typemap, 샤드 정보)
 - `EventHandler`: 이벤트 콜백 트레잇(일반 `async fn`으로 구현)
 - `EventDispatchMode`: 직렬(기본) 또는 동시 핸들러 스케줄링
+- `GatewayHandoff` / `GatewaySession` (3.2): 게이트웨이 세션을 다음 프로세스에 넘겨 재개하게 합니다([프로세스 간 세션 handoff](#프로세스-간-세션-handoff-32) 참고)
 
 ## 기본 실행
 
@@ -219,6 +220,50 @@ INTERACTION_CREATE는 일반 핸들러 큐를 거치지 않습니다. 샤드마�
 `ClientBuilder::start()`는 샤드의 게이트웨이 연결이 끝난 뒤 최대 `handler_shutdown_timeout`(기본 5초)에, 중단 확인과 과부하 훅 스레드 종료를 위한 최대 1초를 더한 시간 안에 돌아옵니다. 이 시간은 종료를 요청한 시점이 아니라 게이트웨이가 끝난 시점부터 셉니다. 그 사이 큐에 남은 이벤트는 계속 전달되고 실행 중인 핸들러는 마무리할 수 있으며, 그 뒤에도 남은 핸들러 작업은 중단하고 **끝날 때까지 기다립니다(join)**. 외부 캐시 백엔드에 쌓인 쓰기도 같은 시간 안에 비우고 워커를 join하므로, `start()`가 돌아온 뒤 이 클라이언트의 쓰기가 늦게 도착하지 않습니다. 중단한 작업이 1초 안에 멈췄음을 확인하지 못하면(예: 스레드를 막는 핸들러) 멈췄다고 주장하지 않고 그 사실을 오류로 돌려줍니다.
 
 반환값은 게이트웨이의 결과이므로 4004(인증 실패), 4014(허용되지 않은 인텐트) 같은 재접속 불가 close code나 이벤트 큐 넘침은 `DiscordError::Gateway`로 호출자에게 전달됩니다. `start()` future를 취소해도 샤드의 처리기·핸들러 작업이 함께 멈춥니다. 다중 샤드는 [샤딩](../../docs/api/sharding.md) 문서를 참고합니다.
+
+### 프로세스 간 세션 handoff (3.2)
+
+교체되는 프로세스(업데이트, 재시작)는 게이트웨이 세션을 다음 프로세스에 넘길 수 있습니다. 다음 프로세스는 IDENTIFY 대신 RESUME하므로 봇이 오프라인이 되지 않고, 옛 프로세스가 처리하지 못한 이벤트는 Discord가 다시 보냅니다. `ClientBuilder::handoff`에 `GatewayHandoff`를 등록하고, 이전 프로세스가 기록한 세션을 `ClientBuilder::resume_sessions`에 넘깁니다.
+
+```rust
+use discordrs::{gateway_intents, Client, GatewayHandoff, GatewaySession};
+
+// 이전 프로세스가 쓴 세션(읽은 즉시 파일을 지웁니다: 세션은 한 번만 재개합니다).
+let sessions: Vec<GatewaySession> = read_and_delete_snapshot()?;
+
+let handoff = GatewayHandoff::new();
+let run = Client::builder(&token, gateway_intents::GUILDS)
+    .event_handler(handler)
+    .resume_sessions(sessions)
+    .handoff(handoff.clone())
+    .start();
+tokio::pin!(run);
+tokio::select! {
+    result = &mut run => return result,
+    _ = update_requested() => handoff.request(),
+}
+// start future를 계속 poll합니다: 샤드가 4000으로 닫고, 실행 중 핸들러가
+// `handler_shutdown_timeout` 안에 끝납니다.
+run.await?;
+write_snapshot_0600(&serde_json::to_vec(&handoff.take_sessions())?)?;
+// 새 바이너리를 exec
+```
+
+`request()` 뒤 각 샤드는 핸들러에 이벤트를 더 넘기지 않고, 닫힘 코드 4000으로 닫고(Discord는 1000/1001로 닫힌 세션을 끝냅니다. 정상 종료는 여전히 1000), 정상 종료처럼 실행 중 핸들러 호출을 기다린 뒤 `GatewaySession`을 기록합니다. `GatewaySession`은 serde로 직렬화됩니다. 토큰과 함께 있으면 세션을 이어 갈 수 있으므로 파일은 봇 계정만 읽게(0600) 둡니다. `Debug`는 session id 앞부분만 보입니다. `spawn_shards`에서는 `handoff.request()` 뒤 `ShardSupervisor::wait()`를 기다립니다.
+
+다음 프로세스에서 맞는 세션(같은 샤드 id·샤드 수·인텐트)이 있는 샤드는 바로 연결해 세션의 resume URL로 RESUME을 보냅니다. RESUME은 IDENTIFY permit도, 하루 세션 시작 예산도 쓰지 않습니다. 그 뒤:
+
+- **READY가 오지 않고 캐시는 비어 있습니다.** `resumed` 핸들러가 돕니다. READY에서 하던 초기화는 RESUMED나 시작 시점에도 해야 합니다. 세션은 처음의 presence와 인텐트를 유지합니다.
+- 빌더가 application id를 정하지 않았으면 세션의 값을 씁니다(인터랙션 follow-up에 필요). `voice` 기능이면 봇 user id를 음성 관리자에 넣습니다.
+- Discord가 세션을 재개하지 않으면(INVALID_SESSION, 닫힘 코드 4007/4009) 또는 resume URL과 설정된 게이트웨이가 모두 RESUME을 받지 않으면 경고를 남기고 IDENTIFY합니다. READY는 평소처럼 옵니다. 클라이언트와 맞지 않는 세션은 연결 전에 경고와 함께 버립니다.
+
+세션의 sequence는 옛 프로세스의 핸들러가 받은 마지막 이벤트입니다. 나머지는 재전송됩니다.
+
+- 핸들러 호출이 시작된 이벤트는 다시 오지 않습니다. 종료 timeout에 abort된 호출은 남은 작업을 잃습니다(최대 한 번). `handler_shutdown_timeout`을 충분히 주고, 핸들러가 spawn한 작업은 프로세스가 끝나기 전에 마칩니다.
+- 큐에 있던 이벤트, 읽었지만 아직 처리하지 않은 이벤트, 요청 뒤에 읽은 이벤트는 다음 프로세스에 재전송됩니다(손실 없음). Discord의 3초 인터랙션 기한은 계속 흐르므로 공백을 짧게 유지합니다.
+- 인터랙션은 큐의 일반 이벤트를 앞지를 수 있습니다. 처리한 인터랙션 뒤에 일반 이벤트가 큐에 남은 채 넘기면 다음 프로세스가 그 인터랙션을 다시 받습니다(최소 한 번, 두 번째 응답은 40060으로 실패).
+
+설계, sequence 추적, Decision Log: `docs/design/gateway-session-handoff.md`.
 
 ## 기본 Allowed Mentions와 캐시 백엔드 (2.2.0)
 

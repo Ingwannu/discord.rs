@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.2.0 - Unreleased
+
+### Added
+- **Gateway session handoff between processes**, so a bot can replace its process (an update, a restart) without going offline or identifying again: the old process closes its shards with a code that keeps their sessions resumable, and the new one RESUMEs them, with Discord replaying the events the old process did not handle. Prior art: twilight-gateway's `CloseFrame::RESUME` and `ConfigBuilder::session`. Design and Decision Log: `docs/design/gateway-session-handoff.md`.
+  - `GatewayHandoff` (`new`, `request`, `is_requested`, `take_sessions`) and `ClientBuilder::handoff(handoff)`: after `request()`, every shard of the client stops handing events to the event handler, closes with code 4000 (Discord ends a session closed with 1000 or 1001), lets running handler calls finish within `handler_shutdown_timeout`, and records a `GatewaySession`; `start()` / `ShardSupervisor::wait()` then return `Ok(())`. Works with `start`, `start_shards`, `start_auto_shards`, and `spawn_shards`/`spawn_auto_shards`; shards waiting for an identify wave or an IDENTIFY permit stop without a session. Keep polling the start future after the request (pin it in `tokio::select!` and await it again).
+  - `GatewaySession` (serde `Serialize`/`Deserialize`; `session_id`, `sequence`, `resume_gateway_url`, `shard`, `intents`, `application_id`, `user_id`): what the next process needs, meant for a file only the bot's user can read. `Debug` shows only the first 6 characters of the session id. Later versions only add optional fields to the JSON form.
+  - `ClientBuilder::resume_sessions(sessions)`: each shard resumes the session recorded for it if its shard count and intents match (otherwise it warns and identifies), connects at once instead of waiting for an identify wave, dials the session's resume URL, and sends RESUME, which uses no IDENTIFY permit and none of the daily session-start budget. On INVALID_SESSION, close code 4007/4009, or when neither the resume URL nor the configured gateway resumes the session, the shard warns and identifies as before (READY follows). The session's application id is used when the builder sets none, and with `voice` the bot's user id is given to the voice manager.
+  - Sequence semantics: the session's sequence is the last event of the session that was handed to the event handler (a handler call started, or an interaction given to the overload hook). Events still queued, read but unprocessed, or read after the request are replayed to the next process; an event whose handler call started is not, so a call aborted at the shutdown timeout loses its remaining work (at most once). Interactions can overtake queued regular events, so the next process may receive an interaction that was already handled (at least once; Discord rejects a second response with 40060). The tracking runs only on clients with a handoff (a short lock per event in the processor and the handler lanes).
+  - **A resumed process receives no READY and starts with an empty cache.** The `resumed` handler runs instead; initialisation that runs on READY must also run on RESUMED or at startup. The session keeps the presence and intents it was opened with.
+- Verified live on 2026-10-23 (GUILDS only, passive): the second process received RESUMED about 0.47 s after the first process handed off, without READY, and kept receiving heartbeat ACKs and events; a snapshot with a made-up session id got INVALID_SESSION and fell back to IDENTIFY and READY.
+
+### Changed
+- A RESUMED dispatch now sets the shard's supervisor state to `Running` (it stayed `Reconnecting` after a resume within the process), and for a handed-off session also publishes `SessionEstablished`.
+- The "Received READY" log line shows only the first 6 characters of the session id, as `GatewaySession`'s `Debug` does.
+
+### Migration notes
+- Nothing breaks: every addition is a new type or builder method, and a client without `handoff` behaves as in 3.1.1 (a normal shutdown still closes with 1000), so this is a minor release (3.2.0).
+
 ## 3.1.1 - 2026-10-23
 
 ### Fixed

@@ -335,7 +335,8 @@ pub use gateway::ShardSupervisor;
 #[cfg(feature = "gateway")]
 pub use gateway::{
     BotClient, BotClientBuilder, Client, ClientBuilder, Context, EventDispatchMode, EventHandler,
-    InteractionOverloadReason, OverloadedInteraction, ShardMessenger, TypeMap,
+    GatewayHandoff, GatewaySession, InteractionOverloadReason, OverloadedInteraction,
+    ShardMessenger, TypeMap,
 };
 
 #[cfg(feature = "interactions")]

@@ -11,6 +11,7 @@ Gateway runtime is provided behind the `gateway` feature.
 - `EventHandler`: handler trait with `handle_event(ctx, event)` and typed hooks, implemented with plain `async fn`
 - `EventDispatchMode`: serial (default) or concurrent handler scheduling
 - `RequestChannelInfo`: typed opcode 43 request for ephemeral voice-channel metadata
+- `GatewayHandoff` / `GatewaySession` (3.2): hand gateway sessions to the next process, which resumes them (see [Session Handoff Between Processes](#session-handoff-between-processes-32))
 
 ## Setup
 
@@ -250,6 +251,51 @@ The processor publishes an event to the collector hub before queueing its handle
 `ClientBuilder::start()` returns once the shard's gateway connection has ended plus at most `handler_shutdown_timeout` (default 5 seconds), plus up to a second to confirm cancellation and for the overload hook thread to return. The window starts when the gateway exits, not when shutdown is requested: queued events keep being delivered and running handlers may finish within it; then the remaining handler tasks are aborted **and joined**, and an external cache backend's queued writes are flushed within the same bound (its worker is joined too, so no write from this client lands after `start()` returned). If a task cannot confirm cancellation within one second of being aborted (for example a handler blocking its thread), the call returns an error saying so instead of claiming the shard stopped.
 
 The return value is the gateway's result, so a non-reconnectable close code such as 4004 (authentication failed) or 4014 (disallowed intents), or an event queue overflow, reaches the caller as `DiscordError::Gateway`. Cancelling the `start()` future also stops the shard's processor and handler tasks. See [Sharding](sharding.md) for the multi-shard equivalent.
+
+### Session Handoff Between Processes (3.2)
+
+A process that is being replaced (an update, a restart) can hand its gateway sessions to the next process, which RESUMEs them instead of identifying: the bot stays online, and Discord replays the events the old process did not handle. Register a `GatewayHandoff` with `ClientBuilder::handoff`, and pass the sessions the previous process recorded to `ClientBuilder::resume_sessions`:
+
+```rust
+use discordrs::{gateway_intents, Client, GatewayHandoff, GatewaySession};
+
+// Sessions the previous process wrote (delete the file right after reading:
+// a session must be resumed once at most).
+let sessions: Vec<GatewaySession> = read_and_delete_snapshot()?;
+
+let handoff = GatewayHandoff::new();
+let run = Client::builder(&token, gateway_intents::GUILDS)
+    .event_handler(handler)
+    .resume_sessions(sessions)
+    .handoff(handoff.clone())
+    .start();
+tokio::pin!(run);
+tokio::select! {
+    result = &mut run => return result,
+    _ = update_requested() => handoff.request(),
+}
+// Keep polling the start future: the shards close with 4000 and running
+// handlers finish within `handler_shutdown_timeout`.
+run.await?;
+write_snapshot_0600(&serde_json::to_vec(&handoff.take_sessions())?)?;
+// exec the new binary
+```
+
+After `request()`, each shard stops handing events to the handler, closes with code 4000 (Discord ends a session closed with 1000 or 1001; a normal shutdown still uses 1000), waits for running handler calls as a normal shutdown does, and records a `GatewaySession`. `GatewaySession` is serde-serializable; keep the file readable by the bot's user only (mode 0600), since with the token it continues the session. `Debug` shows only the start of the session id. With `spawn_shards`, call `handoff.request()` and then `ShardSupervisor::wait()`.
+
+In the next process, a shard with a matching session (same shard id and count, same intents) connects at once, dials the session's resume URL, and sends RESUME, which takes no IDENTIFY permit and none of the daily session-start budget. Then:
+
+- **No READY arrives and the cache starts empty.** The `resumed` handler runs; initialisation that you do on READY must also run on RESUMED or at startup. The session keeps the presence and intents it was opened with.
+- The application id comes from the session when the builder sets none (interaction follow-ups need it), and with `voice` the bot's user id goes to the voice manager.
+- If Discord does not resume the session (INVALID_SESSION, close code 4007 or 4009), or neither the resume URL nor the configured gateway accepts the RESUME, the shard logs a warning and identifies; READY follows as usual. A session that does not match the client is dropped with a warning before connecting.
+
+The session's sequence is the last event the old process's handler was given. Everything else is replayed:
+
+- an event whose handler call started is not replayed, so a call aborted at the shutdown timeout loses its remaining work (at most once): give your handlers enough `handler_shutdown_timeout`, and finish work they spawned before the process exits;
+- queued events, events read but not processed yet, and events read after the request are replayed to the next process (no loss); Discord's three-second interaction deadline keeps running, so keep the gap short;
+- interactions can overtake queued regular events: if regular events are still queued behind an interaction that was handled, the next process receives that interaction again (at least once; a second response fails with 40060).
+
+Design, sequence tracking, and the Decision Log: `docs/design/gateway-session-handoff.md`.
 
 ## Default Allowed Mentions and Cache Backend (2.2.0)
 

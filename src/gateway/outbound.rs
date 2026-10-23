@@ -94,7 +94,9 @@ pub(super) fn classify_gateway_command(command: &GatewayCommand) -> GatewayComma
             ) => GatewayCommandClass::BurstSensitive,
             _ => GatewayCommandClass::Other,
         },
-        GatewayCommand::Shutdown | GatewayCommand::Reconnect => GatewayCommandClass::Other,
+        GatewayCommand::Shutdown | GatewayCommand::Handoff | GatewayCommand::Reconnect => {
+            GatewayCommandClass::Other
+        }
     }
 }
 
@@ -213,7 +215,9 @@ where
         GatewayCommand::RequestGuildMembers(request) => request_guild_members_payload(&request),
         GatewayCommand::RequestChannelInfo(request) => request_channel_info_payload(&request),
         GatewayCommand::SendPayload(payload) => payload,
-        GatewayCommand::Shutdown | GatewayCommand::Reconnect => return Ok(()),
+        GatewayCommand::Shutdown | GatewayCommand::Handoff | GatewayCommand::Reconnect => {
+            return Ok(())
+        }
     };
     write
         .send(WsMessage::Text(payload.to_string().into()))

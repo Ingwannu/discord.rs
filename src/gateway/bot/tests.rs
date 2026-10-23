@@ -2938,6 +2938,7 @@ async fn start_gateway_shard_exits_cleanly_when_boot_gate_closes_early() {
             shard: (0, 1),
             presence: None,
             dispatch: super::DispatchConfig::default(),
+            session: None,
         },
         super::ShardStartControl {
             supervisor_channels: Some(supervisor_channels),
@@ -5634,6 +5635,7 @@ async fn start_returns_a_terminal_close_error_without_waiting_for_a_stuck_handle
                 shutdown_timeout: Duration::from_millis(50),
                 ..super::DispatchConfig::default()
             },
+            session: None,
         },
         super::ShardStartControl {
             supervisor_channels: None,
@@ -5705,6 +5707,7 @@ async fn shard_supervisor_returns_the_first_fatal_error_and_stops_the_other_shar
             shutdown_timeout: Duration::from_millis(50),
             ..super::DispatchConfig::default()
         },
+        sessions: Default::default(),
         background: None,
     })
     .await
@@ -5802,6 +5805,7 @@ async fn spawn_budgeted_supervisor(
             shutdown_timeout: Duration::from_millis(50),
             ..super::DispatchConfig::default()
         },
+        sessions: Default::default(),
         background: None,
     })
     .await
@@ -6422,6 +6426,7 @@ async fn ingress_overflow_stops_the_shard_invalidates_its_cache_and_fails_fetche
                 shutdown_timeout: Duration::from_millis(50),
                 ..super::DispatchConfig::default()
             },
+            session: None,
         },
         super::ShardStartControl {
             supervisor_channels: None,
@@ -7134,6 +7139,7 @@ async fn spawn_test_supervisor(
             shutdown_timeout: Duration::from_millis(50),
             ..super::DispatchConfig::default()
         },
+        sessions: Default::default(),
         background: None,
     })
     .await
@@ -7839,6 +7845,7 @@ async fn a_failing_shard_stops_later_boot_waves_before_its_drain_finishes() {
             shutdown_timeout: Duration::from_secs(2),
             ..super::DispatchConfig::default()
         },
+        sessions: Default::default(),
         background: None,
     })
     .await
@@ -8704,4 +8711,522 @@ async fn apply_voice_updates_track_only_the_bots_own_voice_state() {
         .voice_runtime_config(guild_id, bot_id)
         .await
         .is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Session handoff between processes
+// ---------------------------------------------------------------------------
+
+type HandoffSocket = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+/// A local gateway that sends HELLO, reads the client's IDENTIFY or RESUME,
+/// and hands the connection and that payload to `script`.
+async fn spawn_session_gateway<F, Fut>(script: F) -> (String, tokio::task::JoinHandle<()>)
+where
+    F: Fn(HandoffSocket, Value) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/", listener.local_addr().unwrap());
+    let script = Arc::new(script);
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let script = Arc::clone(&script);
+            tokio::spawn(async move {
+                let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
+                    return;
+                };
+                let hello = json!({ "op": 10, "d": { "heartbeat_interval": 60_000 } });
+                if socket
+                    .send(WsMessage::Text(hello.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let opening = loop {
+                    match socket.next().await {
+                        Some(Ok(WsMessage::Text(text))) => {
+                            let payload: Value = serde_json::from_str(&text).unwrap();
+                            if payload["op"] == json!(2) || payload["op"] == json!(6) {
+                                break payload;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        _ => return,
+                    }
+                };
+                script(socket, opening).await;
+            });
+        }
+    });
+    (url, server)
+}
+
+async fn send_handoff_dispatch(socket: &mut HandoffSocket, sequence: u64, name: &str, data: Value) {
+    use futures_util::SinkExt;
+    let payload = json!({ "op": 0, "s": sequence, "t": name, "d": data });
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            payload.to_string().into(),
+        ))
+        .await
+        .unwrap();
+}
+
+/// Waits for the client's close frame and returns its code.
+async fn client_close_code(socket: &mut HandoffSocket) -> Option<u16> {
+    use futures_util::StreamExt;
+    while let Some(Ok(message)) = socket.next().await {
+        if let tokio_tungstenite::tungstenite::Message::Close(frame) = message {
+            return frame.map(|frame| u16::from(frame.code));
+        }
+    }
+    None
+}
+
+fn handoff_ready_payload(resume_url: &str) -> Value {
+    json!({
+        "v": 10,
+        "user": { "id": "11", "username": "bot" },
+        "session_id": "session-a",
+        "resume_gateway_url": resume_url,
+        "guilds": [],
+        "application": { "id": "12", "flags": 0 }
+    })
+}
+
+fn handoff_message(id: &str, content: &str) -> Value {
+    json!({ "id": id, "channel_id": "6", "content": content })
+}
+
+/// Records what reached the handler; a message with content `"slow"` never
+/// finishes (the shutdown timeout aborts it).
+#[derive(Clone, Default)]
+struct HandoffRecorder {
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+    progress: Arc<tokio::sync::Notify>,
+    application_ids: Arc<std::sync::Mutex<Vec<Option<crate::model::ApplicationId>>>>,
+}
+
+impl HandoffRecorder {
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+
+    fn record(&self, entry: String) {
+        self.seen.lock().unwrap().push(entry);
+        self.progress.notify_waiters();
+    }
+
+    async fn wait_for(&self, entry: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let notified = self.progress.notified();
+                if self.seen().iter().any(|seen| seen == entry) {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the handler never saw {entry}; saw {:?}", self.seen()));
+    }
+}
+
+impl super::EventHandler for HandoffRecorder {
+    async fn ready(&self, _ctx: super::Context, _ready: &ReadyPayload) {
+        self.record("READY".to_string());
+    }
+
+    async fn resumed(&self, ctx: super::Context) {
+        self.application_ids
+            .lock()
+            .unwrap()
+            .push(ctx.rest().application_id());
+        self.record("RESUMED".to_string());
+    }
+
+    async fn message_create(&self, _ctx: super::Context, message: Arc<Message>) {
+        self.record(message.content.clone());
+        if message.content == "slow" {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
+/// Process 1 identifies, hands off while a handler is stuck and two events
+/// wait behind it, and process 2 resumes: Discord replays the two events,
+/// RESUMED reaches the handler instead of READY, and the second handoff
+/// points after RESUMED.
+#[tokio::test]
+async fn a_handed_off_session_is_resumed_by_the_next_process_with_the_unhandled_events() {
+    let (closes_tx, mut closes_rx) = mpsc::unbounded_channel();
+    let (resumes_tx, mut resumes_rx) = mpsc::unbounded_channel();
+    let url_cell = Arc::new(std::sync::OnceLock::<String>::new());
+    let url_for_script = Arc::clone(&url_cell);
+    let (url, server) = spawn_session_gateway(move |mut socket, opening| {
+        let closes_tx = closes_tx.clone();
+        let resumes_tx = resumes_tx.clone();
+        let resume_url = url_for_script.get().cloned().unwrap_or_default();
+        async move {
+            if opening["op"] == json!(2) {
+                send_handoff_dispatch(&mut socket, 1, "READY", handoff_ready_payload(&resume_url))
+                    .await;
+                send_handoff_dispatch(
+                    &mut socket,
+                    2,
+                    "MESSAGE_CREATE",
+                    handoff_message("2", "slow"),
+                )
+                .await;
+                send_handoff_dispatch(
+                    &mut socket,
+                    3,
+                    "MESSAGE_CREATE",
+                    handoff_message("3", "three"),
+                )
+                .await;
+                send_handoff_dispatch(
+                    &mut socket,
+                    4,
+                    "MESSAGE_CREATE",
+                    handoff_message("4", "four"),
+                )
+                .await;
+            } else {
+                resumes_tx.send(opening.clone()).unwrap();
+                // The replay of everything after the RESUME sequence.
+                let after = opening["d"]["seq"].as_u64().unwrap();
+                for sequence in after + 1..=4 {
+                    let content = if sequence == 3 { "three" } else { "four" };
+                    send_handoff_dispatch(
+                        &mut socket,
+                        sequence,
+                        "MESSAGE_CREATE",
+                        handoff_message(&sequence.to_string(), content),
+                    )
+                    .await;
+                }
+                send_handoff_dispatch(&mut socket, 5, "RESUMED", Value::Null).await;
+            }
+            closes_tx
+                .send(client_close_code(&mut socket).await)
+                .unwrap();
+        }
+    })
+    .await;
+    url_cell.set(url.clone()).unwrap();
+
+    // Process 1.
+    let first = HandoffRecorder::default();
+    let handoff = super::GatewayHandoff::new();
+    let run = tokio::spawn(
+        super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url.clone()))
+            .event_handler(first.clone())
+            .handler_shutdown_timeout(Duration::from_millis(200))
+            .handoff(handoff.clone())
+            .start(),
+    );
+    first.wait_for("slow").await;
+    handoff.request();
+    assert_eq!(closes_rx.recv().await.unwrap(), Some(4000));
+    tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .expect("start returns once the stuck handler was aborted")
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.seen(), vec!["READY", "slow"]);
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions.len(), 1);
+    let session = &sessions[0];
+    assert_eq!(session.session_id(), "session-a");
+    assert_eq!(
+        session.sequence(),
+        2,
+        "the last event handed to the handler; 3 and 4 were only queued"
+    );
+    assert_eq!(session.shard(), (0, 1));
+    assert_eq!(session.intents(), crate::gateway_intents::GUILDS);
+    assert_eq!(session.application_id(), Some(test_id(12)));
+    assert_eq!(session.user_id(), Some(test_id(11)));
+    assert!(session.resume_gateway_url().is_some());
+
+    // The snapshot crosses the process boundary as JSON.
+    let json = serde_json::to_string(&sessions).unwrap();
+    let sessions: Vec<super::GatewaySession> = serde_json::from_str(&json).unwrap();
+
+    // Process 2.
+    let second = HandoffRecorder::default();
+    let handoff = super::GatewayHandoff::new();
+    let run = tokio::spawn(
+        super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url))
+            .event_handler(second.clone())
+            .handoff(handoff.clone())
+            .resume_sessions(sessions)
+            .start(),
+    );
+    let resume = tokio::time::timeout(Duration::from_secs(10), resumes_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resume["d"]["session_id"], json!("session-a"));
+    assert_eq!(resume["d"]["seq"], json!(2));
+    second.wait_for("RESUMED").await;
+    handoff.request();
+    assert_eq!(closes_rx.recv().await.unwrap(), Some(4000));
+    tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        second.seen(),
+        vec!["three", "four", "RESUMED"],
+        "the replayed events arrive, READY does not"
+    );
+    assert_eq!(
+        *second.application_ids.lock().unwrap(),
+        vec![Some(test_id(12))],
+        "the application id comes from the session"
+    );
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id(), "session-a");
+    assert_eq!(sessions[0].sequence(), 5);
+    assert_eq!(
+        sessions[0].user_id(),
+        Some(test_id(11)),
+        "carried over from the first READY"
+    );
+    server.abort();
+}
+
+/// A session opened with other intents (or for another shard layout) is not
+/// resumed: the shard identifies and READY follows.
+#[tokio::test]
+async fn a_session_that_does_not_match_the_client_is_identified_instead() {
+    let (openings_tx, mut openings_rx) = mpsc::unbounded_channel();
+    let (url, server) = spawn_session_gateway(move |mut socket, opening| {
+        let openings_tx = openings_tx.clone();
+        async move {
+            openings_tx.send(opening["op"].clone()).unwrap();
+            send_handoff_dispatch(&mut socket, 1, "READY", fake_handoff_ready()).await;
+            client_close_code(&mut socket).await;
+        }
+    })
+    .await;
+    let recorder = HandoffRecorder::default();
+    let handoff = super::GatewayHandoff::new();
+    let other_intents = super::GatewaySession::for_test(
+        "session-old",
+        40,
+        Some(&url),
+        (0, 1),
+        crate::gateway_intents::GUILDS.bits() | crate::gateway_intents::GUILD_MEMBERS.bits(),
+    );
+    let other_layout = super::GatewaySession::for_test("session-old", 40, Some(&url), (0, 2), 1);
+    let run = tokio::spawn(
+        super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url))
+            .event_handler(recorder.clone())
+            .handoff(handoff.clone())
+            .resume_sessions([other_intents, other_layout])
+            .start(),
+    );
+    recorder.wait_for("READY").await;
+    assert_eq!(
+        openings_rx.recv().await.unwrap(),
+        json!(2),
+        "IDENTIFY, not RESUME"
+    );
+    handoff.request();
+    tokio::time::timeout(Duration::from_secs(10), run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions[0].session_id(), "session");
+    assert_eq!(sessions[0].sequence(), 1);
+    server.abort();
+}
+
+fn fake_handoff_ready() -> Value {
+    json!({
+        "v": 10,
+        "user": { "id": "1", "username": "bot" },
+        "session_id": "session",
+        "guilds": [],
+        "application": { "id": "1", "flags": 0 }
+    })
+}
+
+/// A handoff before the shard has a session closes like a shutdown and
+/// records nothing (the ledger tests cover a READY that was read but not
+/// yet handed to the handler).
+#[tokio::test]
+async fn a_handoff_before_the_shard_has_a_session_records_none() {
+    let (url, server) = spawn_session_gateway(move |mut socket, _opening| async move {
+        client_close_code(&mut socket).await;
+    })
+    .await;
+    let handoff = super::GatewayHandoff::new();
+    // Requested before the client even starts: the first connection
+    // identifies, then closes like a shutdown.
+    handoff.request();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        super::Client::builder("token", crate::gateway_intents::GUILDS)
+            .gateway_config(crate::ws::GatewayConnectionConfig::new(url))
+            .event_handler(NoopEventHandler)
+            .handoff(handoff.clone())
+            .start(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(handoff.take_sessions().is_empty());
+    server.abort();
+}
+
+/// In-process shards: a shard with a handed-off session resumes at once,
+/// even with no session starts left and while the other shard waits for the
+/// budget; the handoff then ends that wait, and only the resumed shard
+/// records a session.
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn a_resuming_shard_skips_the_identify_budget_and_a_waiting_shard_stops_on_handoff() {
+    let (openings_tx, mut openings_rx) = mpsc::unbounded_channel();
+    let (url, server) = spawn_session_gateway(move |mut socket, opening| {
+        let openings_tx = openings_tx.clone();
+        async move {
+            openings_tx.send(opening.clone()).unwrap();
+            if opening["op"] == json!(6) {
+                send_handoff_dispatch(&mut socket, 8, "RESUMED", Value::Null).await;
+            }
+            client_close_code(&mut socket).await;
+        }
+    })
+    .await;
+    let handoff = super::GatewayHandoff::new();
+    let recorder = HandoffRecorder::default();
+    let mut sessions = std::collections::BTreeMap::new();
+    sessions.insert(
+        1,
+        super::GatewaySession::for_test("session-shard-1", 7, Some(&url), (1, 2), 0),
+    );
+    let supervisor = super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(recorder.clone()),
+        runtime: super::SharedRuntime::new(
+            "token",
+            None,
+            super::TypeMap::new(),
+            CacheConfig::default(),
+            None,
+        )
+        .with_handoff(Some(handoff.clone())),
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards: 2,
+        boot_window_size: 1,
+        boot_delay: Duration::from_secs(60),
+        session_start_limit: Some(SessionStartLimit {
+            total: 1000,
+            remaining: 0,
+            reset_after: 60_000,
+            max_concurrency: 1,
+        }),
+        budget_refresher: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            shutdown_timeout: Duration::from_millis(200),
+            ..super::DispatchConfig::default()
+        },
+        sessions,
+        background: None,
+    })
+    .await
+    .unwrap();
+
+    let opening = tokio::time::timeout(Duration::from_secs(5), openings_rx.recv())
+        .await
+        .expect("the resuming shard connects without waiting for the budget")
+        .unwrap();
+    assert_eq!(opening["op"], json!(6));
+    assert_eq!(opening["d"]["seq"], json!(7));
+    recorder.wait_for("RESUMED").await;
+
+    handoff.request();
+    tokio::time::timeout(Duration::from_secs(10), supervisor.wait())
+        .await
+        .expect("the shard waiting for an IDENTIFY permit stops on the handoff")
+        .unwrap();
+    assert!(
+        openings_rx.try_recv().is_err(),
+        "shard 0 never identified (no budget)"
+    );
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].shard(), (1, 2));
+    assert_eq!(sessions[0].sequence(), 8);
+    server.abort();
+}
+
+/// A shard still queued for a later identify wave stops on a handoff
+/// instead of connecting.
+#[cfg(feature = "sharding")]
+#[tokio::test]
+async fn a_shard_queued_for_a_later_identify_wave_stops_on_handoff() {
+    let (url, server) = spawn_session_gateway(move |mut socket, _opening| async move {
+        send_handoff_dispatch(&mut socket, 1, "READY", fake_handoff_ready()).await;
+        client_close_code(&mut socket).await;
+    })
+    .await;
+    let handoff = super::GatewayHandoff::new();
+    let recorder = HandoffRecorder::default();
+    let supervisor = super::spawn_shard_supervisor(super::SpawnShardSupervisorConfig {
+        token: "token".to_string(),
+        intents: 0,
+        handler: Arc::new(recorder.clone()),
+        runtime: super::SharedRuntime::new(
+            "token",
+            None,
+            super::TypeMap::new(),
+            CacheConfig::default(),
+            None,
+        )
+        .with_handoff(Some(handoff.clone())),
+        gateway_config: crate::ws::GatewayConnectionConfig::new(url),
+        total_shards: 2,
+        boot_window_size: 1,
+        boot_delay: Duration::from_secs(60),
+        session_start_limit: None,
+        budget_refresher: None,
+        presence: None,
+        dispatch: super::DispatchConfig {
+            shutdown_timeout: Duration::from_millis(200),
+            ..super::DispatchConfig::default()
+        },
+        sessions: Default::default(),
+        background: None,
+    })
+    .await
+    .unwrap();
+    recorder.wait_for("READY").await;
+    handoff.request();
+    tokio::time::timeout(Duration::from_secs(10), supervisor.wait())
+        .await
+        .expect("the queued shard does not wait for its wave")
+        .unwrap();
+    let sessions = handoff.take_sessions();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].shard(), (0, 2));
+    server.abort();
 }

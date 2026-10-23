@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.2.0 - Unreleased
+
+- Gateway session handoff between processes: `GatewayHandoff` + `ClientBuilder::handoff` close every shard with code 4000 (the session stays resumable) after the running handlers finish and record a serde `GatewaySession` per shard; `ClientBuilder::resume_sessions` makes the next process RESUME them (no IDENTIFY, no session-start budget, no identify wave), and Discord replays every event after the last one the old handler was given. A resumed process gets RESUMED instead of READY and starts with an empty cache. Unresumable sessions (INVALID_SESSION, 4007/4009, mismatched shard count or intents) fall back to IDENTIFY with a warning. See the [Gateway API](../api/gateway.md#session-handoff-between-processes-32).
+
+## 3.1.1 - 2026-10-23
+
+- A Reconnect (opcode 7) no longer leaves the bot offline: READY's host-only `resume_gateway_url` is given the root path before dialing (it produced `GET ?v=10…`, which Discord answers with 400), and a resume URL that cannot be dialed is dropped so the next connection uses the configured gateway.
+
 ## 3.1.0 - 2026-10-22
 
 - `InteractionsEndpointBuilder::default_allowed_mentions` gives the HTTP interactions endpoint the default `allowed_mentions` the REST client already applies: inline message responses (types 4 and 7) that leave it unset get the default, an explicit value wins, and `InteractionResponse::Raw` is sent as written, so one response and one policy produce the same bytes on both transports.

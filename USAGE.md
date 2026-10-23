@@ -1485,6 +1485,34 @@ async fn load_members(ctx: &discordrs::Context, guild_id: discordrs::GuildId) ->
 
 Use `fetch_members_with_timeout(guild_id, query, limit, timeout)` to override the default 60-second overall deadline. The lower-level `ctx.request_guild_members(...)` remains available when you want raw `GUILD_MEMBERS_CHUNK` events without awaiting collection.
 
+## 9.7 Hand the Gateway Session to the Next Process (3.2)
+
+To replace the bot's process without going offline, hand its sessions over: the old process closes each shard with code 4000 (Discord keeps the session) and records a `GatewaySession`; the new one RESUMEs it, and Discord replays the events the old process did not hand to its handler.
+
+```rust
+use discordrs::{gateway_intents, Client, GatewayHandoff, GatewaySession};
+
+async fn run(token: &str, handler: impl discordrs::EventHandler, sessions: Vec<GatewaySession>)
+    -> Result<Vec<GatewaySession>, discordrs::DiscordError>
+{
+    let handoff = GatewayHandoff::new();
+    let run = Client::builder(token, gateway_intents::GUILDS)
+        .event_handler(handler)
+        .resume_sessions(sessions) // from the previous process, or empty
+        .handoff(handoff.clone())
+        .start();
+    tokio::pin!(run);
+    tokio::select! {
+        result = &mut run => { result?; return Ok(Vec::new()); }
+        _ = update_requested() => handoff.request(),
+    }
+    run.await?; // closes with 4000, running handlers finish
+    Ok(handoff.take_sessions()) // write them to a 0600 file, then exec the new binary
+}
+```
+
+The resumed process gets RESUMED (the `resumed` handler) instead of READY and starts with an empty cache, so do not rely on READY for initialisation. A session that cannot be resumed falls back to IDENTIFY with a warning. Sequence semantics and the rest: [Gateway API](discordrsdocs/docs/api/gateway.md#session-handoff-between-processes-32).
+
 ## 10. Spawn and Supervise Multiple Shards
 
 With `gateway + sharding`, you have two entry points:
