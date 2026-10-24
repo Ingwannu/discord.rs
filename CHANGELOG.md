@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 3.2.0 - Unreleased
+## 3.2.0 - 2026-10-24
 
 ### Added
 - **Gateway session handoff between processes**, so a bot can replace its process (an update, a restart) without going offline or identifying again: the old process closes its shards with a code that keeps their sessions resumable, and the new one RESUMEs them, with Discord replaying the events the old process did not handle. Prior art: twilight-gateway's `CloseFrame::RESUME` and `ConfigBuilder::session`. Design and Decision Log: `docs/design/gateway-session-handoff.md`.
