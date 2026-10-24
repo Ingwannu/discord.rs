@@ -245,7 +245,10 @@ impl GatewayConnectionConfig {
     /// bound also limits how long the attempt keeps the bucket, and an
     /// attempt that runs over is reported as [`IdentifyOutcome::Abandoned`].
     /// A shutdown or handoff request ends a setup at once, whatever the
-    /// bound.
+    /// bound. A bound too large to add to the current time (for example
+    /// `Duration::MAX`) means no bound: setup then waits as long as the
+    /// connection takes, as 3.1 did for RESUMEs, and only a shutdown or
+    /// handoff ends it early.
     ///
     /// Up to 3.1 only setups holding an IDENTIFY permit were bounded (to 15
     /// seconds); a RESUME or an ungated IDENTIFY could wait forever for a

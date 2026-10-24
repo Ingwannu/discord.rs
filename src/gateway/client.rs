@@ -755,10 +755,13 @@ impl GatewayClient {
                 "failed to initialize gateway compression decoder: {error}"
             ))
         })?;
+        // `checked_add`: a bound too large to add to now (for example
+        // `Duration::MAX`, used as "unlimited") is no deadline instead of a
+        // panic before dialing.
         let setup = open_connection(
             url,
             compression_decoder,
-            Instant::now() + setup_timeout,
+            Instant::now().checked_add(setup_timeout),
             setup_timed_out,
         );
         tokio::pin!(setup);
@@ -1129,23 +1132,24 @@ enum ConnectionSetup {
     ClosedBeforeHello(Option<CloseFrame>),
 }
 
-/// Dials `url`, upgrades, and waits for HELLO, all before `deadline`.
+/// Dials `url`, upgrades, and waits for HELLO, all before `deadline` (none:
+/// no bound).
 ///
 /// It borrows nothing from the client, so `connect_and_run` can serve the
 /// control channel while it runs and drop it on a shutdown or handoff.
 async fn open_connection(
     url: &str,
     mut compression_decoder: GatewayCompressionDecoder,
-    deadline: Instant,
+    deadline: Option<Instant>,
     timed_out: impl Fn() -> crate::error::DiscordError,
 ) -> Result<ConnectionSetup, crate::error::DiscordError> {
-    let (mut socket, _) = timeout_at(deadline, connect_async(url))
+    let (mut socket, _) = before(deadline, connect_async(url))
         .await
-        .map_err(|_| timed_out())??;
+        .map_err(|()| timed_out())??;
     let hello_text = loop {
-        let next = timeout_at(deadline, socket.next())
+        let next = before(deadline, socket.next())
             .await
-            .map_err(|_| timed_out())?;
+            .map_err(|()| timed_out())?;
         let hello = next
             .ok_or_else(|| crate::error::DiscordError::gateway("gateway closed before Hello"))??;
         if let WsMessage::Close(frame) = hello {
@@ -1180,6 +1184,17 @@ async fn open_connection(
         compression_decoder,
         heartbeat_interval_ms,
     })))
+}
+
+/// Runs `future` until `deadline`; without one, until it finishes.
+async fn before<F: std::future::Future>(
+    deadline: Option<Instant>,
+    future: F,
+) -> Result<F::Output, ()> {
+    match deadline {
+        Some(deadline) => timeout_at(deadline, future).await.map_err(|_| ()),
+        None => Ok(future.await),
+    }
 }
 
 enum ReconnectAction {
@@ -3863,5 +3878,48 @@ mod tests {
             vec![("RESUMED".to_string(), Some(22))]
         );
         silent.abort();
+    }
+
+    /// Regression (third review, of 67d2403): `setup_timeout(Duration::MAX)`
+    /// ("unlimited") overflowed `Instant::now() + timeout` and panicked
+    /// before dialing. It now means no bound: setup still completes, and a
+    /// stop request still ends a setup that never finishes.
+    #[tokio::test]
+    async fn an_unlimited_setup_timeout_dials_and_stays_stoppable() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let config = GatewayConnectionConfig::new(url.clone()).setup_timeout(Duration::MAX);
+        let mut client = GatewayClient::new("secret-token".into(), 513).gateway_config(config);
+        let (sent, action) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                serve_one_connection(&listener, false),
+                client.connect_and_run(&url, Arc::new(|_| {}))
+            )
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            sent["op"],
+            serde_json::json!(2),
+            "the connection identified"
+        );
+        assert!(action.is_ok());
+
+        let (stalled, reached, server) = stalling_server(SetupStall::Hello).await;
+        let (command_tx, command_rx) = mpsc::channel(GATEWAY_COMMAND_QUEUE_CAPACITY);
+        let mut client = GatewayClient::new("secret-token".into(), 513)
+            .gateway_config(GatewayConnectionConfig::new(stalled).setup_timeout(Duration::MAX))
+            .control(command_rx);
+        let stop = async {
+            reached.await.unwrap();
+            command_tx.send(GatewayCommand::Shutdown).await.unwrap();
+        };
+        let (exit, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(client.run(Arc::new(|_| {})), stop)
+        })
+        .await
+        .expect("a shutdown ends an unbounded setup");
+        assert!(matches!(exit.unwrap(), GatewayExit::Stopped));
+        server.abort();
     }
 }

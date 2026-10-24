@@ -306,6 +306,11 @@ IDENTIFY는 설정이 아무리 느려도 기다렸다. 이제는 모든 설정�
 backoff로 재시도한다. 설정이 늘 제한보다 느린 회선에서는 예전엔 결국 연결됐지만 이제는 계속 재시도만
 한다. 그래서 제한 시간을 상수가 아니라 `GatewayConnectionConfig::setup_timeout`(기본 15초, 추가형 API)으로
 두었다. Discord는 업그레이드 직후 HELLO를 보내므로 15초는 느린 TLS handshake에도 여유가 있다.
+현재 시각에 더할 수 없을 만큼 큰 값(예: `Duration::MAX`)은 제한 없음으로 처리한다(`checked_add`).
+3차 리뷰(`67d2403`)에서 `Instant::now() + timeout`이 그 값으로 연결 전에 panic하던 것을 고쳤다. 회귀
+테스트는 `an_unlimited_setup_timeout_dials_and_stays_stoppable`이다. 새 코드의 다른 사용자 설정 시간
+(`handler_shutdown_timeout`은 tokio `timeout`, 넘치면 먼 미래로 처리, supervisor는
+`saturating_add`/`checked_add`)은 이미 넘침을 처리한다.
 
 ```text
 [Decision Log]
