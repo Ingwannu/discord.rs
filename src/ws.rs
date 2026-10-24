@@ -2,11 +2,17 @@ use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::error::DiscordError;
 
 const DEFAULT_GATEWAY_URL: &str = "wss://gateway.discord.gg/";
 const DEFAULT_GATEWAY_VERSION: u8 = 10;
+/// Default bound on connection setup; see
+/// [`GatewayConnectionConfig::setup_timeout`]. Discord sends HELLO right
+/// after the WebSocket upgrade, so 15 seconds covers a slow TLS handshake
+/// with room to spare while still noticing a gateway that never answers.
+const DEFAULT_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Typed Discord API enum for `GatewayEncoding`.
@@ -169,7 +175,8 @@ pub type IdentifyPermitFuture<'a> =
 /// connection in a bounded backlog (the same one used during reconnect
 /// backoff): presence updates coalesce to the newest one, and beyond 32
 /// other commands the oldest is dropped. Once granted, connection setup
-/// (connect, WebSocket upgrade, and HELLO) is bounded to 15 seconds; an
+/// (connect, WebSocket upgrade, and HELLO) is bounded by
+/// [`GatewayConnectionConfig::setup_timeout`] (15 seconds by default); an
 /// attempt that runs over is reported as [`IdentifyOutcome::Abandoned`].
 pub trait IdentifyGate: Send + Sync {
     /// Waits until `shard_id` (of `shard_count`) may IDENTIFY.
@@ -205,6 +212,7 @@ pub struct GatewayConnectionConfig {
     shard: Option<(u32, u32)>,
     capabilities: crate::bitfield::GatewayCapabilities,
     identify_gate: Option<IdentifyGateHandle>,
+    setup_timeout: Duration,
 }
 
 impl Default for GatewayConnectionConfig {
@@ -224,7 +232,32 @@ impl GatewayConnectionConfig {
             shard: None,
             capabilities: crate::bitfield::GatewayCapabilities::from_bits(0),
             identify_gate: None,
+            setup_timeout: DEFAULT_SETUP_TIMEOUT,
         }
+    }
+
+    /// Bounds the setup of every gateway connection built from this config:
+    /// TCP/TLS connect, WebSocket upgrade, and HELLO (default 15 seconds).
+    /// An attempt that runs over fails like a failed dial and is retried
+    /// with the usual 1 to 300 second reconnect backoff, so a link on which
+    /// setup is always slower than this never connects: raise it for such
+    /// links. While an IDENTIFY permit is held (see [`IdentifyGate`]) the
+    /// bound also limits how long the attempt keeps the bucket, and an
+    /// attempt that runs over is reported as [`IdentifyOutcome::Abandoned`].
+    /// A shutdown or handoff request ends a setup at once, whatever the
+    /// bound.
+    ///
+    /// Up to 3.1 only setups holding an IDENTIFY permit were bounded (to 15
+    /// seconds); a RESUME or an ungated IDENTIFY could wait forever for a
+    /// gateway that accepted the connection but never sent HELLO.
+    pub fn setup_timeout(mut self, timeout: Duration) -> Self {
+        self.setup_timeout = timeout;
+        self
+    }
+
+    /// The bound set with [`Self::setup_timeout`].
+    pub fn setup_timeout_duration(&self) -> Duration {
+        self.setup_timeout
     }
 
     pub fn version(mut self, version: u8) -> Self {
@@ -488,6 +521,23 @@ mod tests {
                 "{base}"
             );
         }
+    }
+
+    #[test]
+    fn setup_timeout_defaults_to_15_seconds_and_survives_other_settings() {
+        let config = GatewayConnectionConfig::default();
+        assert_eq!(
+            config.setup_timeout_duration(),
+            std::time::Duration::from_secs(15)
+        );
+        let config = config
+            .setup_timeout(std::time::Duration::from_secs(40))
+            .shard(1, 2)
+            .with_base_url("wss://gateway-us-east1-b.discord.gg");
+        assert_eq!(
+            config.setup_timeout_duration(),
+            std::time::Duration::from_secs(40)
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 
 use serde_json::value::RawValue;
@@ -260,10 +260,64 @@ pub struct Context {
     event_cursor: Option<crate::collector::EventCursor>,
     #[cfg(feature = "cache")]
     cache_backend_health: Option<Arc<ForwarderShared>>,
-    // Set by the start path when `http`'s application id came from a
-    // handed-off session; cleared by the event processor of whichever shard
-    // replaces it with the id of a fresh READY.
-    application_id_provisional: Arc<AtomicBool>,
+    // Shared by every shard's `Context` of one client: the start path marks
+    // an application id taken from a handed-off session, and each shard's
+    // event processor consults it on READY.
+    application_id_source: Arc<ApplicationIdSource>,
+}
+
+/// Whether the client's application id is only provisional: taken from a
+/// handed-off session, and replaced by the id of the first fresh READY.
+///
+/// ```text
+/// [Decision Log]
+/// - 목적과 의도: fallback IDENTIFY의 READY가 거절된 스냅샷의 application id를 대신하게 한다.
+/// - 기존 구현 및 제약 조건: id는 REST 클라이언트의 AtomicU64에 있고 모든 샤드가 공유한다. 3dc6888은
+///   AtomicBool 플래그를 swap으로 내린 뒤 id를 썼으므로, 그 사이에 다른 샤드의 READY가 "id 있음, 플래그
+///   없음"을 보고 교체를 건너뛴 채 옛 id로 핸들러를 돌릴 수 있었다(리뷰 탐침 300,000회 중 60회).
+/// - 검토한 주요 대안: (1) id를 먼저 쓰고 Release로 플래그를 내리고 Acquire로 읽기, (2) 결정과 id
+///   쓰기를 한 잠금 안에서 하기.
+/// - 선택한 방식: (2).
+/// - 다른 대안 대신 이 방식을 선택한 이유: READY마다 한 번이라 비용이 없고, "결정한 샤드가 id를 쓸
+///   때까지 다른 샤드는 결정하지 않는다"는 불변식을 메모리 순서 추론 없이 지킨다.
+/// - 장점, 단점 및 영향: 샤드들의 READY 처리 몇 명령이 직렬화된다. 잠금은 await를 건너지 않는다.
+/// ```
+#[derive(Default)]
+struct ApplicationIdSource {
+    // Locked by the start path and by each shard's event processor on
+    // READY, only while deciding and storing the id; never across an await.
+    provisional: StdMutex<bool>,
+}
+
+impl ApplicationIdSource {
+    fn lock(&self) -> std::sync::MutexGuard<'_, bool> {
+        self.provisional
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Uses `application_id` provisionally when `http` has none.
+    fn set_provisional(&self, http: &DiscordHttpClient, application_id: ApplicationId) {
+        let mut provisional = self.lock();
+        if http.application_id().is_none() {
+            http.set_application_id(application_id);
+            *provisional = true;
+        }
+    }
+
+    /// Adopts a fresh READY's id when none is set or the set one is
+    /// provisional. The decision and the store happen under one lock, so a
+    /// READY processed on another shard at the same time waits and then
+    /// sees the corrected id. Returns whether the id was set.
+    fn adopt_ready(&self, http: &DiscordHttpClient, application_id: ApplicationId) -> bool {
+        let mut provisional = self.lock();
+        if http.application_id().is_some() && !*provisional {
+            return false;
+        }
+        http.set_application_id(application_id);
+        *provisional = false;
+        true
+    }
 }
 
 impl Context {
@@ -287,7 +341,7 @@ impl Context {
             event_cursor: None,
             #[cfg(feature = "cache")]
             cache_backend_health: None,
-            application_id_provisional: Arc::new(AtomicBool::new(false)),
+            application_id_source: Arc::new(ApplicationIdSource::default()),
         }
     }
 
@@ -297,16 +351,8 @@ impl Context {
     /// with [`ClientBuilder::application_id`] stays. Returns whether the id
     /// was set.
     pub(super) fn adopt_ready_application_id(&self, application_id: ApplicationId) -> bool {
-        // `||` keeps the flag when no id is set (it is then already clear).
-        if self.http.application_id().is_none()
-            || self
-                .application_id_provisional
-                .swap(false, Ordering::SeqCst)
-        {
-            self.http.set_application_id(application_id);
-            return true;
-        }
-        false
+        self.application_id_source
+            .adopt_ready(&self.http, application_id)
     }
 
     /// When this shard received the event the current handler call is
@@ -2521,9 +2567,8 @@ struct SharedRuntime {
     collectors: CollectorHub,
     /// The client's handoff handle, watched by every shard.
     handoff: Option<GatewayHandoff>,
-    // Shared with every shard's `Context`; see
-    // `Context::application_id_provisional`.
-    application_id_provisional: Arc<AtomicBool>,
+    // Shared with every shard's `Context`; see `ApplicationIdSource`.
+    application_id_source: Arc<ApplicationIdSource>,
 }
 
 impl SharedRuntime {
@@ -2552,7 +2597,7 @@ impl SharedRuntime {
             #[cfg(feature = "collectors")]
             collectors: CollectorHub::new(),
             handoff: None,
-            application_id_provisional: Arc::new(AtomicBool::new(false)),
+            application_id_source: Arc::new(ApplicationIdSource::default()),
         }
     }
 
@@ -2566,10 +2611,9 @@ impl SharedRuntime {
     /// to learn it from, and one that falls back to IDENTIFY replaces it
     /// with READY's (`Context::adopt_ready_application_id`).
     fn with_session_application_id(self, application_id: Option<ApplicationId>) -> Self {
-        if let (None, Some(application_id)) = (self.http.application_id(), application_id) {
-            self.http.set_application_id(application_id);
-            self.application_id_provisional
-                .store(true, Ordering::SeqCst);
+        if let Some(application_id) = application_id {
+            self.application_id_source
+                .set_provisional(&self.http, application_id);
         }
         self
     }
@@ -2603,7 +2647,7 @@ impl SharedRuntime {
         context.gateway_commands = Arc::clone(&self.gateway_commands);
         context.member_chunk_waiters = Arc::clone(&self.member_chunk_waiters);
         context.default_allowed_mentions = self.default_allowed_mentions.clone();
-        context.application_id_provisional = Arc::clone(&self.application_id_provisional);
+        context.application_id_source = Arc::clone(&self.application_id_source);
         #[cfg(feature = "voice")]
         {
             context.voice = Arc::clone(&self.voice);

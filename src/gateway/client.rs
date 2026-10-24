@@ -73,16 +73,6 @@ const INVALID_SESSION_DELAY: Duration = Duration::from_secs(2);
 pub(super) const GATEWAY_COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Discord allows at most one IDENTIFY per shard per 5 seconds.
 const IDENTIFY_MIN_INTERVAL: Duration = Duration::from_secs(5);
-/// Upper bound on connection setup (TCP/TLS connect, WebSocket upgrade, and
-/// HELLO) for every connection; the attempt then fails and is retried
-/// through the normal backoff. With an IDENTIFY permit held, the permit
-/// blocks every other shard in the bucket, so a hung connect or a server
-/// that never sends HELLO gives it back (as abandoned) instead of holding
-/// the bucket until the gate's own watchdog. Without one (a RESUME, for
-/// example of a handed-off session) setup used to have no deadline, so such
-/// a server held the shard forever. Shutdown and handoff requests are
-/// served during setup too (see [`open_connection`]).
-const CONNECTION_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Most non-presence commands kept for the next connection while the
 /// client is not connected (reconnect backoff, or waiting for an IDENTIFY
 /// permit, which can last hours until a daily budget reset). The backlog is
@@ -122,8 +112,6 @@ pub(crate) struct GatewayClient {
     /// already sleeps before disconnecting, and IDENTIFY pacing bounds the
     /// identify rate — while unsolicited short-lived disconnects back off.
     server_directed_reconnect: bool,
-    /// [`CONNECTION_SETUP_TIMEOUT`]; a field so tests can shorten it.
-    setup_timeout: Duration,
     /// Set by [`Self::resume_from`] until RESUMED arrives or the session is
     /// dropped, so a handed-off session that cannot be resumed is reported
     /// (the shard then identifies and READY follows).
@@ -368,7 +356,6 @@ impl GatewayClient {
             heartbeat_ack_received: Arc::new(AtomicBool::new(true)),
             last_identify: None,
             server_directed_reconnect: false,
-            setup_timeout: CONNECTION_SETUP_TIMEOUT,
             handoff_resume: false,
         }
     }
@@ -740,7 +727,14 @@ impl GatewayClient {
         // but never sends HELLO must neither hold the shard forever nor keep
         // a shutdown or handoff waiting (both hung here when no IDENTIFY
         // permit set a deadline).
-        let setup_timeout = self.setup_timeout;
+        // Every connection is bounded (`GatewayConnectionConfig::
+        // setup_timeout`, 15 s by default): with an IDENTIFY permit held,
+        // the permit blocks every other shard in the bucket, so a hung
+        // connect or a server that never sends HELLO gives it back (as
+        // abandoned) instead of holding the bucket until the gate's own
+        // watchdog; without one (a RESUME, for example of a handed-off
+        // session) such a server held the shard forever.
+        let setup_timeout = self.gateway_config.setup_timeout_duration();
         let permit_held = identify_permit.is_some();
         let setup_timed_out = move || {
             crate::error::DiscordError::gateway(format!(
@@ -3278,7 +3272,10 @@ mod tests {
         });
         let gate = Arc::new(RecordingGate::default());
         let mut client = gated_client(&gate);
-        client.setup_timeout = Duration::from_millis(200);
+        client.gateway_config = client
+            .gateway_config
+            .clone()
+            .setup_timeout(Duration::from_millis(200));
 
         let started = Instant::now();
         let error = tokio::time::timeout(
@@ -3774,7 +3771,10 @@ mod tests {
                     513,
                 ));
             // The default 15 s setup bound is not what ends these runs.
-            assert_eq!(client.setup_timeout, super::CONNECTION_SETUP_TIMEOUT);
+            assert_eq!(
+                client.gateway_config.setup_timeout_duration(),
+                Duration::from_secs(15)
+            );
             let handoff = command.is_handoff();
             let stop = async {
                 reached.await.unwrap();
@@ -3833,7 +3833,10 @@ mod tests {
                 (0, 1),
                 513,
             ));
-        client.setup_timeout = Duration::from_millis(200);
+        client.gateway_config = client
+            .gateway_config
+            .clone()
+            .setup_timeout(Duration::from_millis(200));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let notify = Arc::new(tokio::sync::Notify::new());
         let callback = recording_callback(&seen, &notify);

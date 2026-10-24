@@ -9358,3 +9358,77 @@ async fn a_rejected_sessions_application_id_gives_way_to_the_fresh_ready() {
     }
     server.abort();
 }
+
+/// Regression (second review, of 3dc6888): shard A cleared the provisional
+/// flag and was preempted before storing READY's id; shard B then saw "id
+/// set, not provisional", skipped the replacement, and ran its READY
+/// handler with the rejected snapshot's id. Here the test thread is shard A,
+/// stopped at exactly that point: shard B must wait and then see the new id.
+#[test]
+fn a_concurrent_ready_waits_for_the_corrected_application_id() {
+    let http = Arc::new(DiscordHttpClient::new("token", None));
+    let source = Arc::new(super::ApplicationIdSource::default());
+    source.set_provisional(&http, test_id(123));
+    assert_eq!(http.application_id(), Some(test_id(123)));
+
+    // Shard A decided to replace the provisional id but has not stored it.
+    let mut shard_a = source.lock();
+    assert!(*shard_a);
+    *shard_a = false;
+    let shard_b = {
+        let (http, source) = (Arc::clone(&http), Arc::clone(&source));
+        std::thread::spawn(move || {
+            let replaced = source.adopt_ready(&http, test_id(999));
+            (replaced, http.application_id())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!shard_b.is_finished(), "shard B must wait for shard A");
+    http.set_application_id(test_id(999));
+    drop(shard_a);
+    let (replaced, seen) = shard_b.join().unwrap();
+    assert!(!replaced, "shard A already replaced it");
+    assert_eq!(
+        seen,
+        Some(test_id(999)),
+        "shard B's READY sees the corrected id"
+    );
+}
+
+/// The same race with two real "shards" racing their READYs, many times
+/// (the reviewer's probe failed 60 times in 300,000 rounds before the fix).
+#[test]
+fn concurrent_readies_never_see_a_provisional_application_id() {
+    const ROUNDS: usize = 20_000;
+    let http = Arc::new(DiscordHttpClient::new("token", None));
+    let source = Arc::new(super::ApplicationIdSource::default());
+    let start = Arc::new(std::sync::Barrier::new(3));
+    let done = Arc::new(std::sync::Barrier::new(3));
+    let shards: Vec<_> = (0..2)
+        .map(|_| {
+            let (http, source) = (Arc::clone(&http), Arc::clone(&source));
+            let (start, done) = (Arc::clone(&start), Arc::clone(&done));
+            std::thread::spawn(move || {
+                let mut stale = 0;
+                for _ in 0..ROUNDS {
+                    start.wait();
+                    source.adopt_ready(&http, test_id(999));
+                    if http.application_id() != Some(test_id(999)) {
+                        stale += 1;
+                    }
+                    done.wait();
+                }
+                stale
+            })
+        })
+        .collect();
+    for _ in 0..ROUNDS {
+        // A fresh client that resumed with the rejected snapshot's id.
+        *source.lock() = true;
+        http.set_application_id(test_id(123));
+        start.wait();
+        done.wait();
+    }
+    let stale: usize = shards.into_iter().map(|shard| shard.join().unwrap()).sum();
+    assert_eq!(stale, 0, "a READY handler saw the rejected snapshot's id");
+}

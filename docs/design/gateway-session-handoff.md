@@ -1,7 +1,8 @@
 # 게이트웨이 세션 handoff (프로세스 간 RESUME)
 
 작성: 2026-10-23. 기준: main `0a306d9`(3.1.1 배포본). 브랜치 `feat/session-handoff`, 버전 3.2.0(미배포).
-갱신: 2026-10-23, GPT-6.1-sol 리뷰(`f76ee19`) 지적 3건 수정(9절), 라이브 테스트 주의(8절).
+갱신: 2026-10-23, GPT-6.1-sol 리뷰(`f76ee19`) 지적 3건 수정(9절), 라이브 테스트 주의(7절).
+갱신: 2026-10-24, 2차 리뷰(`3dc6888`) 지적 1건(9.4절)과 설정 제한 시간의 동작 변화·설정(9.2절).
 구현 위치: `src/gateway/handoff.rs`(공개 타입·세션 매칭·전달 장부), `src/gateway/client.rs`(4000 종료,
 스냅샷에서 RESUME, fallback), `src/gateway/bot/pipeline.rs`(정지·전달 추적), `src/gateway/bot.rs`
 (빌더·샤드 런타임 연결).
@@ -130,7 +131,7 @@ exec_new_binary();
 | 닫힘 4007 / 4009 | 세션을 버리고 경고 → IDENTIFY (기존 경로) |
 | 기타 닫힘(4000 등), 읽기 오류 | 같은 세션으로 다시 RESUME (기존 경로) |
 | resume URL 연결 실패 | URL만 버리고(3.1.1 규칙) 설정된 게이트웨이로 RESUME. 거기서 INVALID_SESSION이면 IDENTIFY |
-| 연결은 받지만 HELLO가 없음 | 모든 연결의 설정(연결·업그레이드·HELLO)이 15초로 제한된다. 넘으면 연결 실패와 같다(URL을 버리고 재시도). 그동안 Shutdown·handoff 요청은 바로 처리한다 |
+| 연결은 받지만 HELLO가 없음 | 모든 연결의 설정(연결·업그레이드·HELLO)이 `GatewayConnectionConfig::setup_timeout`(기본 15초)으로 제한된다. 넘으면 연결 실패와 같다(URL을 버리고 재시도). 그동안 Shutdown·handoff 요청은 바로 처리한다 |
 | 스냅샷 불일치(샤드 수·id·intents·빈 id) | 시작 전에 경고하고 IDENTIFY |
 | 4004 등 종료 코드 | 기존처럼 샤드 오류 |
 
@@ -296,8 +297,15 @@ RESUME은 IDENTIFY permit을 받지 않으므로 연결 설정에 제한 시간�
 `connect_and_run`이 그것과 명령 채널을 함께 기다린다(명령 우선). Shutdown은 바로 종료하고, handoff는
 세션이 있으면 그대로 넘긴다. 이 연결에는 아직 아무것도 보내지 않았으므로 세션은 바뀌지 않는다.
 Reconnect는 무시하고, 다른 명령은 backoff 때처럼 다음 연결로 미룬다. 설정 전체는 모든 연결에서
-15초(`CONNECTION_SETUP_TIMEOUT`)로 제한된다. 넘으면 연결 실패처럼 resume URL을 버리고 재시도한다.
-IDENTIFY 간격 대기(최대 5초)와 INVALID_SESSION 대기(2초)는 제한된 시간이라 그대로 두었다.
+`GatewayConnectionConfig::setup_timeout`(기본 15초)으로 제한된다. 넘으면 연결 실패처럼 resume URL을
+버리고 재시도한다. IDENTIFY 간격 대기(최대 5초)와 INVALID_SESSION 대기(2초)는 제한된 시간이라 그대로
+두었다.
+
+**3.1.x 대비 동작 변화.** 3.1.x에서는 IDENTIFY permit을 쥔 연결만 15초로 제한됐고, RESUME이나 gate 없는
+IDENTIFY는 설정이 아무리 느려도 기다렸다. 이제는 모든 설정이 제한을 넘으면 실패하고 기존 1~300초 재연결
+backoff로 재시도한다. 설정이 늘 제한보다 느린 회선에서는 예전엔 결국 연결됐지만 이제는 계속 재시도만
+한다. 그래서 제한 시간을 상수가 아니라 `GatewayConnectionConfig::setup_timeout`(기본 15초, 추가형 API)으로
+두었다. Discord는 업그레이드 직후 HELLO를 보내므로 15초는 느린 TLS handshake에도 여유가 있다.
 
 ```text
 [Decision Log]
@@ -311,8 +319,8 @@ IDENTIFY 간격 대기(최대 5초)와 INVALID_SESSION 대기(2초)는 제한된
 - 다른 대안 대신 이 방식을 선택한 이유: 요청이 즉시 처리되고, 명령 처리 규칙(미루기·한도)이 permit
   대기·backoff와 같다. 제한 시간은 요청이 없을 때도 샤드가 멈추지 않게 한다.
 - 장점, 단점 및 영향: 설정 중에 받은 Shutdown은 다음 IDENTIFY 전에 종료한다(기존 테스트 두 개의 명령
-  시점을 맞췄다). 15초 안에 HELLO를 못 받는 느린 네트워크에서는 재시도가 생긴다(Discord HELLO는 보통
-  1초 안에 온다).
+  시점을 맞췄다). 제한 안에 HELLO를 못 받는 느린 네트워크에서는 재시도가 생기므로(Discord HELLO는 보통
+  1초 안에 온다) 제한은 `GatewayConnectionConfig::setup_timeout`으로 바꿀 수 있다.
 ```
 
 ### 9.3 fallback 뒤에도 거절된 스냅샷의 application id가 남음 (P2)
@@ -324,3 +332,19 @@ IDENTIFY 간격 대기(최대 5초)와 INVALID_SESSION 대기(2초)는 제한된
 세운다. READY 처리기는 id가 없거나 임시값이면 READY의 id로 바꾸고 플래그를 내린다
 (`Context::adopt_ready_application_id`). 빌더가 정한 id는 임시값이 아니므로 바뀌지 않는다. 재개에
 성공한 세션은 READY가 없으므로 임시값을 그대로 쓴다(같은 세션이라 맞는 값이다).
+
+### 9.4 동시 READY가 거절된 스냅샷의 application id를 볼 수 있음 (P2, 2차 리뷰)
+
+9.3의 수정은 `AtomicBool` 플래그를 `swap`으로 내린 뒤 id를 썼다. 샤드 A가 플래그를 내리고 id를 쓰기 전에
+멈추면, 샤드 B는 "id 있음, 플래그 없음"을 보고 교체를 건너뛰어 옛 id로 READY 핸들러를 돌렸다. 리뷰어의
+탐침에서는 300,000회 중 60회 재현됐다.
+
+수정: 결정과 id 쓰기를 한 잠금(`ApplicationIdSource`, `StdMutex<bool>`) 안에서 한다. 동시에 READY를
+처리하는 샤드는 먼저 결정한 샤드가 id를 쓸 때까지 기다린다. Release/Acquire 순서로 "id 먼저 쓰고 플래그
+내리기"도 가능했지만, READY마다 한 번이라 잠금 비용이 없고 메모리 순서 추론이 필요 없어 잠금을 택했다.
+Decision Log는 `src/gateway/bot.rs`의 `ApplicationIdSource`에 있다.
+
+회귀 테스트: `a_concurrent_ready_waits_for_the_corrected_application_id`(테스트 스레드가 샤드 A 역할로
+정확히 그 지점에서 멈춤), `concurrent_readies_never_see_a_provisional_application_id`(두 스레드 × 20,000회).
+스트레스 테스트를 9.3의 순서로 되돌려 돌리면 40,000번의 READY 중 11번이 옛 id를 봐서 실패했고, 수정본에서는
+0번이다.
