@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/Ingwannu/discord.rs/main/assets/discordrs-logo.svg" width="160" alt="discord.rs logo"></p>
+
 # discord.rs
 
 <a href="https://coveralls.io/github/Ingwannu/discordrs?branch=main"><img src="https://coveralls.io/repos/github/Ingwannu/discordrs/badge.svg?branch=main&t=20260411" alt="Coveralls"></a>

@@ -21,6 +21,8 @@ categories = ["api-bindings"]
 exclude = [
     "ci/",
     ".github/",
+    # The logo; the README shows it from GitHub by absolute URL.
+    "assets/",
     "discordrsdocs/",
     "docs/",
     "index.html",
