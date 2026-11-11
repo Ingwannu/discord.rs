@@ -586,8 +586,30 @@ impl BotActivity {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Typed Discord API object for `UpdatePresence` (gateway opcode 3, and the
 /// `presence` of IDENTIFY).
+///
+/// ```text
+/// [Decision Log] `since`는 값이 없어도 항상 보낸다 (3.2.1)
+/// - 목적과 의도: 접속 중에 보내는 상태 변경(opcode 3)을 Discord가 받아들이게 한다.
+/// - 기존 구현 및 제약 조건: 3.2.0까지 `since`가 `None`이면 직렬화에서 키를 뺐다. Discord 문서(Gateway Events:
+///   Update Presence)에서 `since`는 `?integer`, 곧 값은 null일 수 있어도 키는 있어야 하는 필드다. 키가 빠진 opcode 3을
+///   받으면 Discord는 4002 "Error while decoding payload"로 연결을 닫고, 그 세션은 RESUME도 거절한다(Invalid
+///   session). `update_presence(status)`도 `since: None`으로 만들어 보내므로 같은 결과였다. READY에서 상태를 정하는
+///   봇은 새 세션마다 다시 끊겨 로그인을 반복했다(2026-11-11 실서버: 2분에 새 세션 21번. 세션 시작은 하루 1,000번이고
+///   다 쓰면 토큰이 초기화된다). IDENTIFY 안의 `presence`는 키가 없어도 받아들여져서 드러나지 않았다.
+/// - 검토한 주요 대안: (1) opcode 3을 만들 때만 `since`를 채워 넣기: 같은 타입이 보내는 곳에 따라 다르게 직렬화되고,
+///   타입을 직접 직렬화하는 사용자는 여전히 틀린 모양을 얻는다. (2) `None`을 0으로 바꿔 보내기: 받아들여지지만 "idle이
+///   아님"을 뜻하는 문서의 값은 null이다. (3) 건너뛰기 속성을 지워 `None`을 null로 직렬화하기.
+/// - 선택한 방식: (3).
+/// - 다른 대안 대신 이 방식을 선택한 이유: 문서의 구조 그대로이고, IDENTIFY와 opcode 3이 같은 객체를 쓴다는 문서의
+///   설명과도 맞는다. discord.js도 두 곳 모두에 `since: null`을 보낸다.
+/// - 장점, 단점 및 영향: IDENTIFY의 `presence`에도 `"since": null`이 들어간다(유효한 값이다). 타입과 메서드 서명은
+///   그대로다. 이 키를 다시 건너뛰게 만들면 안 된다: `bots_send_only_the_fields_they_may_set`와
+///   `gateway_typed_presence_and_member_request_payloads_match_gateway_shape`가 지킨다.
+/// ```
 pub struct UpdatePresence {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Unix time in milliseconds of when the client went idle; `None` (sent
+    /// as `null`) when it is not idle. The key is always sent: Discord
+    /// closes a connection whose presence update lacks it (close code 4002).
     pub since: Option<u64>,
     #[serde(default)]
     pub activities: Vec<BotActivity>,
@@ -834,9 +856,12 @@ mod tests {
             status: PresenceStatus::DND,
             afk: false,
         };
+        // `since` is there although it has no value: a presence update
+        // without the key makes Discord close the connection with 4002.
         assert_eq!(
             serde_json::to_value(&presence).unwrap(),
             json!({
+                "since": null,
                 "activities": [
                     { "name": "with the API", "type": 0 },
                     { "name": "Custom Status", "type": 4, "state": "Handling tickets" }
@@ -848,6 +873,23 @@ mod tests {
         let read: UpdatePresence =
             serde_json::from_value(serde_json::to_value(&presence).unwrap()).unwrap();
         assert_eq!(read.activities, presence.activities);
+        assert_eq!(read.since, None);
+        // A presence written by 3.2.0 or earlier (no `since` key) still reads.
+        let without_key: UpdatePresence =
+            serde_json::from_value(json!({ "activities": [], "status": "online", "afk": false }))
+                .unwrap();
+        assert_eq!(without_key.since, None);
+
+        let idle = UpdatePresence {
+            since: Some(1_700_000_000_000),
+            activities: Vec::new(),
+            status: PresenceStatus::IDLE,
+            afk: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&idle).unwrap(),
+            json!({ "since": 1_700_000_000_000_u64, "activities": [], "status": "idle", "afk": true })
+        );
         assert_eq!(
             UpdatePresence::online_with_activity("x").activities,
             [BotActivity::new(ActivityType::PLAYING, "x")]

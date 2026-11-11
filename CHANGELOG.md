@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.2.1 - 2026-11-11
+
+### Fixed
+- **A presence update no longer ends the gateway session.** `UpdatePresence` left the `since` key out when it was `None`. Discord requires the key in a presence update (opcode 3; its value may be null): it closed the connection with 4002 "Error while decoding payload" and then refused to resume the session ("Invalid session"), so the shard identified again. Every `update_presence(status)` call was affected (`Context`, `ShardMessenger`, `ShardSupervisor`: they build `since: None`), and `update_presence_typed` unless the caller set `since`. A bot that sets its presence in the `ready` handler lost each new session the same way and went through logins in a loop (seen live on 2026-11-11: 21 new sessions in two minutes; a bot has 1,000 session starts a day, and Discord resets the token of one that uses them up). `since` is now always sent, as `null` when the client is not idle. The `presence` of IDENTIFY, which Discord accepted without the key, carries `"since": null` as well.
+- Verified live on 2026-11-11 (one shard, a bot in 5 guilds): built with this change, the bot sent its presence in IDENTIFY and an update 30 seconds later, both with `"since": null`, and its session stayed up; the same bot on 3.2.0 lost the session at that update every time.
+
+### Migration notes
+- Nothing to change. A bot that worked around this by passing `since: Some(0)` can go back to `None`. A stored `UpdatePresence` without the key still deserializes.
+
 ## 3.2.0 - 2026-10-24
 
 ### Added

@@ -1682,6 +1682,15 @@ mod tests {
             payload["d"]["activities"][0]["name"],
             serde_json::json!("busy")
         );
+        // Every key of Discord's Update Presence structure is required, `since`
+        // included (as null when the client is not idle): without it Discord
+        // closes the connection with 4002 and refuses to resume the session.
+        let sent = payload["d"].as_object().expect("the presence is an object");
+        for required in ["since", "activities", "status", "afk"] {
+            assert!(sent.contains_key(required), "opcode 3 lacks `{required}`");
+        }
+        assert_eq!(payload["d"]["since"], serde_json::Value::Null);
+        assert_eq!(payload["d"]["afk"], serde_json::json!(false));
 
         let payload = request_guild_members_payload(&RequestGuildMembers {
             guild_id: test_id(1),
@@ -1942,6 +1951,8 @@ mod tests {
             identify["d"]["presence"]["activities"][0]["name"],
             serde_json::json!("hello")
         );
+        // The same object as in opcode 3, `since` included.
+        assert_eq!(identify["d"]["presence"]["since"], serde_json::Value::Null);
     }
 
     #[test]

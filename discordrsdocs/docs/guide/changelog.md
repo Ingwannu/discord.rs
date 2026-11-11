@@ -1,6 +1,10 @@
 # Changelog
 
-## 3.2.0 - Unreleased
+## 3.2.1 - 2026-11-11
+
+- A presence update no longer ends the gateway session: `UpdatePresence` now always sends `since` (as `null` when the client is not idle). Without the key Discord closed the connection with 4002 and refused the resume, so `update_presence(status)`, and `update_presence_typed` with `since: None`, cost the session; a bot that set its presence in `ready` looped through logins. Nothing to change in bots; a `since: Some(0)` workaround can go back to `None`.
+
+## 3.2.0 - 2026-10-24
 
 - Gateway session handoff between processes: `GatewayHandoff` + `ClientBuilder::handoff` close every shard with code 4000 (the session stays resumable) after the running handlers finish and record a serde `GatewaySession` per shard; `ClientBuilder::resume_sessions` makes the next process RESUME them (no IDENTIFY, no session-start budget, no identify wave), and Discord replays every event after the last one the old handler was given. A resumed process gets RESUMED instead of READY and starts with an empty cache. Unresumable sessions (INVALID_SESSION, 4007/4009, mismatched shard count or intents) fall back to IDENTIFY with a warning, and the fresh READY's application id replaces the snapshot's. See the [Gateway API](../api/gateway.md#session-handoff-between-processes-32).
 - Every gateway connection's setup (connect, upgrade, HELLO) is bounded, by default to 15 seconds (`GatewayConnectionConfig::setup_timeout`), and shutdown and handoff requests are served during it. A setup that is always slower than the bound now keeps failing and retrying with the 1–300 s backoff, where 3.1.x waited; raise the bound for such links.
